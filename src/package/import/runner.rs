@@ -1,4 +1,4 @@
-//! Generated-runner reconstruction of an exact imported facade plan.
+//! Generated-runner reconstruction of a program's generated bindings.
 
 pub mod account;
 
@@ -368,151 +368,42 @@ impl StructuralRow {
     }
 }
 
-/// Linked profile decisions applied while reconstructing one exact imported facade.
-///
-/// The importer remains authoritative for every declaration not claimed by this
-/// hook. A profile may substitute only already-validated host proofs and must
-/// map every imported identity it replaces back to the corresponding semantic
-/// type reference.
-#[doc(hidden)]
-pub trait Profile {
-    /// Return whether all profile-owned target dependencies for this facade exist.
-    fn ready(&self, _facade: &facade::Facade, _installed: &[host::facade::Definition]) -> bool {
-        true
+/// A Rust future, which no crate's type names, is the core's future
+/// (D511.3, D513.3), and std's `Duration` and `Instant` are Rawr's own.
+fn semantic_type(
+    identity: &[u8; 32],
+    arguments: Box<[host::type_ref::Type]>,
+) -> Result<Option<host::type_ref::Type>, host::Error> {
+    use rawr_import::surface::identity::Definition;
+    if identity == Definition::future().as_bytes() {
+        let future = crate::future::facade::definition()?.export_type("future::Future")?;
+        return host::type_ref::Type::external(future, arguments).map(Some);
     }
-
-    /// Return one unregistered compatibility seed for this imported root and
-    /// the exact proof seal of its composition.
-    fn compatibility<'a>(
-        &'a self,
-        _facade: &facade::Facade,
-    ) -> Option<(&'a host::facade::Definition, [u8; 32])> {
-        None
+    if identity == Definition::duration().as_bytes() && arguments.is_empty() {
+        return Ok(Some(host::type_ref::Type::builtin(
+            host::type_ref::Builtin::Duration,
+        )));
     }
-
-    /// Whether one seed item survives later controlling suppression law.
-    fn retain_compatibility_item(
-        &self,
-        _facade: &facade::Facade,
-        _item: &host::item::Definition,
-    ) -> bool {
-        true
+    if identity == Definition::instant().as_bytes() && arguments.is_empty() {
+        return Ok(Some(host::type_ref::Type::builtin(
+            host::type_ref::Builtin::Instant,
+        )));
     }
-
-    /// Whether this profile owns the imported type's semantic representation.
-    fn owns_type(&self, facade: &facade::Facade, ty: &facade::TypeDefinition) -> bool;
-
-    /// Install the linked semantic types owned by this profile.
-    fn install_types(
-        &self,
-        facade: &facade::Facade,
-        builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error>;
-
-    /// Map one replaced imported identity to its linked semantic reference.
-    /// `installed` holds the facades built before this one.
-    fn semantic_type(
-        &self,
-        facade: &facade::Facade,
-        installed: &[host::facade::Definition],
-        identity: &[u8; 32],
-        arguments: Box<[host::type_ref::Type]>,
-    ) -> Result<Option<host::type_ref::Type>, host::Error>;
-
-    /// Whether this profile owns the imported item's compiler/runtime meaning.
-    fn owns_item(&self, facade: &facade::Facade, item: &facade::Item) -> bool;
-
-    /// Install the linked semantic items owned by this profile.
-    fn install_items(
-        &self,
-        facade: &facade::Facade,
-        builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error>;
-
-    /// Install exact support-only operation endpoints authenticated by this profile.
-    fn install_endpoints(
-        &self,
-        _facade: &facade::Facade,
-        _builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error> {
-        Ok(())
-    }
-
-    /// Install exact direct projections already authenticated by this profile.
-    fn install_projections(
-        &self,
-        _facade: &facade::Facade,
-        _installed: &[host::facade::Definition],
-        _builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error> {
-        Ok(())
-    }
+    Ok(None)
 }
 
-struct Ordinary;
-
-impl Profile for Ordinary {
-    fn owns_type(&self, _facade: &facade::Facade, _ty: &facade::TypeDefinition) -> bool {
-        false
-    }
-
-    fn install_types(
-        &self,
-        _facade: &facade::Facade,
-        _builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error> {
-        Ok(())
-    }
-
-    /// A Rust future, which no crate's type names, is the core's future
-    /// (D511.3, D513.3), and std's `Duration` is Rawr's own.
-    fn semantic_type(
-        &self,
-        _facade: &facade::Facade,
-        _installed: &[host::facade::Definition],
-        identity: &[u8; 32],
-        arguments: Box<[host::type_ref::Type]>,
-    ) -> Result<Option<host::type_ref::Type>, host::Error> {
-        use rawr_import::surface::identity::Definition;
-        if identity == Definition::future().as_bytes() {
-            let future = crate::future::facade::definition()?.export_type("future::Future")?;
-            return host::type_ref::Type::external(future, arguments).map(Some);
-        }
-        if identity == Definition::duration().as_bytes() && arguments.is_empty() {
-            return Ok(Some(host::type_ref::Type::builtin(
-                host::type_ref::Builtin::Duration,
-            )));
-        }
-        if identity == Definition::instant().as_bytes() && arguments.is_empty() {
-            return Ok(Some(host::type_ref::Type::builtin(
-                host::type_ref::Builtin::Instant,
-            )));
-        }
-        Ok(None)
-    }
-
-    fn owns_item(&self, _facade: &facade::Facade, _item: &facade::Item) -> bool {
-        false
-    }
-
-    fn install_items(
-        &self,
-        _facade: &facade::Facade,
-        _builder: &mut host::facade::Builder,
-    ) -> Result<(), host::Error> {
-        Ok(())
-    }
-}
-
-/// Install the compiler facades embedded by one compiler-owned demand brand.
+/// Install the generated bindings embedded by one compiler-owned demand brand.
 pub fn install(
     engine: &mut crate::Engine,
     bytes: &[u8],
 ) -> Result<Box<[host::facade::Definition]>, Error> {
-    install_profile(engine, bytes, &Ordinary)
+    let limits = rawr_import::cargo::Limits::standard();
+    let plan = facade::Plan::decode(bytes, &limits)?;
+    let mut allocation = account::Attempt::standard()?;
+    install_decoded(engine, &plan, &mut allocation)
 }
 
-/// Reconstruct an ordinary generated facade under its retained native account.
+/// Install generated bindings under their retained native account.
 #[doc(hidden)]
 pub fn install_retained(
     engine: &mut crate::Engine,
@@ -521,47 +412,12 @@ pub fn install_retained(
 ) -> Result<Box<[host::facade::Definition]>, Error> {
     let limits = rawr_import::cargo::Limits::standard();
     let plan = facade::Plan::decode(bytes, &limits)?;
-    install_decoded_profile_retained(engine, &plan, &Ordinary, native)
-}
-
-/// Install exact imported facades with one linked profile's semantic anchors.
-#[doc(hidden)]
-pub fn install_profile(
-    engine: &mut crate::Engine,
-    bytes: &[u8],
-    profile: &impl Profile,
-) -> Result<Box<[host::facade::Definition]>, Error> {
-    let limits = rawr_import::cargo::Limits::standard();
-    let plan = facade::Plan::decode(bytes, &limits)?;
-    install_decoded_profile(engine, &plan, profile)
-}
-
-/// Install one already-decoded exact plan with linked profile semantics.
-#[doc(hidden)]
-pub fn install_decoded_profile(
-    engine: &mut crate::Engine,
-    plan: &facade::Plan,
-    profile: &impl Profile,
-) -> Result<Box<[host::facade::Definition]>, Error> {
-    let mut allocation = account::Attempt::standard()?;
-    install_decoded(engine, plan, profile, &mut allocation)
-}
-
-/// Install decoded facades while retaining their charges with the native owner.
-#[doc(hidden)]
-pub fn install_decoded_profile_retained(
-    engine: &mut crate::Engine,
-    plan: &facade::Plan,
-    profile: &impl Profile,
-    native: &mut account::Native,
-) -> Result<Box<[host::facade::Definition]>, Error> {
-    install_decoded(engine, plan, profile, &mut native.allocation())
+    install_decoded(engine, &plan, &mut native.allocation())
 }
 
 fn install_decoded(
     engine: &mut crate::Engine,
     plan: &facade::Plan,
-    profile: &impl Profile,
     allocation: &mut account::Attempt,
 ) -> Result<Box<[host::facade::Definition]>, Error> {
     let mut shapes = Vec::<([u8; 32], crate::Shared<host::type_def::Shape>)>::new();
@@ -576,34 +432,19 @@ fn install_decoded(
     definitions
         .try_reserve_exact(plan.facades().len())
         .map_err(|_| Error::Allocation)?;
-    let mut pending = plan.facades().collect::<Vec<_>>();
-    while !pending.is_empty() {
-        let Some(index) = pending
-            .iter()
-            .position(|facade| profile.ready(facade, &definitions))
-        else {
-            return Err(Error::ProfileOrder);
-        };
-        let facade = pending.remove(index);
-        let (definition, families) = build(facade, profile, &definitions, &mut shapes, allocation)?;
+    for facade in plan.facades() {
+        let (definition, families) = build(facade, &mut shapes, allocation)?;
         retain_registry_definition(&definition, allocation)?;
-        engine.register_host_facade(definition.clone())?;
-        engine.host_registry.defer_imported(families)?;
+        engine
+            .register_host_facade(definition.clone())
+            .map_err(|source| entry_error(facade.root(), "", source.into()))?;
+        engine
+            .host_registry
+            .defer_imported(families)
+            .map_err(|source| entry_error(facade.root(), "", source.into()))?;
         definitions.push(definition);
     }
     Ok(definitions.into_boxed_slice())
-}
-
-/// Consume a linked profile extension into the accounted native compiler.
-#[doc(hidden)]
-pub fn install_profile_facade_retained(
-    engine: &mut crate::Engine,
-    definition: host::facade::Definition,
-    native: &mut account::Native,
-) -> Result<(), Error> {
-    retain_registry_definition(&definition, &mut native.allocation())?;
-    engine.register_host_facade(definition)?;
-    Ok(())
 }
 
 fn retain_registry_definition(
@@ -687,13 +528,8 @@ pub fn admit_generated_applications(
     {
         return Err(Error::Surface(rawr_import::surface::Error::Canonical));
     }
-    super::admit_applications(&mut engine.host_registry, &applications).map_err(|error| {
-        Error::FacadeEntry {
-            root: "<application>".into(),
-            path: error.to_string().into_boxed_str(),
-            source: Box::new(Error::Shape),
-        }
-    })
+    super::admit_applications(&mut engine.host_registry, &applications)
+        .map_err(|error| Error::Application(error.to_string().into_boxed_str()))
 }
 
 /// Admit structural bindings under the same account as the retained carrier.
@@ -941,18 +777,12 @@ fn structural_path<'facade>(
 
 fn build(
     facade: &facade::Facade,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
     shapes: &mut Vec<([u8; 32], crate::Shared<host::type_def::Shape>)>,
     allocation: &mut account::Attempt,
 ) -> Result<(host::facade::Definition, Vec<host::family::Pending>), Error> {
     let abi = host::facade::Abi::new(1)?;
-    let mut builder = host::facade::Builder::new_imported(facade.root(), abi, allocation)?;
-    let compatibility = profile.compatibility(facade);
-    if let Some((_, seal)) = compatibility {
-        builder.compatibility_seal(seal)?;
-    }
-    let compatibility = compatibility.map(|(seed, _)| seed);
+    let mut builder = host::facade::Builder::new_imported(facade.root(), abi, allocation)
+        .map_err(|source| entry_error(facade.root(), "", source.into()))?;
     let type_paths = facade
         .types()
         .map(facade::TypeDefinition::path)
@@ -972,75 +802,17 @@ fn build(
     {
         collect_modules(path, &owner_paths, &mut modules)?;
     }
-    if let Some(seed) = compatibility {
-        let prefix = format!("{}::", facade.root());
-        for module in seed.modules() {
-            let display = module.to_string();
-            // A definition's modules all sit under its own root.
-            let Some(relative) = display.strip_prefix(&prefix) else {
-                continue;
-            };
-            if type_paths.contains(&relative) {
-                return Err(host::Error::DuplicateFacadeEntry {
-                    path: display.into(),
-                    existing: "imported type",
-                    incoming: "compatibility module",
-                }
-                .into());
-            }
-            match modules.binary_search_by(|candidate| candidate.as_ref().cmp(relative)) {
-                Ok(_) => {}
-                Err(index) => {
-                    modules.try_reserve(1).map_err(|_| Error::Allocation)?;
-                    modules.insert(index, relative.into());
-                }
-            }
-        }
-    }
     for module in modules {
-        builder.imported_module(&module, allocation)?;
+        builder
+            .imported_module(&module, allocation)
+            .map_err(|source| entry_error(facade.root(), &module, source.into()))?;
     }
-    // The members of a type the profile owns are the profile's under each
-    // of the type's paths (iced's `Application` and
-    // `application::Application`).
-    let owned = facade
-        .types()
-        .filter(|ty| profile.owns_type(facade, ty))
-        .map(|ty| *ty.identity())
-        .collect::<Vec<_>>();
-    // A path the compatibility seed re-exports (iced's `Renderer` and
-    // `canvas::Event`) keeps the seed's meaning, whatever the importer made of
-    // the Rust item there.
-    let prefix = format!("{}::", facade.root());
-    let seed_aliases = compatibility
-        .map(|seed| {
-            seed.aliases()
-                .iter()
-                .filter_map(|(alias, _)| {
-                    alias
-                        .to_string()
-                        .strip_prefix(&prefix)
-                        .map(Box::<str>::from)
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let aliased = |path: &str| seed_aliases.iter().any(|alias| alias.as_ref() == path);
-    let owned_path = |path: &str| {
-        aliased(path)
-            || facade
-                .types()
-                .any(|ty| ty.path() == path && owned.contains(ty.identity()))
-    };
     for ty in facade.types() {
-        if profile.owns_type(facade, ty) || aliased(ty.path()) {
-            continue;
-        }
         let identity = *ty.identity();
         let shape = match shapes.binary_search_by_key(&identity, |(identity, _)| *identity) {
             Ok(index) => shapes[index].1.clone(),
             Err(index) => {
-                let shape = shape(facade, ty.shape(), profile, installed)
+                let shape = shape(ty.shape())
                     .map_err(|source| entry_error(facade.root(), ty.path(), source))?;
                 retain_shape(&shape, allocation)?;
                 let shape = crate::Shared::new(shape);
@@ -1053,12 +825,7 @@ fn build(
         let defaults = ty
             .defaults()
             .iter()
-            .map(|default| {
-                default
-                    .as_ref()
-                    .map(|default| self::ty(facade, default, profile, installed))
-                    .transpose()
-            })
+            .map(|default| default.as_ref().map(self::ty).transpose())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|source| entry_error(facade.root(), ty.path(), source))?
             .into_boxed_slice();
@@ -1084,55 +851,12 @@ fn build(
             )
             .map_err(|source| entry_error(facade.root(), ty.path(), source.into()))?;
     }
-    profile
-        .install_types(facade, &mut builder)
-        .map_err(|source| entry_error(facade.root(), "<profile-types>", source.into()))?;
-    if let Some(seed) = compatibility {
-        for definition in seed.types() {
-            builder
-                .compatibility_type(definition, allocation)
-                .map_err(|source| entry_error(facade.root(), &definition.path(), source.into()))?;
-        }
-        for (alias, target) in seed.aliases() {
-            builder
-                .compatibility_alias(alias, target)
-                .map_err(|source| entry_error(facade.root(), &alias.to_string(), source.into()))?;
-        }
-    }
     for item in facade.items() {
-        let owner_owned = item
-            .path()
-            .rsplit_once("::")
-            .is_some_and(|(owner, _)| owned_path(owner));
-        if !profile.owns_item(facade, item) && !owner_owned {
-            let definition = item_definition(facade, item, profile, installed)
-                .map_err(|source| entry_error(facade.root(), item.path(), source))?;
-            builder
-                .imported_item(definition)
-                .map_err(|source| entry_error(facade.root(), item.path(), source.into()))?;
-        }
-    }
-    profile
-        .install_items(facade, &mut builder)
-        .map_err(|source| entry_error(facade.root(), "<profile-items>", source.into()))?;
-    if let Some(seed) = compatibility {
-        for item in seed
-            .items()
-            .filter(|item| profile.retain_compatibility_item(facade, item))
-        {
-            builder
-                .compatibility_item(item, allocation)
-                .map_err(|source| entry_error(facade.root(), &item.path(), source.into()))?;
-        }
-    }
-    profile
-        .install_endpoints(facade, &mut builder)
-        .map_err(|source| entry_error(facade.root(), "<profile-endpoints>", source.into()))?;
-    profile
-        .install_projections(facade, installed, &mut builder)
-        .map_err(|source| entry_error(facade.root(), "<profile-projections>", source.into()))?;
-    if let Some(seed) = compatibility {
-        builder.install_compatibility_projections(seed)?;
+        let definition = item_definition(facade, item)
+            .map_err(|source| entry_error(facade.root(), item.path(), source))?;
+        builder
+            .imported_item(definition)
+            .map_err(|source| entry_error(facade.root(), item.path(), source.into()))?;
     }
     // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
     for (path, builtin) in facade.builtins() {
@@ -1156,17 +880,12 @@ fn build(
         let defaults = alias
             .defaults()
             .iter()
-            .map(|default| {
-                default
-                    .as_ref()
-                    .map(|default| self::ty(facade, default, profile, installed))
-                    .transpose()
-            })
+            .map(|default| default.as_ref().map(self::ty).transpose())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|source| entry_error(facade.root(), path, source))?
             .into_boxed_slice();
-        let target = self::ty(facade, alias.target(), profile, installed)
-            .map_err(|source| entry_error(facade.root(), path, source))?;
+        let target =
+            self::ty(alias.target()).map_err(|source| entry_error(facade.root(), path, source))?;
         builder
             .type_alias(path, parameters, defaults, target)
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
@@ -1178,12 +897,7 @@ fn build(
         let defaults = header
             .defaults()
             .iter()
-            .map(|default| {
-                default
-                    .as_ref()
-                    .map(|default| self::ty(facade, default, profile, installed))
-                    .transpose()
-            })
+            .map(|default| default.as_ref().map(self::ty).transpose())
             .collect::<Result<Box<[_]>, _>>();
         let Ok(defaults) = defaults else {
             continue;
@@ -1201,14 +915,13 @@ fn build(
         let types = |types: &[facade::Type]| {
             types
                 .iter()
-                .map(|ty| self::ty(facade, ty, profile, installed))
+                .map(self::ty)
                 .collect::<Result<Box<[_]>, _>>()
                 .ok()
         };
-        let (Some(arguments), Some(self_type)) = (
-            types(header.arguments()),
-            self::ty(facade, header.self_type(), profile, installed).ok(),
-        ) else {
+        let (Some(arguments), Some(self_type)) =
+            (types(header.arguments()), self::ty(header.self_type()).ok())
+        else {
             continue;
         };
         let bounds = header
@@ -1216,7 +929,7 @@ fn build(
             .iter()
             .filter_map(|bound| {
                 Some(host::facade::ImplBound {
-                    ty: self::ty(facade, bound.ty(), profile, installed).ok()?,
+                    ty: self::ty(bound.ty()).ok()?,
                     trait_identity: *bound.trait_identity(),
                     arguments: types(bound.arguments())?,
                 })
@@ -1240,13 +953,14 @@ fn build(
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
     // A trait the program names is a module (`use rand::Rng;`), unless the
-    // profile already gives its path a meaning (iced's `Widget`).
+    // bindings already declare something at its path (iced's `Widget`, whose
+    // type the bindings carry).
     for path in facade.traits() {
         let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
         for module in prefixes.chain(std::iter::once(path)) {
             match builder.imported_module(module, allocation) {
                 Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
     }
@@ -1258,20 +972,23 @@ fn build(
         for module in prefixes {
             match builder.imported_module(module, allocation) {
                 Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(entry_error(facade.root(), module, error.into())),
             }
         }
         let item = host::item::Definition::macro_rules(
             path,
             rules.source(),
             format!("{}::{}", facade.root(), rules.krate()),
-        )?;
+        )
+        .map_err(|source| entry_error(facade.root(), path, source.into()))?;
         match builder.item(item) {
             Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
             Err(error) => return Err(entry_error(facade.root(), path, error.into())),
         }
     }
-    builder.finish_imported(allocation).map_err(Error::from)
+    builder
+        .finish_imported(allocation)
+        .map_err(|source| entry_error(facade.root(), "", source.into()))
 }
 
 fn retain_shape(
@@ -1335,19 +1052,28 @@ fn retain_shape(
 }
 
 fn entry_error(root: &str, path: &str, source: Error) -> Error {
-    Error::FacadeEntry {
+    // The innermost item names the failure: a type's field registers
+    // under its type.
+    if let Error::Registration { .. } = source {
+        return source;
+    }
+    Error::Registration {
         root: root.into(),
         path: path.into(),
         source: Box::new(source),
     }
 }
 
-fn shape(
-    facade: &facade::Facade,
-    shape: &facade::Shape,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
-) -> Result<host::type_def::Shape, Error> {
+/// `root::path` as Rust names it, or `root` alone for the crate itself.
+fn rust_item(root: &str, path: &str) -> String {
+    if path.is_empty() {
+        root.to_owned()
+    } else {
+        format!("{root}::{path}")
+    }
+}
+
+fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Error> {
     if let Some((form, constructor, fields, constructible)) = shape.struct_parts() {
         return Ok(host::type_def::Shape::Struct {
             form: form.into(),
@@ -1356,7 +1082,7 @@ fn shape(
                 .transpose()?,
             fields: fields
                 .iter()
-                .map(|source| field(facade, source, profile, installed))
+                .map(field)
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice(),
             constructible,
@@ -1372,7 +1098,7 @@ fn shape(
                     variant
                         .fields()
                         .iter()
-                        .map(|source| field(facade, source, profile, installed))
+                        .map(field)
                         .collect::<Result<Vec<_>, Error>>()?
                         .into_boxed_slice(),
                     variant.constructible(),
@@ -1384,15 +1110,10 @@ fn shape(
     ))
 }
 
-fn field(
-    facade: &facade::Facade,
-    field: &facade::Field,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
-) -> Result<host::type_def::Field, Error> {
+fn field(field: &facade::Field) -> Result<host::type_def::Field, Error> {
     Ok(host::type_def::Field::new(
         field.name().into(),
-        ty(facade, field.ty(), profile, installed)?,
+        ty(field.ty())?,
         field.selector().try_clone()?,
     ))
 }
@@ -1400,10 +1121,8 @@ fn field(
 fn item_definition(
     facade: &facade::Facade,
     item: &facade::Item,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
 ) -> Result<host::item::Definition, Error> {
-    let signature = signature(facade, item.signature(), profile, installed)?;
+    let signature = signature(facade, item.signature())?;
     let definition = match item.kind() {
         ItemKind::Function => host::item::Definition::function(item.path(), signature)?,
         ItemKind::AssociatedFunction => {
@@ -1418,14 +1137,12 @@ fn item_definition(
         ItemKind::MutableMethod => {
             host::item::Definition::method(item.path(), receiver::Mode::Mutable, signature)?
         }
-        ItemKind::Constant => host::item::Definition::value(
-            item.path(),
-            ty(facade, item.signature().output(), profile, installed)?,
-        )?,
-        ItemKind::AssociatedConstant => host::item::Definition::associated_value(
-            item.path(),
-            ty(facade, item.signature().output(), profile, installed)?,
-        )?,
+        ItemKind::Constant => {
+            host::item::Definition::value(item.path(), ty(item.signature().output())?)?
+        }
+        ItemKind::AssociatedConstant => {
+            host::item::Definition::associated_value(item.path(), ty(item.signature().output())?)?
+        }
     };
     let guard = item.signature().guard().map(|guard| match guard {
         rawr_import::classify::representability::signature::Guard::Shared => {
@@ -1450,8 +1167,6 @@ fn item_definition(
 fn signature(
     facade: &facade::Facade,
     signature: &facade::Signature,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
 ) -> Result<host::signature::Definition, Error> {
     let mut builder = host::signature::Builder::new();
     for (index, parameter) in signature.parameters().enumerate() {
@@ -1461,11 +1176,11 @@ fn signature(
         builder.crossing();
     }
     for input in signature.inputs() {
-        builder.try_parameter(ty(facade, input, profile, installed)?)?;
+        builder.try_parameter(ty(input)?)?;
     }
-    builder.output(ty(facade, signature.output(), profile, installed)?);
+    builder.output(ty(signature.output())?);
     if let Some(instance) = signature.instance() {
-        builder.instance(ty(facade, instance, profile, installed)?);
+        builder.instance(ty(instance)?);
     }
     for relation in signature.relations() {
         if let Some(relation) = super::relation(
@@ -1478,9 +1193,7 @@ fn signature(
             relation.trait_identity(),
             |source| {
                 pattern(source, &|nominal| {
-                    ty(facade, nominal, profile, installed)
-                        .ok()
-                        .and_then(|ty| rooted(facade.root(), ty))
+                    ty(nominal).ok().and_then(|ty| rooted(facade.root(), ty))
                 })
             },
         ) {
@@ -1563,12 +1276,7 @@ fn pattern(
     })
 }
 
-fn ty(
-    facade: &facade::Facade,
-    source: &facade::Type,
-    profile: &impl Profile,
-    installed: &[host::facade::Definition],
-) -> Result<host::type_ref::Type, Error> {
+fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
     Ok(match source {
         facade::Type::Unit => host::type_ref::Type::unit(),
         facade::Type::Bool => host::type_ref::Type::builtin(host::type_ref::Builtin::Bool),
@@ -1588,7 +1296,7 @@ fn ty(
         } => {
             let arguments = arguments
                 .iter()
-                .map(|argument| ty(facade, argument, profile, installed))
+                .map(ty)
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice();
             // core's `RangeInclusive<T>`: Rawr's range of `T`'s kind of
@@ -1609,9 +1317,7 @@ fn ty(
                 };
                 return Ok(host::type_ref::Type::callable(input, output.clone()));
             }
-            if let Some(ty) =
-                profile.semantic_type(facade, installed, identity, arguments.clone())?
-            {
+            if let Some(ty) = semantic_type(identity, arguments.clone())? {
                 return Ok(ty);
             }
             host::type_ref::Type::imported_boxed(
@@ -1619,45 +1325,29 @@ fn ty(
                 arguments,
             )
         }
-        facade::Type::Callable { input, output } => host::type_ref::Type::callable(
-            ty(facade, input, profile, installed)?,
-            ty(facade, output, profile, installed)?,
-        ),
+        facade::Type::Callable { input, output } => {
+            host::type_ref::Type::callable(ty(input)?, ty(output)?)
+        }
         facade::Type::FunctionItem { input, output } => {
-            host::type_ref::Type::imported_function_item(
-                ty(facade, input, profile, installed)?,
-                ty(facade, output, profile, installed)?,
-            )
+            host::type_ref::Type::imported_function_item(ty(input)?, ty(output)?)
         }
         facade::Type::Parameter(parameter) => host::type_ref::Type::parameter(parameter.as_ref())?,
         facade::Type::Reference { mutable, target } => {
-            host::type_ref::Type::reference(*mutable, ty(facade, target, profile, installed)?)
+            host::type_ref::Type::reference(*mutable, ty(target)?)
         }
-        facade::Type::Option(element) => {
-            host::type_ref::Type::option(ty(facade, element, profile, installed)?)
-        }
-        facade::Type::Range(element) => {
-            host::type_ref::Type::range(ty(facade, element, profile, installed)?)
-        }
+        facade::Type::Option(element) => host::type_ref::Type::option(ty(element)?),
+        facade::Type::Range(element) => host::type_ref::Type::range(ty(element)?),
         // Only a relation's case names an impl's own parameter.
         facade::Type::Variable(_) => return Err(Error::Shape),
-        facade::Type::Result(ok, err) => host::type_ref::Type::result(
-            ty(facade, ok, profile, installed)?,
-            ty(facade, err, profile, installed)?,
-        ),
-        facade::Type::Array(element) => {
-            host::type_ref::Type::slice(ty(facade, element, profile, installed)?)
-        }
+        facade::Type::Result(ok, err) => host::type_ref::Type::result(ty(ok)?, ty(err)?),
+        facade::Type::Array(element) => host::type_ref::Type::slice(ty(element)?),
         facade::Type::FixedArray { element, length } => host::type_ref::Type::array(
-            ty(facade, element, profile, installed)?,
+            ty(element)?,
             usize::try_from(*length).map_err(|_| Error::Shape)?,
         ),
-        facade::Type::Tuple(members) => host::type_ref::Type::tuple(
-            members
-                .iter()
-                .map(|member| ty(facade, member, profile, installed))
-                .collect::<Result<Vec<_>, _>>()?,
-        )?,
+        facade::Type::Tuple(members) => {
+            host::type_ref::Type::tuple(members.iter().map(ty).collect::<Result<Vec<_>, _>>()?)?
+        }
     })
 }
 
@@ -1693,7 +1383,8 @@ impl From<facade::Form> for host::type_def::Form {
     }
 }
 
-/// Invalid generated facade plan or compiler registration.
+/// Invalid generated bindings or their registration: a rawr bug, never the
+/// program's.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A replacement compiler has no original child allocation owner.
@@ -1705,34 +1396,38 @@ pub enum Error {
     /// Embedded generated-manifest authentication failed.
     #[error(transparent)]
     Manifest(#[from] rawr_import::runner::manifest::Error),
-    /// Host facade validation failed.
+    /// Validating a generated declaration failed.
     #[error(transparent)]
     Host(#[from] host::Error),
-    /// One exact reconstructed entry failed before the facade could publish.
-    #[error("generated facade entry `{root}::{path}` is invalid: {source}")]
-    FacadeEntry {
-        /// Imported facade root.
+    /// Registering one generated item failed. The bindings are rawr's own,
+    /// so this is a rawr bug.
+    #[error(
+        "internal error: rawr cannot register its bindings for `{}`: {source}. This is a rawr bug",
+        rust_item(.root, .path)
+    )]
+    Registration {
+        /// The crate's root.
         root: Box<str>,
-        /// Relative imported type or item path.
+        /// The Rust item's path below the root, empty for the crate itself.
         path: Box<str>,
-        /// Exact nested reconstruction failure.
+        /// What went wrong.
         #[source]
         source: Box<Error>,
     },
+    /// Admitting a generated application failed: a rawr bug.
+    #[error("internal error: rawr cannot admit a generated application: {0}. This is a rawr bug")]
+    Application(Box<str>),
     /// The plan contains contradictory nominal shape evidence.
-    #[error("generated imported facade has no nominal shape")]
+    #[error("a generated type has no nominal shape")]
     Shape,
-    /// Bounded runner facade allocation failed.
-    #[error("cannot allocate generated imported facade")]
+    /// Bounded allocation of the bindings failed.
+    #[error("cannot allocate generated bindings")]
     Allocation,
-    /// Profile-owned cross-facade projections contain an unresolved dependency cycle.
-    #[error("generated profile facade dependencies cannot be ordered")]
-    ProfileOrder,
     /// A private event producer is absent from the generated manifest.
     #[error("generated event producer is absent from its manifest")]
     EventManifest,
-    /// A private event binding names an absent facade.
-    #[error("generated event facade is absent")]
+    /// A private event binding names bindings that are absent.
+    #[error("generated event names absent bindings")]
     EventFacade,
     /// A private event row disagrees with its source or target contract.
     #[error("generated event source or target selector disagrees")]
@@ -1740,11 +1435,11 @@ pub enum Error {
     /// More than one producer claims the same private event binding.
     #[error("generated event conversion is duplicated")]
     EventDuplicate,
-    /// A structural row names no exact installed facade.
-    #[error("generated structural adapter names no exact installed facade")]
+    /// A structural row names no exact installed bindings.
+    #[error("generated structural adapter names no installed bindings")]
     StructuralFacade,
     /// A structural selector is absent, ambiguous, or has the wrong operation kind.
-    #[error("generated structural adapter does not match one exact facade selector")]
+    #[error("generated structural adapter does not match one exact selector")]
     StructuralSelector,
     /// A structural row is absent from the authenticated generated manifest.
     #[error("generated structural adapter is absent from the authenticated manifest")]

@@ -5,11 +5,10 @@ use super::{Error, Output};
 use crate::{host, package, resolve, Engine, Shared};
 use rawr_import::surface::identity;
 
-fn failure(engine: &Engine, cycle: &host::facade::ProfileCycle, source: &str) -> Error {
-    match Output::transform(
+fn failure(engine: &Engine, source: &str) -> Error {
+    match Output::transform_plain(
         engine,
         &native_snapshot(source),
-        cycle,
         &mut host::TestImportAllocation::default(),
     ) {
         Ok(_) => panic!("fixture must fail at its selected lookup: {source}"),
@@ -19,14 +18,14 @@ fn failure(engine: &Engine, cycle: &host::facade::ProfileCycle, source: &str) ->
 
 #[test]
 fn terminal_declared_native_function_and_type_absence_request_preparation() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     for source in [
         "use native::new_function; pub fn sample() -> i64 { new_function() }",
         "pub fn sample() -> i64 { native::new_function() }",
         "pub fn sample(value: native::NewType) {}",
         "struct Holder { value: native::NewType }",
     ] {
-        let error = failure(&engine, &cycle, source);
+        let error = failure(&engine, source);
         let Error::NativeMiss(error) = error else {
             panic!("native lookup must request one preparation: {source}: {error}")
         };
@@ -41,7 +40,7 @@ fn terminal_declared_native_function_and_type_absence_request_preparation() {
 
 #[test]
 fn terminal_native_miss_preserves_the_original_resolution_diagnostic() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     let source = "use native::new_function; pub fn sample() {}";
     let snapshot = native_snapshot(source);
     let graph = package::Graph::load_snapshot(&engine, &snapshot).unwrap();
@@ -50,7 +49,7 @@ fn terminal_native_miss_preserves_the_original_resolution_diagnostic() {
         Ok(_) => panic!("ordinary resolution must still reject the absent import"),
         Err(error) => package::Error::resolution(sources, error),
     };
-    let Error::NativeMiss(captured) = failure(&engine, &cycle, source) else {
+    let Error::NativeMiss(captured) = failure(&engine, source) else {
         panic!("actual absent native import must have provenance")
     };
     assert_eq!(captured.to_string(), ordinary.to_string());
@@ -62,7 +61,7 @@ fn terminal_native_miss_preserves_the_original_resolution_diagnostic() {
 
 #[test]
 fn rawr_typos_shadowed_aliases_wrong_kinds_and_type_errors_remain_source_errors() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     for source in [
         "pub fn sample() -> i64 { misspelled() }",
         "pub fn sample(value: MissingType) {}",
@@ -77,7 +76,7 @@ fn rawr_typos_shadowed_aliases_wrong_kinds_and_type_errors_remain_source_errors(
         "pub fn sample() -> i64 { native::echo(true) }",
         "pub fn first() -> i64 { native::echo(1) } pub fn second() -> i64 { misspelled() }",
     ] {
-        let error = failure(&engine, &cycle, source);
+        let error = failure(&engine, source);
         let Error::Source(error) = error else {
             panic!("ordinary source failure changed classification: {source}: {error}");
         };
@@ -88,7 +87,7 @@ fn rawr_typos_shadowed_aliases_wrong_kinds_and_type_errors_remain_source_errors(
         );
     }
     assert!(matches!(
-        failure(&engine, &cycle, "pub fn sample( {"),
+        failure(&engine, "pub fn sample( {"),
         Error::Source(_)
     ));
 }
@@ -126,7 +125,7 @@ fn structure(engine: &mut Engine) -> identity::Selector {
 
 #[test]
 fn terminal_member_absence_requires_a_resolved_imported_type() {
-    let (mut engine, cycle) = compiler();
+    let mut engine = compiler();
     structure(&mut engine);
     for source in [
         "use structure::Cell; pub fn sample(value: Cell) { value.new_method(); }",
@@ -134,22 +133,22 @@ fn terminal_member_absence_requires_a_resolved_imported_type() {
         "use structure::Cell; pub fn sample() { Cell::new_associated(); }",
         "pub fn sample() { structure::Cell::new_associated(); }",
     ] {
-        let error = failure(&engine, &cycle, source);
+        let error = failure(&engine, source);
         assert!(
             matches!(error, Error::NativeMiss(_)),
             "imported member lost provenance: {source}: {error}"
         );
     }
     let source = "struct Cell { value: i64 } pub fn sample(value: Cell) { value.new_method(); }";
-    assert!(matches!(failure(&engine, &cycle, source), Error::Source(_)));
+    assert!(matches!(failure(&engine, source), Error::Source(_)));
 }
 
 #[test]
 fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_is_not() {
-    let (mut engine, cycle) = compiler();
+    let mut engine = compiler();
     let constructor = structure(&mut engine);
     let source = "use structure::Cell; pub fn sample() -> i64 { let value = Cell(1); value.0 }";
-    let error = failure(&engine, &cycle, source);
+    let error = failure(&engine, source);
     assert!(matches!(error, Error::NativeMiss(_)), "{error}");
     let definition = host::structural::Definition::new(
         engine
@@ -169,14 +168,14 @@ fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_is_not() {
         .host_registry
         .admit_structural(definition, &mut host::TestImportAllocation::default())
         .unwrap();
-    let error = failure(&engine, &cycle, source);
+    let error = failure(&engine, source);
     assert!(matches!(error, Error::Source(_)), "{error}");
     assert!(error.to_string().contains("adapter kind differs"));
 }
 
 #[test]
 fn capture_and_lowering_allocation_refusals_precede_native_miss_classification() {
-    let (engine, cycle) = compiler();
+    let engine = compiler();
     let snapshot = native_snapshot("pub fn sample() -> i64 { native::new_function() }");
     let graph = package::Graph::load_snapshot(&engine, &snapshot).unwrap();
     let mut probe = host::TestImportAllocation::default();
@@ -187,7 +186,7 @@ fn capture_and_lowering_allocation_refusals_precede_native_miss_classification()
         host::TestImportAllocation::new(0, 0),
         host::TestImportAllocation::new(items, bytes),
     ] {
-        let error = match Output::transform(&engine, &snapshot, &cycle, &mut allocation) {
+        let error = match Output::transform_plain(&engine, &snapshot, &mut allocation) {
             Ok(_) => panic!("bounded metadata account must refuse this compilation"),
             Err(error) => error,
         };

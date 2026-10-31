@@ -20,9 +20,11 @@ use crate::{Error, Result};
 const SCHEMA: u32 = 1;
 pub(crate) const BUILD_PROJECTION_SCHEMA: u32 = 4;
 const BUILD_PROJECTION_DOMAIN: &[u8] = b"rawr.import.cargo.protected-source-build/v1";
-/// The profile host whose closure the iced universe governs.
+/// The fixtures' host package, whose closure their universe governs.
+#[cfg(test)]
 const ROOT_PACKAGE: &str = "rawr-iced";
-/// The framework crate whose exact package the iced facade fixes.
+/// The framework crate whose exact package the fixtures' universe fixes.
+#[cfg(test)]
 const FRAMEWORK_PACKAGE: &str = "iced";
 /// The runtime crate a runner with no host profile links: the plain
 /// universe governs its closure and fixes no framework.
@@ -36,20 +38,10 @@ const PLAIN_PROFILE: [u8; 32] = [0; 32];
 const PLAIN_SEED_BYTES: &[u8] =
     b"version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.0.0\"\n";
 const RECEIPT_SCHEMA: u32 = 2;
-const ICED_NAME: &str = "rawr.framework.iced/current";
-// Compiler and endpoint proof identity rotate independently of ICED_PROFILE.
-const ICED_VERSION: u32 = 3;
-const ICED_ENDPOINT_TABLE: u32 = 4;
-const ICED_TARGET: &str = super::toolchain::HOST;
-const ICED_CARGO_PROFILE: &str = "dev";
-const ICED_RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
-const ICED_CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
-const ICED_PROFILE: [u8; 32] = [
-    0xfb, 0x80, 0xda, 0x22, 0xdc, 0x39, 0x10, 0x65, 0x81, 0x04, 0x8b, 0xf6, 0xc0, 0xb8, 0xe4, 0xe4,
-    0x1b, 0x7b, 0xc9, 0x3d, 0xfd, 0xdf, 0x0c, 0x0d, 0x67, 0x7e, 0x74, 0x48, 0x84, 0x18, 0xd1, 0xe4,
-];
-const ICED_SEED_BYTES: &[u8] =
-    include_bytes!("../../../iced/src/profile/resolution/current-v2.lock");
+const TARGET: &str = super::toolchain::HOST;
+const CARGO_PROFILE: &str = "dev";
+const RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
+const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
 
 /// Exact bounded canonical protected source/build facts observed after build.
 #[derive(Debug, Eq, PartialEq)]
@@ -674,26 +666,6 @@ impl Definition {
 }
 
 impl Catalog {
-    /// Authenticate the only product-known iced cohort.
-    #[doc(hidden)]
-    pub fn iced_current_v2(limits: &Limits) -> Result<Self> {
-        let current = Definition::new(
-            ROOT_PACKAGE,
-            Some(FRAMEWORK_PACKAGE),
-            ICED_NAME,
-            ICED_VERSION,
-            ICED_ENDPOINT_TABLE,
-            ICED_PROFILE,
-            ICED_SEED_BYTES,
-            ICED_TARGET,
-            ICED_CARGO_PROFILE,
-            ICED_RUSTC_COMMIT,
-            ICED_CARGO_COMMIT,
-            limits,
-        )?;
-        Ok(Self::new(current))
-    }
-
     /// The universe of a runner with no host profile: it governs the
     /// closure of the `rawr` runtime crate and fixes no framework.
     #[doc(hidden)]
@@ -706,10 +678,10 @@ impl Catalog {
             PLAIN_ENDPOINT_TABLE,
             PLAIN_PROFILE,
             PLAIN_SEED_BYTES,
-            ICED_TARGET,
-            ICED_CARGO_PROFILE,
-            ICED_RUSTC_COMMIT,
-            ICED_CARGO_COMMIT,
+            TARGET,
+            CARGO_PROFILE,
+            RUSTC_COMMIT,
+            CARGO_COMMIT,
             limits,
         )
         .map(Self::new)
@@ -5614,51 +5586,12 @@ mod tests {
         assert_eq!(first.input, [0x51; 32]);
     }
 
-    const CURRENT_MEMCHR: &str = "name = \"memchr\"\nversion = \"2.8.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4\"\n";
-    const PREVIOUS_MEMCHR: &str = "name = \"memchr\"\nversion = \"2.8.3\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98\"\n";
-    const CURRENT_MEMCHR_EDGE: &str = " \"idna_adapter\",\n \"memchr\",\n \"nix\",";
-    const PREVIOUS_MEMCHR_EDGE: &str = " \"idna_adapter\",\n \"nix\",";
-    const CURRENT_RUSTIX_EDGE: &str = " \"rawr-toml\",\n \"rustix\",\n \"semver\",";
-
-    const ICED_REV: &str = "be88873d38544455e26c7a104eb757da2cbbac6b";
-    const FORK_REV: &str = "23f021145eff7dfd420e8f3739b742e902568678";
-    /// iced master's own git cosmic-text, not a `[patch]`.
-    const ICED_COSMIC_TEXT: &str = "source = \"git+https://github.com/hecrj/cosmic-text.git?rev=6adc2364289fd241daed751948a03d0aea5a31ca#6adc2364289fd241daed751948a03d0aea5a31ca\"\n";
-    const REGISTRY_COSMIC_TEXT: &str = "source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
-
-    /// A project that is not shaped like RawrGallery (another
-    /// cosmic-text, other dependency versions and edges, its own path crates)
-    /// is admitted as long as it uses the iced the facade was built for.
-    #[test]
-    fn non_gallery_project_universe_is_admitted() {
-        let limits = Limits::standard();
-        let catalog = super::Catalog::iced_current_v2(&limits).unwrap();
-        admit(catalog.current.clone(), super::ICED_SEED_BYTES.into())
-            .expect("the seed itself is admitted");
-        let current = std::str::from_utf8(super::ICED_SEED_BYTES).unwrap();
-        assert!(current.contains(ICED_COSMIC_TEXT));
-        let project = current
-            .replacen(ICED_COSMIC_TEXT, REGISTRY_COSMIC_TEXT, 1)
-            .replacen(CURRENT_MEMCHR, PREVIOUS_MEMCHR, 1)
-            .replacen(CURRENT_MEMCHR_EDGE, PREVIOUS_MEMCHR_EDGE, 1)
-            .replacen(CURRENT_RUSTIX_EDGE, " \"rawr-toml\",\n \"semver\",", 1)
-            + "\n[[package]]\nname = \"helper\"\nversion = \"0.1.0\"\n";
-        assert_ne!(project.as_bytes(), super::ICED_SEED_BYTES);
-        admit(
-            catalog.current.clone(),
-            project.into_bytes().into_boxed_slice(),
-        )
-        .expect("the project's own resolution around the same iced is admitted");
-    }
-
     /// A runner with no host profile governs the `rawr` crate's closure
     /// and fixes no framework: a lock with any iced, or none, is admitted.
     #[test]
     fn the_plain_universe_governs_rawr_and_fixes_no_framework() {
         let limits = Limits::standard();
         let plain = super::Catalog::plain(&limits).unwrap();
-        let iced = super::Catalog::iced_current_v2(&limits).unwrap();
-        assert_ne!(plain.identity(), iced.identity());
         assert!(plain.names_package("rawr"));
         assert!(!plain.names_package("iced"));
         let project = "version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.25.1\"\n\
@@ -5668,63 +5601,5 @@ mod tests {
             .expect("a project's own resolution around rawr is admitted");
         let without_root = "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.18\"\n";
         assert!(admit(plain.current.clone(), without_root.as_bytes().into()).is_err());
-    }
-
-    /// A project on another iced revision (here the airstrike fork
-    /// Rawr used before moving to iced master) is refused with both revisions.
-    #[test]
-    fn a_different_iced_revision_names_both_revisions() {
-        let limits = Limits::standard();
-        let catalog = super::Catalog::iced_current_v2(&limits).unwrap();
-        let current = std::str::from_utf8(super::ICED_SEED_BYTES).unwrap();
-        let project = current.replacen(
-            &format!(
-                "name = \"iced\"\nversion = \"0.15.0-dev\"\nsource = \"git+https://github.com/iced-rs/iced?rev={ICED_REV}#{ICED_REV}\"\n"
-            ),
-            &format!(
-                "name = \"iced\"\nversion = \"0.15.0-dev\"\nsource = \"git+https://github.com/airstrike/iced?rev={FORK_REV}#{FORK_REV}\"\n"
-            ),
-            1,
-        );
-        assert_ne!(project, current);
-        let Err(crate::Error::Request { field, reason }) = admit(
-            catalog.current.clone(),
-            project.into_bytes().into_boxed_slice(),
-        ) else {
-            panic!("a second iced revision must be refused");
-        };
-        assert_eq!(field, "framework dependency");
-        assert_eq!(
-            reason.as_ref(),
-            format!(
-                "this rawr supports iced at rev {ICED_REV} (https://github.com/iced-rs/iced); \
-                 the project uses iced at rev {FORK_REV} (https://github.com/airstrike/iced)"
-            )
-        );
-    }
-
-    #[test]
-    fn prospective_seed_rotates_resolution_and_endpoint_cohorts() {
-        assert_eq!((super::ICED_VERSION, super::ICED_ENDPOINT_TABLE), (3, 4));
-        let limits = Limits::standard();
-        let current = super::Catalog::iced_current_v2(&limits).unwrap();
-        for (version, endpoint_table) in [(2, 4), (3, 3)] {
-            let previous = Definition::new(
-                super::ROOT_PACKAGE,
-                Some(super::FRAMEWORK_PACKAGE),
-                super::ICED_NAME,
-                version,
-                endpoint_table,
-                super::ICED_PROFILE,
-                super::ICED_SEED_BYTES,
-                super::ICED_TARGET,
-                super::ICED_CARGO_PROFILE,
-                super::ICED_RUSTC_COMMIT,
-                super::ICED_CARGO_COMMIT,
-                &limits,
-            )
-            .unwrap();
-            assert_ne!(current.identity(), previous.identity());
-        }
     }
 }

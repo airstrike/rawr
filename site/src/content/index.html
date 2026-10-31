@@ -142,10 +142,10 @@ fn main() {
   <div class="wrap sec">
     <div class="side">
       <h2>iced apps that reload when you save</h2>
-      <p>With the rawr-iced extension, <code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles the rest of the app.</p>
-      <p>Saving a marked file swaps the new code into the running app. The app keeps its state when the new code is compatible with it. Otherwise it starts again from its initial state. A save that fails the check leaves the last good version running and shows the error in the app.</p>
-      <p>In RawrGallery, a gallery app built with rawr-iced, an edit to a marked file was live in about 0.2&nbsp;s on an Apple Silicon Mac. An edit to a native module or a dependency is rebuilt by Cargo first, which took about 8&nbsp;s there.</p>
-      <div class="actions"><a class="btn" href="/docs/iced">Set up rawr-iced</a></div>
+      <p><code>rawr run</code> runs an <a href="https://github.com/iced-rs/iced">iced</a> app with its marked files interpreted. Cargo compiles iced and the rest of the app. Your marked files call iced through bindings generated from iced&rsquo;s own API.</p>
+      <p>Saving a marked file reaches the running app at its next message. The app keeps its state when the new code is compatible with it. Otherwise it starts again. A save that fails the check prints its error and leaves the last good version running.</p>
+      <p>An edit to a native module or a dependency is rebuilt by Cargo first.</p>
+      <div class="actions"><a class="btn" href="/docs/iced">Run an iced app</a></div>
     </div>
       <figure class="compare" style="--pos: 50%" data-left="cargo run" data-right="rawr run">
         <div class="tabs">
@@ -202,7 +202,7 @@ impl Counter {
           </div>
           <div class="pane rawr">
             <div class="file"><b>src/main.rs</b><span>interpreted by rawr</span></div>
-            <pre><code data-lang="rust" data-run="main.rs" id="src-counter">// rawr
+            <pre><code data-lang="rust">// rawr
 use iced::Center;
 use iced::widget::{Widget, button, column, text};
 
@@ -243,7 +243,7 @@ impl Counter {
         .align_x(Center)
     }
 }</code></pre>
-            <div class="run"><button type="button" class="runbtn" data-source="src-counter" data-out="out-counter" data-alt="Counter preview with an Increment button, the number 0 and a Decrement button" aria-label="Render the counter's first frame on rawr's server" hidden></button><b>rawr run</b><span class="quiet" id="out-counter" aria-live="polite">(opens a window)</span></div>
+            <div class="run"><b>rawr run</b><span class="quiet">(opens a window)</span></div>
           </div>
           <div class="divider">
             <span class="hit" aria-hidden="true"></span>
@@ -253,7 +253,7 @@ impl Counter {
         </div>
         <figcaption>
           The same counter runs with rawr and compiles with Cargo.
-          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line. The run button renders its first frame on rawr&rsquo;s server.</small>
+          <small>Based on iced&rsquo;s <code>examples/counter</code> at revision <code>be88873d</code>, with <code>// rawr</code> as its first line.</small>
         </figcaption>
       </figure>
   </div>
@@ -310,24 +310,21 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
   <div class="wrap sec">
     <div class="side">
       <h2>Run Rust in your browser</h2>
-      <p>The playground runs Rust code and shows its output. It renders iced code as an image or an animation.</p>
+      <p>The playground runs Rust code and shows its output. It doesn&rsquo;t run iced programs yet.</p>
       <p>The <code class="nw">?play</code> bot does the same in Discord. Post <code class="nw">?play</code> above a Rust code block in a channel where the bot is turned on.</p>
       <div class="actions">
         <a class="btn go" href="/play">Open the playground</a>
         <a class="btn" href="/docs/play/discord">Use rawr in Discord</a>
       </div>
     </div>
-    <div class="pair">
-      <figure class="shot">
-        <img src="img/counter.png" width="320" height="340" loading="lazy" alt="An iced counter showing 1 between Increment and Decrement buttons">
-      </figure>
+    <div>
       <div class="block">
         <div class="file"><b>Discord</b></div>
-        <pre><code><span class="k">?play</span> 160x170 msg=Message::Increment
+        <pre><code><span class="k">?play</span>
 <span class="c">```rust</span>
-<span class="c">// the counter from above</span>
+<span class="c">// the cart from above</span>
 <span class="c">```</span></code></pre>
-        <p class="fig-note">The counter after one <code>Increment</code> message.</p>
+        <p class="fig-note">The bot replies with the program&rsquo;s output, <code>total: 27</code>.</p>
       </div>
     </div>
   </div>
@@ -340,7 +337,7 @@ fn category(tx: Transaction) -&gt; Option&lt;String&gt; {
     </div>
     <div>
       <p class="status">rawr supports part of Rust. The <a href="/docs/reference/overview">API Reference</a> lists what works, what is missing and where rawr still differs from Rust.</p>
-      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import and rawr-iced need a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. They have been tested on Apple Silicon Macs. rawr-iced supports one pinned iced revision. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
+      <p class="status">The <code>rawr</code> crate and the <code>rawr</code> command need Rust 1.95 or newer. rawr-import needs a Unix system and the pinned nightly <code>nightly-2026-07-11</code>. It has been tested on Apple Silicon Macs. <a href="/docs/reference/requirements">Requirements</a> has the details.</p>
       <p class="status"><strong>Planned:</strong> native modules other than the crate root that call into marked modules, and marked ratatui code that draws on the <code>Frame</code> itself.</p>
       <p class="status">rawr&rsquo;s API and commands may change. Report incorrect results or unexpected rejections <a href="https://github.com/airstrike/rawr/issues">on GitHub</a> with a small reproduction.</p>
     </div>

@@ -29,5 +29,5 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
             #[cfg(not(target_family = "wasm"))]
             Ok(crate::Dynamic::from(i64::from(std::process::id())))
         })
-        .unwrap_or_else(|_| panic!("the std facade must retain process::id"));
+        .unwrap_or_else(|_| panic!("the std bindings must retain process::id"));
 }

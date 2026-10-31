@@ -4,7 +4,7 @@
 //! output to its admitted artifact, original request, epoch and publication
 //! gate. Native runtime binding remains mandatory before installation.
 
-use crate::{application, host, package, reload, Engine, Shared};
+use crate::{application, package, reload, Engine, Shared};
 
 use super::runner::account;
 use package::compile::captured;
@@ -77,38 +77,16 @@ impl Engine {
 
     /// Compile the immutable snapshot once and compare actual inferred native
     /// uses with this compiler's retained carrier. Only actual terminal misses
-    /// with native provenance request preparation; ordinary source errors do not.
-    #[doc(hidden)]
-    pub fn compile_package_snapshot_resident(
-        &self,
-        snapshot: &package::snapshot::Snapshot,
-        cycle: &host::facade::ProfileCycle,
-    ) -> Result<Outcome, Error> {
-        self.compile_resident(snapshot, Some(cycle))
-    }
-
-    /// [`Engine::compile_package_snapshot_resident`] for a runner with no
-    /// host profile: any program, a plain one included, and no application
-    /// semantics to derive.
+    /// with native provenance request preparation; ordinary source errors do
+    /// not. Any program, a plain one included.
     #[doc(hidden)]
     pub fn compile_package_snapshot_resident_plain(
         &self,
         snapshot: &package::snapshot::Snapshot,
     ) -> Result<Outcome, Error> {
-        self.compile_resident(snapshot, None)
-    }
-
-    fn compile_resident(
-        &self,
-        snapshot: &package::snapshot::Snapshot,
-        cycle: Option<&host::facade::ProfileCycle>,
-    ) -> Result<Outcome, Error> {
         let native = self.imported_native.as_ref().ok_or(Error::Unowned)?;
         let mut attempt = account::support::Pending::transform(native.attempt()?)?;
-        let output = match cycle {
-            Some(cycle) => captured::Output::transform(self, snapshot, cycle, &mut attempt),
-            None => captured::Output::transform_plain(self, snapshot, &mut attempt),
-        };
+        let output = captured::Output::transform_plain(self, snapshot, &mut attempt);
         let output = match output {
             Ok(output) => output,
             Err(captured::Error::NativeMiss(_)) => return Ok(Outcome::NeedsPreparation),

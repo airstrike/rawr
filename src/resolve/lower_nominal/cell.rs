@@ -530,7 +530,7 @@ impl Parser<'_> {
             .models
             .host_items("rawr_iced::tokio::__lock")
             .map(<[_]>::to_vec)
-            .ok_or_else(|| self.unsupported("tokio's `Mutex` without rawr-iced"))?;
+            .ok_or_else(|| self.unsupported("tokio's `Mutex` in a program without tokio"))?;
         let owner = self.models.item_owner("rawr_iced::tokio::__lock").cloned();
         let cell = mutex.rendered_source();
         let lock = self.call_host_function(&items, owner, vec![mutex], call)?;

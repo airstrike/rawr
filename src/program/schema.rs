@@ -91,27 +91,6 @@ impl Fingerprint {
     pub(crate) fn symbol_id(&self) -> u64 {
         symbol_id(self)
     }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &crate::host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        let parts = crate::Shared::make_mut(&mut self.0);
-        debug_assert_eq!(parts.authority.len(), parts.atoms.len());
-        parts.authority.iter_mut().zip(parts.atoms.iter()).fold(
-            0_usize,
-            |completed, (part, atom)| {
-                let (Part::Identity(type_def::Identity::Host(identity)), Atom::Host(path)) =
-                    (part, atom)
-                else {
-                    return completed;
-                };
-                completed
-                    .saturating_add(usize::from(profile.normalize_identity_text(path, identity)))
-            },
-        )
-    }
 }
 
 impl Manifest {
@@ -647,72 +626,5 @@ fn schema_tag(marker: Marker) -> u16 {
         Marker::ErasedLifetime => 0x2e11,
         Marker::SharedReference => 0x2e12,
         Marker::MutableReference => 0x2e13,
-    }
-}
-
-#[cfg(all(test, feature = "rust-import"))]
-mod profile_finalization_tests {
-    use super::{Atom, Fingerprint, Part};
-    use crate::{host, type_def, ImmutableString};
-
-    const EXACT: [u8; 32] = [0x81; 32];
-    const SEMANTIC: [u8; 32] = [0x92; 32];
-
-    fn profile<T: 'static>() -> host::facade::Definition {
-        let mut builder =
-            host::facade::Builder::new("proof", host::facade::Abi::new(1).unwrap()).unwrap();
-        builder.compatibility_seal(EXACT).unwrap();
-        builder.type_::<T>("Opaque", &[], &[]).unwrap();
-        builder.finish().unwrap()
-    }
-
-    fn schema(definition: &host::type_def::Definition, ordinary: &str) -> Fingerprint {
-        Fingerprint::new(
-            Box::from([
-                Part::Identity(type_def::Identity::Host(definition.identity().clone())),
-                Part::Text(ImmutableString::from(ordinary)),
-            ]),
-            Box::from([
-                Atom::Host(ImmutableString::from("proof::Opaque")),
-                Atom::Text(ImmutableString::from(ordinary)),
-            ]),
-        )
-    }
-
-    #[test]
-    fn script_schema_finalizes_only_authenticated_host_identity_parts() {
-        struct Provisional;
-        struct Admitted;
-
-        let provisional = profile::<Provisional>();
-        let admitted = profile::<Admitted>();
-        let provisional_type = provisional.types().next().unwrap();
-        let admitted_type = admitted.types().next().unwrap();
-        let provisional_cycle =
-            host::facade::ProfileCycle::transform(&provisional, EXACT, SEMANTIC).unwrap();
-        let admitted_cycle =
-            host::facade::ProfileCycle::transform(&admitted, EXACT, SEMANTIC).unwrap();
-        let provisional_finalization = provisional_cycle
-            .finalization(provisional.fingerprint())
-            .unwrap();
-        let admitted_finalization = admitted_cycle.finalization(admitted.fingerprint()).unwrap();
-        let mut provisional_schema = schema(provisional_type, "same");
-        let mut admitted_schema = schema(admitted_type, "same");
-
-        assert_eq!(
-            provisional_schema.normalize_profile(&provisional_finalization),
-            1
-        );
-        assert_eq!(admitted_schema.normalize_profile(&admitted_finalization), 1);
-        assert_eq!(provisional_schema, admitted_schema);
-
-        let mut changed = schema(admitted_type, "changed");
-        let shared = changed.clone();
-        assert!(crate::Shared::ptr_eq(&shared.0, &changed.0));
-        assert_eq!(changed.normalize_profile(&admitted_finalization), 1);
-        assert_ne!(provisional_schema, changed);
-        assert!(!crate::Shared::ptr_eq(&shared.0, &changed.0));
-        assert_eq!(shared, schema(admitted_type, "changed"));
-        assert_ne!(shared, changed);
     }
 }

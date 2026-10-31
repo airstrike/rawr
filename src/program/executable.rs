@@ -49,19 +49,7 @@ pub struct Executable {
     imported_owner: Option<crate::package::import::runner::account::support::Owner>,
 }
 
-/// Compiler-only application metadata with no lowered program or runtime authority.
-#[cfg(feature = "rust-import")]
-pub(crate) struct ContractEvidence {
-    source: super::source::Id,
-    callables: BTreeMap<item::Key, Callable>,
-    application: Option<crate::application::Entry>,
-    preview_fingerprint: crate::preview::Fingerprint,
-    host_dependencies: Box<[host::facade::Dependency]>,
-}
-
 pub(crate) trait ApplicationEvidence {
-    #[cfg(feature = "rust-import")]
-    fn application(&self) -> Option<&crate::application::Entry>;
     fn callable(&self, key: &item::Key) -> Option<&Callable>;
     fn preview_fingerprint(&self) -> &crate::preview::Fingerprint;
     fn host_dependencies(&self) -> &[host::facade::Dependency];
@@ -636,39 +624,7 @@ impl Executable {
     }
 }
 
-#[cfg(feature = "rust-import")]
-impl ContractEvidence {
-    pub(crate) fn from_resolved(
-        program: &resolve::Program,
-        host_dependencies: Box<[host::facade::Dependency]>,
-    ) -> Self {
-        let callables = collect_callables(program);
-        let application = program
-            .application()
-            .map(|entry| collect_application(entry, &callables, program));
-        Self {
-            source: program.source().entry(),
-            callables,
-            application,
-            preview_fingerprint: crate::preview::Fingerprint::from_definitions(program.previews()),
-            host_dependencies,
-        }
-    }
-
-    pub(crate) fn application_error_source(
-        &self,
-        error: &crate::application::Error,
-    ) -> super::source::Id {
-        application_error_source(self.source, self.application(), &self.callables, error)
-    }
-}
-
 impl ApplicationEvidence for Executable {
-    #[cfg(feature = "rust-import")]
-    fn application(&self) -> Option<&crate::application::Entry> {
-        self.application()
-    }
-
     fn callable(&self, key: &item::Key) -> Option<&Callable> {
         self.callable(key)
     }
@@ -679,25 +635,6 @@ impl ApplicationEvidence for Executable {
 
     fn host_dependencies(&self) -> &[host::facade::Dependency] {
         self.host_dependencies()
-    }
-}
-
-#[cfg(feature = "rust-import")]
-impl ApplicationEvidence for ContractEvidence {
-    fn application(&self) -> Option<&crate::application::Entry> {
-        self.application.as_ref()
-    }
-
-    fn callable(&self, key: &item::Key) -> Option<&Callable> {
-        self.callables.get(key)
-    }
-
-    fn preview_fingerprint(&self) -> &crate::preview::Fingerprint {
-        &self.preview_fingerprint
-    }
-
-    fn host_dependencies(&self) -> &[host::facade::Dependency] {
-        &self.host_dependencies
     }
 }
 

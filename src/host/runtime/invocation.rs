@@ -98,7 +98,7 @@ impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::OwnedStorage => formatter.write_str(
-                "invocation authority requires a facade type with invocation-scoped storage",
+                "invocation authority requires a host type with invocation-scoped storage",
             ),
         }
     }

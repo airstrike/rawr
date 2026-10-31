@@ -18,13 +18,13 @@ include!(concat!(env!("OUT_DIR"), "/host.rs"));
 #[cfg(not(feature = "embedded-host"))]
 pub const DIGEST: [u8; 32] = [0; 32];
 
-/// The Rawr repository root holding `rawr`, `rawr-import` and `rawr-iced`.
+/// The Rawr repository root holding `rawr` and `rawr-import`.
 #[cfg(not(feature = "embedded-host"))]
 pub fn root() -> crate::Result<PathBuf> {
     Ok(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")))
 }
 
-/// The Rawr repository root holding `rawr`, `rawr-import` and `rawr-iced`.
+/// The Rawr repository root holding `rawr` and `rawr-import`.
 /// The host is found or written once per process.
 #[cfg(feature = "embedded-host")]
 pub fn root() -> crate::Result<PathBuf> {

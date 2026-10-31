@@ -264,15 +264,6 @@ impl Definition {
         })
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn try_clone_without_projections(
-        &self,
-    ) -> Result<Self, rawr_import::surface::Error> {
-        let mut definition = self.try_clone()?;
-        definition.projections = Box::default();
-        Ok(definition)
-    }
-
     pub(crate) fn declared<T: 'static>(
         path: host::path::Path,
         parameters: &[&str],
@@ -615,73 +606,13 @@ impl Contract {
     pub(crate) const fn runtime_identity(&self) -> Option<TypeId> {
         self.identity.native()
     }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) const fn identity_ref(&self) -> &Identity {
-        &self.identity
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        let mut completed = usize::from(profile.normalize_identity(&self.path, &mut self.identity));
-        if let Some(shape) = &mut self.shape {
-            completed =
-                completed.saturating_add(Shared::make_mut(shape).normalize_profile(profile));
-        }
-        completed
-    }
 }
 
-impl Shape {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        match self {
-            Self::Opaque | Self::Trait(_) => 0,
-            Self::Struct { fields, .. } => fields.iter_mut().fold(0_usize, |completed, field| {
-                completed.saturating_add(field.ty.normalize_profile(profile))
-            }),
-            Self::Enum(variants) => variants.iter_mut().fold(0_usize, |completed, variant| {
-                completed.saturating_add(variant.fields.iter_mut().fold(
-                    0_usize,
-                    |completed, field| {
-                        completed.saturating_add(field.ty.normalize_profile(profile))
-                    },
-                ))
-            }),
-        }
-    }
-}
+impl Shape {}
 
-impl Export {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        profile
-            .normalize_fingerprint(&mut self.facade)
-            .saturating_add(self.contract.normalize_profile(profile))
-    }
-}
+impl Export {}
 
-impl Projection {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        match &mut self.target {
-            Target::Local(contract) => contract.normalize_profile(profile),
-            Target::External(export) => export.normalize_profile(profile),
-        }
-    }
-}
+impl Projection {}
 
 impl Export {
     #[cfg(feature = "rust-import")]
@@ -866,7 +797,7 @@ impl Argument {
 }
 
 impl Identity {
-    #[cfg(any(test, feature = "rust-import"))]
+    #[cfg(test)]
     pub(crate) const fn linked(identity: TypeId) -> Self {
         Self::Linked(native::Identity::from_type_id(identity))
     }
@@ -1178,7 +1109,6 @@ mod layout_tests {
 #[cfg(all(test, feature = "rust-import"))]
 mod selector_hash_tests {
     use super::{Field, Variant};
-    use crate::host;
     use crate::host::type_ref::{Builtin, Type};
     use rawr_import::surface::identity::{Form, Selector};
     use std::hash::{Hash, Hasher};
@@ -1247,12 +1177,6 @@ mod selector_hash_tests {
                 form: Form::Tuple { arity: 1 },
             },
         ];
-        let mut builder =
-            host::facade::Builder::new("proof", host::facade::Abi::new(1).unwrap()).unwrap();
-        builder.compatibility_seal([1; 32]).unwrap();
-        let definition = builder.finish().unwrap();
-        let cycle = host::facade::ProfileCycle::transform(&definition, [1; 32], [2; 32]).unwrap();
-        let profile = cycle.finalization(definition.fingerprint()).unwrap();
         let mut fields = Vec::new();
         let mut variants = Vec::new();
         for (index, selector) in selectors.into_iter().enumerate() {
@@ -1262,8 +1186,8 @@ mod selector_hash_tests {
                 selector.clone(),
             );
             for ty in [Builtin::I64, Builtin::Bool] {
-                // Profile normalization may transform the field type, but not
-                // its immutable imported selector.
+                // A field's type may change, but not its immutable imported
+                // selector.
                 field.ty = Type::builtin(ty);
                 let expected = writes(&OriginalField {
                     name: &field.name,
@@ -1288,16 +1212,6 @@ mod selector_hash_tests {
             assert_eq!(writes(&variant), expected);
             assert_eq!(writes(&variant.clone()), expected);
             assert_eq!(variant.imported_fingerprint, variant.imported.fingerprint());
-            let original: crate::Shared<super::Shape> =
-                super::Shape::Enum(Box::from([variant.clone()])).into();
-            let mut normalized = original.clone();
-            assert_eq!(
-                crate::Shared::make_mut(&mut normalized).normalize_profile(&profile),
-                0
-            );
-            assert!(!crate::Shared::ptr_eq(&original, &normalized));
-            assert_eq!(writes(original.as_ref()), writes(normalized.as_ref()));
-            assert_eq!(original, normalized);
             variants.push(variant);
             fields.push(field);
         }

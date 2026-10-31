@@ -289,11 +289,7 @@ impl Exports {
 }
 
 fn failed(error: impl std::fmt::Display) -> Box<EvalAltResult> {
-    EvalAltResult::ErrorRuntime(
-        format!("cannot export to rawr: {error}").into(),
-        Position::NONE,
-    )
-    .into()
+    EvalAltResult::ErrorRuntime(format!("`#[rawr::export]`: {error}").into(), Position::NONE).into()
 }
 
 impl Engine {

@@ -19,7 +19,6 @@ on:
   #     - "play/**"
   #     - "site/**"
   #     - "src/**"
-  #     - "iced/**"
   #     - "cli/**"
   #     - "canonical/**"
   #     - "codegen/**"
@@ -47,11 +46,11 @@ permissions:
   actions: read
 
 jobs:
-  # rawr-web for wasm32 (web/build.sh): the module, its JS glue and the fonts
-  # it fetches, each with a brotli copy. Its target dir (with wasm-bindgen-cli
-  # at the Cargo.lock version), the cargo registry and the fonts live in the
-  # Actions cache, saved once per Cargo.lock, so a run rebuilds the workspace
-  # crates and the LTO link only. It runs beside `image`, which takes longer.
+  # rawr-web for wasm32 (web/build.sh): the module, with a brotli copy, and
+  # its JS glue. Its target dir (with wasm-bindgen-cli at the Cargo.lock
+  # version) and the cargo registry live in the Actions cache, saved once per
+  # Cargo.lock, so a run rebuilds the workspace crates and the LTO link only.
+  # It runs beside `image`, which takes longer.
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -74,7 +73,6 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/wasm
-            target/play/fonts
           key: web-${{ hashFiles('Cargo.lock') }}
           restore-keys: web-
 

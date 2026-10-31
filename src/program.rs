@@ -16,8 +16,6 @@ pub(crate) mod source;
 
 pub use authority::Authority;
 pub use error::{Aspect, Error};
-#[cfg(feature = "rust-import")]
-pub(crate) use executable::ContractEvidence;
 pub(crate) use executable::{ApplicationEvidence, Evidence};
 pub use executable::{Executable, Positions};
 pub use generation::GenerationId;

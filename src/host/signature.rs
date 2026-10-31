@@ -848,18 +848,6 @@ fn same_input_type(
 
 impl Fingerprint {
     #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        let mut completed = 0_usize;
-        for parameter in &mut self.parameters {
-            completed = completed.saturating_add(parameter.normalize_profile(profile));
-        }
-        completed.saturating_add(self.output.normalize_profile(profile))
-    }
-
-    #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let type_parameters = self.type_parameters.iter().try_fold(
             self.type_parameters

@@ -23,8 +23,8 @@
 // each request's data written in (playpage.ts), keeps shares in this
 // Durable Object (content-addressed), limits each IP (by HMAC, never in
 // clear), checks Turnstile, and forwards renders to the bot's HTTP port,
-// which only this Durable Object can reach. A render is an iced snippet's
-// PNG or a plain program's output (JSON). The Turnstile widget stays
+// which only this Durable Object can reach. A render is a plain program's
+// output, or an iced or async snippet's message (JSON). The Turnstile widget stays
 // invisible unless Cloudflare needs an interaction. After one successful
 // Siteverify the Worker sets a 30-day pass cookie (HttpOnly, Secure,
 // SameSite=Lax), signed with a key derived from TURNSTILE_SECRET. While
@@ -166,10 +166,6 @@ interface Env {
   PLAY_MEMORY_MB: string;
   PLAY_TIMEOUT_MS: string;
   PLAY_TIME_MS: string;
-  PLAY_ANIMATION_TIME_MS: string;
-  PLAY_IDLE_ANIMATION_TIME_MS: string;
-  PLAY_ANIMATION_ALLOWANCE_S: string;
-  PLAY_ANIMATION_WINDOW_S: string;
   PLAY_VERSION: string;
   /**
    * Secret: the key the bot makes server tokens with. The Worker only
@@ -213,10 +209,6 @@ export class PlayBot extends Container<Env> {
       PLAY_MEMORY_MB: env.PLAY_MEMORY_MB,
       PLAY_TIMEOUT_MS: env.PLAY_TIMEOUT_MS,
       PLAY_TIME_MS: env.PLAY_TIME_MS,
-      PLAY_ANIMATION_TIME_MS: env.PLAY_ANIMATION_TIME_MS,
-      PLAY_IDLE_ANIMATION_TIME_MS: env.PLAY_IDLE_ANIMATION_TIME_MS,
-      PLAY_ANIMATION_ALLOWANCE_S: env.PLAY_ANIMATION_ALLOWANCE_S,
-      PLAY_ANIMATION_WINDOW_S: env.PLAY_ANIMATION_WINDOW_S,
       PLAY_CONFIG_URL: `http://${CONFIG_HOST}/channels`,
       PLAY_REPORT_URL: `http://${CONFIG_HOST}`,
       PLAY_HTTP_PORT: String(HTTP_PORT),
@@ -521,10 +513,7 @@ export class PlayBot extends Container<Env> {
   /** The settings the container reads at start: a change restarts it. */
   private settings(): string {
     const e = this.env;
-    return (
-      `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},` +
-      `animation=${e.PLAY_ANIMATION_TIME_MS},idle=${e.PLAY_IDLE_ANIMATION_TIME_MS},allowance=${e.PLAY_ANIMATION_ALLOWANCE_S}/${e.PLAY_ANIMATION_WINDOW_S}`
-    );
+    return `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS}`;
   }
 
   /** The image the bot reported since its container last started, or null before it reports. */

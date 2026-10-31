@@ -157,8 +157,7 @@ fn an_unmarked_module_is_native_rust() {
 }
 
 /// A marked iced crate imports its Cargo dependencies with or without a
-/// native module: rawr-iced runs it against the iced its own `cargo build`
-/// builds, never one built into rawr-iced.
+/// native module: it runs against the iced its own `cargo build` builds.
 #[test]
 fn a_marked_iced_crate_imports_its_dependencies_with_or_without_a_native_module() {
     let sandbox = Sandbox::new("marked-counter");

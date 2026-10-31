@@ -35,7 +35,7 @@ pub struct SupportExport {
 }
 
 impl SignatureContract {
-    #[cfg(feature = "rust-import")]
+    #[cfg(test)]
     pub(crate) fn new(
         path: host::path::Path,
         role: impl Into<ImmutableString>,
@@ -133,14 +133,6 @@ impl Local {
     }
 
     #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        self.contract.normalize_profile(profile)
-    }
-
-    #[cfg(feature = "rust-import")]
     pub(crate) fn try_clone(&self) -> Result<Self, rawr_import::surface::Error> {
         Ok(Self::new(self.contract.try_clone()?))
     }
@@ -185,16 +177,6 @@ impl SupportExport {
     }
 
     #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        profile
-            .normalize_fingerprint(&mut self.facade)
-            .saturating_add(self.contract.normalize_profile(profile))
-    }
-
-    #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         self.facade_root
             .retained_bytes()?
@@ -212,15 +194,7 @@ impl SupportExport {
     }
 }
 
-impl SignatureContract {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        usize::from(profile.normalize_identity(&self.path, &mut self.representation))
-    }
-}
+impl SignatureContract {}
 
 impl crate::preview::digest::Write for SignatureContract {
     fn write(

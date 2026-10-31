@@ -1,24 +1,23 @@
-//! A plain program in the browser: a snippet rawr-iced does not claim runs
-//! on the base language, as the `?play` server runs it, and its output comes
-//! back as the server's text result.
+//! A plain program in the browser: a snippet that needs neither iced nor an
+//! async runtime runs on the base language, as the `?play` server runs it,
+//! and its output comes back as the server's text result.
 
-use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
-use rawr_snippet::{plain, SOURCE_NAME};
+use rawr_snippet::{plain, route, SOURCE_NAME};
 
 /// Most output kept, in bytes, as on the server.
 const MAX_OUTPUT: usize = 64 * 1024;
 /// What ends output cut at [`MAX_OUTPUT`].
 const TRUNCATED: &str = "… output truncated";
 /// The status of a program that panicked, as Rust's.
-pub(crate) const PANIC_STATUS: i32 = 101;
+const PANIC_STATUS: i32 = 101;
 /// Time before a program is stopped, in milliseconds. The page waits for
 /// the program, so a long one is cut rather than left to hang the tab.
-pub(crate) const TIME_MS: f64 = 10_000.0;
-pub(crate) const TIME_LIMIT: &str = "time limit exceeded";
-pub(crate) const OUTPUT_LIMIT: &str = "output limit exceeded";
+const TIME_MS: f64 = 10_000.0;
+const TIME_LIMIT: &str = "time limit exceeded";
+const OUTPUT_LIMIT: &str = "output limit exceeded";
 /// The server's limits on call depth and data sizes.
 const CALL_DEPTH: usize = 32;
 const DATA_SIZE: usize = 64 * 1024;
@@ -26,31 +25,19 @@ const DATA_SIZE: usize = 64 * 1024;
 const UNUSED_ITERATOR: &str =
     "This iterator is never used. Iterators are lazy and do nothing unless consumed.";
 
-thread_local! {
-    /// Where a running program's output also goes as it is written: the
-    /// page's callback, given `(stream, text)`. None for a program the page
-    /// waits for.
-    static STREAM: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
-}
-
-/// Send the output written from now on to `callback` as well.
-pub(crate) fn stream(callback: Option<js_sys::Function>) {
-    STREAM.with(|stream| *stream.borrow_mut() = callback);
-}
-
 /// A program's output, in the order it was written.
 #[derive(Default)]
-pub(crate) struct Output {
+struct Output {
     /// Runs of text, each `(stderr, text)`.
     chunks: Vec<(bool, String)>,
-    pub(crate) status: i32,
-    pub(crate) truncated: bool,
-    pub(crate) limit: bool,
+    status: i32,
+    truncated: bool,
+    limit: bool,
     note: Option<&'static str>,
 }
 
 impl Output {
-    pub(crate) fn push(&mut self, stderr: bool, text: &str) {
+    fn push(&mut self, stderr: bool, text: &str) {
         let used: usize = self.chunks.iter().map(|(_, text)| text.len()).sum();
         if self.truncated || text.is_empty() {
             return;
@@ -70,17 +57,11 @@ impl Output {
             Some((last, chunk)) if *last == stderr => chunk.push_str(text),
             _ => self.chunks.push((stderr, text.to_owned())),
         }
-        STREAM.with(|stream| {
-            if let Some(callback) = &*stream.borrow() {
-                let name = if stderr { "stderr" } else { "stdout" };
-                let _ = callback.call2(&wasm_bindgen::JsValue::NULL, &name.into(), &text.into());
-            }
-        });
     }
 
     /// The server's text result, with the truncation marker when output
     /// was cut.
-    pub(crate) fn finish(mut self) -> String {
+    fn finish(mut self) -> String {
         if self.truncated {
             let marker = format!("\n{TRUNCATED}\n");
             match self.chunks.last_mut() {
@@ -134,18 +115,39 @@ fn json(text: &str) -> String {
 }
 
 /// A compile error, as `{"kind":"error","text":".."}`.
-pub fn error(text: &str) -> String {
+fn error(text: &str) -> String {
     format!(r#"{{"kind":"error","text":{}}}"#, json(text))
 }
 
-/// Run a plain snippet once; its output as the server's text result, or a
+/// A snippet that doesn't run here yet, as the server's
+/// `{"kind":"unavailable","text":".."}`.
+fn unavailable(reason: route::Unavailable) -> String {
+    format!(
+        r#"{{"kind":"unavailable","text":{}}}"#,
+        json(reason.message())
+    )
+}
+
+/// Run a snippet once; a plain program's output as the server's text
+/// result, an iced or async snippet's message as [`unavailable`], or a
 /// compile error as [`error`].
 pub fn run(source: &str) -> String {
     let sink = Arc::new(Mutex::new(Output::default()));
     let engine = engine(&sink);
     let mut program = plain::program(source);
     let mut note = None;
-    let compiled = match compile(&engine, &program) {
+    // One parse says whether the snippet runs here, and is the one compiled.
+    let compiled = match parse(&engine, &program) {
+        Ok((unit, evidence)) => {
+            let facts = rawr::layer::Facts::of_unit(&unit);
+            if let Some(reason) = route::unavailable(source, &facts) {
+                return unavailable(reason);
+            }
+            compile_unit(&engine, unit, evidence)
+        }
+        Err(failure) => Err(failure),
+    };
+    let compiled = match compiled {
         Ok(compiled) => Ok(compiled),
         Err(failure) => match failure
             .0
@@ -250,7 +252,7 @@ pub fn run(source: &str) -> String {
 
 /// `report`, a run-time failure, as a Cargo-built program prints its panic,
 /// at the snippet's own line and column.
-pub(crate) fn panic(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
+fn panic(report: &rawr::diagnostic::Report, program: &str, source: &str) -> String {
     rawr_snippet::panic(&rawr::diagnostic::panic(report), program, source)
 }
 
@@ -265,18 +267,39 @@ type Compiled = (
 type Failure = (Option<rawr::diagnostic::Report>, String);
 
 fn compile(engine: &Engine, program: &str) -> Result<Compiled, Failure> {
+    let (unit, evidence) = parse(engine, program)?;
+    compile_unit(engine, unit, evidence)
+}
+
+/// `program` parsed, with the source its reports quote.
+fn parse(
+    engine: &Engine,
+    program: &str,
+) -> Result<(rawr::parse::Unit, rawr::diagnostic::Source), Failure> {
     let evidence = rawr::diagnostic::Source::new(SOURCE_NAME, program)
         .map_err(|_| (None, "the snippet cannot be read".to_owned()))?;
+    match engine.parse_unit(program) {
+        Ok(unit) => Ok((unit, evidence)),
+        Err(error) => Err(failure(evidence, &error)),
+    }
+}
+
+fn compile_unit(
+    engine: &Engine,
+    unit: rawr::parse::Unit,
+    evidence: rawr::diagnostic::Source,
+) -> Result<Compiled, Failure> {
     engine
-        .parse_unit(program)
-        .and_then(|unit| engine.compile_unit_with_positions(unit, evidence.clone()))
+        .compile_unit_with_positions(unit, evidence.clone())
         .map(|(ast, positions)| (ast, positions, evidence.clone()))
-        .map_err(|error| {
-            (
-                rawr::diagnostic::Report::from_parse(evidence, &error).ok(),
-                error.to_string(),
-            )
-        })
+        .map_err(|error| failure(evidence, &error))
+}
+
+fn failure(evidence: rawr::diagnostic::Source, error: &rawr::ParseError) -> Failure {
+    (
+        rawr::diagnostic::Report::from_parse(evidence, error).ok(),
+        error.to_string(),
+    )
 }
 
 /// The type of a statements-only snippet's final value when
@@ -296,7 +319,7 @@ fn unprintable(report: &rawr::diagnostic::Report, source: &str) -> Option<String
 }
 
 /// The server's wording for an error that is a limit.
-pub(crate) fn limit(text: &str) -> Option<String> {
+fn limit(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     Some(
         if lower.contains(TIME_LIMIT) || lower.contains("terminated") {
@@ -327,7 +350,7 @@ fn engine(sink: &Arc<Mutex<Output>>) -> Engine {
 /// Give `engine` the server's limits but its operation count, and a
 /// wall-clock deadline [`TIME_MS`] from now instead, and send its output
 /// to `sink`.
-pub(crate) fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
+fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
     let deadline = crate::now() + TIME_MS;
     let depth = engine.max_call_levels().min(CALL_DEPTH);
     let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());

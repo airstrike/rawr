@@ -21,7 +21,7 @@ pub const MAX_DURATIONS: usize = 10_000;
 /// How a render ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
-    /// An image or a program's output was sent.
+    /// A program's output, or why it does not run here, was sent.
     Ok,
     /// The snippet did not check or failed while running.
     Code,
@@ -47,8 +47,8 @@ pub fn classify_output(output: &crate::Output) -> Outcome {
 ///
 /// [`message::reply`]: crate::message::reply
 #[must_use]
-pub fn classify(success: bool, has_image: bool, stderr: &str) -> Outcome {
-    if success && has_image {
+pub fn classify(success: bool, has_output: bool, stderr: &str) -> Outcome {
+    if success && has_output {
         return Outcome::Ok;
     }
     let stderr = stderr.trim();
@@ -326,7 +326,7 @@ mod tests {
             Outcome::Code
         );
         assert_eq!(
-            classify(false, false, "render time limit exceeded"),
+            classify(false, false, "time limit exceeded"),
             Outcome::Limit
         );
         assert_eq!(
@@ -341,7 +341,7 @@ mod tests {
             classify(false, false, "memory allocation of 8 bytes failed"),
             Outcome::Limit
         );
-        // Killed with nothing said, or a success without an image: a crash.
+        // Killed with nothing said, or a success that wrote nothing: a crash.
         assert_eq!(classify(false, false, ""), Outcome::Limit);
         assert_eq!(classify(true, false, ""), Outcome::Limit);
     }

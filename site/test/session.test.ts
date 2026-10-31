@@ -6,14 +6,13 @@ import { test } from "node:test";
 import { Session, WEB_MODULE, type Example, type PlayData, type Web } from "../src/play/session.ts";
 
 const EXAMPLES: Example[] = [
-  { name: "Async tasks", code: "async fn main() {}", group: "Rust", slug: "async-tasks" },
-  { name: "Counter", code: "counter code", messages: ["Message::Increment"], group: "iced", slug: "counter" },
+  { name: "Word count", code: "word count code", group: "Rust", slug: "word-count" },
+  { name: "Traits and generics", code: "traits code", group: "Rust", slug: "traits" },
 ];
 
 interface Options {
   code?: string;
   web?: Partial<Web> | null;
-  gpu?: boolean;
   url?: string;
   shared?: string | null;
   examples?: Example[];
@@ -27,17 +26,14 @@ interface Options {
 
 /** A Session on stand-ins, with what it did. */
 function standIn(options: Options = {}) {
-  const { code = "", web = null, gpu = true, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true } = options;
-  const data: PlayData = { snippet: { code, theme: "dark", size: "", messages: [] }, examples, sitekey, pass, shared };
+  const { code = "", web = null, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true } = options;
+  const data: PlayData = { snippet: { code }, examples, sitekey, pass, shared };
   const parsed = new URL(url);
   const loads: string[] = [];
   const fetched: { url: string; body: any }[] = [];
   const addresses: string[] = [];
   const stored = new Map<string, string>(draft ? [["rawr-play-draft", draft]] : []);
   const timers: (() => void)[] = [];
-  const holder = { className: "live", style: {} as Record<string, string>, classes: new Set<string>(), classList: { toggle(this: void, _n: string, _on: boolean) {} } };
-  holder.classList.toggle = (name: string, on: boolean) => void (on ? holder.classes.add(name) : holder.classes.delete(name));
-  let attached = false;
   let respond: (url: string) => Response = () =>
     Response.json({ kind: "text", status: 0, output: [{ stream: "stdout", text: "from the server\n" }] });
   const widgets: string[] = [];
@@ -56,21 +52,18 @@ function standIn(options: Options = {}) {
         if (!web) throw new Error("404");
         return web as Web;
       },
-      gpu: () => gpu,
       now: () => 0,
       clipboard: async () => {},
       turnstile: () => ({ render: () => (widgets.push("render"), "w1"), reset: () => void widgets.push("reset"), remove: () => void widgets.push("remove") }),
       loadTurnstile: () => {},
       hasContainer: () => container,
-      live: { holder: () => holder, attach: (on) => void (attached = on) },
       setTimeout: (f) => (timers.push(f), timers.length),
       clearTimeout: () => {},
     },
     theme,
   );
   return {
-    session, loads, fetched, addresses, stored, holder, widgets,
-    attached: () => attached,
+    session, loads, fetched, addresses, stored, widgets,
     respond: (next: (url: string) => Response) => void (respond = next),
     /** Runs the timers set so far, as their time passing would. */
     tick: () => timers.splice(0).forEach((f) => f()),
@@ -78,77 +71,40 @@ function standIn(options: Options = {}) {
 }
 
 test("Run in browser runs a plain program in rawr-web and shows its output as the server's", async () => {
-  const page = standIn({ code: 'println!("hi")', web: { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 3, output: [{ stream: "stdout", text: "hi\n" }] }) } });
+  const page = standIn({ code: 'println!("hi")', web: { run_text: () => JSON.stringify({ kind: "text", status: 3, output: [{ stream: "stdout", text: "hi\n" }] }) } });
   await page.session.go();
   assert.deepEqual(page.loads, [WEB_MODULE]);
   assert.deepEqual(page.fetched, [], "the server is not asked");
   assert.equal(page.session.state.output.kind, "term");
   assert.match(page.session.state.status, /in the browser · exit 3$/);
-  assert.ok(page.session.state.plain, "messages are marked unused");
 });
 
-test("Run in browser mounts an iced snippet on the canvas holder and runs it there in the page's theme", async () => {
-  const calls: unknown[][] = [];
-  const page = standIn({ code: 'text("hi")', theme: "light", web: { kind: () => "iced", run: (...args: unknown[]) => void calls.push(args) } });
-  page.session.setSize("200x100");
+test("an iced or async snippet shows its message, in the browser and from the server", async () => {
+  const text = "iced programs don't run here yet.";
+  const page = standIn({ code: 'text("hi")', web: { run_text: () => JSON.stringify({ kind: "unavailable", text }) } });
   await page.session.go();
-  assert.deepEqual(calls, [['text("hi")', "light", []]]);
-  assert.ok(page.attached(), "the holder is on the page before rawr-web looks for #iced");
-  assert.equal(page.session.state.output.kind, "live");
-  assert.equal(page.holder.style.width, "200px");
-  assert.ok(page.holder.classes.has("sized"));
-  assert.match(page.session.state.status, /· live$/);
-  assert.deepEqual(page.fetched, []);
+  assert.deepEqual(page.session.state.output, { kind: "unavailable", text });
+  assert.equal(page.session.state.status, "not available here yet");
+  page.respond(() => Response.json({ kind: "unavailable", text }));
+  page.session.choose("server");
+  await new Promise((done) => setTimeout(done, 0));
+  assert.deepEqual(page.session.state.output, { kind: "unavailable", text });
 });
 
-test("a broken edit keeps the running app with its report under it", async () => {
-  let fail = false;
-  const page = standIn({ code: "x", web: { kind: () => "iced", run: () => { if (fail) throw "error: expected `)`"; } } });
+test("a snippet that does not compile shows its report", async () => {
+  const page = standIn({ code: "x", web: { run_text: () => JSON.stringify({ kind: "error", text: "error: expected `)`" }) } });
   await page.session.go();
-  fail = true;
-  await page.session.go();
-  assert.deepEqual(page.session.state.output, { kind: "live", report: "error: expected `)`" });
+  assert.deepEqual(page.session.state.output, { kind: "error", text: "error: expected `)`" });
   assert.equal(page.session.state.status, "error");
 });
 
-test("Run in browser falls back to the server when the module does not load or cannot draw", async () => {
+test("Run in browser falls back to the server when the module does not load", async () => {
   const failed = standIn({ code: "1 + 2", web: null });
   await failed.session.go();
   assert.deepEqual(failed.fetched.map((f) => f.url), ["/play/render"]);
   assert.match(failed.session.state.status, /on the server: rawr-web did not load$/);
   assert.equal(failed.session.state.where, "server", "the choice goes back to the server");
   assert.deepEqual(failed.addresses, [], "the fallback does not write ?run=server");
-  const iced = standIn({ code: 'text("hi")', gpu: false, web: { kind: () => "iced", run() { throw new Error("not called"); } } });
-  await iced.session.go();
-  assert.deepEqual(iced.fetched.map((f) => f.url), ["/play/render"]);
-  assert.match(iced.session.state.status, /no WebGL2 or WebGPU$/);
-  const later = standIn({ code: "1 + 2", web: { kind: () => "server" } });
-  await later.session.go();
-  assert.match(later.session.state.status, /rawr-web cannot run this yet$/);
-});
-
-test("Run in browser runs an async main and shows its output as it is written", async () => {
-  const shown: number[] = [];
-  const holder: { page?: ReturnType<typeof standIn> } = {};
-  holder.page = standIn({
-    code: "async fn main() {}",
-    web: {
-      kind: () => "async",
-      run_async: async (_code, write) => {
-        write("stdout", "one\n");
-        const out = holder.page!.session.state.output;
-        shown.push(out.kind === "term" && !out.done ? out.chunks.length : -1);
-        write("stderr", "two\n");
-        return JSON.stringify({ kind: "text", status: 1, output: [{ stream: "stdout", text: "one\n" }, { stream: "stderr", text: "two\n" }] });
-      },
-    },
-  });
-  await holder.page.session.go();
-  assert.deepEqual(shown, [1], "the first chunk shows before the run ends");
-  const out = holder.page.session.state.output;
-  assert.ok(out.kind === "term" && out.done && out.chunks.length === 2);
-  assert.match(holder.page.session.state.status, /in the browser · exit 1$/);
-  assert.deepEqual(holder.page.fetched, [], "the server is not asked");
 });
 
 test("the server answers with text or a refusal", async () => {
@@ -164,25 +120,23 @@ test("the server answers with text or a refusal", async () => {
 });
 
 test("the address restores an example from its hash and the server from ?run=server", () => {
-  const page = standIn({ url: "http://localhost/play?run=server#counter", examples: EXAMPLES });
-  assert.equal(page.session.state.code, "counter code");
-  assert.equal(page.session.state.messages, "Message::Increment");
+  const page = standIn({ url: "http://localhost/play?run=server#traits", examples: EXAMPLES });
+  assert.equal(page.session.state.code, "traits code");
   assert.equal(page.session.state.where, "server");
-  assert.deepEqual(page.addresses, ["/play?run=server#counter"]);
+  assert.deepEqual(page.addresses, ["/play?run=server#traits"]);
   // The browser is the default: ?run=browser is dropped, and the hash kept.
-  const browser = standIn({ url: "http://localhost/play?run=browser#async-tasks", examples: EXAMPLES });
-  assert.equal(browser.session.state.code, "async fn main() {}");
+  const browser = standIn({ url: "http://localhost/play?run=browser#word-count", examples: EXAMPLES });
+  assert.equal(browser.session.state.code, "word count code");
   assert.equal(browser.session.state.where, "browser");
-  assert.deepEqual(browser.addresses, ["/play#async-tasks"]);
+  assert.deepEqual(browser.addresses, ["/play#word-count"]);
   // A bare address writes nothing.
   assert.deepEqual(standIn({ examples: EXAMPLES }).addresses, []);
 });
 
 test("bare /play restores the draft; a share shows the share", () => {
-  const draft = JSON.stringify({ code: "my draft", theme: "light", size: "10x10", messages: ["A"] });
+  const draft = JSON.stringify({ code: "my draft", theme: "light" });
   const page = standIn({ code: "first example", draft });
   assert.equal(page.session.state.code, "my draft");
-  assert.equal(page.session.state.size, "10x10");
   assert.equal(page.session.state.theme, "dark", "the page's theme, not the draft's");
   const shared = standIn({ code: "shared code", shared: "abcDEF1234", url: "http://localhost/play/abcDEF1234", draft });
   assert.equal(shared.session.state.code, "shared code");
@@ -190,13 +144,13 @@ test("bare /play restores the draft; a share shows the share", () => {
 });
 
 test("a share's code wins over an example's hash, which the share page drops", () => {
-  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server#counter", shared: "abcDEF1234", examples: EXAMPLES });
+  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server#traits", shared: "abcDEF1234", examples: EXAMPLES });
   assert.equal(page.session.state.code, "shared code");
   assert.deepEqual(page.addresses, ["/play/abcDEF1234?run=server"]);
 });
 
 test("a share's link keeps ?run=server and drops the example's hash", async () => {
-  const page = standIn({ code: "x", url: "http://localhost/play?run=server#counter", examples: EXAMPLES });
+  const page = standIn({ code: "x", url: "http://localhost/play?run=server#traits", examples: EXAMPLES });
   const copied: string[] = [];
   page.session.deps.clipboard = async (text) => void copied.push(text);
   page.respond(() => Response.json({ id: "abcDEF1234" }));
@@ -207,32 +161,31 @@ test("a share's link keeps ?run=server and drops the example's hash", async () =
 });
 
 test("choosing an example, the run mode and an edit keep the address with replaceState", async () => {
-  const web: Partial<Web> = { kind: () => "text", run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) };
+  const web: Partial<Web> = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) };
   const page = standIn({ code: "x", url: "http://localhost/play/abcDEF1234", shared: "abcDEF1234", examples: EXAMPLES, web });
-  page.session.pick("counter");
-  assert.equal(page.session.state.code, "counter code");
-  assert.equal(page.session.state.mark, "counter");
-  assert.equal(page.addresses.at(-1), "/play#counter");
+  page.session.pick("traits");
+  assert.equal(page.session.state.code, "traits code");
+  assert.equal(page.session.state.mark, "traits");
+  assert.equal(page.addresses.at(-1), "/play#traits");
   page.session.choose("server");
-  assert.equal(page.addresses.at(-1), "/play?run=server#counter");
+  assert.equal(page.addresses.at(-1), "/play?run=server#traits");
   // An edit drops the hash: the code is no longer the example's.
-  page.session.setCode("counter code, edited");
+  page.session.setCode("traits code, edited");
   assert.equal(page.addresses.at(-1), "/play?run=server");
   page.session.choose("browser");
   assert.equal(page.addresses.at(-1), "/play");
   page.session.pick("reset");
-  assert.equal(page.session.state.code, "async fn main() {}", "Reset is the first example");
+  assert.equal(page.session.state.code, "word count code", "Reset is the first example");
   await new Promise((done) => setTimeout(done, 10));
 });
 
-test("in the browser an edit or a change of theme runs again after a pause; on the server it waits for Run", async () => {
+test("in the browser an edit runs again after a pause; on the server it waits for Run", async () => {
   const ran: string[] = [];
-  const page = standIn({ code: "x", web: { kind: () => "iced", run: (code: string, theme: string) => void ran.push(`${code} ${theme}`) } });
+  const page = standIn({ code: "x", web: { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) } });
   page.session.setCode("y");
-  page.session.setTheme("light");
   page.tick();
   await new Promise((done) => setTimeout(done, 0));
-  assert.deepEqual(ran, ["y light"]);
+  assert.deepEqual(ran, ["y"]);
   page.session.choose("server");
   await new Promise((done) => setTimeout(done, 0));
   const asked = page.fetched.length;
@@ -243,13 +196,13 @@ test("in the browser an edit or a change of theme runs again after a pause; on t
 
 test("in the browser, rawr-web loads once the page has loaded, and a restored example runs", async () => {
   const ran: string[] = [];
-  const web: Partial<Web> = { kind: () => "text", run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) };
-  const page = standIn({ url: "http://localhost/play#async-tasks", examples: EXAMPLES, web });
+  const web: Partial<Web> = { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) };
+  const page = standIn({ url: "http://localhost/play#word-count", examples: EXAMPLES, web });
   assert.deepEqual(page.loads, [], "nothing loads before the page has");
   page.session.preload();
   await new Promise((done) => setTimeout(done, 10));
   assert.deepEqual(page.loads, [WEB_MODULE]);
-  assert.deepEqual(ran, ["async fn main() {}"]);
+  assert.deepEqual(ran, ["word count code"]);
   // On the server, nothing loads.
   const server = standIn({ url: "http://localhost/play?run=server", web });
   server.session.preload();

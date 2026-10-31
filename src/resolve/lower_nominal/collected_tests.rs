@@ -112,7 +112,6 @@ fn parity(engine: &Engine, source: &str) -> (crate::program::Executable, Importe
     let (executable, actual) = lower(engine, program, &mut actual_allocation)
         .unwrap_or_else(|failure| panic!("executable fixture: {}", failure.into_error()));
     assert_eq!(actual.uses, symbolic.uses);
-    assert_eq!(actual.dependencies, symbolic.dependencies);
     assert_eq!(actual_allocation.usage(), symbolic_allocation.usage());
     (executable, actual)
 }
@@ -794,28 +793,6 @@ fn executable_use_collection_retains_elided_imported_selections() {
     assert_eq!(collected.uses.len(), 1);
     assert_eq!(collected.uses[0].selector, selector(5));
     assert!(executable.runtime_requirements().is_empty());
-}
-
-#[test]
-fn symbolic_lowering_records_the_facade_of_every_called_item() {
-    let mut extension = facade::Builder::new("extension", facade::Abi::new(1).unwrap()).unwrap();
-    let mut make = signature::Builder::new();
-    make.output(type_ref::Type::builtin(type_ref::Builtin::I64));
-    extension
-        .item(item::Definition::function("make", make.finish()).unwrap())
-        .unwrap();
-    let mut engine = Engine::new();
-    engine.register_host_facade(call_facade()).unwrap();
-    engine
-        .register_host_facade(extension.finish().unwrap())
-        .unwrap();
-    let source = "use extension::make; pub fn run() -> i64 { make() }";
-    let program = program(&engine, source);
-    let mut allocation = host::TestImportAllocation::default();
-    let symbolic = super::imported(&engine, &program, &engine.host_registry, &mut allocation)
-        .unwrap_or_else(|failure| panic!("symbolic fixture: {}", failure.into_error()));
-    let ordinary = engine.compile_executable(source).unwrap();
-    assert_eq!(symbolic.dependencies.as_ref(), ordinary.host_dependencies());
 }
 
 #[test]

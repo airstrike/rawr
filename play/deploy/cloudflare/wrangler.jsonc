@@ -31,20 +31,10 @@
   "vars": {
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
-    // Whole render, killed after it: an idle animation's 60 s, plus the
-    // start and the GIF's encoding.
-    "PLAY_TIMEOUT_MS": "80000",
-    // Script time per render; 2 s was too tight for large canvases on lite.
+    // A whole run, killed after it: the script time plus the process start.
+    "PLAY_TIMEOUT_MS": "15000",
+    // Script time per run.
     "PLAY_TIME_MS": "5000",
-    // An animation's time per render, once its view changes. One render at
-    // a time gets it, and each user (or playground IP) gets 90 s of it in
-    // any 10 minutes; others get PLAY_TIME_MS.
-    "PLAY_ANIMATION_TIME_MS": "15000",
-    // An animation's time when no other render is queued or running. Once
-    // it is past PLAY_ANIMATION_TIME_MS, a newcomer cuts it at its next frame.
-    "PLAY_IDLE_ANIMATION_TIME_MS": "60000",
-    "PLAY_ANIMATION_ALLOWANCE_S": "90",
-    "PLAY_ANIMATION_WINDOW_S": "600",
     // The image's commit (push-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
@@ -54,8 +44,8 @@
   // /play's examples (play/tests/fixtures/**/*.rs), as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
   // dist/ is site/dist (the Astro build: the landing page, the docs, /play's page) and public/
-  // (/bot/invite, the redirect with its link preview; /og/invite.png, which
-  // rawr-play renders from og/card.rs), merged by build.mjs. It also writes
+  // (/bot/invite, the redirect with its link preview; /og/invite.png, drawn
+  // from og/card.rs when ?play rendered iced), merged by build.mjs. It also writes
   // src/runnable.gen.ts, the hashes of the sources /play/run accepts.
   "build": { "command": "node build.mjs" },
   // The Worker runs first so it can redirect the old host; for the new host

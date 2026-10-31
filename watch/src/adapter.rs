@@ -2048,6 +2048,8 @@ mod tests {
         .unwrap()
     }
 
+    const MAIN: &str = "// rawr\nfn main() {\n    println!(\"watch\");\n}\n";
+
     struct Fixture {
         root: std::path::PathBuf,
         source: std::path::PathBuf,
@@ -2063,27 +2065,17 @@ mod tests {
                 std::thread::current().id()
             ));
             fs::create_dir_all(root.join("src")).unwrap();
-            fs::write(
-                root.join("src/main.rs"),
-                r#"// rawr
-use iced::Element;
-use iced::widget::text;
-#[derive(Default)] struct State;
-#[derive(Debug, Clone, Copy)] enum Message { Tick }
-impl State {
-    fn update(&mut self, message: Message) {}
-    fn view(&self) -> Element<Message> { text("watch") }
-}
-pub fn main() -> iced::Result { iced::run(State::update, State::view) }
-"#,
-            )
-            .unwrap();
+            fs::write(root.join("src/main.rs"), MAIN).unwrap();
             // One explicit file: no Cargo.toml, so the watched inputs are
             // the source alone.
-            let target = rawr::project::Target::discover(root.join("src/main.rs")).unwrap();
-            let mut engine = rawr::Engine::new();
-            rawr_iced::install(&mut engine).unwrap();
-            let candidate = engine.compile_package_generation(&target).unwrap();
+            let entry = fs::canonicalize(root.join("src/main.rs")).unwrap();
+            let snapshot =
+                rawr::package::snapshot::Snapshot::new(entry.clone(), vec![(entry, MAIN.into())])
+                    .unwrap();
+            let engine = rawr::Engine::new();
+            let (candidate, _ast) = engine
+                .compile_package_snapshot_generation_with_top_level(&snapshot)
+                .unwrap();
             let source = candidate.source().entry_source().path().to_path_buf();
             let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
                 rawr::reload::source::Inputs::from_graph(candidate.source()),

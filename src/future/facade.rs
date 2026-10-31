@@ -28,8 +28,8 @@ pub fn join_path(count: usize) -> String {
 pub fn engine() -> crate::Engine {
     let mut engine = crate::Engine::new();
     engine
-        .register_host_facade(definition().expect("the core future facade is valid"))
-        .expect("an engine has no other `rawr` facade");
+        .register_host_facade(definition().expect("the core future bindings are valid"))
+        .expect("an engine has no other `rawr` bindings");
     engine
 }
 
@@ -94,7 +94,7 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
         .bind_type_attestation(FUTURE, |value, expected| {
             expected.attest(value.is::<super::Future>())
         })
-        .expect("the rawr facade declares its future once");
+        .expect("the rawr bindings declare their future once");
     builder
         .bind_with_context(SCRIPT, |_call, args| {
             let [step] = args else {
@@ -107,7 +107,7 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
                 .map_err(|_| error(format!("an async body's step is `{actual}`")))?;
             Ok(Dynamic::from(super::Future::script(step)))
         })
-        .expect("the rawr facade declares `future::script` once");
+        .expect("the rawr bindings declare `future::script` once");
     for count in 2..=MOST_FUTURES {
         builder
             .bind_with_context(join_path(count), |_call, args| {
@@ -117,7 +117,7 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Dynamic::from(super::Future::join(parts)))
             })
-            .expect("the rawr facade declares each `future::__join` once");
+            .expect("the rawr bindings declare each `future::__join` once");
     }
     Ok(builder.finish())
 }

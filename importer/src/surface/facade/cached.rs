@@ -20,17 +20,17 @@ pub(super) fn encode(
         .cloned()
         .ok_or_else(|| crate::Error::Input {
             code: "missing-generic-node-parent",
-            reason: "cached facade selection requires a current generic-contract receipt".into(),
+            reason: "cached bindings selection requires a current generic-contract receipt".into(),
         })?;
     if parent.output_limit() != limits.node_output_bytes() {
         return Err(crate::Error::Request {
-            field: "facade cache limits",
+            field: "bindings cache limits",
             reason: "differ from the limits sealed by the API node context".into(),
         });
     }
     let authority =
         authority(contract.fingerprint().as_bytes()).map_err(|source| crate::Error::Node {
-            operation: "capture facade node authority",
+            operation: "capture bindings node authority",
             source: Box::new(source),
         })?;
     let product = parent
@@ -40,7 +40,7 @@ pub(super) fn encode(
             Product::capture(bytes)
         })
         .map_err(|source| crate::Error::Node {
-            operation: "facade selection",
+            operation: "bindings selection",
             source: Box::new(source),
         })?;
     Ok(Cached::from_validated(parent.context().clone(), product))
@@ -147,14 +147,14 @@ impl Product {
 
     fn validate(&self) -> Result<(), node::Error> {
         let plan: Plan = serde_json::from_slice(&self.bytes)
-            .map_err(|_| node::Error::Codec("cached facade plan is not valid JSON"))?;
+            .map_err(|_| node::Error::Codec("cached bindings plan is not valid JSON"))?;
         plan.validate()
-            .map_err(|_| node::Error::Codec("cached facade plan is invalid"))?;
+            .map_err(|_| node::Error::Codec("cached bindings plan is invalid"))?;
         let canonical = serde_json::to_vec(&plan)
-            .map_err(|_| node::Error::Codec("cached facade plan cannot be re-encoded"))?;
+            .map_err(|_| node::Error::Codec("cached bindings plan cannot be re-encoded"))?;
         if canonical.as_slice() != self.bytes.as_ref() {
             return Err(node::Error::Codec(
-                "cached facade plan is not canonically encoded",
+                "cached bindings plan is not canonically encoded",
             ));
         }
         Ok(())
@@ -168,7 +168,7 @@ impl node::Value for Product {
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if self.bytes.len() > limit {
             return Err(node::Error::Limit {
-                resource: "cached facade plan bytes",
+                resource: "cached bindings plan bytes",
                 limit,
                 actual: self.bytes.len(),
             });
@@ -179,7 +179,7 @@ impl node::Value for Product {
     fn decode(bytes: &[u8], limit: usize) -> Result<Self, node::Error> {
         if bytes.len() > limit {
             return Err(node::Error::Limit {
-                resource: "cached facade plan bytes",
+                resource: "cached bindings plan bytes",
                 limit,
                 actual: bytes.len(),
             });

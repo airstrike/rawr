@@ -64,27 +64,6 @@ impl Catalog {
         Self::from_package_executable_with_presence(executable, false, true)
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn from_package_generation_executable_checked(
-        executable: program::Executable,
-        cycle: &host::facade::ProfileCycle,
-        expected: &[u8; 32],
-    ) -> Result<Self, (program::source::Id, preview::Error)> {
-        // A plain program (no application, a `main` run once) has neither an
-        // application nor previews.
-        let plain = *expected == *application::descriptor::SemanticFingerprint::plain().as_bytes();
-        let catalog = Self::from_package_executable_with_presence(executable, false, plain)?;
-        if let Some(actual) = catalog.application_semantic(cycle)?
-            && actual.as_bytes() != expected
-        {
-            return Err((
-                catalog.executable.model_source(),
-                preview::Error::ApplicationSemanticMismatch,
-            ));
-        }
-        Ok(catalog)
-    }
-
     fn finish(
         executable: program::Executable,
         application: Option<(application::descriptor::Contract, application::Fingerprint)>,
@@ -167,22 +146,6 @@ impl Catalog {
 
     pub(crate) fn application_contract(&self) -> Option<&application::descriptor::Contract> {
         self.application.as_ref().map(|(contract, _)| contract)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn application_semantic(
-        &self,
-        cycle: &host::facade::ProfileCycle,
-    ) -> Result<Option<application::SemanticFingerprint>, (program::source::Id, preview::Error)>
-    {
-        self.application_contract()
-            .map(|contract| {
-                contract.semantic_fingerprint(cycle).map_err(|error| {
-                    let source = self.executable.application_error_source(&error);
-                    (source, preview::Error::Application(error))
-                })
-            })
-            .transpose()
     }
 
     pub(crate) fn preview_fingerprint(&self) -> &preview::Fingerprint {

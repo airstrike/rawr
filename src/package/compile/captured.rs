@@ -44,29 +44,11 @@ pub(crate) enum Error {
 }
 
 impl Output {
-    pub(crate) fn transform<A: host::ImportAllocation>(
-        engine: &Engine,
-        snapshot: &package::snapshot::Snapshot,
-        cycle: &host::facade::ProfileCycle,
-        allocation: &mut A,
-    ) -> Result<Self, Error> {
-        Self::transform_with(engine, snapshot, Some(cycle), allocation)
-    }
-
-    /// [`Output::transform`] for a runner with no host profile: any program,
-    /// a plain one included, with no application semantics to derive.
+    /// Compile any program, a plain one included, with no application
+    /// semantics to derive.
     pub(crate) fn transform_plain<A: host::ImportAllocation>(
         engine: &Engine,
         snapshot: &package::snapshot::Snapshot,
-        allocation: &mut A,
-    ) -> Result<Self, Error> {
-        Self::transform_with(engine, snapshot, None, allocation)
-    }
-
-    fn transform_with<A: host::ImportAllocation>(
-        engine: &Engine,
-        snapshot: &package::snapshot::Snapshot,
-        cycle: Option<&host::facade::ProfileCycle>,
         allocation: &mut A,
     ) -> Result<Self, Error> {
         let graph = package::Graph::load_snapshot(engine, snapshot)?;
@@ -126,11 +108,8 @@ impl Output {
                 }
             }
         })?;
-        let derived = match cycle {
-            Some(cycle) => reload::Candidate::from_package_derived(executable, source, cycle),
-            None => reload::Candidate::from_package_plain(executable, source)
-                .map(|candidate| (candidate, None)),
-        };
+        let derived = reload::Candidate::from_package_plain(executable, source)
+            .map(|candidate| (candidate, None));
         let (candidate, semantic) = derived.map_err(|(source, error)| {
             package::Error::resolution(
                 sources,

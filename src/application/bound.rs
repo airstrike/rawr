@@ -370,7 +370,7 @@ impl BoundLaunch {
             application::Task::Facade(ty) => {
                 let runtime_type = ty
                     .exact_runtime_type()
-                    .expect("validated facade Task output has an exact runtime type");
+                    .expect("a validated Task output has an exact runtime type");
                 self.launch.authority().validate_bound_type(
                     callback.item(),
                     &runtime_type,

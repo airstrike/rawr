@@ -58,35 +58,6 @@ impl Candidate {
         Ok(Self::from_catalog(catalog, schemas, source))
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn from_package_checked(
-        executable: program::Executable,
-        source: source::Graph,
-        cycle: &crate::host::facade::ProfileCycle,
-        expected: &[u8; 32],
-    ) -> Result<Self, (program::source::Id, preview::Error)> {
-        let schemas = executable.schemas().clone();
-        let catalog = preview::Catalog::from_package_generation_executable_checked(
-            executable, cycle, expected,
-        )?;
-        Ok(Self::from_catalog(catalog, schemas, source))
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn from_package_derived(
-        executable: program::Executable,
-        source: source::Graph,
-        cycle: &crate::host::facade::ProfileCycle,
-    ) -> Result<
-        (Self, Option<crate::application::SemanticFingerprint>),
-        (program::source::Id, preview::Error),
-    > {
-        let schemas = executable.schemas().clone();
-        let catalog = preview::Catalog::from_package_generation_executable(executable)?;
-        let semantic = catalog.application_semantic(cycle)?;
-        Ok((Self::from_catalog(catalog, schemas, source), semantic))
-    }
-
     // Generation handles deliberately use Arc for stable cross-owner proof
     // identity even when one concrete catalog is confined to the host thread.
     #[allow(clippy::arc_with_non_send_sync)]

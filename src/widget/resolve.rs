@@ -125,7 +125,7 @@ pub(crate) fn resolve(
                 shell.source,
                 invalid(
                     owner.name(),
-                    "a marked widget requires one exact installed `rawr_iced` facade dependency",
+                    "a scripted `#[widget]` is not supported",
                     attribute.span,
                     None,
                 ),
@@ -136,7 +136,7 @@ pub(crate) fn resolve(
                 shell.source,
                 invalid(
                     owner.name(),
-                    "a marked widget requires one exact installed `iced` facade dependency",
+                    "a marked widget requires one exact installed `iced` dependency",
                     attribute.span,
                     None,
                 ),
@@ -520,7 +520,7 @@ fn expect_renderer_reference(
     {
         return Err(signature_error(
             method,
-            "expected facade-authenticated invocation-scoped `&mut rawr_iced::Renderer`",
+            "expected authenticated invocation-scoped `&mut rawr_iced::Renderer`",
             path.span,
         ));
     }
@@ -642,7 +642,7 @@ fn expect_host<'a>(
         return Err(signature_error(
             method,
             format!(
-                "expected `{expected}` from the exact installed `{}` facade; legacy or unowned lookalikes are not lifecycle proofs",
+                "expected `{expected}` from the exact installed `{}` bindings; legacy or unowned lookalikes are not lifecycle proofs",
                 dependency.root()
             ),
             path.span,
@@ -652,7 +652,7 @@ fn expect_host<'a>(
         return Err(signature_error(
             method,
             format!(
-                "expected `{expected}` from the same exact `{}` facade dependency as this widget protocol",
+                "expected `{expected}` from the same exact `{}` dependency as this widget protocol",
                 dependency.root()
             ),
             path.span,

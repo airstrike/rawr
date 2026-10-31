@@ -529,7 +529,7 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
                     Error::InvalidHostOperation {
                         item: path.into(),
                         reason: format!(
-                            "invocation-scoped host types cannot appear in {role}; they are legal only in an exact facade-authorized invocation formal"
+                            "invocation-scoped host types cannot appear in {role}; they are legal only in an exact host-authorized invocation formal"
                         )
                         .into(),
                         operation: type_span(ty),
@@ -1478,29 +1478,17 @@ fn resolve_import_binding(
 
 /// The path `qualified` resolves at through a re-export: the std path an
 /// imported crate's re-export of a std item names (`iced::time::Duration`
-/// is `std::time::Duration`), or the facade path a std path names where a
-/// hand-written facade declares that std module as its own (rawr-iced's
-/// `iced::time::Instant` for `std::time::Instant`).
+/// is `std::time::Duration`), or the core's own module for a std module it
+/// declares (`rawr_std::io` for `std::io`).
 pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
-    // tokio in a program that does not import it, as a `?play` snippet, is
-    // rawr-iced's: its timers follow a recording's clock. Its `Instant` is
-    // the facade's, which reads that clock too, and its `Duration` is std's.
-    const REEXPORTS: [(&str, &str); 11] = [
-        ("std::time", "iced::time"),
+    const REEXPORTS: [(&str, &str); 6] = [
         ("std::path", "rawr_std::path"),
         ("std::ffi", "rawr_std::ffi"),
         ("std::io", "rawr_std::io"),
         ("std::env", "rawr_std::env"),
         ("std::fs", "rawr_std::fs"),
         ("std::process", "rawr_std::process"),
-        ("core::time", "iced::time"),
-        ("tokio::time::Instant", "iced::time::Instant"),
-        ("tokio::time::Duration", "iced::time::Duration"),
-        ("tokio", "rawr_iced::tokio"),
     ];
-    // `spawn_blocking` takes a Rawr closure, which the imported tokio's
-    // cannot, so it stays rawr-iced's in a program that imports tokio.
-    const BLOCKING: &str = "tokio::task::spawn_blocking";
     if host.entry(qualified).is_some() {
         return qualified.into();
     }
@@ -1509,17 +1497,11 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
     if let Some(std) = host.std_alias(qualified) {
         return std;
     }
-    for (std, facade) in REEXPORTS {
-        if std.starts_with("tokio")
-            && host.facade_fingerprint("tokio").is_some()
-            && qualified != BLOCKING
-        {
-            continue;
-        }
+    for (std, root) in REEXPORTS {
         if let Some(rest) = qualified.strip_prefix(std)
             && (rest.is_empty() || rest.starts_with("::"))
         {
-            let reexported = format!("{facade}{rest}");
+            let reexported = format!("{root}{rest}");
             if host.entry(&reexported).is_some() {
                 return reexported.into();
             }
@@ -1554,19 +1536,9 @@ pub fn cell_lock(value: &crate::Dynamic) -> Option<crate::Dynamic> {
     lower_nominal::cell_lock(value)
 }
 
-/// The macro `path` names when it is tokio's `join`, `try_join` or
-/// `select` in a program without tokio, whose tokio is rawr-iced's
-/// (`std_reexport`). Rawr expands them itself.
+/// The macro `path` names when it is tokio's or the futures crate's
+/// `join`, `try_join` or `select`, which Rawr expands itself.
 pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static str> {
-    if let Some(name) = path.strip_prefix("tokio::")
-        && let Some(name) = ["join", "try_join", "select"]
-            .into_iter()
-            .find(|macro_name| *macro_name == name)
-        && host.facade_fingerprint("tokio").is_none()
-        && host.entry("rawr_iced::tokio").is_some()
-    {
-        return Some(name);
-    }
     // A program whose futures are the core's (D513.5): the runtime's own
     // `join!` expands with private items, so Rawr writes it over
     // `rawr::future`'s combinators, for tokio's and the futures crate's.
@@ -5737,55 +5709,6 @@ mod tests {
     use super::{resolve, resolve_with, AllocationOrder, Category, Error, Namespace, Program};
     use crate::{host, program, type_def, Engine};
     use std::any::TypeId;
-
-    #[test]
-    fn spawn_blocking_stays_rawr_iced_s_in_a_program_that_imports_tokio() {
-        fn facade(root: &str, modules: &[&str], items: &[&str]) -> host::facade::Definition {
-            let mut builder =
-                host::facade::Builder::new(root, host::facade::Abi::new(1).unwrap()).unwrap();
-            for module in modules {
-                builder.module(*module).unwrap();
-            }
-            for item in items {
-                let mut signature = host::signature::Builder::new();
-                signature.output(host::type_ref::Type::builtin(host::type_ref::Builtin::I64));
-                builder
-                    .item(host::item::Definition::function(*item, signature.finish()).unwrap())
-                    .unwrap();
-            }
-            builder.finish().unwrap()
-        }
-        let mut engine = Engine::new();
-        engine
-            .register_host_facade(facade(
-                "rawr_iced",
-                &["tokio", "tokio::task"],
-                &["tokio::task::spawn_blocking", "tokio::task::yield_now"],
-            ))
-            .unwrap();
-        assert_eq!(
-            super::std_reexport("tokio::task::yield_now", &engine.host_registry).as_str(),
-            "rawr_iced::tokio::task::yield_now"
-        );
-        engine
-            .register_host_facade(facade("tokio", &["task"], &["task::block_in_place"]))
-            .unwrap();
-        let host = &engine.host_registry;
-        assert_eq!(
-            super::std_reexport("tokio::task::spawn_blocking", host).as_str(),
-            "rawr_iced::tokio::task::spawn_blocking"
-        );
-        // The imported tokio keeps its own items, and rawr-iced's others
-        // are not reached.
-        assert_eq!(
-            super::std_reexport("tokio::task::block_in_place", host).as_str(),
-            "tokio::task::block_in_place"
-        );
-        assert_eq!(
-            super::std_reexport("tokio::task::yield_now", host).as_str(),
-            "tokio::task::yield_now"
-        );
-    }
 
     #[test]
     fn forward_item_names_resolve_in_headers() {

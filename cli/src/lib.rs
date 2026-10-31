@@ -381,7 +381,7 @@ fn program(
     cells::tell("rawr", &loaded.cells);
     if let Some(known) = layer::known_claimant(facts) {
         let report = rawr::diagnostic::Report::error(
-            rawr::diagnostic::code::FRAMEWORK_FACADE,
+            rawr::diagnostic::code::FRAMEWORK_EXTENSION,
             format!(
                 "this program uses {}, which {} serves, and it is not installed",
                 known.manifest.claims.reason(facts).unwrap_or_default(),

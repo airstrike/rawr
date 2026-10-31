@@ -25,19 +25,6 @@ impl Engine {
         crate::package::compile::snapshot_generation(self, snapshot)
     }
 
-    /// Compile a reload generation and require exact staging/final application
-    /// semantics before the candidate can be published.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn compile_package_snapshot_generation_checked(
-        &self,
-        snapshot: &crate::package::snapshot::Snapshot,
-        cycle: &crate::host::facade::ProfileCycle,
-        expected: &[u8; 32],
-    ) -> Result<crate::reload::Candidate, crate::package::Error> {
-        crate::package::compile::snapshot_generation_checked(self, snapshot, cycle, expected)
-    }
-
     /// A reload generation of any program, a plain one (no application or
     /// previews, a `main` run once) included, retaining the same program for
     /// top-level evaluation before the generation is bound.
@@ -48,20 +35,6 @@ impl Engine {
         snapshot: &crate::package::snapshot::Snapshot,
     ) -> Result<(crate::reload::Candidate, AST), crate::package::Error> {
         crate::package::compile::snapshot_generation_plain(self, snapshot)
-            .map(crate::reload::Candidate::with_top_level)
-    }
-
-    /// Compile and validate once, retaining the same program for top-level
-    /// evaluation after native admission. Neither result escapes on failure.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn compile_package_snapshot_generation_with_top_level_checked(
-        &self,
-        snapshot: &crate::package::snapshot::Snapshot,
-        cycle: &crate::host::facade::ProfileCycle,
-        expected: &[u8; 32],
-    ) -> Result<(crate::reload::Candidate, AST), crate::package::Error> {
-        self.compile_package_snapshot_generation_checked(snapshot, cycle, expected)
             .map(crate::reload::Candidate::with_top_level)
     }
 

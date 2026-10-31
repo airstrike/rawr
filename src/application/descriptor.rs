@@ -149,133 +149,31 @@ pub(super) struct Proof {
 }
 
 #[cfg(feature = "rust-import")]
-impl Proof {
-    fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> (usize, usize) {
-        let mut completed = profile.normalize_fingerprint(&mut self.facade);
-        let mut direct_dependencies = 0_usize;
-        for dependency in &mut self.dependencies {
-            let (direct, nested) = profile.normalize_dependency(dependency);
-            direct_dependencies = direct_dependencies.saturating_add(usize::from(direct));
-            completed = completed.saturating_add(nested);
-        }
-        for item in [
-            Some(&mut self.root),
-            self.application_title.as_mut(),
-            self.application_theme.as_mut(),
-            self.application_subscription.as_mut(),
-            self.application_centered.as_mut(),
-            self.terminal_run.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            completed = completed.saturating_add(item.normalize_profile(profile));
-        }
-        completed = completed.saturating_add(self.state.normalize_profile(profile));
-        completed = completed.saturating_add(self.message.normalize_profile(profile));
-        completed = completed.saturating_add(self.boot.normalize_profile(profile));
-        if let Some(prelude) = &mut self.prelude {
-            completed = completed.saturating_add(prelude.callback.normalize_profile(profile));
-        }
-        completed = completed.saturating_add(self.update.normalize_profile(profile));
-        completed = completed.saturating_add(self.view.normalize_profile(profile));
-        if let Some(title) = &mut self.title {
-            completed = completed.saturating_add(title.normalize_profile(profile));
-        }
-        if let Some(theme) = &mut self.theme {
-            completed = completed.saturating_add(theme.normalize_profile(profile));
-        }
-        if let Some(subscription) = &mut self.subscription {
-            completed = completed.saturating_add(subscription.normalize_profile(profile));
-        }
-        completed = completed.saturating_add(self.previews.normalize_profile(profile));
-        (direct_dependencies, completed)
-    }
-}
+impl Proof {}
 
 #[cfg(feature = "rust-import")]
-impl Callback {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        let mut completed = self.item.normalize_profile(profile);
-        for parameter in &mut self.parameters {
-            completed = completed.saturating_add(parameter.normalize_profile(profile));
-        }
-        completed.saturating_add(self.output.normalize_profile(profile))
-    }
-}
+impl Callback {}
 
 #[cfg(feature = "rust-import")]
-impl Task {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        match self {
-            Self::None => 0,
-            Self::Facade(ty) => ty.normalize_profile(profile),
-        }
-    }
-}
+impl Task {}
 
 #[cfg(feature = "rust-import")]
-impl Boot {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        match self {
-            Self::Default => 0,
-            Self::Explicit { callback, task } => callback
-                .normalize_profile(profile)
-                .saturating_add(task.normalize_profile(profile)),
-        }
-    }
-}
+impl Boot {}
 
 #[cfg(feature = "rust-import")]
-impl Update {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        self.callback
-            .normalize_profile(profile)
-            .saturating_add(self.task.normalize_profile(profile))
-    }
-}
+impl Update {}
 
 #[cfg(feature = "rust-import")]
-impl View {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        let mut completed = self.callback.normalize_profile(profile);
-        completed = completed.saturating_add(self.runtime_output.normalize_profile(profile));
-        if let Some(projection) = &mut self.projection {
-            completed = completed.saturating_add(projection.normalize_profile(profile));
-        }
-        completed
-    }
-}
+impl View {}
 
 #[cfg(feature = "rust-import")]
-impl Title {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        self.callback
-            .normalize_profile(profile)
-            .saturating_add(self.runtime_output.normalize_profile(profile))
-    }
-}
+impl Title {}
 
 #[cfg(feature = "rust-import")]
-impl Theme {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        self.callback
-            .normalize_profile(profile)
-            .saturating_add(self.runtime_output.normalize_profile(profile))
-    }
-}
+impl Theme {}
 
 #[cfg(feature = "rust-import")]
-impl Subscription {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        self.callback
-            .normalize_profile(profile)
-            .saturating_add(self.runtime_output.normalize_profile(profile))
-    }
-}
+impl Subscription {}
 
 #[derive(Clone)]
 pub(crate) struct Contract {
@@ -963,38 +861,6 @@ impl Contract {
         Fingerprint(self.proof.clone())
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn semantic_fingerprint(
-        &self,
-        cycle: &host::facade::ProfileCycle,
-    ) -> Result<SemanticFingerprint, application::Error> {
-        use std::hash::Hash as _;
-        let finalization = cycle.finalization(&self.proof.facade).ok_or(
-            application::Error::InvalidFacadeContract {
-                required: "one exact profile self-cycle application facade",
-                entry: Span::NONE,
-            },
-        )?;
-        let mut proof = Proof::clone(&self.proof);
-        let (dependencies, completed) = proof.normalize_profile(&finalization);
-        if dependencies != 1 {
-            return Err(application::Error::InvalidFacadeContract {
-                required: "one exact profile self-cycle application dependency",
-                entry: Span::NONE,
-            });
-        }
-        if !finalization.runtime_representations_are_valid() {
-            return Err(application::Error::InvalidFacadeContract {
-                required: "authenticated semantic runtime representation",
-                entry: Span::NONE,
-            });
-        }
-        let mut digest = SemanticHasher::new();
-        completed.hash(&mut digest);
-        Fingerprint(Shared::new(proof)).hash(&mut digest);
-        Ok(SemanticFingerprint(digest.seal()))
-    }
-
     pub(crate) fn reload_fingerprint(&self) -> Fingerprint {
         let mut proof = Proof::clone(&self.proof);
         proof.previews = crate::preview::Fingerprint::default();
@@ -1071,24 +937,6 @@ impl Contract {
 }
 
 impl CheckedContract {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn transform(
-        evidence: &program::ContractEvidence,
-        cycle: &host::facade::ProfileCycle,
-    ) -> Result<Self, application::Error> {
-        // A program whose `main` is not an application runs `main` once,
-        // as a plain program does.
-        let Some(entry) = program::ApplicationEvidence::application(evidence) else {
-            return Ok(Self {
-                fingerprint: SemanticFingerprint::plain(),
-            });
-        };
-        let contract = Contract::validate(entry, evidence)?;
-        Ok(Self {
-            fingerprint: contract.semantic_fingerprint(cycle)?,
-        })
-    }
-
     /// Borrow the exact normalized application-semantic fingerprint.
     #[doc(hidden)]
     #[must_use]
@@ -1111,36 +959,6 @@ impl SemanticFingerprint {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
-    }
-}
-
-#[cfg(feature = "rust-import")]
-struct SemanticHasher(sha2::Sha256);
-
-#[cfg(feature = "rust-import")]
-impl SemanticHasher {
-    fn new() -> Self {
-        use sha2::Digest as _;
-        let mut digest = sha2::Sha256::new();
-        digest.update(b"rawr.application.semantic-contract/v3");
-        Self(digest)
-    }
-
-    fn seal(self) -> [u8; 32] {
-        use sha2::Digest as _;
-        self.0.finalize().into()
-    }
-}
-
-#[cfg(feature = "rust-import")]
-impl std::hash::Hasher for SemanticHasher {
-    fn finish(&self) -> u64 {
-        0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        use sha2::Digest as _;
-        self.0.update(bytes);
     }
 }
 

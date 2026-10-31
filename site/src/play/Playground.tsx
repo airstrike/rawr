@@ -6,16 +6,11 @@
 import type { EditorView } from "@codemirror/view";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "../components/ui/button.tsx";
-import { Input, Textarea } from "../components/ui/input.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
-import { cn } from "../lib/utils.ts";
 import { createEditor, setDoc } from "./editor.ts";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
-
-const HINT = "(sent before preview, separated by newline)";
-const PLAIN_HINT = "(ignored for programs without iced)";
 
 /** The page's data, or a bare page's when the Worker wrote none (a static preview). */
 function readData(): PlayData {
@@ -23,27 +18,10 @@ function readData(): PlayData {
     const data = JSON.parse(document.getElementById("play-data")?.textContent ?? "null");
     if (data) return data;
   } catch {}
-  return { snippet: { code: "", theme: "dark", size: "", messages: [] }, examples: [], sitekey: null, pass: false, shared: null };
+  return { snippet: { code: "" }, examples: [], sitekey: null, pass: false, shared: null };
 }
 
-function browserDeps(liveSlot: () => HTMLElement | null) {
-  let holder: HTMLDivElement | null = null;
-  const live = {
-    holder() {
-      if (!holder) {
-        holder = document.createElement("div");
-        holder.className = "live";
-        holder.innerHTML = '<div id="iced"></div>';
-      }
-      return holder as unknown as { className: string; style: Record<string, string>; classList: { toggle(name: string, on: boolean): void } };
-    },
-    attach(on: boolean) {
-      const slot = liveSlot();
-      if (!slot) return;
-      if (on && holder && holder.parentNode !== slot) slot.replaceChildren(holder);
-      if (!on && slot.firstChild) slot.replaceChildren();
-    },
-  };
+function browserDeps() {
   return {
     fetch: window.fetch.bind(window),
     location: window.location,
@@ -60,7 +38,6 @@ function browserDeps(liveSlot: () => HTMLElement | null) {
       await m.default();
       return m as Web;
     },
-    gpu: () => Boolean((navigator as Navigator & { gpu?: unknown }).gpu || document.createElement("canvas").getContext("webgl2")),
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
     turnstile: () => (window as Window & { turnstile?: any }).turnstile,
@@ -73,14 +50,13 @@ function browserDeps(liveSlot: () => HTMLElement | null) {
       js.dataset.turnstile = "";
       document.head.append(js);
     },
-    live,
     setTimeout: (f: () => void, ms: number) => window.setTimeout(f, ms),
     clearTimeout: (id: unknown) => window.clearTimeout(id as number),
   };
 }
 
 const NONE: State = {
-  code: "", messages: "", size: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, plain: false, mark: "",
+  code: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, mark: "",
 };
 
 export default function Playground() {
@@ -90,14 +66,13 @@ export default function Playground() {
     () => session?.state ?? NONE,
     () => NONE,
   );
-  const liveSlot = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
 
   // After hydration: the session from the page's data, the editor, the theme and the keys.
   useEffect(() => {
     const data = readData();
-    const s = new Session(data, browserDeps(() => liveSlot.current), pageTheme());
+    const s = new Session(data, browserDeps(), pageTheme());
     setSession(s);
     const view = createEditor({ parent: host.current!, doc: s.state.code, onChange: (code) => s.setCode(code), onRun: () => void s.go() });
     editor.current = view;
@@ -165,14 +140,6 @@ export default function Playground() {
             )}
           </SelectContent>
         </Select>
-        <Input
-          className="order-3 w-[9em] flex-1 md:flex-none"
-          placeholder="size: auto"
-          aria-label="Size, WxH"
-          spellCheck={false}
-          value={state.size}
-          onChange={(event) => session?.setSize(event.target.value)}
-        />
         <span className="order-3 hidden grow md:block" />
         <ToggleGroup
           type="single"
@@ -193,18 +160,6 @@ export default function Playground() {
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
           <p className="playcap mb-2"><span className="text-ink">//</span> Code</p>
           <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
-          <p className="playcap mt-3 mb-1.5 flex flex-wrap justify-between gap-x-2">
-            <span>Messages</span>
-            <span className="normal-case tracking-normal">{state.plain ? PLAIN_HINT : HINT}</span>
-          </p>
-          <Textarea
-            className={cn("h-[4.6em] whitespace-pre", state.plain && "opacity-45")}
-            spellCheck={false}
-            placeholder="Message::Foo"
-            aria-label="Messages"
-            value={state.messages}
-            onChange={(event) => session?.setMessages(event.target.value)}
-          />
           {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
           <div id="ts" className="mt-3 empty:hidden" />
         </section>
@@ -213,8 +168,7 @@ export default function Playground() {
             <span><span className="text-ink">//</span> Output</span>
             <span id="status" className="truncate">{state.status}</span>
           </p>
-          <div id="out" className={cn("out", state.output.kind === "live" && "has-live")} aria-live="polite">
-            <div ref={liveSlot} className="contents" />
+          <div id="out" className="out" aria-live="polite">
             <OutputView output={state.output} />
           </div>
         </section>
@@ -236,25 +190,23 @@ function OutputView({ output }: { output: Output }) {
     case "note":
       return (
         <p className="note">
-          Run (Ctrl/Cmd + Enter). In the browser, iced code runs live and updates as you type. On the server, iced code shows its last frame, and an app that moves shows a GIF. Other programs show their output.
+          Run (Ctrl/Cmd + Enter). A Rust program shows its output. iced and async programs don't run here yet.
         </p>
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
-    case "image":
-      return <img src={output.url} alt={output.animated ? "The animation" : "The rendered frame"} />;
-    case "live":
-      return output.report ? <pre className="error">{output.report}</pre> : null;
+    case "unavailable":
+      return <p className="note">{output.text}</p>;
     case "term": {
-      const empty = output.done && !output.chunks.some((chunk) => chunk.text !== "");
+      const empty = !output.chunks.some((chunk) => chunk.text !== "");
       return (
         <pre className="term">
           {output.chunks.map((chunk, i) => (
             <span key={i} className={chunk.stream === "stderr" ? "err" : undefined}>{chunk.text}</span>
           ))}
           {empty && <span className="none">(no output){"\n"}</span>}
-          {output.done && output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
-          {output.done && output.note && <span className="note">{"\n" + output.note + "\n"}</span>}
+          {output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
+          {output.note && <span className="note">{"\n" + output.note + "\n"}</span>}
         </pre>
       );
     }

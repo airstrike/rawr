@@ -167,55 +167,6 @@ pub(crate) struct ImportedTypes(Box<[(host::type_def::import::Identity, usize)]>
 pub(crate) struct ImportedTypes;
 
 impl Type {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        fn types(values: &mut [Type], profile: &host::facade::ProfileFinalization<'_>) -> usize {
-            values.iter_mut().fold(0_usize, |completed, value| {
-                completed.saturating_add(value.normalize_profile(profile))
-            })
-        }
-
-        match &mut self.0 {
-            Shape::Unit | Shape::Builtin(_) | Shape::Parameter(_) => 0,
-            Shape::Tuple(values)
-            | Shape::Registered {
-                arguments: values, ..
-            } => types(values, profile),
-            #[cfg(feature = "rust-import")]
-            Shape::Imported {
-                arguments: values, ..
-            } => types(values, profile),
-            Shape::Array { element, .. }
-            | Shape::Option(element)
-            | Shape::Reference {
-                target: element, ..
-            }
-            | Shape::Iter(element)
-            | Shape::Range(element)
-            | Shape::RangeInclusive(element) => element.normalize_profile(profile),
-            Shape::Result(ok, err) => ok
-                .normalize_profile(profile)
-                .saturating_add(err.normalize_profile(profile)),
-            Shape::Callable { input, output } => input
-                .normalize_profile(profile)
-                .saturating_add(output.normalize_profile(profile)),
-            #[cfg(feature = "rust-import")]
-            Shape::ImportedFunctionItem { input, output } => input
-                .normalize_profile(profile)
-                .saturating_add(output.normalize_profile(profile)),
-            Shape::External { export, arguments } => export
-                .normalize_profile(profile)
-                .saturating_add(types(arguments, profile)),
-            Shape::Support(target) => match target {
-                SupportTarget::Local(local) => local.normalize_profile(profile),
-                SupportTarget::External(export) => export.normalize_profile(profile),
-            },
-        }
-    }
-
     pub(crate) const fn signature_support(&self) -> bool {
         matches!(self.0, Shape::Support(_))
     }

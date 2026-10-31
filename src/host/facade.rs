@@ -294,7 +294,6 @@ pub(crate) struct RegistryParts {
 pub struct Fingerprint {
     root: ImmutableString,
     abi: Abi,
-    compatibility: Option<[u8; 32]>,
     modules: Shared<[ImmutableString]>,
     types: Shared<[TypeProof]>,
     supports: Shared<[host::support::SignatureContract]>,
@@ -315,36 +314,6 @@ impl Hasher for ContentHasher {
     fn write(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
     }
-}
-
-/// Opaque proof of the one profile-derived facade self-cycle edge.
-///
-/// This proof can normalize application-semantic hashing only. It is not a
-/// facade fingerprint and cannot satisfy registry or runtime compatibility.
-#[doc(hidden)]
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ProfileCycle {
-    root: ImmutableString,
-    abi: Abi,
-    exact: [u8; 32],
-    semantic: [u8; 32],
-    schema: u32,
-}
-
-/// Borrowed proof that one exact profile facade may finalize stage-local type
-/// identities only for non-authoritative application semantics.
-#[cfg(feature = "rust-import")]
-pub(crate) struct ProfileFinalization<'a> {
-    cycle: &'a ProfileCycle,
-    exact: &'a Fingerprint,
-    runtime_representations_are_valid: core::cell::Cell<bool>,
-    /// Facades already normalized by this finalization (input, output,
-    /// completed count). Normalization is pure in the input, so every type
-    /// reference naming the same facade reuses one output and its content hash.
-    normalized: core::cell::RefCell<Vec<(Fingerprint, Fingerprint, usize)>>,
-    /// Facades the profile built beside its exact facade: they carry its exact
-    /// seal under another root, so their own types finalize like its types.
-    companions: core::cell::RefCell<Vec<Fingerprint>>,
 }
 
 /// Opaque proof that one installed declaration belongs to an exact facade.
@@ -369,14 +338,11 @@ pub(crate) struct TypeProof {
 pub struct Builder {
     root: host::path::Path,
     abi: Abi,
-    compatibility: Option<[u8; 32]>,
     modules: Vec<host::path::Path>,
     types: Vec<host::type_def::Definition>,
     supports: Vec<host::support::SignatureContract>,
     endpoints: Vec<host::endpoint::Contract>,
     items: Vec<(host::path::Path, Vec<host::item::Definition>)>,
-    #[cfg(feature = "rust-import")]
-    profile_items: Vec<host::item::Definition>,
     projections: Vec<ProjectionDeclaration>,
     aliases: Vec<(host::path::Path, host::path::Path)>,
     type_aliases: Vec<TypeAlias>,
@@ -412,14 +378,11 @@ impl Builder {
         Ok(Self {
             root,
             abi,
-            compatibility: None,
             modules: Vec::new(),
             types: Vec::new(),
             supports: Vec::new(),
             endpoints: Vec::new(),
             items: Vec::new(),
-            #[cfg(feature = "rust-import")]
-            profile_items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
             type_aliases: Vec::new(),
@@ -443,13 +406,11 @@ impl Builder {
         Ok(Self {
             root,
             abi,
-            compatibility: None,
             modules: Vec::new(),
             types: Vec::new(),
             supports: Vec::new(),
             endpoints: Vec::new(),
             items: Vec::new(),
-            profile_items: Vec::new(),
             projections: Vec::new(),
             aliases: Vec::new(),
             type_aliases: Vec::new(),
@@ -458,46 +419,6 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             impl_headers: Vec::new(),
         })
-    }
-
-    /// Seal a facade with its profile's exact compatibility seal. A profile seals
-    /// its exact facade and any companion facade it builds beside it.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn compatibility_seal(&mut self, seal: [u8; 32]) -> Result<&mut Self, host::Error> {
-        if self.compatibility.replace(seal).is_some() {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: self.root.to_string().into(),
-                existing: "compatibility seed",
-                incoming: "compatibility seed",
-            });
-        }
-        Ok(self)
-    }
-
-    /// Carry one of the compatibility seed's re-exports into an imported
-    /// facade. Both paths are already qualified. The seed's own type stays the
-    /// meaning of the re-export, so an iced path the facade declares as an
-    /// alias resolves even when the importer rejects the Rust item there.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn compatibility_alias(
-        &mut self,
-        path: &host::path::Path,
-        target: &host::path::Path,
-    ) -> Result<&mut Self, host::Error> {
-        self.ensure_vacant(path, "re-export")?;
-        if self.aliases.iter().any(|(alias, _)| alias == path) {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "re-export",
-                incoming: "re-export",
-            });
-        }
-        self.aliases
-            .try_reserve(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.aliases.push((path.clone(), target.clone()));
-        Ok(self)
     }
 
     #[cfg(feature = "rust-import")]
@@ -800,420 +721,6 @@ impl Builder {
         )?;
         self.insert_type(definition)?;
         Ok(self)
-    }
-
-    /// Retain one linked profile type in an otherwise imported facade.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn profile_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-    ) -> Result<&mut Self, host::Error> {
-        let path = definition.path_ref();
-        if path.segments().first() != self.root.segments().first() {
-            return Err(host::Error::InvalidFacadeRoot(path.to_string().into()));
-        }
-        self.ensure_vacant(path, "type")?;
-        self.insert_type(definition.clone())?;
-        Ok(self)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn compatibility_type<A: host::ImportAllocation + ?Sized>(
-        &mut self,
-        definition: &host::type_def::Definition,
-        allocation: &mut A,
-    ) -> Result<&mut Self, host::Error> {
-        let path = definition.path_ref();
-        if path.segments().first() != self.root.segments().first() {
-            return Err(host::Error::InvalidFacadeRoot(path.to_string().into()));
-        }
-        if let Ok(index) = self.type_index(path) {
-            let existing = &self.types[index];
-            if existing.contract() != definition.contract() || !existing.projections().is_empty() {
-                return Err(host::Error::ConflictingHostIdentity {
-                    existing: existing.path().into(),
-                    incoming: definition.path().into(),
-                });
-            }
-            return Ok(self);
-        }
-        self.ensure_vacant(path, "compatibility type")?;
-        allocation
-            .retain_checked(Some(1), definition.retained_bytes())
-            .map_err(|_| host::Error::Allocation)?;
-        let definition = definition
-            .try_clone_without_projections()
-            .map_err(|_| host::Error::Allocation)?;
-        self.insert_type(definition)?;
-        Ok(self)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn install_compatibility_projections(
-        &mut self,
-        seed: &Definition,
-    ) -> Result<(), host::Error> {
-        let mut required_rows = 0_usize;
-        for source in seed
-            .types()
-            .filter(|definition| !definition.projections().is_empty())
-        {
-            let final_source = self
-                .type_index(source.path_ref())
-                .ok()
-                .map(|index| &self.types[index])
-                .ok_or_else(|| host::Error::UnknownProjectionSource {
-                    source: source.path().into(),
-                })?;
-            if final_source.contract() != source.contract()
-                || !final_source.projections().is_empty()
-            {
-                return Err(host::Error::ConflictingHostIdentity {
-                    existing: final_source.path().into(),
-                    incoming: source.path().into(),
-                });
-            }
-            for required in source.projections() {
-                required_rows = required_rows
-                    .checked_add(1)
-                    .ok_or(host::Error::Allocation)?;
-                let target_path = required.target_contract().path_ref();
-                let final_target = self
-                    .type_index(target_path)
-                    .ok()
-                    .map(|index| &self.types[index])
-                    .ok_or_else(|| host::Error::UnknownFacadeType {
-                        item: source.path().into(),
-                        ty: required.target().into(),
-                    })?;
-                if final_target.contract() != *required.target_contract() {
-                    return Err(host::Error::ConflictingHostIdentity {
-                        existing: final_target.path().into(),
-                        incoming: required.target().into(),
-                    });
-                }
-                let matches = self
-                    .projections
-                    .iter()
-                    .filter(|projection| {
-                        projection.source == *source.path_ref()
-                            && matches!(
-                                &projection.target,
-                                ProjectionTarget::Local(target) if target == target_path
-                            )
-                            && projection.arguments.as_ref() == required.arguments()
-                    })
-                    .count();
-                if matches > 1 {
-                    return Err(host::Error::UnknownProjectionSource {
-                        source: source.path().into(),
-                    });
-                }
-                if matches == 0 {
-                    let prefix = format!("{}::", self.root);
-                    let source_path = source.path();
-                    let target_path = required.target();
-                    let source_path = source_path.strip_prefix(&prefix).ok_or_else(|| {
-                        host::Error::InvalidFacadeRoot(source_path.clone().into())
-                    })?;
-                    let target_path = target_path.strip_prefix(&prefix).ok_or_else(|| {
-                        host::Error::InvalidFacadeRoot(target_path.clone().into())
-                    })?;
-                    self.project_with(source_path, target_path, required.arguments())?;
-                }
-            }
-        }
-        let installed_rows = self
-            .projections
-            .iter()
-            .filter(|projection| {
-                seed.types().any(|source| {
-                    source.path_ref() == &projection.source && !source.projections().is_empty()
-                })
-            })
-            .count();
-        if installed_rows != required_rows {
-            return Err(host::Error::UnknownProjectionSource {
-                source: seed.root().into(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Seal one compiler/profile-authenticated signature-only linked type.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the signature-support proof bundle is intentionally indivisible"
-    )]
-    pub fn profile_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: &rawr_import::surface::facade::AbiSite,
-        profile: [u8; 32],
-        linked: [u8; 32],
-    ) -> Result<host::support::Local, host::Error> {
-        self.validate_profile_support_type(definition, site)?;
-        self.insert_profile_support_type(
-            definition,
-            role,
-            *site.selector(),
-            profile,
-            linked,
-            Some(site.definition_identity()),
-        )
-    }
-
-    /// Install one exact profile-semantic ordinary type beside its independently
-    /// sealed signature-support contract.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the semantic/support proof join is intentionally indivisible"
-    )]
-    pub fn profile_semantic_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: &rawr_import::surface::facade::AbiSite,
-        profile: [u8; 32],
-        linked: [u8; 32],
-    ) -> Result<host::support::Local, host::Error> {
-        self.validate_profile_support_type(definition, site)?;
-        self.insert_profile_semantic_support_type(
-            definition,
-            role,
-            *site.selector(),
-            profile,
-            linked,
-        )
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn validate_profile_support_type(
-        &self,
-        definition: &host::type_def::Definition,
-        site: &rawr_import::surface::facade::AbiSite,
-    ) -> Result<(), host::Error> {
-        let path = definition.path_ref();
-        let relative = host::path::Path::parse(site.path())?;
-        let expected = host::path::Path::qualify(&self.root, &relative);
-        if site.namespace() != rawr_import::surface::facade::Namespace::Type
-            || site.root() != self.root.segments()[0].as_str()
-            || path != &expected
-            || definition.visibility() != host::type_def::Visibility::Public
-            || !definition.parameters().is_empty()
-        {
-            return Err(host::Error::InvalidFacadeRoot(path.to_string().into()));
-        }
-        Ok(())
-    }
-
-    #[cfg(all(test, feature = "rust-import"))]
-    pub(crate) fn fixture_profile_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: [u8; 32],
-        profile: [u8; 32],
-        linked: [u8; 32],
-    ) -> Result<host::support::Local, host::Error> {
-        self.insert_profile_support_type(definition, role, site, profile, linked, None)
-    }
-
-    #[cfg(all(test, feature = "rust-import"))]
-    pub(crate) fn fixture_profile_semantic_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: [u8; 32],
-        profile: [u8; 32],
-        linked: [u8; 32],
-    ) -> Result<host::support::Local, host::Error> {
-        self.insert_profile_semantic_support_type(definition, role, site, profile, linked)
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn insert_profile_semantic_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: [u8; 32],
-        profile: [u8; 32],
-        linked: [u8; 32],
-    ) -> Result<host::support::Local, host::Error> {
-        let path = definition.path_ref();
-        self.ensure_vacant(path, "profile semantic type")?;
-        let representation =
-            definition
-                .native_identity()
-                .ok_or_else(|| host::Error::ConflictingHostIdentity {
-                    existing: path.to_string().into(),
-                    incoming: path.to_string().into(),
-                })?;
-        let contract = host::support::SignatureContract::new(
-            path.clone(),
-            role,
-            site,
-            profile,
-            linked,
-            representation,
-        )?;
-        let type_index = self
-            .type_index(path)
-            .expect_err("semantic type vacancy is checked before insertion");
-        let support_index = self
-            .support_index(path)
-            .expect_err("support vacancy is checked before insertion");
-        self.types
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.supports
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.types.insert(type_index, definition.clone());
-        self.supports.insert(support_index, contract.clone());
-        Ok(host::support::Local::new(contract))
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn insert_profile_support_type(
-        &mut self,
-        definition: &host::type_def::Definition,
-        role: &str,
-        site: [u8; 32],
-        profile: [u8; 32],
-        linked: [u8; 32],
-        ordinary_identity: Option<&[u8; 32]>,
-    ) -> Result<host::support::Local, host::Error> {
-        let path = definition.path_ref();
-        let existing = if self.modules.binary_search(path).is_ok() {
-            Some("module")
-        } else if self.support_index(path).is_ok() {
-            Some("signature support")
-        } else if self.item_index(path).is_ok() {
-            Some("item")
-        } else {
-            None
-        };
-        if let Some(existing) = existing {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing,
-                incoming: "signature support",
-            });
-        }
-        if let Ok(index) = self.type_index(path) {
-            let ordinary = &self.types[index];
-            let exact = ordinary_identity.is_some_and(|identity| {
-                ordinary.visibility() == host::type_def::Visibility::Public
-                    && ordinary
-                        .identity()
-                        .imported()
-                        .is_some_and(|imported| imported.as_bytes() == identity)
-            });
-            if !exact {
-                return Err(host::Error::ConflictingHostIdentity {
-                    existing: ordinary.path().into(),
-                    incoming: path.to_string().into(),
-                });
-            }
-        }
-        let representation =
-            definition
-                .native_identity()
-                .ok_or_else(|| host::Error::ConflictingHostIdentity {
-                    existing: path.to_string().into(),
-                    incoming: path.to_string().into(),
-                })?;
-        let contract = host::support::SignatureContract::new(
-            path.clone(),
-            role,
-            site,
-            profile,
-            linked,
-            representation,
-        )?;
-        let index = self
-            .supports
-            .binary_search_by(|candidate| candidate.path_ref().cmp(path))
-            .expect_err("support vacancy is checked before insertion");
-        self.supports
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.supports.insert(index, contract.clone());
-        Ok(host::support::Local::new(contract))
-    }
-
-    /// Seal one compiler/profile-authenticated support-only operation endpoint.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the operation-endpoint proof bundle is intentionally indivisible"
-    )]
-    pub fn profile_endpoint<T: 'static>(
-        &mut self,
-        site: &rawr_import::surface::facade::OperationSite,
-        target: &str,
-        profile: [u8; 32],
-        source: [u8; 32],
-        projection: [u8; 32],
-        linked: [u8; 32],
-        invoke: host::endpoint::Invoke,
-    ) -> Result<(), host::Error> {
-        if site.root() != self.root.segments()[0].as_str()
-            || site.namespace() != rawr_import::surface::facade::Namespace::Value
-            || site.path().is_empty()
-        {
-            return Err(host::Error::InvalidFacadeRoot(site.path().into()));
-        }
-        let relative = host::path::Path::parse(site.path())?;
-        let path = host::path::Path::qualify(&self.root, &relative);
-        let target = host::path::Path::qualify(&self.root, &host::path::Path::parse(target)?);
-        if self
-            .types
-            .binary_search_by(|definition| definition.path_ref().cmp(&target))
-            .is_err()
-        {
-            return Err(host::Error::UnknownFacadeType {
-                item: path.to_string().into(),
-                ty: target.to_string().into(),
-            });
-        }
-        let index = self
-            .endpoints
-            .binary_search_by(|endpoint| endpoint.path_ref().cmp(&path));
-        if index.is_ok() {
-            return Err(host::Error::DuplicateFacadeEntry {
-                path: path.to_string().into(),
-                existing: "operation endpoint",
-                incoming: "operation endpoint",
-            });
-        }
-        let contract = host::endpoint::Contract::new(
-            path,
-            target,
-            *site.selector(),
-            profile,
-            source,
-            projection,
-            linked,
-            std::any::TypeId::of::<T>(),
-            invoke,
-        )?;
-        self.endpoints
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.endpoints.insert(
-            index.expect_err("duplicate endpoint paths are rejected above"),
-            contract,
-        );
-        Ok(())
     }
 
     /// Declare a host value type whose `==` is `T`'s own `PartialEq`;
@@ -1525,43 +1032,6 @@ impl Builder {
         }
     }
 
-    /// Retain one already-resolved linked profile item in an imported facade.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    pub fn profile_item(
-        &mut self,
-        item: &host::item::Definition,
-    ) -> Result<&mut Self, host::Error> {
-        if item.path_ref().segments().first() != self.root.segments().first() {
-            return Err(host::Error::InvalidFacadeRoot(item.path().into()));
-        }
-        self.profile_items
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.profile_items.push(item.clone());
-        Ok(self)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn compatibility_item<A: host::ImportAllocation + ?Sized>(
-        &mut self,
-        item: &host::item::Definition,
-        allocation: &mut A,
-    ) -> Result<&mut Self, host::Error> {
-        if item.path_ref().segments().first() != self.root.segments().first() {
-            return Err(host::Error::InvalidFacadeRoot(item.path().into()));
-        }
-        allocation
-            .retain_checked(Some(1), item.retained_bytes())
-            .map_err(|_| host::Error::Allocation)?;
-        self.profile_items
-            .try_reserve_exact(1)
-            .map_err(|_| host::Error::Allocation)?;
-        self.profile_items
-            .push(item.try_clone().map_err(|_| host::Error::Allocation)?);
-        Ok(self)
-    }
-
     /// Declare one direct projection between types in this facade.
     pub fn project(
         &mut self,
@@ -1689,7 +1159,7 @@ impl Builder {
         }
 
         #[cfg(feature = "rust-import")]
-        append_profile_items(&mut items, self.profile_items)?;
+        sort_items(&mut items)?;
         let items = items.into_boxed_slice();
         // A re-export names one of this facade's types at another path, or a
         // builtin (`builtin_alias`).
@@ -1730,7 +1200,6 @@ impl Builder {
         let fingerprint = fingerprint(
             &self.root,
             self.abi,
-            self.compatibility,
             &modules,
             &self.types,
             &self.supports,
@@ -1830,20 +1299,7 @@ impl Builder {
             }
         }
 
-        // A profile declaration at a deferred path is not part of the
-        // imported family. Preserve the strict mixed-declaration boundary.
-        for item in &self.profile_items {
-            if families
-                .iter()
-                .any(|family| family.path() == item.path_ref())
-            {
-                return Err(host::Error::DuplicateFacadeOverloadInputs {
-                    item: item.path().into(),
-                });
-            }
-        }
-
-        append_profile_items(&mut items, self.profile_items)?;
+        sort_items(&mut items)?;
 
         let (fingerprint_items, fingerprint_bytes) = fingerprint_usage(
             &self.root,
@@ -2002,7 +1458,6 @@ impl Builder {
         let fingerprint = fingerprint(
             &self.root,
             self.abi,
-            self.compatibility,
             &modules,
             &self.types,
             &self.supports,
@@ -2083,41 +1538,7 @@ impl Builder {
 }
 
 #[cfg(feature = "rust-import")]
-fn append_profile_items(
-    items: &mut Vec<host::item::Definition>,
-    profile: Vec<host::item::Definition>,
-) -> Result<(), host::Error> {
-    items
-        .try_reserve_exact(profile.len())
-        .map_err(|_| host::Error::Allocation)?;
-    for candidate in profile {
-        let mut replaced = false;
-        for existing in items.iter().filter(|existing| {
-            existing.path_ref() == candidate.path_ref() && same_namespace(existing, &candidate)
-        }) {
-            if !compatible_overload(existing, &candidate) {
-                return Err(host::Error::IncompatibleFacadeOverload {
-                    item: candidate.path().into(),
-                    existing_kind: existing.kind(),
-                    existing_receiver: existing.receiver(),
-                    incoming_kind: candidate.kind(),
-                    incoming_receiver: candidate.receiver(),
-                });
-            }
-            if existing.signature().same_inputs(candidate.signature())? {
-                if existing.same_contract_except_imported(&candidate) {
-                    replaced = true;
-                    break;
-                }
-                return Err(host::Error::DuplicateFacadeOverloadInputs {
-                    item: candidate.path().into(),
-                });
-            }
-        }
-        if !replaced {
-            items.push(candidate);
-        }
-    }
+fn sort_items(items: &mut [host::item::Definition]) -> Result<(), host::Error> {
     items.sort_by(|left, right| {
         left.path_ref()
             .cmp(right.path_ref())
@@ -2215,12 +1636,6 @@ impl Definition {
         self.types.iter()
     }
 
-    /// The facade's re-exports, each a qualified path and the type it names.
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn aliases(&self) -> &[(host::path::Path, host::path::Path)] {
-        &self.aliases
-    }
-
     /// Iterate over the facade's registered items in canonical path order.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &host::item::Definition> {
         self.items.iter()
@@ -2243,7 +1658,7 @@ impl Definition {
             .ok()
             .map(|index| &self.types[index])
             .ok_or_else(|| host::Error::UnknownFacadeType {
-                item: "<facade export>".into(),
+                item: "<export>".into(),
                 ty: path.to_string().into(),
             })?;
         Ok(host::type_def::Export::new(
@@ -2267,7 +1682,7 @@ impl Definition {
             .ok()
             .map(|index| self.supports[index].clone())
             .ok_or_else(|| host::Error::UnknownFacadeType {
-                item: "<facade support export>".into(),
+                item: "<support export>".into(),
                 ty: path.to_string().into(),
             })?;
         Ok(host::support::SupportExport::new(
@@ -2495,20 +1910,6 @@ impl Fingerprint {
         + shared_slice_overhead::<host::endpoint::Contract>()
         + shared_slice_overhead::<host::item::Fingerprint>();
 
-    /// Return bounded canonical digest evidence for compatibility composition.
-    #[cfg(feature = "rust-import")]
-    #[doc(hidden)]
-    #[must_use]
-    pub fn compatibility_digest(&self) -> [u8; 16] {
-        use crate::preview::digest::Write as _;
-
-        let mut writer =
-            crate::preview::digest::Writer::with_version(b"rawr-facade-compatibility-seed-v1");
-        self.write(&mut writer)
-            .expect("validated facade fingerprints have canonical digest evidence");
-        writer.finish().bytes()
-    }
-
     #[cfg(feature = "rust-import")]
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         let modules = self.modules.iter().try_fold(
@@ -2548,216 +1949,7 @@ impl Fingerprint {
     }
 }
 
-impl ProfileCycle {
-    const SCHEMA: u32 = 3;
-
-    /// Transform one finished exact facade plus its structured compatibility
-    /// preimage outputs into a non-authoritative self-cycle proof.
-    #[doc(hidden)]
-    pub fn transform(
-        definition: &Definition,
-        exact: [u8; 32],
-        semantic: [u8; 32],
-    ) -> Result<Self, host::Error> {
-        if definition.fingerprint.compatibility != Some(exact) || exact == semantic {
-            return Err(host::Error::InvalidFacadeProfileCycle {
-                root: definition.root().into(),
-            });
-        }
-        Ok(Self {
-            root: definition.root().into(),
-            abi: definition.abi,
-            exact,
-            semantic,
-            schema: Self::SCHEMA,
-        })
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn accepts(&self, fingerprint: &Fingerprint) -> bool {
-        self.schema == Self::SCHEMA
-            && fingerprint.root == self.root
-            && fingerprint.abi == self.abi
-            && fingerprint.compatibility == Some(self.exact)
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn finalization<'a>(
-        &'a self,
-        fingerprint: &'a Fingerprint,
-    ) -> Option<ProfileFinalization<'a>> {
-        self.accepts(fingerprint).then_some(ProfileFinalization {
-            cycle: self,
-            exact: fingerprint,
-            runtime_representations_are_valid: core::cell::Cell::new(true),
-            normalized: core::cell::RefCell::default(),
-            companions: core::cell::RefCell::default(),
-        })
-    }
-}
-
-#[cfg(feature = "rust-import")]
-impl ProfileFinalization<'_> {
-    pub(crate) fn reject_runtime_representation(&self) {
-        self.runtime_representations_are_valid.set(false);
-    }
-
-    pub(crate) fn runtime_representations_are_valid(&self) -> bool {
-        self.runtime_representations_are_valid.get()
-    }
-
-    fn token(&self, path: &host::path::Path) -> host::type_def::import::Identity {
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.application.profile-type-finalization/v1");
-        digest.update(self.cycle.semantic);
-        digest.update(
-            u64::try_from(path.segments().len())
-                .unwrap_or(u64::MAX)
-                .to_le_bytes(),
-        );
-        for segment in path.segments() {
-            digest.update(
-                u64::try_from(segment.len())
-                    .unwrap_or(u64::MAX)
-                    .to_le_bytes(),
-            );
-            digest.update(segment.as_bytes());
-        }
-        host::type_def::import::Identity::new(digest.finalize().into())
-    }
-
-    /// The path of the one type proof, in the exact facade or a companion,
-    /// whose contract `matches`.
-    fn proven(
-        &self,
-        matches: impl Fn(&host::type_def::Contract) -> bool,
-    ) -> Option<host::path::Path> {
-        let companions = self.companions.borrow();
-        let mut proofs = self
-            .exact
-            .types
-            .iter()
-            .chain(
-                companions
-                    .iter()
-                    .flat_map(|companion| companion.types.iter()),
-            )
-            .filter(|proof| matches(&proof.contract));
-        let proof = proofs.next()?;
-        proofs
-            .next()
-            .is_none()
-            .then(|| proof.contract.path_ref().clone())
-    }
-
-    pub(crate) fn normalize_identity(
-        &self,
-        path: &host::path::Path,
-        identity: &mut host::type_def::Identity,
-    ) -> bool {
-        let host::type_def::Identity::Linked(linked) = identity else {
-            return false;
-        };
-        let linked = host::type_def::Identity::Linked(*linked);
-        if self
-            .proven(|contract| contract.path_ref() == path && contract.identity_ref() == &linked)
-            .is_none()
-        {
-            return false;
-        }
-        *identity = host::type_def::Identity::Imported(self.token(path));
-        true
-    }
-
-    pub(crate) fn normalize_runtime_identity(
-        &self,
-        path: &str,
-        identity: std::any::TypeId,
-    ) -> Option<host::type_def::import::Identity> {
-        self.proven(|contract| {
-            contract.path() == path && contract.runtime_identity() == Some(identity)
-        })
-        .map(|path| self.token(&path))
-    }
-
-    pub(crate) fn normalize_identity_text(
-        &self,
-        path: &str,
-        identity: &mut host::type_def::Identity,
-    ) -> bool {
-        let host::type_def::Identity::Linked(linked) = identity else {
-            return false;
-        };
-        let linked = host::type_def::Identity::Linked(*linked);
-        let Some(path) =
-            self.proven(|contract| contract.path() == path && contract.identity_ref() == &linked)
-        else {
-            return false;
-        };
-        *identity = host::type_def::Identity::Imported(self.token(&path));
-        true
-    }
-
-    pub(crate) fn normalize_fingerprint(&self, fingerprint: &mut Fingerprint) -> usize {
-        let reused = self
-            .normalized
-            .borrow()
-            .iter()
-            .find(|(input, ..)| input == fingerprint)
-            .map(|(_, output, completed)| (output.clone(), *completed));
-        if let Some((output, completed)) = reused {
-            *fingerprint = output;
-            return completed;
-        }
-        let input = fingerprint.clone();
-        let mut completed = 0_usize;
-        if fingerprint == self.exact {
-            fingerprint.compatibility = Some(self.cycle.semantic);
-            completed = completed.saturating_add(1);
-        } else if fingerprint.root != self.cycle.root
-            && fingerprint.compatibility == Some(self.cycle.exact)
-        {
-            self.companions.borrow_mut().push(input.clone());
-            fingerprint.compatibility = Some(self.cycle.semantic);
-            completed = completed.saturating_add(1);
-        }
-        for proof in Shared::make_mut(&mut fingerprint.types).iter_mut() {
-            completed = completed.saturating_add(proof.contract.normalize_profile(self));
-            for projection in &mut proof.projections {
-                completed = completed.saturating_add(projection.normalize_profile(self));
-            }
-        }
-        for support in Shared::make_mut(&mut fingerprint.supports).iter_mut() {
-            completed = completed.saturating_add(support.normalize_profile(self));
-        }
-        for endpoint in Shared::make_mut(&mut fingerprint.endpoints).iter_mut() {
-            completed = completed.saturating_add(endpoint.normalize_profile(self));
-        }
-        for item in Shared::make_mut(&mut fingerprint.items).iter_mut() {
-            completed = completed.saturating_add(item.normalize_profile(self));
-        }
-        fingerprint.seal();
-        self.normalized
-            .borrow_mut()
-            .push((input, fingerprint.clone(), completed));
-        completed
-    }
-
-    pub(crate) fn normalize_dependency(&self, dependency: &mut Dependency) -> (bool, usize) {
-        let direct = dependency.root == self.cycle.root && &dependency.fingerprint == self.exact;
-        let completed = self.normalize_fingerprint(&mut dependency.fingerprint);
-        (direct, completed)
-    }
-}
-
 impl Fingerprint {
-    fn hash_with<H: Hasher>(&self, compatibility: Option<[u8; 32]>, state: &mut H) {
-        self.root.hash(state);
-        self.abi.hash(state);
-        compatibility.hash(state);
-        self.content.hash(state);
-    }
-
     /// Recompute the content digest after the slices are set.
     fn seal(&mut self) {
         let mut content = ContentHasher(Sha256::new());
@@ -2776,10 +1968,7 @@ impl PartialEq for Fingerprint {
         // so equal digests are equal contracts. A program's proof and the
         // runtime registry's are separate copies, so walking the slices
         // cost every attested call a walk of the whole facade.
-        self.content == other.content
-            && self.root == other.root
-            && self.abi == other.abi
-            && self.compatibility == other.compatibility
+        self.content == other.content && self.root == other.root && self.abi == other.abi
     }
 }
 
@@ -2793,7 +1982,6 @@ impl Ord for Fingerprint {
         (
             &self.root,
             &self.abi,
-            &self.compatibility,
             &self.modules,
             &self.types,
             &self.supports,
@@ -2803,7 +1991,6 @@ impl Ord for Fingerprint {
             .cmp(&(
                 &other.root,
                 &other.abi,
-                &other.compatibility,
                 &other.modules,
                 &other.types,
                 &other.supports,
@@ -2821,7 +2008,9 @@ impl PartialOrd for Fingerprint {
 
 impl Hash for Fingerprint {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash_with(self.compatibility, state);
+        self.root.hash(state);
+        self.abi.hash(state);
+        self.content.hash(state);
     }
 }
 
@@ -2856,10 +2045,6 @@ impl crate::preview::digest::Write for Fingerprint {
         writer.text(&self.root);
         writer.tag(0x2902);
         writer.u32(self.abi.get());
-        if let Some(compatibility) = self.compatibility {
-            writer.tag(0x2908);
-            writer.bytes(&compatibility);
-        }
         writer.tag(0x2903);
         writer.count(self.modules.len());
         for module in self.modules.iter() {
@@ -2914,7 +2099,7 @@ fn validate_module_parents(
     for module in modules {
         let parent = module
             .parent()
-            .expect("qualified facade modules retain their root");
+            .expect("qualified modules retain their root");
         if &parent != root && modules.binary_search(&parent).is_err() {
             return Err(host::Error::MissingFacadeModule {
                 path: module.to_string().into(),
@@ -2932,9 +2117,7 @@ fn validate_type_parents(
 ) -> Result<(), host::Error> {
     for definition in types {
         let path = definition.path_ref();
-        let parent = path
-            .parent()
-            .expect("qualified facade types retain their root");
+        let parent = path.parent().expect("qualified types retain their root");
         // A type under a type is an enum's struct variant, as
         // `HandleShape::Rectangle { .. }`: a builder of its own.
         if &parent != root
@@ -3100,7 +2283,6 @@ mod imported_allocation_tests {
             left.root
                 .cmp(&right.root)
                 .then_with(|| left.abi.cmp(&right.abi))
-                .then_with(|| left.compatibility.cmp(&right.compatibility))
                 .then_with(|| left.modules.cmp(&right.modules))
                 .then_with(|| left.types.cmp(&right.types))
                 .then_with(|| left.supports.cmp(&right.supports))
@@ -3113,7 +2295,6 @@ mod imported_allocation_tests {
             leaf: host::type_ref::Builtin,
         ) -> super::Fingerprint {
             let mut builder = Builder::new("ordered", Abi::new(1).unwrap()).unwrap();
-            builder.compatibility_seal([1; 32]).unwrap();
             builder.module("nested").unwrap();
             builder
                 .imported_type(
@@ -3203,22 +2384,21 @@ mod imported_allocation_tests {
         // of a callable's parameter, sets two apart.
         let deep = fixture(host::type_def::Form::Record, host::type_ref::Builtin::Bool);
         assert_eq!(
-            (&deep.root, deep.abi, deep.compatibility, &deep.modules),
-            (&base.root, base.abi, base.compatibility, &base.modules)
+            (&deep.root, deep.abi, &deep.modules),
+            (&base.root, base.abi, &base.modules)
         );
         assert_ne!(base, deep);
         assert_ne!(original(&base, &deep), std::cmp::Ordering::Equal);
 
-        let mut variants = vec![base.clone(); 8];
+        let mut variants = vec![base.clone(); 7];
         variants[0].root = "different".into();
         variants[1].abi = Abi::new(2).unwrap();
-        variants[2].compatibility = None;
-        variants[3].modules = Shared::default();
-        variants[4].types =
+        variants[2].modules = Shared::default();
+        variants[3].types =
             fixture(host::type_def::Form::Tuple, host::type_ref::Builtin::I64).types;
-        variants[5].supports = Shared::default();
-        variants[6].endpoints = Shared::default();
-        variants[7].items =
+        variants[4].supports = Shared::default();
+        variants[5].endpoints = Shared::default();
+        variants[6].items =
             fixture(host::type_def::Form::Record, host::type_ref::Builtin::Bool).items;
         for variant in &variants {
             assert_ne!(original(&base, variant), std::cmp::Ordering::Equal);
@@ -3260,7 +2440,7 @@ mod imported_allocation_tests {
         variants.dedup();
         expected.dedup_by(|left, right| original(left, right).is_eq());
         assert_eq!(variants, expected);
-        assert_eq!(variants.len(), 9);
+        assert_eq!(variants.len(), 8);
     }
 
     #[test]
@@ -3321,345 +2501,7 @@ mod imported_allocation_tests {
         );
     }
 
-    #[test]
-    fn signature_support_coexists_only_with_the_exact_imported_identity() {
-        fn linked() -> super::Definition {
-            let mut builder = Builder::new("proof", Abi::new(1).expect("nonzero ABI")).unwrap();
-            builder.type_::<Support>("Opaque", &[], &[]).unwrap();
-            builder.finish().unwrap()
-        }
-
-        fn imported(identity: [u8; 32]) -> Builder {
-            let mut builder = Builder::new("proof", Abi::new(2).expect("nonzero ABI")).unwrap();
-            let mut allocation = host::TestImportAllocation::default();
-            let shape: Shared<host::type_def::Shape> = host::type_def::Shape::Opaque.into();
-            builder
-                .imported_type(
-                    "Opaque",
-                    host::type_def::import::Identity::new(identity),
-                    &[],
-                    Box::default(),
-                    Box::default(),
-                    shape,
-                    &mut allocation,
-                )
-                .unwrap();
-            builder
-        }
-
-        let linked = linked();
-        let definition = linked
-            .types()
-            .find(|definition| definition.path() == "proof::Opaque")
-            .expect("the linked representation exists");
-        let mut semantic = Builder::new("proof", Abi::new(2).expect("nonzero ABI")).unwrap();
-        semantic
-            .fixture_profile_semantic_support_type(definition, "opaque", [1; 32], [2; 32], [3; 32])
-            .expect("one exact semantic/support pair installs atomically");
-        assert!(matches!(
-            semantic.fixture_profile_semantic_support_type(
-                definition, "opaque", [1; 32], [2; 32], [3; 32],
-            ),
-            Err(host::Error::DuplicateFacadeEntry {
-                existing: "type",
-                ..
-            })
-        ));
-        let semantic = semantic.finish().unwrap();
-        let ordinary = semantic
-            .types()
-            .find(|candidate| candidate.path() == "proof::Opaque")
-            .expect("the semantic ordinary definition exists");
-        assert_eq!(ordinary, definition);
-        assert!(semantic.export_type("Opaque").is_ok());
-        assert!(semantic.support_type("Opaque").is_ok());
-
-        let identity = [0x51; 32];
-        let mut exact = imported(identity);
-        exact
-            .insert_profile_support_type(
-                definition,
-                "opaque",
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                Some(&identity),
-            )
-            .expect("the exact imported identity admits separate support");
-        let exact = exact.finish().unwrap();
-        assert_eq!(exact.types().len(), 1);
-        assert!(exact.export_type("Opaque").is_ok());
-        assert!(exact.support_type("Opaque").is_ok());
-
-        let mut wrong = imported([0x52; 32]);
-        assert!(matches!(
-            wrong.insert_profile_support_type(
-                definition,
-                "opaque",
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                Some(&identity),
-            ),
-            Err(host::Error::ConflictingHostIdentity { .. })
-        ));
-
-        let mut linked_ordinary = Builder::new("proof", Abi::new(2).unwrap()).unwrap();
-        linked_ordinary.type_::<Other>("Opaque", &[], &[]).unwrap();
-        assert!(matches!(
-            linked_ordinary.insert_profile_support_type(
-                definition,
-                "opaque",
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                Some(&identity),
-            ),
-            Err(host::Error::ConflictingHostIdentity { .. })
-        ));
-
-        let mut duplicate = imported(identity);
-        duplicate
-            .insert_profile_support_type(
-                definition,
-                "opaque",
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                Some(&identity),
-            )
-            .unwrap();
-        assert!(matches!(
-            duplicate.insert_profile_support_type(
-                definition,
-                "opaque",
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                Some(&identity),
-            ),
-            Err(host::Error::DuplicateFacadeEntry {
-                existing: "signature support",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn profile_finalization_reconciles_only_authenticated_stage_local_identities() {
-        const EXACT: [u8; 32] = [0x41; 32];
-        const SEMANTIC: [u8; 32] = [0x52; 32];
-
-        fn profile<T: 'static>(extra_module: bool) -> super::Definition {
-            let mut builder = Builder::new("proof", Abi::new(1).unwrap()).unwrap();
-            builder.compatibility_seal(EXACT).unwrap();
-            if extra_module {
-                builder.module("extra").unwrap();
-            }
-            builder.type_::<T>("Opaque", &[], &[]).unwrap();
-            builder.finish().unwrap()
-        }
-
-        let provisional = profile::<Support>(false);
-        let admitted = profile::<Other>(false);
-        assert_ne!(provisional.fingerprint(), admitted.fingerprint());
-
-        let provisional_cycle =
-            super::ProfileCycle::transform(&provisional, EXACT, SEMANTIC).unwrap();
-        let admitted_cycle = super::ProfileCycle::transform(&admitted, EXACT, SEMANTIC).unwrap();
-        let provisional_finalization = provisional_cycle
-            .finalization(provisional.fingerprint())
-            .unwrap();
-        let admitted_finalization = admitted_cycle.finalization(admitted.fingerprint()).unwrap();
-        let exact_digest = provisional.fingerprint().compatibility_digest();
-        let mut provisional_fingerprint = provisional.fingerprint().clone();
-        let mut admitted_fingerprint = admitted.fingerprint().clone();
-
-        assert_eq!(
-            provisional_finalization.normalize_fingerprint(&mut provisional_fingerprint),
-            2
-        );
-        assert_eq!(
-            admitted_finalization.normalize_fingerprint(&mut admitted_fingerprint),
-            2
-        );
-        assert_eq!(provisional_fingerprint, admitted_fingerprint);
-        assert_eq!(
-            provisional.fingerprint().compatibility_digest(),
-            exact_digest
-        );
-        assert_eq!(provisional.fingerprint().compatibility, Some(EXACT));
-        assert!(!Shared::ptr_eq(
-            &provisional.fingerprint().types,
-            &provisional_fingerprint.types,
-        ));
-        assert!(Shared::ptr_eq(
-            &provisional.fingerprint().modules,
-            &provisional_fingerprint.modules,
-        ));
-
-        let path = provisional.types().next().unwrap().path_ref().clone();
-        let mut foreign = host::type_def::Identity::linked(TypeId::of::<Other>());
-        assert!(!provisional_finalization.normalize_identity(&path, &mut foreign));
-        assert_eq!(foreign.native(), Some(TypeId::of::<Other>()));
-
-        let mut exact = host::type_def::Identity::linked(TypeId::of::<Support>());
-        let foreign_path = host::path::Path::parse("proof::Foreign").unwrap();
-        assert!(!provisional_finalization.normalize_identity(&foreign_path, &mut exact));
-        assert_eq!(exact.native(), Some(TypeId::of::<Support>()));
-    }
-
-    #[test]
-    fn profile_finalization_reconciles_a_companion_sealed_with_the_exact_seal() {
-        const EXACT: [u8; 32] = [0x85; 32];
-        const SEMANTIC: [u8; 32] = [0x96; 32];
-
-        fn companion<T: 'static>(seal: Option<[u8; 32]>) -> super::Fingerprint {
-            let mut builder = Builder::new("companion", Abi::new(1).unwrap()).unwrap();
-            if let Some(seal) = seal {
-                builder.compatibility_seal(seal).unwrap();
-            }
-            builder.type_::<T>("Opaque", &[], &[]).unwrap();
-            builder.finish().unwrap().fingerprint().clone()
-        }
-
-        let mut exact = Builder::new("proof", Abi::new(1).unwrap()).unwrap();
-        exact.compatibility_seal(EXACT).unwrap();
-        let exact = exact.finish().unwrap();
-        let cycle = super::ProfileCycle::transform(&exact, EXACT, SEMANTIC).unwrap();
-        let normalized = |mut fingerprint: super::Fingerprint| {
-            let finalization = cycle.finalization(exact.fingerprint()).unwrap();
-            finalization.normalize_fingerprint(&mut fingerprint);
-            fingerprint
-        };
-
-        assert_eq!(
-            normalized(companion::<Support>(Some(EXACT))),
-            normalized(companion::<Other>(Some(EXACT)))
-        );
-        assert_ne!(
-            normalized(companion::<Support>(None)),
-            normalized(companion::<Other>(None))
-        );
-    }
-
-    #[test]
-    fn profile_finalization_preserves_ordinary_facade_structure() {
-        const EXACT: [u8; 32] = [0x63; 32];
-        const SEMANTIC: [u8; 32] = [0x74; 32];
-
-        fn profile<T: 'static>(extra_module: bool) -> super::Definition {
-            let mut builder = Builder::new("proof", Abi::new(1).unwrap()).unwrap();
-            builder.compatibility_seal(EXACT).unwrap();
-            if extra_module {
-                builder.module("extra").unwrap();
-            }
-            builder.type_::<T>("Opaque", &[], &[]).unwrap();
-            builder.finish().unwrap()
-        }
-
-        let provisional = profile::<Support>(false);
-        let changed = profile::<Other>(true);
-        let provisional_cycle =
-            super::ProfileCycle::transform(&provisional, EXACT, SEMANTIC).unwrap();
-        let changed_cycle = super::ProfileCycle::transform(&changed, EXACT, SEMANTIC).unwrap();
-        let provisional_finalization = provisional_cycle
-            .finalization(provisional.fingerprint())
-            .unwrap();
-        let changed_finalization = changed_cycle.finalization(changed.fingerprint()).unwrap();
-        let mut provisional_fingerprint = provisional.fingerprint().clone();
-        let mut changed_fingerprint = changed.fingerprint().clone();
-
-        provisional_finalization.normalize_fingerprint(&mut provisional_fingerprint);
-        changed_finalization.normalize_fingerprint(&mut changed_fingerprint);
-
-        assert_ne!(provisional_fingerprint, changed_fingerprint);
-        assert_eq!(changed_fingerprint.modules.as_ref(), ["proof::extra"]);
-    }
-
-    #[test]
-    fn profile_finalization_normalizes_a_repeated_facade_once_with_the_same_result() {
-        const EXACT: [u8; 32] = [0x17; 32];
-        const SEMANTIC: [u8; 32] = [0x28; 32];
-
-        let mut builder = Builder::new("proof", Abi::new(1).unwrap()).unwrap();
-        builder.compatibility_seal(EXACT).unwrap();
-        builder.type_::<Support>("Opaque", &[], &[]).unwrap();
-        let facade = builder.finish().unwrap();
-        let cycle = super::ProfileCycle::transform(&facade, EXACT, SEMANTIC).unwrap();
-
-        // Full: every occurrence through its own fresh finalization.
-        let mut full = facade.fingerprint().clone();
-        let full_completed = cycle
-            .finalization(facade.fingerprint())
-            .unwrap()
-            .normalize_fingerprint(&mut full);
-
-        // Incremental: repeated occurrences through one finalization.
-        let finalization = cycle.finalization(facade.fingerprint()).unwrap();
-        let mut first = facade.fingerprint().clone();
-        let mut second = facade.fingerprint().clone();
-        assert_eq!(
-            finalization.normalize_fingerprint(&mut first),
-            full_completed
-        );
-        assert_eq!(
-            finalization.normalize_fingerprint(&mut second),
-            full_completed
-        );
-        assert_eq!(first, full);
-        assert_eq!(second, full);
-        assert!(Shared::ptr_eq(&first.types, &second.types));
-        let digest = |fingerprint: &super::Fingerprint| {
-            let mut hasher = super::ContentHasher(<super::Sha256 as sha2::Digest>::new());
-            std::hash::Hash::hash(fingerprint, &mut hasher);
-            <[u8; 32]>::from(sha2::Digest::finalize(hasher.0))
-        };
-        assert_eq!(digest(&second), digest(&full));
-    }
-
-    #[cfg(feature = "rust-import")]
-    #[test]
-    fn profile_finalization_rejects_bad_pairs_and_keeps_arbitrary_host_exact() {
-        const EXACT: [u8; 32] = [0x85; 32];
-        const SEMANTIC: [u8; 32] = [0x96; 32];
-
-        let mut builder = Builder::new("proof", Abi::new(1).unwrap()).unwrap();
-        builder.compatibility_seal(EXACT).unwrap();
-        builder.type_::<Support>("Opaque", &[], &[]).unwrap();
-        let facade = builder.finish().unwrap();
-        let cycle = super::ProfileCycle::transform(&facade, EXACT, SEMANTIC).unwrap();
-
-        let valid_finalization = cycle.finalization(facade.fingerprint()).unwrap();
-        let mut valid = crate::host::runtime::type_ref::Type::builtin(
-            "String",
-            TypeId::of::<crate::ImmutableString>(),
-        );
-        let exact = valid.clone();
-        assert_eq!(valid.normalize_profile(&valid_finalization), 1);
-        assert!(valid_finalization.runtime_representations_are_valid());
-        assert_eq!(exact.runtime(), TypeId::of::<crate::ImmutableString>());
-
-        let invalid_finalization = cycle.finalization(facade.fingerprint()).unwrap();
-        let mut invalid =
-            crate::host::runtime::type_ref::Type::builtin("String", TypeId::of::<crate::INT>());
-        assert_eq!(invalid.normalize_profile(&invalid_finalization), 0);
-        assert!(!invalid_finalization.runtime_representations_are_valid());
-
-        let host_finalization = cycle.finalization(facade.fingerprint()).unwrap();
-        let mut arbitrary_host = crate::host::runtime::type_ref::Type::host(
-            "foreign::Opaque".into(),
-            TypeId::of::<Other>(),
-            Box::default(),
-            None,
-        );
-        assert_eq!(arbitrary_host.normalize_profile(&host_finalization), 0);
-        assert!(host_finalization.runtime_representations_are_valid());
-        assert_eq!(arbitrary_host.runtime(), TypeId::of::<Other>());
-    }
-
     struct Marker;
-    struct Other;
     struct Support;
 }
 
@@ -3778,7 +2620,6 @@ fn reject_projection_cycles(
 fn fingerprint(
     root: &host::path::Path,
     abi: Abi,
-    compatibility: Option<[u8; 32]>,
     modules: &[host::path::Path],
     types: &[host::type_def::Definition],
     supports: &[host::support::SignatureContract],
@@ -3840,7 +2681,6 @@ fn fingerprint(
         content: [0; 32],
         root: root.to_string().into(),
         abi,
-        compatibility,
         modules: module_proofs.into_boxed_slice().into(),
         types: type_proofs.into_boxed_slice().into(),
         supports: supports.to_vec().into_boxed_slice().into(),

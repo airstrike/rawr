@@ -371,7 +371,7 @@ impl Engine {
         engine
             .host_registry
             .install(crate::std_facade::definition())
-            .expect("a new engine has no other std facade");
+            .expect("a new engine has no other std bindings");
 
         engine
     }

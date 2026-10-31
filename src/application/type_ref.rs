@@ -59,61 +59,6 @@ impl fmt::Debug for Type {
 }
 
 impl Type {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        fn types(values: &mut [Type], profile: &host::facade::ProfileFinalization<'_>) -> usize {
-            values.iter_mut().fold(0_usize, |completed, value| {
-                completed.saturating_add(value.normalize_profile(profile))
-            })
-        }
-
-        match &mut self.0 {
-            Shape::Unit | Shape::Builtin(_) => 0,
-            Shape::Option(value) => value.normalize_profile(profile),
-            Shape::Tuple(values) => types(values, profile),
-            Shape::Host {
-                contract,
-                arguments,
-                projections,
-                owner,
-            } => {
-                let mut completed = contract.normalize_profile(profile);
-                completed = completed.saturating_add(types(arguments, profile));
-                for projection in projections {
-                    completed = completed.saturating_add(projection.normalize_profile(profile));
-                }
-                if let Some(owner) = owner {
-                    completed = completed.saturating_add(profile.normalize_dependency(owner).1);
-                }
-                completed
-            }
-            Shape::Script {
-                schema,
-                kind,
-                runtime,
-                dependencies,
-                ..
-            } => {
-                let completed = dependencies.iter_mut().fold(
-                    schema.normalize_profile(profile),
-                    |completed, dependency| {
-                        completed.saturating_add(profile.normalize_dependency(dependency).1)
-                    },
-                );
-                if runtime.project_script(*kind) {
-                    completed.saturating_add(1)
-                } else {
-                    profile.reject_runtime_representation();
-                    completed
-                }
-            }
-            Shape::Reference { target, .. } => target.normalize_profile(profile),
-        }
-    }
-
     #[cfg(test)]
     pub(crate) const fn digest_unit() -> Self {
         Self(Shape::Unit)

@@ -865,8 +865,44 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rawr-parse-cells-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src")).unwrap();
-        let main = include_str!("../../iced-cli/assets/counter/src/main.rs");
-        let main = main.strip_prefix("// rawr\n").unwrap();
+        // Upstream iced's counter, which parses without iced.
+        let main = "use iced::Center;
+use iced::widget::{Widget, button, column, text};
+
+#[derive(Default)]
+struct Counter {
+    value: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
+}
+
+impl Counter {
+    fn update(&mut self, message: Message) {
+        match message {
+            Message::Increment => self.value += 1,
+            Message::Decrement => self.value -= 1,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Message> {
+        column![
+            button(\"Increment\").on_press(Message::Increment),
+            text(self.value).size(50),
+            button(\"Decrement\").on_press(Message::Decrement),
+        ]
+        .padding(20)
+        .align_x(Center)
+    }
+}
+
+pub fn main() -> iced::Result {
+    iced::run(Counter::update, Counter::view)
+}
+";
         std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"cells\"\n").unwrap();
         std::fs::write(
             root.join("src/main.rs"),

@@ -697,8 +697,8 @@ fn application_builder(error: &application::Error) -> Builder {
         ApplicationCategory::InvalidOutput => code::FRAMEWORK_INVALID_OUTPUT,
         ApplicationCategory::MissingDefault => code::FRAMEWORK_MISSING_DEFAULT,
         ApplicationCategory::MissingCapability => code::FRAMEWORK_CAPABILITY,
-        ApplicationCategory::InvalidFacadeContract => code::FRAMEWORK_FACADE,
-        ApplicationCategory::FacadeDependencyConflict => code::FRAMEWORK_FACADE_DEPENDENCY,
+        ApplicationCategory::InvalidFacadeContract => code::FRAMEWORK_BINDINGS,
+        ApplicationCategory::FacadeDependencyConflict => code::FRAMEWORK_BINDINGS_DEPENDENCY,
         ApplicationCategory::UnsupportedRuntimeType => code::FRAMEWORK_RUNTIME_TYPE,
     };
     let builder = Report::error(stable_code, application_message(error));
@@ -979,10 +979,10 @@ fn application_message(error: &application::Error) -> String {
             ..
         } => format!("application message `{message}` does not provide `{capability}`"),
         application::Error::InvalidFacadeContract { required, .. } => {
-            format!("application requires canonical facade type `{required}`")
+            format!("application requires the canonical type `{required}`")
         }
         application::Error::FacadeDependencyConflict { root } => format!(
-            "application dependency root `{root}` has conflicting exact facade fingerprints"
+            "application dependency root `{root}` has conflicting exact fingerprints"
         ),
         application::Error::UnsupportedRuntimeType { role, ty, .. } => format!(
             "application {role} type `{ty}` reaches a structural tuple, which has no runtime value semantics"

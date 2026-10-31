@@ -172,14 +172,6 @@ impl std::hash::Hash for Bound {
 }
 
 impl Value {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &crate::host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        self.signature.normalize_profile(profile)
-    }
-
     pub(crate) fn new(
         key: Key,
         kind: Kind,

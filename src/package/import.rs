@@ -33,45 +33,8 @@ pub struct Brand {
     facade: Box<[u8]>,
 }
 
-/// Atomic compiler-only imported demand plus normalized application contract.
-#[doc(hidden)]
-pub struct ApplicationDemand {
-    demand: rawr_import::Demand<rawr_import::Sealed, Brand>,
-    application: crate::application::CheckedContract,
-    named: Box<[Box<str>]>,
-}
-
 struct CompiledImported {
     demand: rawr_import::Demand<rawr_import::Sealed, Brand>,
-    application: Option<crate::application::CheckedContract>,
-    named: Box<[Box<str>]>,
-}
-
-impl ApplicationDemand {
-    /// Whether the Rawr source still names Rust `path`, an item below it,
-    /// or (for a demanded member) its owner.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn names(&self, path: &str) -> bool {
-        let below = |long: &str, short: &str| {
-            long.strip_prefix(short)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
-        };
-        self.named
-            .iter()
-            .any(|named| below(named, path) || below(path, named))
-    }
-
-    /// Consume the exact staging products together.
-    #[doc(hidden)]
-    pub fn into_parts(
-        self,
-    ) -> (
-        rawr_import::Demand<rawr_import::Sealed, Brand>,
-        crate::application::CheckedContract,
-    ) {
-        (self.demand, self.application)
-    }
 }
 
 impl Brand {
@@ -143,7 +106,7 @@ pub enum Error {
     #[error("cannot allocate imported contract lookup evidence")]
     Allocation,
     /// The classified contract contains a path shape the facade cannot name.
-    #[error("invalid imported facade path `{path}`")]
+    #[error("invalid imported path `{path}`")]
     InvalidPath {
         /// Rejected unchanged Rust path.
         path: Box<str>,
@@ -164,7 +127,7 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::cargo::Limits::standard();
-        self.compile_imported_with_limits(contract, snapshot, &limits, false, None, None)
+        self.compile_imported_applied(contract, snapshot, &limits, &[])
             .map(|compiled| compiled.demand)
     }
 
@@ -179,83 +142,15 @@ impl crate::Engine {
         applications: &[rawr_import::surface::application::Application],
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::cargo::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, false, None, None, applications)
+        self.compile_imported_applied(contract, snapshot, &limits, applications)
             .map(|compiled| compiled.demand)
     }
 
-    /// Compile one imported contract against profile facades already installed in this engine.
-    ///
-    /// The caller must have reconstructed those facades from the exact encoded contract. This
-    /// entry exists for linked framework profiles that replace only semantic anchors while the
-    /// importer remains authoritative for ordinary declarations and selected operations.
-    #[doc(hidden)]
-    pub fn compile_imported_with_installed_profile(
-        &self,
-        contract: &rawr_import::Contract<rawr_import::Classified>,
-        snapshot: crate::reload::source::Snapshot,
-    ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
-        let limits = rawr_import::cargo::Limits::standard();
-        self.compile_imported_with_limits(contract, snapshot, &limits, true, None, None)
-            .map(|compiled| compiled.demand)
-    }
-
-    /// Atomically compile symbolic imported demand and one normalized
-    /// application contract under the same exact snapshot and staging facade.
-    #[doc(hidden)]
-    pub fn compile_imported_application_with_installed_profile(
-        &self,
-        contract: &rawr_import::Contract<rawr_import::Classified>,
-        snapshot: crate::reload::source::Snapshot,
-        cycle: &host::facade::ProfileCycle,
-        event_projection: rawr_import::profile::contract::EventProjectionRules,
-    ) -> Result<ApplicationDemand, super::Error> {
-        let limits = rawr_import::cargo::Limits::standard();
-        let compiled = self.compile_imported_with_limits(
-            contract,
-            snapshot,
-            &limits,
-            true,
-            Some(cycle),
-            Some(event_projection),
-        )?;
-        Ok(ApplicationDemand {
-            demand: compiled.demand,
-            application: compiled
-                .application
-                .expect("requested application staging retains its checked contract"),
-            named: compiled.named,
-        })
-    }
-
-    fn compile_imported_with_limits(
-        &self,
-        contract: &rawr_import::Contract<rawr_import::Classified>,
-        snapshot: crate::reload::source::Snapshot,
-        limits: &rawr_import::cargo::Limits,
-        installed_profile: bool,
-        cycle: Option<&host::facade::ProfileCycle>,
-        event_projection: Option<rawr_import::profile::contract::EventProjectionRules>,
-    ) -> Result<CompiledImported, super::Error> {
-        self.compile_imported_applied(
-            contract,
-            snapshot,
-            limits,
-            installed_profile,
-            cycle,
-            event_projection,
-            &[],
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn compile_imported_applied(
         &self,
         contract: &rawr_import::Contract<rawr_import::Classified>,
         snapshot: crate::reload::source::Snapshot,
         limits: &rawr_import::cargo::Limits,
-        installed_profile: bool,
-        cycle: Option<&host::facade::ProfileCycle>,
-        event_projection: Option<rawr_import::profile::contract::EventProjectionRules>,
         applications: &[rawr_import::surface::application::Application],
     ) -> Result<CompiledImported, super::Error> {
         snapshot
@@ -295,9 +190,7 @@ impl crate::Engine {
             .clone_for_import(&mut allocation)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        if !installed_profile {
-            install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
-        }
+        install(contract, &mut registry, &mut allocation).map_err(super::Error::import)?;
         admit_applications(&mut registry, applications).map_err(super::Error::import)?;
         let mut program = match crate::resolve::package::resolve(graph, &registry) {
             Ok(program) => program,
@@ -415,45 +308,12 @@ impl crate::Engine {
                     }));
                 }
             };
-        let application = match cycle {
-            Some(cycle) => {
-                let evidence = crate::program::ContractEvidence::from_resolved(
-                    &program,
-                    symbolic.dependencies,
-                );
-                match crate::application::CheckedContract::transform(&evidence, cycle) {
-                    Ok(application) => Some(application),
-                    Err(error) => {
-                        let source = evidence.application_error_source(&error);
-                        return Err(super::Error::resolution(
-                            sources.clone(),
-                            crate::resolve::package::Failure {
-                                primary: crate::package::source::Id::from_index(source.index()),
-                                secondary: None,
-                                error: crate::resolve::Error::from(error),
-                            },
-                        ));
-                    }
-                }
-            }
-            None => None,
-        };
-
-        let compiler = contract
+        let mut compiler = contract
             .compiler_with_allocation(Brand::mint(facade), imported_snapshot, limits, allocation)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        let mut compiler = match event_projection {
-            Some(rules) => compiler
-                .with_event_projection_rules(rules)
-                .map_err(Error::from)
-                .map_err(super::Error::import)?,
-            None => compiler,
-        };
-        let mut named = Vec::new();
         let impls = symbolic.impls;
         for used in symbolic.uses {
-            named.push(Box::<str>::from(used.path.as_str()));
             // The script's impls for the script types the instance takes,
             // which cross with them (D594).
             let crossing = crossing_impls(&used.types, &impls);
@@ -489,18 +349,11 @@ impl crate::Engine {
                     .map_err(super::Error::import)?;
                 continue;
             }
-            if let Some(site) = used.endpoint {
-                let exact = installed_profile
-                    && registry
-                        .operation_endpoint(used.path.as_str())
-                        .is_some_and(|(endpoint, _)| endpoint.site() == &site);
-                if !exact {
-                    return Err(super::Error::import(Error::UnmappedImportedUse {
-                        path: used.path.as_str().into(),
-                        selector: used.selector,
-                    }));
-                }
-                continue;
+            if used.endpoint.is_some() {
+                return Err(super::Error::import(Error::UnmappedImportedUse {
+                    path: used.path.as_str().into(),
+                    selector: used.selector,
+                }));
             }
             let mut identity = None;
             for outcome in paths.outcomes(used.path.as_str()) {
@@ -561,7 +414,6 @@ impl crate::Engine {
                 .try_reserve_exact(used.functions.len())
                 .map_err(|_| super::Error::import(Error::Allocation))?;
             for function in used.functions {
-                named.push(Box::<str>::from(function.path.as_str()));
                 let mut selected = None;
                 for outcome in paths.outcomes(function.path.as_str()) {
                     if !contract.accepts(outcome.identity(), &function.selector) {
@@ -736,13 +588,7 @@ impl crate::Engine {
             .seal()
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        named.sort_unstable();
-        named.dedup();
-        Ok(CompiledImported {
-            demand,
-            application,
-            named: named.into_boxed_slice(),
-        })
+        Ok(CompiledImported { demand })
     }
 }
 

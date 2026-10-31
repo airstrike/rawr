@@ -25,18 +25,6 @@ pub(crate) struct Site {
 }
 
 impl Key {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        profile
-            .normalize_dependency(&mut self.owner)
-            .1
-            .saturating_add(self.source.normalize_profile(profile))
-            .saturating_add(self.projection.normalize_profile(profile))
-    }
-
     pub(crate) fn new(
         owner: host::facade::Dependency,
         source: host::type_def::Contract,
@@ -63,18 +51,6 @@ impl Key {
 }
 
 impl Site {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        self.bound = host::runtime::Bound::new();
-        self.key
-            .normalize_profile(profile)
-            .saturating_add(self.source.normalize_profile(profile))
-            .saturating_add(self.target.normalize_profile(profile))
-    }
-
     pub(crate) const fn new(key: Key, source: Type, target: Type, span: Span) -> Self {
         Self {
             key,

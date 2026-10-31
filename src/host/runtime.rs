@@ -1782,36 +1782,39 @@ impl fmt::Display for Error {
             Self::ImportedAllocation => formatter
                 .write_str("generated runtime metadata exceeds the shared allocation limit"),
             Self::Profile { reason } => {
-                write!(formatter, "linked profile runtime binding failed: {reason}")
+                write!(formatter, "runtime binding failed: {reason}")
             }
-            Self::UnknownItem { facade, item } => {
-                write!(formatter, "runtime facade `{facade}` has no item `{item}`")
+            Self::UnknownItem { facade: root, item } => {
+                write!(formatter, "the bindings of `{root}` have no item `{item}`")
             }
-            Self::UnknownGenericType { facade, ty } => {
+            Self::UnknownGenericType { facade: root, ty } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` has no generic type `{ty}`"
+                    "the bindings of `{root}` have no generic type `{ty}`"
                 )
             }
             #[cfg(feature = "rust-import")]
-            Self::UnknownImportedType { facade, selector } => write!(
+            Self::UnknownImportedType {
+                facade: root,
+                selector,
+            } => write!(
                 formatter,
-                "runtime facade `{facade}` has no imported type for selector {selector:02x?}"
+                "the bindings of `{root}` have no imported type for selector {selector:02x?}"
             ),
             Self::UnknownProjection {
-                facade,
+                facade: root,
                 source,
                 target,
             } => write!(
                 formatter,
-                "runtime facade `{facade}` has no direct projection `{source} -> {target}`"
+                "the bindings of `{root}` have no direct projection `{source} -> {target}`"
             ),
             Self::DuplicateBinding { item } => {
                 write!(formatter, "duplicate runtime binding for `{item}`")
             }
             Self::StructuralFacadeMismatch { operation } => write!(
                 formatter,
-                "generated structural operation `{operation}` belongs to another facade"
+                "generated structural operation `{operation}` belongs to other bindings"
             ),
             Self::DuplicateStructuralBinding { operation } => write!(
                 formatter,
@@ -1826,37 +1829,37 @@ impl fmt::Display for Error {
             Self::DuplicateStreamBinding { item } => {
                 write!(formatter, "duplicate runtime stream binding for `{item}`")
             }
-            Self::UnknownOperation { facade, item } => {
+            Self::UnknownOperation { facade: root, item } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` has no operation `{item}`"
+                    "the bindings of `{root}` have no operation `{item}`"
                 )
             }
-            Self::OperationFacadeMismatch { facade, item } => write!(
+            Self::OperationFacadeMismatch { facade: root, item } => write!(
                 formatter,
-                "operation `{item}` does not belong to runtime facade `{facade}`"
+                "operation `{item}` does not belong to the bindings of `{root}`"
             ),
             Self::InvalidOperationKind { item, actual } => write!(
                 formatter,
-                "runtime operation `{item}` has facade item kind {actual:?}"
+                "runtime operation `{item}` has item kind {actual:?}"
             ),
             Self::OperationSignatureMismatch { item } => write!(
                 formatter,
                 "runtime operation `{item}` does not match an exact declared signature"
             ),
-            Self::UnknownStream { facade, item } => {
+            Self::UnknownStream { facade: root, item } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` has no stream `{item}`"
+                    "the bindings of `{root}` have no stream `{item}`"
                 )
             }
-            Self::StreamFacadeMismatch { facade, item } => write!(
+            Self::StreamFacadeMismatch { facade: root, item } => write!(
                 formatter,
-                "stream operation `{item}` does not belong to runtime facade `{facade}`"
+                "stream operation `{item}` does not belong to the bindings of `{root}`"
             ),
             Self::InvalidStreamKind { item, actual } => write!(
                 formatter,
-                "runtime stream `{item}` has facade item kind {actual:?}"
+                "runtime stream `{item}` has item kind {actual:?}"
             ),
             Self::StreamSignatureMismatch { item } => write!(
                 formatter,
@@ -1871,16 +1874,16 @@ impl fmt::Display for Error {
                     "duplicate runtime projection binding for `{projection}`"
                 )
             }
-            Self::DuplicateFacade { facade } => {
-                write!(formatter, "duplicate runtime facade `{facade}`")
+            Self::DuplicateFacade { facade: root } => {
+                write!(formatter, "duplicate runtime bindings for `{root}`")
             }
-            Self::MissingFacade { facade } => {
-                write!(formatter, "missing runtime facade `{facade}`")
+            Self::MissingFacade { facade: root } => {
+                write!(formatter, "missing runtime bindings for `{root}`")
             }
-            Self::FacadeMismatch { facade } => {
+            Self::FacadeMismatch { facade: root } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` does not match its compiled ABI"
+                    "the runtime bindings of `{root}` do not match their compiled ABI"
                 )
             }
             Self::MissingBinding { item } => {
@@ -1916,20 +1919,20 @@ impl fmt::Display for Error {
                     "missing exact runtime type attestation for `{ty}`"
                 )
             }
-            Self::UnknownWidgetType { facade, ty } => {
+            Self::UnknownWidgetType { facade: root, ty } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` has no open widget carrier represented by `{ty}`"
+                    "the bindings of `{root}` have no open widget carrier represented by `{ty}`"
                 )
             }
-            Self::AmbiguousWidgetType { facade, ty } => {
+            Self::AmbiguousWidgetType { facade: root, ty } => {
                 write!(
                     formatter,
-                    "runtime facade `{facade}` has multiple open widget carriers represented by `{ty}`"
+                    "the bindings of `{root}` have multiple open widget carriers represented by `{ty}`"
                 )
             }
-            Self::DuplicateWidgetBinding { facade } => {
-                write!(formatter, "duplicate private widget binding for `{facade}`")
+            Self::DuplicateWidgetBinding { facade: root } => {
+                write!(formatter, "duplicate private widget binding for `{root}`")
             }
             Self::MissingWidgetBinding { ty } => {
                 write!(formatter, "missing private widget binding for `{ty}`")

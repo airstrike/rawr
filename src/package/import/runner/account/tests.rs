@@ -755,14 +755,14 @@ fn native_account_simultaneous_scopes_cannot_partition_the_aggregate_target() {
     assert_eq!(native.snapshot().first_refusal, None);
 }
 
-fn plan() -> rawr_import::surface::facade::Plan {
+fn plan() -> Vec<u8> {
     let constructor = identity::Selector::StructConstructor(identity::Form::Unit);
     let producer = identity::Selector::Function {
         item: identity::Definition::authenticated([21; 32]),
     };
     let source = [11; 32];
     let target = [12; 32];
-    let bytes = serde_json::to_vec(&serde_json::json!({
+    serde_json::to_vec(&serde_json::json!({
         "schema": 24, "aliases": [], "sources": [], "abis": [], "operations": [],
         "facades": [
             {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false, "debug": false, "clone": false,
@@ -772,33 +772,19 @@ fn plan() -> rawr_import::surface::facade::Plan {
             {"root": "target", "types": [{"path": "Event", "identity": target, "parameters": ["Message"], "copy": false, "default": false, "debug": false, "clone": false,
                 "shape": {"Struct": {"form": "Unit", "constructor": null, "fields": [], "constructible": false}}}], "items": [], "traits": []}
         ]
-    })).unwrap();
-    rawr_import::surface::facade::Plan::decode(&bytes, &rawr_import::cargo::Limits::standard())
-        .unwrap()
+    }))
+    .unwrap()
 }
 
 #[test]
-fn native_account_retains_facades_extensions_structural_and_event_metadata() {
+fn native_account_retains_bindings_structural_and_event_metadata() {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
     let mut native = Native::transform(carrier).unwrap();
     let initial = native.usage();
     let mut engine = Engine::new();
-    let definitions = runner::install_decoded_profile_retained(
-        &mut engine,
-        &plan(),
-        &runner::Ordinary,
-        &mut native,
-    )
-    .unwrap();
-    let facades = native.usage();
-    assert!(facades.0 > initial.0 && facades.1 > initial.1);
-    let extension = host::facade::Builder::new("extension", host::facade::Abi::new(1).unwrap())
-        .unwrap()
-        .finish()
-        .unwrap();
-    runner::install_profile_facade_retained(&mut engine, extension, &mut native).unwrap();
+    let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
     let extended = native.usage();
-    assert!(extended.0 > facades.0 && extended.1 > facades.1);
+    assert!(extended.0 > initial.0 && extended.1 > initial.1);
     let row = runner::StructuralRow::new(
         "native",
         "",
@@ -855,13 +841,7 @@ fn runtime_fixture() -> (
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
     let mut native = Native::transform(carrier).unwrap();
     let mut engine = Engine::new();
-    let definitions = runner::install_decoded_profile_retained(
-        &mut engine,
-        &plan(),
-        &runner::Ordinary,
-        &mut native,
-    )
-    .unwrap();
+    let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
     engine.imported_native = Some(native);
     (
         engine,

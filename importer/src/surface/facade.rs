@@ -1355,7 +1355,7 @@ impl Plan {
         // The encoded plan size is an accounting target recorded on a
         // surface account; the physical bound is the node content ceiling.
         super::account::Account::surface().exceeded(
-            "runner facade plan bytes",
+            "runner bindings plan bytes",
             limits.json_bytes,
             bytes.len(),
         );
@@ -1372,7 +1372,7 @@ impl Plan {
         limits: &crate::cargo::Limits,
         account: &mut super::account::Account,
     ) -> Result<Self, super::Error> {
-        account.exceeded("runner facade plan bytes", limits.json_bytes, bytes.len());
+        account.exceeded("runner bindings plan bytes", limits.json_bytes, bytes.len());
         let plan: Self = serde_json::from_slice(bytes).map_err(|_| super::Error::Encoding)?;
         plan.validate()?;
         Ok(plan)
@@ -3515,7 +3515,7 @@ mod alias_schema_tests {
         };
         assert!(!decode(bytes.len()).is_exceeded());
         let axis = *decode(bytes.len() - 1)
-            .axis("runner facade plan bytes")
+            .axis("runner bindings plan bytes")
             .expect("the plan byte target records its axis");
         assert_eq!(
             (axis.target, axis.first_requested, axis.high_water),

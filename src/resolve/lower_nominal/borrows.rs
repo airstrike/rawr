@@ -497,7 +497,7 @@ impl Parser<'_> {
             });
         }
         if !compiled.binds.is_empty() {
-            trace.unmodeled = Some(("a pattern binding a part of a facade value", span));
+            trace.unmodeled = Some(("a pattern binding a part of a host value", span));
         }
         trace
     }

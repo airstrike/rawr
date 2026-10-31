@@ -88,23 +88,16 @@ it, and says how to install it when it is missing.
   marked code calls them. A save that edits a function body reaches the
   running program in about 80 ms, in the same process with its state kept
   ([measurements](benches/README.md#release-hot-reload-measurements)).
-- **rawr-iced** runs [iced](https://github.com/iced-rs/iced) apps and reloads
-  them when you save a marked file.
+  An [iced](https://github.com/iced-rs/iced) app is one of these programs.
 
-Both need 64-bit macOS or 64-bit Linux and the pinned nightly
-`nightly-2026-07-11` with the `rustc-dev` and `rust-src` components. Both have
-been tested on Apple Silicon Macs. CI runs rawr-import on x86_64 Linux.
-rawr-iced hasn't been tried on Linux. Windows isn't supported.
+rawr-import needs 64-bit macOS or 64-bit Linux and the pinned nightly
+`nightly-2026-07-11` with the `rustc-dev` and `rust-src` components. It has
+been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. Windows isn't
+supported.
 
 ```sh
 rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-
-# rawr-import
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver
-
-# rawr-iced
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-iced-cli
 cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver
 ```
 
@@ -116,22 +109,20 @@ separately. The [docs](https://rawr.airstrike.fyi/docs/imports) explain them.
 
 ## How do I start an iced app?
 
-With rawr-iced installed:
+With rawr-import installed, make a crate and add iced to it:
 
 ```sh
-rawr new counter --template iced && cd counter && rawr run
+rawr new counter && cd counter
+cargo add iced --git https://github.com/iced-rs/iced --rev be88873d38544455e26c7a104eb757da2cbbac6b
 ```
 
-The template writes iced's counter with `// rawr` as its first line, a
-`Cargo.toml` that depends on the iced revision rawr-iced supports, and the two
-files above. Edit `src/main.rs` while the window is open. A save that passes
-the check swaps the new code into the running app. The app keeps its state
-when the new code is compatible with it. `cargo run` compiles the same app
-natively.
-
-rawr-iced also adds `rawr preview`, `rawr snapshot` and `rawr cache`, and
-window tools for `rawr mcp`. The [rawr-iced docs](https://rawr.airstrike.fyi/docs/iced)
-cover them.
+Put iced's counter example in `src/main.rs` with `// rawr` as its first line,
+and run `rawr run`. rawr-import reads iced's API and generates the bindings
+the marked file calls. Edit `src/main.rs` while the window is open. A save
+that passes the check reaches the running app at its next message. The app
+keeps its state when the new code is compatible with it. `cargo run` compiles
+the same app natively. The [iced docs](https://rawr.airstrike.fyi/docs/iced)
+say what works today.
 
 ## Can a coding agent use it?
 
@@ -196,8 +187,8 @@ ships in your release build. `examples/rules` is a fuller example, and the
 ## Can I try it without installing anything?
 
 The [playground](https://rawr.airstrike.fyi/play) runs Rust in your browser.
-It shows a program's output, and renders iced code as an image or an
-animation. The `?play` bot does the same in Discord channels where it is
+It shows a program's output. It doesn't run iced programs yet. The `?play`
+bot does the same in Discord channels where it is
 turned on. [Add it to a server](https://rawr.airstrike.fyi/bot/invite).
 
 ## How far along is it?

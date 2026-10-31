@@ -80,32 +80,6 @@ pub(crate) struct Representation(RepresentationValue);
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum RepresentationValue {
     Exact(TypeId),
-    #[cfg(feature = "rust-import")]
-    Semantic(SemanticRepresentation),
-}
-
-#[cfg(feature = "rust-import")]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum SemanticRepresentation {
-    Builtin(BuiltinRepresentation),
-    Script(ScriptRepresentation),
-}
-
-#[cfg(feature = "rust-import")]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum BuiltinRepresentation {
-    Bool,
-    Char,
-    I64,
-    F64,
-    String,
-}
-
-#[cfg(feature = "rust-import")]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum ScriptRepresentation {
-    Struct,
-    Enum,
 }
 
 impl Representation {
@@ -116,56 +90,7 @@ impl Representation {
     pub(crate) fn runtime(self) -> TypeId {
         match self.0 {
             RepresentationValue::Exact(exact) => exact,
-            #[cfg(feature = "rust-import")]
-            RepresentationValue::Semantic(_) => {
-                unreachable!("semantic runtime representation has no execution authority")
-            }
         }
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn project_builtin(&mut self, name: &str) -> bool {
-        let RepresentationValue::Exact(exact) = self.0 else {
-            return false;
-        };
-        let expected = match name {
-            "bool" => (TypeId::of::<bool>(), BuiltinRepresentation::Bool),
-            "char" => (TypeId::of::<char>(), BuiltinRepresentation::Char),
-            "i64" => (TypeId::of::<crate::INT>(), BuiltinRepresentation::I64),
-            "f64" => (TypeId::of::<crate::FLOAT>(), BuiltinRepresentation::F64),
-            "String" => (
-                TypeId::of::<crate::ImmutableString>(),
-                BuiltinRepresentation::String,
-            ),
-            _ => return false,
-        };
-        if exact != expected.0 {
-            return false;
-        }
-        self.0 = RepresentationValue::Semantic(SemanticRepresentation::Builtin(expected.1));
-        true
-    }
-
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn project_script(&mut self, kind: type_def::Kind) -> bool {
-        let RepresentationValue::Exact(exact) = self.0 else {
-            return false;
-        };
-        let (expected, semantic) = match kind {
-            type_def::Kind::Struct => (
-                TypeId::of::<crate::types::nominal::Struct>(),
-                ScriptRepresentation::Struct,
-            ),
-            type_def::Kind::Enum => (
-                TypeId::of::<crate::types::nominal::Enum>(),
-                ScriptRepresentation::Enum,
-            ),
-        };
-        if exact != expected {
-            return false;
-        }
-        self.0 = RepresentationValue::Semantic(SemanticRepresentation::Script(semantic));
-        true
     }
 }
 
@@ -213,111 +138,6 @@ pub enum Error {
 }
 
 impl Type {
-    #[cfg(feature = "rust-import")]
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        fn types(values: &mut [Type], profile: &host::facade::ProfileFinalization<'_>) -> usize {
-            values.iter_mut().fold(0_usize, |completed, value| {
-                completed.saturating_add(value.normalize_profile(profile))
-            })
-        }
-
-        match self {
-            Self::Unit | Self::Object(_) => 0,
-            Self::Array { element, .. } | Self::Option(element) => {
-                element.normalize_profile(profile)
-            }
-            Self::Result(ok, err) => ok
-                .normalize_profile(profile)
-                .saturating_add(err.normalize_profile(profile)),
-            Self::Tuple(members) => types(members, profile),
-            Self::Builtin { name, runtime } => {
-                if runtime.project_builtin(name) {
-                    1
-                } else {
-                    profile.reject_runtime_representation();
-                    0
-                }
-            }
-            Self::Script {
-                schema,
-                kind,
-                runtime,
-                ..
-            } => {
-                let completed = schema.normalize_profile(profile);
-                if runtime.project_script(*kind) {
-                    completed.saturating_add(1)
-                } else {
-                    profile.reject_runtime_representation();
-                    completed
-                }
-            }
-            Self::Callable { inputs, output, .. } => {
-                types(inputs, profile).saturating_add(output.normalize_profile(profile))
-            }
-            Self::Host {
-                path,
-                identity,
-                arguments,
-                owner,
-            } => {
-                let mut completed = types(arguments, profile);
-                let direct = owner
-                    .as_mut()
-                    .map(|owner| {
-                        let (direct, nested) = profile.normalize_dependency(owner);
-                        completed = completed.saturating_add(nested);
-                        direct
-                    })
-                    .unwrap_or(false);
-                let logical = direct
-                    .then(|| profile.normalize_runtime_identity(path, *identity))
-                    .flatten();
-                if let (Some(logical), Some(owner)) = (logical, owner.take()) {
-                    *self = Self::Imported {
-                        path: std::mem::take(path),
-                        identity: logical,
-                        arguments: std::mem::take(arguments),
-                        owner,
-                    };
-                    completed = completed.saturating_add(1);
-                }
-                completed
-            }
-            #[cfg(feature = "rust-import")]
-            Self::Imported {
-                arguments, owner, ..
-            } => types(arguments, profile).saturating_add(profile.normalize_dependency(owner).1),
-            Self::Support {
-                path,
-                identity,
-                owner,
-                ..
-            } => {
-                let (direct, nested) = profile.normalize_dependency(owner);
-                let logical = direct
-                    .then(|| profile.normalize_runtime_identity(path, *identity))
-                    .flatten();
-                if let Some(logical) = logical {
-                    let path = std::mem::take(path);
-                    let owner = owner.clone();
-                    *self = Self::Imported {
-                        path,
-                        identity: logical,
-                        arguments: Box::default(),
-                        owner,
-                    };
-                    nested.saturating_add(1)
-                } else {
-                    nested
-                }
-            }
-        }
-    }
-
     pub(crate) const fn unit() -> Self {
         Self::Unit
     }
@@ -1273,70 +1093,5 @@ fn identity_name(identity: &type_def::Identity) -> String {
     match identity {
         type_def::Identity::Host(identity) => format!("host::{identity:?}"),
         type_def::Identity::Script(key) => key.to_string(),
-    }
-}
-
-#[cfg(all(test, feature = "rust-import"))]
-mod semantic_representation_tests {
-    use super::{Representation, RepresentationValue, SemanticRepresentation};
-    use std::any::TypeId;
-    use std::hash::{DefaultHasher, Hash, Hasher};
-
-    fn digest(value: &impl Hash) -> u64 {
-        let mut digest = DefaultHasher::new();
-        value.hash(&mut digest);
-        digest.finish()
-    }
-
-    #[test]
-    fn builtin_projection_requires_the_closed_exact_pair() {
-        let mut string = Representation::exact(TypeId::of::<crate::ImmutableString>());
-        let raw = string;
-        assert!(string.project_builtin("String"));
-        assert_eq!(raw.runtime(), TypeId::of::<crate::ImmutableString>());
-        assert_ne!(digest(&string), digest(&raw));
-        assert!(matches!(
-            string,
-            Representation(RepresentationValue::Semantic(
-                SemanticRepresentation::Builtin(_)
-            ))
-        ));
-
-        let mut wrong = Representation::exact(TypeId::of::<crate::INT>());
-        assert!(!wrong.project_builtin("String"));
-        let mut unknown = Representation::exact(TypeId::of::<std::ops::RangeInclusive<i64>>());
-        assert!(!unknown.project_builtin("RangeInclusive<i64>"));
-        assert!(!string.project_builtin("String"));
-    }
-
-    #[test]
-    fn script_projection_is_closed_over_exact_nominal_classes() {
-        let mut structure = Representation::exact(TypeId::of::<crate::types::nominal::Struct>());
-        let mut enumeration = Representation::exact(TypeId::of::<crate::types::nominal::Enum>());
-        assert!(structure.project_script(crate::type_def::Kind::Struct));
-        assert!(enumeration.project_script(crate::type_def::Kind::Enum));
-        assert_ne!(digest(&structure), digest(&enumeration));
-
-        let mut unsupported = Representation::exact(TypeId::of::<crate::Dynamic>());
-        assert!(!unsupported.project_script(crate::type_def::Kind::Struct));
-        let mut wrong_kind = Representation::exact(TypeId::of::<crate::types::nominal::Struct>());
-        assert!(!wrong_kind.project_script(crate::type_def::Kind::Enum));
-        assert!(!structure.project_script(crate::type_def::Kind::Struct));
-    }
-
-    #[test]
-    fn semantic_marker_hashes_without_granting_runtime_identity() {
-        let mut admitted = Representation::exact(TypeId::of::<crate::ImmutableString>());
-        let exact = admitted;
-        assert!(admitted.project_builtin("String"));
-        let independent_artifact = admitted;
-        assert_eq!(digest(&independent_artifact), digest(&admitted));
-        assert_eq!(exact.runtime(), TypeId::of::<crate::ImmutableString>());
-        assert!(matches!(
-            admitted,
-            Representation(RepresentationValue::Semantic(
-                SemanticRepresentation::Builtin(_)
-            ))
-        ));
     }
 }

@@ -19,4 +19,3 @@ rawr = { path = "..", features = ["sync"] }
 [dev-dependencies]
 rawr = { path = "..", features = ["rust-import", "sync"] }
 rawr_import = { package = "rawr-import", path = "../importer" }
-rawr_iced = { package = "rawr-iced", path = "../iced" }

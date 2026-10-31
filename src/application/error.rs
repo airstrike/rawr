@@ -70,11 +70,9 @@ impl fmt::Display for Category {
             Self::MissingCapability => {
                 formatter.write_str("application message lacks a required capability")
             }
-            Self::InvalidFacadeContract => {
-                formatter.write_str("invalid application facade contract")
-            }
+            Self::InvalidFacadeContract => formatter.write_str("invalid application contract"),
             Self::FacadeDependencyConflict => {
-                formatter.write_str("conflicting application facade dependencies")
+                formatter.write_str("conflicting application dependencies")
             }
             Self::UnsupportedRuntimeType => {
                 formatter.write_str("unsupported application runtime type")
@@ -446,11 +444,11 @@ impl fmt::Display for Error {
             ),
             Self::InvalidFacadeContract { required, entry } => write!(
                 formatter,
-                "application entry at {entry} requires canonical facade type `{required}`"
+                "application entry at {entry} requires the canonical type `{required}`"
             ),
             Self::FacadeDependencyConflict { root } => write!(
                 formatter,
-                "application dependency root `{root}` has conflicting exact facade fingerprints"
+                "application dependency root `{root}` has conflicting exact fingerprints"
             ),
             Self::UnsupportedRuntimeType {
                 role,

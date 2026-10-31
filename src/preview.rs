@@ -319,15 +319,6 @@ impl LogicalSize {
 }
 
 impl Callback {
-    #[cfg(feature = "rust-import")]
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        let mut completed = self.item.normalize_profile(profile);
-        for parameter in &mut self.parameters {
-            completed = completed.saturating_add(parameter.normalize_profile(profile));
-        }
-        completed.saturating_add(self.output.normalize_profile(profile))
-    }
-
     /// Return the stable callback item key.
     #[must_use]
     pub const fn item(&self) -> &item::Value {
@@ -354,11 +345,6 @@ impl Callback {
 }
 
 impl Theme {
-    #[cfg(feature = "rust-import")]
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        self.callback.normalize_profile(profile)
-    }
-
     /// Return the stable theme choice label.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -373,57 +359,16 @@ impl Theme {
 }
 
 #[cfg(feature = "rust-import")]
-impl Input {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        match self {
-            Self::Stateless => 0,
-            Self::Shared(ty) | Self::Owned(ty) => ty.normalize_profile(profile),
-        }
-    }
-}
+impl Input {}
 
 #[cfg(feature = "rust-import")]
-impl Seed {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        match self {
-            Self::None | Self::Default => 0,
-            Self::Callback(callback) => callback.normalize_profile(profile),
-        }
-    }
-}
+impl Seed {}
 
 #[cfg(feature = "rust-import")]
-impl Fingerprint {
-    pub(crate) fn normalize_profile(
-        &mut self,
-        profile: &host::facade::ProfileFinalization<'_>,
-    ) -> usize {
-        self.0.iter_mut().fold(0_usize, |completed, proof| {
-            completed.saturating_add(proof.normalize_profile(profile))
-        })
-    }
-}
+impl Fingerprint {}
 
 #[cfg(feature = "rust-import")]
-impl Proof {
-    fn normalize_profile(&mut self, profile: &host::facade::ProfileFinalization<'_>) -> usize {
-        let mut completed = self.subject.normalize_profile(profile);
-        completed = completed.saturating_add(self.input.normalize_profile(profile));
-        completed = completed.saturating_add(self.message.normalize_profile(profile));
-        completed = completed.saturating_add(self.seed.normalize_profile(profile));
-        if let Some(update) = &mut self.update {
-            completed = completed.saturating_add(update.normalize_profile(profile));
-        }
-        for theme in &mut self.themes {
-            completed = completed.saturating_add(theme.normalize_profile(profile));
-        }
-        completed = completed.saturating_add(self.runtime_output.normalize_profile(profile));
-        if let Some(projection) = &mut self.projection {
-            completed = completed.saturating_add(projection.normalize_profile(profile));
-        }
-        completed
-    }
-}
+impl Proof {}
 
 impl Location {
     /// Return the exact span within this location's retained program source.
@@ -758,7 +703,7 @@ pub(crate) fn resolve(
                 subjects[0].candidate.source,
                 None,
                 subjects[0].candidate.key.to_string(),
-                "installed iced facade does not expose `Element<Message>`",
+                "the installed bindings do not expose `Element<Message>`",
                 subjects[0].syntaxes[0].span,
                 None,
             )
@@ -772,7 +717,7 @@ pub(crate) fn resolve(
                 subjects[0].candidate.source,
                 None,
                 subjects[0].candidate.key.to_string(),
-                "installed iced facade does not expose `Task<Message>`",
+                "the installed bindings do not expose `Task<Message>`",
                 subjects[0].syntaxes[0].span,
                 None,
             )
@@ -786,7 +731,7 @@ pub(crate) fn resolve(
                 subjects[0].candidate.source,
                 None,
                 subjects[0].candidate.key.to_string(),
-                "installed iced facade does not expose `Theme`",
+                "the installed bindings do not expose `Theme`",
                 subjects[0].syntaxes[0].span,
                 None,
             )
