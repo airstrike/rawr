@@ -1049,20 +1049,10 @@ fn resolve_impl(
     #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
 ) -> Result<Path, Error> {
     let span = parsed.span;
-    if let Some(output) = future_output(&parsed) {
-        // A future is iced's `Task` of its output, which runs it, and else
-        // the core's future (D511.3).
-        let task = if host.type_(TASK).is_some() {
-            TASK
-        } else {
-            CORE_FUTURE
-        };
-        let definition = host
-            .type_(task)
-            .ok_or_else(|| Error::UnsupportedNominalSyntax {
-                construct: "a future in a program without iced, whose `Task` runs it".into(),
-                source: span,
-            })?;
+    // A future is the core's future of its output (D511.3).
+    if let Some(output) = future_output(&parsed)
+        && let Some(definition) = host.type_(CORE_FUTURE)
+    {
         let output = match output {
             Some(output) => resolve(
                 output.clone(),
@@ -1076,9 +1066,9 @@ fn resolve_impl(
         return Ok(Path {
             target: Target::Host {
                 definition: definition.clone(),
-                owner: host.type_owner(task).cloned(),
+                owner: host.type_owner(CORE_FUTURE).cloned(),
             },
-            name: task.into(),
+            name: CORE_FUTURE.into(),
             arguments: Box::new([Argument::Type(output)]),
             span,
         });
@@ -1207,8 +1197,6 @@ fn resolve_impl(
     })
 }
 
-/// The type that runs a future: iced's `Task`.
-const TASK: &str = "iced::Task";
 /// The core's future, where no host's type runs futures.
 const CORE_FUTURE: &str = "rawr::future::Future";
 

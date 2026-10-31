@@ -67,8 +67,6 @@ const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
 /// The last parameter of an async body's step function: `()` to start, or
 /// the frame it resumes from.
 const ASYNC_RESUME: &str = "__rawr_resume";
-/// The facade function that makes an async body's step function a `Task`.
-const ASYNC_TASK: &str = "rawr_iced::task::script";
 /// The core's function an async body's step function is passed to, where
 /// no host's `Task` runs futures.
 const CORE_ASYNC: &str = "rawr::future::script";
@@ -14784,11 +14782,10 @@ impl<'a> Parser<'a> {
 
     /// tokio's `join!(a, b, ..)`, `try_join!(a, b, ..)` and
     /// `select! { pattern = future => body, .. else => body }`, at the `!`,
-    /// written again as Rawr code: an `.await` on rawr-iced's
-    /// `tokio::__join2` (and the others for each count), and for `select!` a
-    /// `match` of its output. Plan `i` of a select gives `Err` `i` times
-    /// around its output, then `Ok` unless it is the last
-    /// (`rawr_iced::task::Kind::Select`).
+    /// written again as Rawr code: an `.await` on `rawr::future::__join2`
+    /// (and the others for each count), and for `select!` a `match` of its
+    /// output. Plan `i` of a select gives `Err` `i` times around its output,
+    /// then `Ok` unless it is the last.
     fn parse_tokio_macro(&mut self, name: &str, start: Span) -> Result<ParsedExpr, Error> {
         const MOST: usize = 5;
         let at = start.start();
@@ -15020,25 +15017,19 @@ impl<'a> Parser<'a> {
             spliced.push((Token::RightParen, at));
         } else {
             let function = if filtered { "select_some" } else { name };
-            if crate::resolve::core_futures(&self.models.host) {
-                // The core has `join!` only, so far (D513.7).
-                if name != "join" {
-                    return Err(unsupported(
-                        format!(
-                            "`{name}!` in a program without iced; Rawr runs `join!` here so far"
-                        ),
-                        end,
-                    ));
-                }
-                spliced.extend([
-                    ident("rawr"),
-                    (Token::DoubleColon, at),
-                    ident("future"),
-                    (Token::DoubleColon, at),
-                ]);
-            } else {
-                spliced.extend([ident("tokio"), (Token::DoubleColon, at)]);
+            // The core has `join!` only, so far (D513.7).
+            if name != "join" {
+                return Err(unsupported(
+                    format!("`{name}!`; Rawr runs `join!` here so far"),
+                    end,
+                ));
             }
+            spliced.extend([
+                ident("rawr"),
+                (Token::DoubleColon, at),
+                ident("future"),
+                (Token::DoubleColon, at),
+            ]);
             spliced.extend([
                 ident(&format!("__{function}{count}")),
                 (Token::LeftParen, at),
@@ -34648,21 +34639,6 @@ impl<'a> Parser<'a> {
                 value = self.parse_cell_member(value, inner, member, member_span)?;
                 continue;
             }
-            // tokio's `mutex.lock().await` without tokio: a `RefCell`
-            // borrow once no other borrow holds it.
-            let mutex = match &builtin {
-                Ty::Reference { target, .. } => (**target).clone(),
-                ty => ty.clone(),
-            };
-            if member.as_str() == "lock"
-                && let Ty::Host { proof, arguments } = &mutex
-                && proof.definition.path() == "rawr_iced::tokio::sync::Mutex"
-                && let [inner] = &arguments[..]
-            {
-                let inner = inner.clone();
-                value = self.parse_mutex_lock(value, inner, member_span)?;
-                continue;
-            }
             let tuple = match &builtin {
                 Ty::Tuple(members) => Some(members.clone()),
                 Ty::Reference { target, .. } => match &**target {
@@ -41586,22 +41562,13 @@ impl<'a> Parser<'a> {
         moved: bool,
         output: Option<Ty>,
     ) -> Result<ParsedExpr, Error> {
-        // iced's `Task` runs an iced program's async bodies, and the core's
-        // future any other program's (D511.3).
-        let runner = if self.models.host_items(ASYNC_TASK).is_some() {
-            ASYNC_TASK
-        } else {
-            CORE_ASYNC
-        };
+        // The core's future runs async bodies (D511.3).
         let items = self
             .models
-            .host_items(runner)
+            .host_items(CORE_ASYNC)
             .map(<[_]>::to_vec)
-            .ok_or_else(|| Error::UnsupportedNominalSyntax {
-                construct: "`async` in a program without iced, whose `Task` runs it".into(),
-                source: start,
-            })?;
-        let owner = self.models.item_owner(runner).cloned();
+            .ok_or_else(|| self.unsupported("`async`"))?;
+        let owner = self.models.item_owner(CORE_ASYNC).cloned();
         self.async_step = Some(output);
         let step = self.parse_closure(Token::Or, start, moved)?;
         let call = span(start.start(), step.span.end());
@@ -42356,20 +42323,6 @@ impl<'a> Parser<'a> {
                     call,
                 });
             };
-            let tokio = matches!(
-                self.inference.resolve(&argument.ty),
-                Ty::Host { proof, .. } if proof.definition.path().starts_with("rawr_iced::tokio::")
-            );
-            if tokio
-                && let Some(items) = self
-                    .models
-                    .host_items("rawr_iced::tokio::__drop")
-                    .map(<[_]>::to_vec)
-            {
-                self.move_local(argument)?;
-                let owner = self.models.item_owner("rawr_iced::tokio::__drop").cloned();
-                return self.call_host_function(&items, owner, arguments, call);
-            }
             self.move_local(argument)?;
             // A value with drop glue runs it here.
             let source = if self.needs_drop(&argument.ty, argument.span)? {
@@ -53760,7 +53713,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 952);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 936);
     }
 
     #[cfg(feature = "rust-import")]

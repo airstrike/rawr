@@ -238,23 +238,6 @@ fn aggregate_compile_rejects_non_entry_statements_at_their_source() {
 }
 
 #[test]
-fn aggregate_widget_errors_retain_the_declaring_child_source() {
-    let project = Project::new("widget-child-diagnostic");
-    project.write("src/main.rs", "mod controls;\n");
-    project.write("src/controls.rs", "pub struct Dial;\n#[widget]\nimpl Dial { fn paint(&self) { () } }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let mut engine = Engine::new();
-    let facade = host::facade::Builder::new("iced", host::facade::Abi::new(1).unwrap()).unwrap().finish().unwrap();
-    engine.register_host_facade(facade).unwrap();
-
-    let error = engine.compile_package_executable(&target).unwrap_err();
-    let report = error.report().unwrap();
-
-    assert_eq!(report.code(), code::RESOLVE_WIDGET);
-    assert!(report.labels().iter().all(|label| label.source().identity().ends_with("src/controls.rs")));
-}
-
-#[test]
 fn imported_functions_lower_once_with_module_qualified_runtime_symbols() {
     let project = Project::new("module-functions");
     project.write("src/main.rs", "pub mod left;\npub mod right;\nuse crate::left::double;\npub fn answer(value: i64) -> i64 { double(value) }\n");

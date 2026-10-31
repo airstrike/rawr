@@ -1510,10 +1510,9 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
 }
 
 /// Whether async code in this program gives the core's
-/// `rawr::future::Future`: its facade is installed and no host's own type,
-/// such as iced's `Task`, runs futures.
+/// `rawr::future::Future`: its facade is installed.
 pub(crate) fn core_futures(host: &host::Registry) -> bool {
-    host.type_(crate::future::facade::FUTURE).is_some() && host.type_("iced::Task").is_none()
+    host.type_(crate::future::facade::FUTURE).is_some()
 }
 
 /// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,
