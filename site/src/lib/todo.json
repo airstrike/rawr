@@ -2,7 +2,7 @@
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
   "version": "0.3.32",
-  "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
+  "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
@@ -909,7 +909,7 @@
       "rows": [
         {"id":"typed-rust-language","name":"Typed Rust language","start":0,"size":5,"state":"done","note":"Structs, enums, traits, generics and match","issues":[],"milestone":"0.0"},
         {"id":"hot-reload-state-kept","name":"Hot reload keeps state","start":2,"size":3,"state":"done","note":"Edits apply at the next event","issues":[],"milestone":"0.0"},
-        {"id":"iced-facade-rawr-iced","name":"rawr-iced facade for iced","start":4,"size":4,"state":"done","note":"Hosts, widgets and previews","issues":[],"milestone":"0.0"},
+        {"id":"iced-facade-rawr-iced","name":"iced through rawr-iced","start":4,"size":4,"state":"done","note":"Hosts, widgets and previews","issues":[],"milestone":"0.0"},
         {"id":"rust-crates-through-rustc","name":"Rust crates through rustc","start":6,"size":5,"state":"done","note":"The importer generates bindings","issues":[],"milestone":"0.0"},
         {"id":"projects-and-the-marker","name":"Projects and the marker","start":9,"size":2,"state":"done","note":"A crate marked // rawr","issues":[],"milestone":"0.0"},
         {"id":"play-and-the-playground","name":"?play and the playground","start":10,"size":3,"state":"done","note":"A Discord bot and the browser through wasm","issues":[],"milestone":"0.0"},
@@ -981,7 +981,7 @@
     {
       "id": "gnar",
       "title": "The gnarly snippet",
-      "subtitle": "A ?play snippet, as rustc runs it",
+      "subtitle": "A ?play snippet that runs as rustc runs it",
       "open": true,
       "rows": [
         {
@@ -1067,7 +1067,7 @@
         },
         {
           "id": "drift-loudly",
-          "name": "Drift, loudly",
+          "name": "Loud drift checks",
           "start": 49,
           "size": 2,
           "state": "done",
@@ -1127,7 +1127,7 @@
           "start": 47,
           "size": 3,
           "state": "done",
-          "note": "Every crate read whole; path crates kept with the project. #398, #281",
+          "note": "Saves read whole crates with no nightly",
           "issues": [
             {"number":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed"},
             {"number":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed"},
