@@ -695,6 +695,21 @@ impl Engine {
 
         let pos = op_info.position();
 
+        if let Some(place) = crate::place::get(target.as_ref()) {
+            if op_info.is_op_assignment() {
+                let copied = place.invoke(crate::place::Operation::Copy, &mut [])?;
+                let mut copied = Target::TempValue(copied);
+                self.eval_op_assignment(global, caches, op_info, root, &mut copied, new_val)?;
+                let _ = place.invoke(
+                    crate::place::Operation::Store,
+                    &mut [copied.take_or_clone()],
+                )?;
+            } else {
+                let _ = place.invoke(crate::place::Operation::Store, &mut [new_val])?;
+            }
+            return Ok(());
+        }
+
         if let Some((hash_x, hash, op_x, op_x_str, op, op_str)) = op_info.get_op_assignment_info() {
             let mut lock_guard = target.as_mut().write_lock::<Dynamic>().unwrap();
             let mut done = false;

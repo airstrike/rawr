@@ -12,6 +12,8 @@ mod keyed;
 mod location;
 mod origin;
 mod places;
+#[cfg(feature = "rust-import")]
+mod sequence;
 use places::PlacePattern;
 mod reborrow;
 mod reverse;
@@ -5158,6 +5160,11 @@ pub(crate) struct ClosureCallable {
 #[derive(Clone)]
 enum Op {
     #[cfg(feature = "rust-import")]
+    Sequence {
+        target: Ty,
+        span: Span,
+    },
+    #[cfg(feature = "rust-import")]
     Imported {
         path: ImmutableString,
         selector: crate::host::type_def::ImportedSelector,
@@ -5289,6 +5296,10 @@ enum PreludeOp {
     GenericEqual,
     /// `{:?}` of a value of a generic type, by its runtime value.
     GenericDebug,
+    /// Explicit source Clone, distinct from cloning an authority handle.
+    ValueClone,
+    /// A checked sequence membership query with borrowed operands.
+    SequenceContains,
     /// A number's, `bool`'s or `()`'s `Debug` under a `{:?}` spec
     /// (`DebugSpec`): `leaf(value, spec, code)` (`DebugLeaf::from_code`).
     FormatDebugLeaf,
@@ -5466,6 +5477,15 @@ enum PreludeOp {
     /// script function's `&mut` output is read and written.
     PathGet,
     PathSet,
+    /// Store through a checked reference; native places write immediately.
+    ReferentStore,
+    /// Whether a checked argument uses direct native place transport.
+    NativePlace,
+    /// Whether a `Memory` swap exchanged two native places where they are,
+    /// leaving nothing to store back.
+    Swapped,
+    /// Ownership-preserving `mem::take`, `replace` and `swap` on sequences/text.
+    Memory,
     /// The parts of a value the drop glue goes on to after the value's own
     /// `Drop` (`drops.rs`): its fields, payload or elements in Rust's drop
     /// order, each that holds a value of a type with `impl Drop`.
@@ -5489,6 +5509,8 @@ impl PreludeOp {
             Self::ExpectErr => "result.expect-err",
             Self::GenericEqual => "generic.eq",
             Self::GenericDebug => "generic.debug",
+            Self::ValueClone => "generic.clone",
+            Self::SequenceContains => "sequence.contains",
             Self::FormatDebugLeaf => "format.debug-leaf",
             Self::FormatSpecDebug => "format.spec-debug",
             Self::Compare => "generic.partial-cmp",
@@ -5563,6 +5585,10 @@ impl PreludeOp {
             Self::SliceChunks => "slice.chunks",
             Self::PathGet => "place.get",
             Self::PathSet => "place.set",
+            Self::ReferentStore => "place.store",
+            Self::NativePlace => "place.native",
+            Self::Swapped => "place.swapped",
+            Self::Memory => "place.memory",
             Self::DropParts => "drop.parts",
         }
     }
@@ -5578,7 +5604,9 @@ impl PreludeOp {
             | Self::SetRemove
             | Self::VecMethod
             | Self::StrChange
-            | Self::PathSet => Some(true),
+            | Self::PathSet
+            | Self::ReferentStore
+            | Self::Memory => Some(true),
             Self::MapGet
             | Self::MapContainsKey
             | Self::MapIndex
@@ -5589,6 +5617,8 @@ impl PreludeOp {
             | Self::KeyedRange
             | Self::PathGet
             | Self::GenericDebug
+            | Self::ValueClone
+            | Self::SequenceContains
             | Self::DisplayText => Some(false),
             _ => None,
         }
@@ -5598,6 +5628,8 @@ impl PreludeOp {
         match self {
             Self::None => Vec::new(),
             Self::Some
+            | Self::NativePlace
+            | Self::Swapped
             | Self::IsSome
             | Self::Unwrap
             | Self::Ok
@@ -5606,6 +5638,7 @@ impl PreludeOp {
             | Self::UnwrapOk
             | Self::UnwrapErr
             | Self::GenericDebug
+            | Self::ValueClone
             | Self::TypeIndex
             | Self::Discriminant
             | Self::ReverseWrap
@@ -5620,9 +5653,15 @@ impl PreludeOp {
             | Self::CellSet
             | Self::CellReplace
             | Self::ErrorNew
-            | Self::ErrorText => {
+            | Self::ErrorText
+            | Self::ReferentStore => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
+            Self::Memory => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<INT>(),
+                TypeId::of::<Dynamic>(),
+            ],
             Self::CellUpdate => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
@@ -5684,7 +5723,7 @@ impl PreludeOp {
             Self::Parse | Self::ErrorParse => vec![TypeId::of::<ImmutableString>()],
             Self::Print => vec![TypeId::of::<ImmutableString>(), TypeId::of::<bool>()],
             Self::StrChange => vec![
-                TypeId::of::<ImmutableString>(),
+                TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
@@ -5743,13 +5782,13 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::VecCapacity => vec![TypeId::of::<crate::Array>()],
+            Self::VecCapacity => vec![TypeId::of::<Dynamic>()],
             Self::FrameCopy => vec![
                 TypeId::of::<crate::scope::Opening>(),
                 TypeId::of::<crate::INT>(),
             ],
             Self::VecMethod => vec![
-                TypeId::of::<crate::Array>(),
+                TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
@@ -5776,7 +5815,7 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::GenericEqual | Self::Compare => {
+            Self::GenericEqual | Self::Compare | Self::SequenceContains => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
             Self::Expect | Self::ExpectOk | Self::ExpectErr => {
@@ -5803,11 +5842,38 @@ impl PreludeOp {
         };
         match self {
             Self::Some => return Ok(crate::option::some(args[0].take())),
+            Self::NativePlace => return Ok(crate::place::get(args[0]).is_some().into()),
+            Self::Swapped => return Ok(args[0].is_unit().into()),
             Self::None => return Ok(crate::option::none()),
             Self::Ok => return Ok(crate::result::ok(args[0].take())),
             Self::Err => return Ok(crate::result::err(args[0].take())),
+            Self::SequenceContains => {
+                if let Some(place) = crate::place::get(args[0]) {
+                    return place.invoke(crate::place::Operation::Contains, &mut [args[1].clone()]);
+                }
+                let array = args[0]
+                    .as_array_ref()
+                    .map_err(|_| invariant("a sequence membership receiver is not a sequence"))?;
+                for value in array.iter() {
+                    if comparison.equal(value, args[1])? {
+                        return Ok(true.into());
+                    }
+                }
+                return Ok(false.into());
+            }
             Self::GenericEqual => return Ok(comparison.equal(args[0], args[1])?.into()),
-            Self::GenericDebug => return Ok(debug_value(args[0], models).into()),
+            Self::GenericDebug => {
+                return match crate::place::get(args[0]) {
+                    Some(place) => place.invoke(crate::place::Operation::Debug, &mut []),
+                    None => Ok(debug_value(args[0], models).into()),
+                }
+            }
+            Self::ValueClone => {
+                return match crate::place::get(args[0]) {
+                    Some(place) => place.invoke(crate::place::Operation::Clone, &mut []),
+                    None => Ok(args[0].clone()),
+                };
+            }
             Self::FormatDebugLeaf => {
                 let spec = DebugSpec::read(args[1]);
                 let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
@@ -6014,9 +6080,47 @@ impl PreludeOp {
                 )));
             }
             Self::Slice | Self::SplitAt => return slice_value(self, args),
-            Self::VecMethod => return vec_method(args),
+            Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
+            Self::Memory => {
+                let mode = args[1].as_int().unwrap_or(-1);
+                let incoming = args[2].take();
+                if let Some(place) = crate::place::get(args[0]) {
+                    return match mode {
+                        0 => place.invoke(crate::place::Operation::Take, &mut []),
+                        1 => place.invoke(crate::place::Operation::Replace, &mut [incoming]),
+                        2 if crate::place::get(&incoming).is_some() => {
+                            place.invoke(crate::place::Operation::SwapValues, &mut [incoming])
+                        }
+                        2 => place.invoke(crate::place::Operation::Replace, &mut [incoming]),
+                        _ => Err(invariant("unknown native memory operation")),
+                    };
+                }
+                let incoming = if mode == 2
+                    && let Some(other) = crate::place::get(&incoming)
+                {
+                    other.invoke(crate::place::Operation::Take, &mut [])?
+                } else {
+                    incoming
+                };
+                return Ok(std::mem::replace(args[0], incoming));
+            }
+            Self::ReferentStore => {
+                let incoming = args[1].take();
+                if let Some(place) = crate::place::get(args[0]) {
+                    if crate::place::get(&incoming).is_some_and(|other| place.same_storage(&other))
+                    {
+                        return Ok(Dynamic::UNIT);
+                    }
+                    return place.invoke(crate::place::Operation::Store, &mut [incoming]);
+                }
+                *args[0] = incoming;
+                return Ok(Dynamic::UNIT);
+            }
             Self::VecCapacity => {
+                if let Some(place) = crate::place::get(args[0]) {
+                    return place.invoke(crate::place::Operation::Capacity, &mut []);
+                }
                 let capacity = args[0].as_array_ref().map_or(0, |array| array.capacity());
                 return Ok(Dynamic::from(capacity as crate::INT));
             }
@@ -6027,7 +6131,7 @@ impl PreludeOp {
                     .map_or(Dynamic::UNIT, |opening| opening.copies().get(index)));
             }
             Self::Time => return time_method(args),
-            Self::StrChange => return str_change(args),
+            Self::StrChange => return str_change(context, args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {
                 let size = usize::try_from(args[1].as_int().unwrap_or(0)).unwrap_or(0);
@@ -6101,7 +6205,12 @@ impl PreludeOp {
                 });
             }
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
-            Self::DisplayText => return Ok(args[0].to_string().into()),
+            Self::DisplayText => {
+                return match crate::place::get(args[0]) {
+                    Some(place) => place.invoke(crate::place::Operation::Display, &mut []),
+                    None => Ok(args[0].to_string().into()),
+                }
+            }
             Self::CellNew
             | Self::PlainCellNew
             | Self::CellBorrow
@@ -6282,8 +6391,12 @@ impl PreludeOp {
                 };
             }
         }
-        let option = crate::option::read(args[0])
-            .ok_or_else(|| invariant("an `Option` operand is not an option at runtime"))?;
+        // `unwrap` and `expect` consume their operand, so its value moves out.
+        let option = match self {
+            Self::IsSome => crate::option::read(args[0]),
+            _ => crate::option::take(args[0]),
+        }
+        .ok_or_else(|| invariant("an `Option` operand is not an option at runtime"))?;
         match (self, option) {
             (Self::IsSome, option) => Ok(option.is_some().into()),
             (_, Some(value)) => Ok(value),
@@ -6777,6 +6890,8 @@ fn builtin_type_key(value: &Dynamic) -> Option<crate::INT> {
 #[derive(Clone)]
 enum ExecutableOp {
     #[cfg(feature = "rust-import")]
+    Sequence(sequence::Constructor),
+    #[cfg(feature = "rust-import")]
     Imported {
         proof: crate::host::structural::Proof,
     },
@@ -7155,6 +7270,8 @@ impl ExecutableOp {
 
     fn dependencies(&self) -> BTreeSet<crate::host::facade::Dependency> {
         match self {
+            #[cfg(feature = "rust-import")]
+            Self::Sequence(constructor) => constructor.dependencies(),
             Self::Witnessed(op) => op.placeholder.dependencies(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => proof.dependencies(),
@@ -7209,7 +7326,7 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
-            Self::Imported { .. } | Self::Event { .. } => None,
+            Self::Imported { .. } | Self::Event { .. } | Self::Sequence(_) => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Endpoint { .. }
@@ -7240,6 +7357,8 @@ impl ExecutableOp {
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
             #[cfg(feature = "rust-import")]
             Self::Event { proof } => Some(proof.requirement()),
+            #[cfg(feature = "rust-import")]
+            Self::Sequence(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
             Self::Perform { producer, .. } => Some(producer.runtime_requirement()),
             Self::Symbolic { .. }
@@ -7288,6 +7407,8 @@ impl ExecutableOp {
                 );
             }
             Self::Prelude(op) => return format!("\0rawr.{}", op.name()),
+            #[cfg(feature = "rust-import")]
+            Self::Sequence(constructor) => return constructor.name(),
             Self::Kinded { op, kinds } => {
                 return format!("\0rawr.{}.{}.{}", op.name(), kinds[0], kinds[1]);
             }
@@ -7411,6 +7532,12 @@ impl ExecutableOp {
 
     fn argument_types(&self, models: &Models) -> Vec<TypeId> {
         match self {
+            #[cfg(feature = "rust-import")]
+            Self::Sequence(_) => vec![
+                TypeId::of::<INT>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<INT>(),
+            ],
             // A bare generic operand takes any value; the proof checks it.
             Self::Witnessed(op) => {
                 let parameter = intrinsic::Type::witness_parameter(0).runtime();
@@ -7431,13 +7558,13 @@ impl ExecutableOp {
             Self::Imported { proof } => proof
                 .operands()
                 .iter()
-                .map(|operand| operand.ty().runtime())
+                .map(|operand| place_operand(operand.ty().runtime()))
                 .collect(),
             Self::Symbolic { captures, .. } => vec![TypeId::of::<Dynamic>(); *captures],
             Self::Intrinsic { proof } => proof
                 .operands()
                 .iter()
-                .map(|operand| operand.ty().runtime())
+                .map(|operand| place_operand(operand.ty().runtime()))
                 .collect(),
             Self::Endpoint { .. } => vec![TypeId::of::<ImmutableString>()],
             Self::Perform { producer, selected } => {
@@ -7473,11 +7600,13 @@ impl ExecutableOp {
                 .fields
                 .iter()
                 .map(|field| Ty::from_resolved(&field.ty).type_id(models))
+                .map(place_operand)
                 .collect(),
             Self::Enum { item, variant, .. } => item.variants[*variant]
                 .payload
                 .iter()
                 .map(|ty| Ty::from_resolved(ty).type_id(models))
+                .map(place_operand)
                 .collect(),
             Self::Clone { definition } | Self::Debug { definition } => {
                 vec![models.definition(definition.id()).ty().type_id(models)]
@@ -7519,6 +7648,8 @@ impl ExecutableOp {
         requirement: Option<&crate::host::runtime::Requirement>,
     ) -> RawrResult {
         match self {
+            #[cfg(feature = "rust-import")]
+            Self::Sequence(constructor) => constructor.invoke(context.as_ref(), args),
             Self::Witnessed(op) => op.invoke(context, args, models),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => {
@@ -7904,6 +8035,19 @@ fn copied_input(inference: &Inference, ty: &Ty) -> bool {
         Ty::Reference { mutable: true, target }
             if matches!(*target, Ty::Array { .. } | Ty::String)
     )
+}
+
+/// The dispatch type of an operand. A sequence or string may be a typed
+/// native place (D651) as well as a script value, as a native vector a
+/// script made and keeps in a struct's field is: a host proof validates
+/// either against the operand's exact type before the binding runs, and
+/// each operation's name is unique to it, so no overload is widened.
+fn place_operand(ty: TypeId) -> TypeId {
+    if ty == TypeId::of::<crate::Array>() || ty == TypeId::of::<ImmutableString>() {
+        TypeId::of::<Dynamic>()
+    } else {
+        ty
+    }
 }
 
 fn register(module: &mut Module, name: ImmutableString, op: ExecutableOp, models: &Shared<Models>) {
@@ -13945,7 +14089,8 @@ impl<'a> Parser<'a> {
                 PreludeOp::FormatBits,
                 [value, "10".into(), kind.bits().to_string().into()],
             )),
-            Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool => Some(value),
+            Ty::String | Ty::Str => Some(self.prelude_op(PreludeOp::DisplayText, [value])),
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool => Some(value),
             _ => None,
         }
     }
@@ -17167,6 +17312,16 @@ impl<'a> Parser<'a> {
             Op::Debug { definition } => ExecutableOp::Debug { definition },
             Op::Equal { definition } => ExecutableOp::Equal { definition },
             Op::Default { value, definition } => ExecutableOp::Default { value, definition },
+            #[cfg(feature = "rust-import")]
+            Op::Sequence { target, span } => {
+                let target = self.inference.resolve(&target);
+                let concrete = instance_surface_type(&self.inference, &self.models, &target);
+                let proof = concrete.as_ref().and_then(|_| {
+                    self.proven_type(&target, "native sequence constructor", span)
+                        .ok()
+                });
+                ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof)?)
+            }
             Op::Prelude(op) => ExecutableOp::Prelude(op),
             Op::Collect { target } => {
                 ExecutableOp::Prelude(match self.inference.resolve(&target) {
@@ -21237,10 +21392,10 @@ impl<'a> Parser<'a> {
                 Ty::Reference { target, .. } => *target,
                 ty => ty,
             };
-            // In parentheses, so the copy is not a move of the receiver.
-            let mut source = origin::Fragment::plain("(");
-            source.push(receiver.rendered_source());
-            source.push_text(")");
+            // A copy of the handle, not a move of the receiver; a native
+            // element's place is cloned now, by the element's own `Clone`,
+            // since the element may change before the copy is used (D651).
+            let source = self.prelude_op(PreludeOp::ValueClone, [receiver.rendered_source()]);
             return Ok(self.operator_expr(source, owned, span(receiver.span.start(), end)));
         }
         if self.models.host_items(&path).is_none()
@@ -25527,6 +25682,8 @@ impl<'a> Parser<'a> {
                 },
             });
         }
+        let referent =
+            matches!(binding.ty, Ty::Reference { .. }) && !matches!(value.ty, Ty::Reference { .. });
         // `r = &mut b;` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
@@ -25571,6 +25728,18 @@ impl<'a> Parser<'a> {
             && let Some(read) = self.replaced_read(&lvalue)
         {
             self.drop_replaced(&lvalue.ty().clone(), read, &mut replacement)?;
+        }
+        if referent && matches!(&lvalue, Lvalue::Binding { .. } | Lvalue::Place { .. }) {
+            let target = match &lvalue {
+                Lvalue::Binding { .. } => origin::Fragment::plain(binding_name.as_str()),
+                Lvalue::Place { place, .. } => place.clone(),
+                _ => unreachable!("a direct referent has a direct target"),
+            };
+            let helper = self.push_op(Op::Prelude(PreludeOp::ReferentStore));
+            let mut rendered = target.surrounded("(", &format!(").{helper}("));
+            rendered.push(replacement.rendered_source());
+            rendered.push_text(");");
+            return Ok((rendered, replacement.span));
         }
         let rendered = match lvalue {
             Lvalue::Binding { .. } => {
@@ -28700,8 +28869,9 @@ impl<'a> Parser<'a> {
             store.push_text(";");
             return Ok(store);
         }
+        let helper = self.push_op(Op::Prelude(PreludeOp::ReferentStore));
         let mut target = self.keyed_place(place)?;
-        target.push_text(format!(" = {value};"));
+        target.push_text(format!(".{helper}({value});"));
         Ok(target)
     }
 
@@ -33302,8 +33472,7 @@ impl<'a> Parser<'a> {
     fn plain_equality(&self, ty: &Ty) -> bool {
         match self.inference.resolve(ty) {
             Ty::Tuple(members) => members.iter().all(|member| self.plain_equality(member)),
-            Ty::Array { element, .. } => self.plain_equality(&element),
-            Ty::Reference { target, .. } => self.plain_equality(&target),
+            Ty::Array { .. } | Ty::String | Ty::Str | Ty::Reference { .. } => false,
             Ty::Script(..)
             | Ty::Host { .. }
             | Ty::Option(_)
@@ -34334,19 +34503,21 @@ impl<'a> Parser<'a> {
                 output: Box::new(Ty::Bool),
             };
             self.coerce_expr(&expected, filter)?;
-            let (keep, kept, c) = (
-                self.temporary("keep"),
-                self.temporary("kept"),
-                self.temporary("char"),
-            );
-            let mut source = origin::Fragment::plain(format!("{{ let {keep} = "));
-            source.push(filter.rendered_source());
-            source.push_text(format!("; let {kept} = \"\"; for {c} in "));
-            source.push(receiver.clone());
-            source.push_text(format!(" {{ if {keep}.call({c}) {{ {kept} += {c}; }} }} "));
-            source.push(self.store_into(&value, &kept)?);
-            source.push_text(" }");
-            return Ok(self.operator_expr(source, Ty::Unit, expression));
+            let helper = self.push_op(Op::Prelude(PreludeOp::StrChange));
+            let code = STR_CHANGES
+                .iter()
+                .position(|name| *name == "retain")
+                .expect("listed String operation");
+            let native = self.mutation_call(
+                &value,
+                &helper,
+                vec![
+                    code.to_string().into(),
+                    "()".into(),
+                    filter.rendered_source(),
+                ],
+            )?;
+            return Ok(self.operator_expr(native.surrounded("{ ", "; }"), Ty::Unit, expression));
         }
         if let ("split_at", [mid]) = (member.as_str(), arguments.as_mut_slice()) {
             self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
@@ -34369,7 +34540,12 @@ impl<'a> Parser<'a> {
                 let borrowed = member.as_str() == "as_str"
                     || member.as_str() == "clone"
                         && *without_references(&self.inference.resolve(&value.ty)) != Ty::String;
-                (receiver, if borrowed { Ty::Str } else { Ty::String })
+                let source = if borrowed {
+                    receiver
+                } else {
+                    self.prelude_op(PreludeOp::ValueClone, [receiver])
+                };
+                (source, if borrowed { Ty::Str } else { Ty::String })
             }
             ("to_string", [])
                 if matches!(
@@ -34417,7 +34593,10 @@ impl<'a> Parser<'a> {
                 return Ok(self.array_iterator(&pieces, Ty::Str, end));
             }
             ("to_lowercase", []) => (receiver.surrounded("", ".to_lower()"), Ty::String),
-            ("to_owned", []) => (receiver, Ty::String),
+            ("to_owned", []) => (
+                self.prelude_op(PreludeOp::ValueClone, [receiver]),
+                Ty::String,
+            ),
             // `Cow<str>::into_owned`: an imported `Cow<'_, str>` is Rawr's
             // string (D558 slice 2).
             ("into_owned", []) => (receiver, Ty::String),
@@ -35346,7 +35525,7 @@ impl<'a> Parser<'a> {
                 let source = if self.models.std_traits.contains("Clone") {
                     Self::std_dispatch("Clone", "clone", value.rendered_source(), &[])
                 } else {
-                    value.rendered_source()
+                    self.prelude_op(PreludeOp::ValueClone, [value.rendered_source()])
                 };
                 value = self.operator_expr(source, param, span(value.span.start(), end));
                 continue;
@@ -37046,15 +37225,15 @@ impl<'a> Parser<'a> {
                 let mut source = origin::Fragment::plain(format!("{helper}([], {code}, "));
                 source.push(capacity.rendered_source());
                 source.push_text(", (), false)");
-                let element = Box::new(self.inference.fresh());
-                return Ok(self.operator_expr(
-                    source,
-                    Ty::Array {
-                        element,
-                        length: None,
-                    },
-                    span(name_span.start(), end),
-                ));
+                let ty = Ty::Array {
+                    element: Box::new(self.inference.fresh()),
+                    length: None,
+                };
+                let at = span(name_span.start(), end);
+                #[cfg(feature = "rust-import")]
+                let source =
+                    self.sequence_source(&ty, at, capacity.rendered_source(), "()".into(), 0);
+                return Ok(self.operator_expr(source, ty, at));
             } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
                     owner: "Vec".into(),
@@ -37062,15 +37241,16 @@ impl<'a> Parser<'a> {
                     reference: member_span,
                 });
             }
-            let element = Box::new(self.inference.fresh());
-            return Ok(self.operator_expr(
-                origin::Fragment::plain("[]"),
-                Ty::Array {
-                    element,
-                    length: None,
-                },
-                span(name_span.start(), end),
-            ));
+            let ty = Ty::Array {
+                element: Box::new(self.inference.fresh()),
+                length: None,
+            };
+            let at = span(name_span.start(), end);
+            #[cfg(feature = "rust-import")]
+            let source = self.sequence_source(&ty, at, "0".into(), "()".into(), 0);
+            #[cfg(not(feature = "rust-import"))]
+            let source = origin::Fragment::plain("[]");
+            return Ok(self.operator_expr(source, ty, at));
         }
         // `Box::new(value)`, `Rc::new(value)` and `Arc::new(value)`: the
         // value itself at runtime. `Rc::clone(&rc)` is a clone of it.
@@ -37555,6 +37735,46 @@ impl<'a> Parser<'a> {
             self.require_type(&expected, &places[1].ty, places[1].span)?;
         } else if function == "replace" {
             self.coerce_expr(&target, &mut arguments[1])?;
+        }
+        if matches!(target, Ty::Array { .. } | Ty::String) {
+            let helper = self.push_op(Op::Prelude(PreludeOp::Memory));
+            let operand = if function == "take" {
+                if !self.type_provides(&target, capability::Kind::Default) {
+                    return Err(Error::MissingCapability {
+                        owner: target.name(&self.models),
+                        capability: "Default".into(),
+                        operation: call,
+                    });
+                }
+                self.default_source(&target, call)?
+            } else {
+                arguments[1].rendered_source()
+            };
+            let code = match function {
+                "take" => 0,
+                "replace" => 1,
+                _ => 2,
+            };
+            let mut source = self.keyed_place(&places[0])?;
+            source.push_text(format!(".{helper}({code}, "));
+            source.push(operand);
+            source.push_text(")");
+            if function == "swap" {
+                // Two native places swap where they are (`Swapped`); else
+                // the second place takes the first's old value.
+                let old = self.temporary("swapped");
+                let swapped = self.prelude_op(PreludeOp::Swapped, [old.as_str().into()]);
+                source = source.surrounded(&format!("{{ let {old} = "), "; if !");
+                source.push(swapped);
+                source.push_text(" { ");
+                source.push(self.store_into(&places[1], &old)?);
+                source.push_text(" } }");
+            }
+            return Ok(self.operator_expr(
+                source,
+                if function == "swap" { Ty::Unit } else { target },
+                call,
+            ));
         }
         let old = self.temporary("old");
         let mut source = origin::Fragment::plain(format!("{{ let {old} = "));
@@ -39627,11 +39847,41 @@ impl<'a> Parser<'a> {
                 source.push_text(format!("; let {items} = []; {items}.pad("));
                 source.push(count.rendered_source());
                 source.push_text(format!(", {item}); {items} }}"));
+                #[cfg(feature = "rust-import")]
+                let source = {
+                    let constructed = self.sequence_source(
+                        &array_ty,
+                        span(open, end),
+                        count.rendered_source(),
+                        item.as_str().into(),
+                        2,
+                    );
+                    let mut source = origin::Fragment::plain(format!("{{ let {item} = "));
+                    source.push(value.rendered_source());
+                    source.push_text("; ");
+                    source.push(constructed);
+                    source.push_text(" }");
+                    source
+                };
                 source
             }
             (None, None) => {
-                origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
-                    .surrounded("[", "]")
+                let source =
+                    origin::Fragment::join(elements.iter().map(ParsedExpr::rendered_source), ", ")
+                        .surrounded("[", "]");
+                #[cfg(feature = "rust-import")]
+                let source = if array.is_none() {
+                    self.sequence_source(
+                        &array_ty,
+                        span(open, end),
+                        elements.len().to_string().into(),
+                        source,
+                        1,
+                    )
+                } else {
+                    source
+                };
+                source
             }
         };
         let length = array.map(|_| repeat.unwrap_or(elements.len()));
@@ -41055,6 +41305,9 @@ impl<'a> Parser<'a> {
             Ty::Unknown | Ty::Infer(_) => {
                 return Err(self.unsupported("equality of dynamic values"));
             }
+            Ty::Array { .. } | Ty::String | Ty::Str => {
+                self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
+            }
             ty if !self.plain_equality(ty) => {
                 if !self.type_provides(ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
@@ -41251,18 +41504,28 @@ impl<'a> Parser<'a> {
                 source
             }
             Ty::Array { element, .. } => {
+                let receiver = self.temporary("debug_values");
+                let mut routed = origin::Fragment::plain(format!("{{ let {receiver} = "));
+                routed.push(value);
+                routed.push_text("; if ");
+                routed.push(self.prelude_op(PreludeOp::NativePlace, [receiver.as_str().into()]));
+                routed.push_text(" { ");
+                routed.push(self.prelude_op(PreludeOp::GenericDebug, [receiver.as_str().into()]));
+                routed.push_text(" } else ");
                 let item = self.temporary("debug");
                 let text = self.temporary("debug");
                 let rendered = self.debug_source(element, item.as_str().into(), span)?;
                 let mut source =
                     origin::Fragment::plain(format!("{{ let {text} = \"[\"; for {item} in "));
-                source.push(value);
+                source.push(receiver.as_str().into());
                 source.push_text(format!(
                     " {{ if {text} != \"[\" {{ {text} += \", \"; }} {text} += "
                 ));
                 source.push(rendered);
                 source.push_text(format!("; }} {text} + \"]\" }}"));
-                source
+                routed.push(source);
+                routed.push_text(" }");
+                routed
             }
             Ty::Script(id, ..) if self.models.std_impl(*id, "Debug", "fmt").is_some() => {
                 let definition = self
@@ -41611,13 +41874,14 @@ impl<'a> Parser<'a> {
             }
             ("clone", []) => {
                 self.refuse_cell_clone(&value.ty, member_span)?;
+                let cloned = self.prelude_op(PreludeOp::ValueClone, [receiver]);
                 match self.inference.resolve(&value.ty) {
-                    Ty::Reference { target, .. } => (receiver, *target),
-                    ty => (receiver, ty),
+                    Ty::Reference { target, .. } => (cloned, *target),
+                    ty => (cloned, ty),
                 }
             }
             ("to_vec", []) => (
-                receiver,
+                self.prelude_op(PreludeOp::ValueClone, [receiver]),
                 Ty::Array {
                     element: Box::new(element),
                     length: None,
@@ -41826,7 +42090,23 @@ impl<'a> Parser<'a> {
                     ));
                     return Ok(self.operator_expr(source, Ty::Unit, expression));
                 }
-                let source = self.mutation_call(&value, member.as_str(), operands)?;
+                let source = if member.as_str() == "retain" {
+                    let direct = self.prelude_op(PreludeOp::NativePlace, [value.rendered_source()]);
+                    let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                    let mut native_arguments = vec![vec_method_code("retain").to_string().into()];
+                    native_arguments.extend(operands.clone());
+                    native_arguments.resize(4, "()".into());
+                    let native = self.mutation_call(&value, &helper, native_arguments)?;
+                    let script = self.mutation_call(&value, "retain", operands)?;
+                    let mut source = direct.surrounded("if ", " { ");
+                    source.push(native);
+                    source.push_text("; } else { ");
+                    source.push(script);
+                    source.push_text("; }");
+                    source
+                } else {
+                    self.mutation_call(&value, member.as_str(), operands)?
+                };
                 (source.surrounded("{ ", "; }"), Ty::Unit)
             }
             // `resize(n, value)` and `resize_with(n, f)`: the new items made
@@ -41844,6 +42124,18 @@ impl<'a> Parser<'a> {
                     element.clone()
                 };
                 self.coerce_expr(&expected, argument)?;
+                let direct = self.prelude_op(PreludeOp::NativePlace, [value.rendered_source()]);
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let native = self.mutation_call(
+                    &value,
+                    &helper,
+                    vec![
+                        vec_method_code(member.as_str()).to_string().into(),
+                        length.rendered_source(),
+                        argument.rendered_source(),
+                        "()".into(),
+                    ],
+                )?;
                 let (n, len, extra, made) = (
                     self.temporary("length"),
                     self.temporary("len"),
@@ -41871,23 +42163,59 @@ impl<'a> Parser<'a> {
                 ];
                 source.push(self.mutation_call(&value, "splice", operands)?);
                 source.push_text("; }");
-                (source, Ty::Unit)
+                let mut dispatched = direct.surrounded("if ", " { ");
+                dispatched.push(native);
+                dispatched.push_text("; } else { ");
+                dispatched.push(source);
+                dispatched.push_text(" }");
+                (dispatched, Ty::Unit)
             }
             // `extend` from an iterable of `T`, or of `&T` for a `Copy` `T`.
             ("extend" | "extend_from_slice", [argument]) => {
-                let Some((items, item)) = self.collected_items(argument) else {
+                let borrowed = match self.inference.resolve(&argument.ty) {
+                    Ty::Reference { mutable, target } => match *target {
+                        Ty::Array { element, .. } => Some((
+                            argument.rendered_source(),
+                            Ty::Reference {
+                                mutable,
+                                target: element,
+                            },
+                        )),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some((items, item)) = borrowed.or_else(|| self.collected_items(argument))
+                else {
                     return Err(Error::TypeMismatch {
                         expected: "an array or an iterator to `extend` with".into(),
                         actual: argument.ty.name(&self.models),
                         expression: argument.span,
                     });
                 };
+                let mode = if member.as_str() == "extend_from_slice" {
+                    "extend_clone"
+                } else if matches!(self.inference.resolve(&item), Ty::Reference { .. }) {
+                    "extend_copy"
+                } else {
+                    "extend_move"
+                };
                 let item = match self.inference.resolve(&item) {
                     Ty::Reference { target, .. } if self.unifies(&element, &target) => *target,
                     item => item,
                 };
                 self.require_type(&element, &item, argument.span)?;
-                let source = self.mutation_call(&value, "append", vec![items])?;
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let source = self.mutation_call(
+                    &value,
+                    &helper,
+                    vec![
+                        vec_method_code(mode).to_string().into(),
+                        items,
+                        "()".into(),
+                        "()".into(),
+                    ],
+                )?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
             }
             // `split_at(mid)`: the two halves, `(&[T], &[T])`.
@@ -41909,33 +42237,13 @@ impl<'a> Parser<'a> {
                     target: Box::new(element.clone()),
                 };
                 self.coerce_expr(&expected, argument)?;
-                if self.plain_equality(&element) {
-                    let mut source = receiver;
-                    source.push_text(".contains(");
-                    source.push(argument.rendered_source());
-                    source.push_text(")");
-                    (source, Ty::Bool)
-                } else {
-                    // Each element by its `PartialEq`, a crate type's own
-                    // `eq` where it has one.
-                    let (probe, found, item) = (
-                        self.temporary("probe"),
-                        self.temporary("found"),
-                        self.temporary("item"),
-                    );
-                    let equal = self.prelude_op(
-                        PreludeOp::GenericEqual,
-                        [item.as_str().into(), probe.as_str().into()],
-                    );
-                    let mut source = origin::Fragment::plain(format!("{{ let {probe} = "));
-                    source.push(argument.rendered_source());
-                    source.push_text(format!("; let {found} = false; for {item} in "));
-                    source.push(receiver);
-                    source.push_text(" { if ");
-                    source.push(equal);
-                    source.push_text(format!(" {{ {found} = true; break; }} }} {found} }}"));
-                    (source, Ty::Bool)
-                }
+                (
+                    self.prelude_op(
+                        PreludeOp::SequenceContains,
+                        [receiver, argument.rendered_source()],
+                    ),
+                    Ty::Bool,
+                )
             }
             // `v.iter().min()`, `max`, `min_by_key`, `max_by_key`, `min_by`
             // and `max_by`: Rust's first minimum and last maximum.
@@ -41968,9 +42276,12 @@ impl<'a> Parser<'a> {
                 let places = self.mutable_arguments(std::slice::from_ref(other), [0])?;
                 let mut source =
                     self.mutation_call(&value, "append", vec![other.rendered_source()])?;
-                source = source.surrounded("{ ", "; ");
+                let direct = self.prelude_op(PreludeOp::NativePlace, [other.rendered_source()]);
+                source = source.surrounded("{ ", "; if !(");
+                source.push(direct);
+                source.push_text(") { ");
                 source.push(self.store_into(&places[0], "[]")?);
-                source.push_text(" }");
+                source.push_text(" } }");
                 (source, Ty::Unit)
             }
             // `v.push(x)` on a local, an element (`v[i].push(x)`,
@@ -42011,6 +42322,7 @@ impl<'a> Parser<'a> {
         member: &str,
         arguments: &mut [ParsedExpr],
     ) -> Result<Option<origin::Fragment>, Error> {
+        let stable = !member.starts_with("sort_unstable");
         let member = match member {
             "sort_unstable" => "sort",
             "sort_unstable_by" => "sort_by",
@@ -42052,6 +42364,7 @@ impl<'a> Parser<'a> {
             origin::Fragment::plain(b.clone()),
         );
         let mut source = origin::Fragment::plain("{ ");
+        let comparator;
         match (member, by) {
             ("sort_by", Some(f)) => {
                 let expected = Ty::Fn {
@@ -42059,6 +42372,7 @@ impl<'a> Parser<'a> {
                     output: Box::new(Ty::Ordering),
                 };
                 self.coerce_expr(&expected, f)?;
+                comparator = f.rendered_source();
                 source.push_text(format!("{binding}.sort("));
                 source.push(f.rendered_source());
                 source.push_text(");");
@@ -42075,6 +42389,17 @@ impl<'a> Parser<'a> {
                     self.temporary("keyed"),
                     self.temporary("item"),
                 );
+                let left_key = self.temporary("left_key");
+                let right_key = self.temporary("right_key");
+                let native_compare = self
+                    .ord_compare(&key, left_key.as_str().into(), right_key.as_str().into())
+                    .ok_or_else(|| missing(self, &key))?;
+                let mut native = origin::Fragment::plain(format!("{{ let {function} = "));
+                native.push(f.rendered_source());
+                native.push_text(format!("; |{a}, {b}| {{ let {left_key} = {function}.call({a}); let {right_key} = {function}.call({b}); "));
+                native.push(native_compare);
+                native.push_text(" } }");
+                comparator = native;
                 let compare = self
                     .ord_compare(
                         &key,
@@ -42095,6 +42420,7 @@ impl<'a> Parser<'a> {
                 let compare = self
                     .ord_compare(element, pair.0, pair.1)
                     .ok_or_else(|| missing(self, element))?;
+                comparator = compare.clone().surrounded(&format!("|{a}, {b}| "), "");
                 source.push_text(format!("{binding}.sort(|{a}, {b}| "));
                 source.push(compare);
                 source.push_text(");");
@@ -42110,7 +42436,31 @@ impl<'a> Parser<'a> {
             source = copied;
         }
         source.push_text(" }");
-        Ok(Some(source))
+        let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+        let native = self.mutation_call(
+            value,
+            &helper,
+            vec![
+                vec_method_code(match (member == "sort", stable) {
+                    (true, true) => "sort",
+                    (true, false) => "sort_unstable",
+                    (false, true) => "sort_by",
+                    (false, false) => "sort_unstable_by",
+                })
+                .to_string()
+                .into(),
+                comparator,
+                "()".into(),
+                "()".into(),
+            ],
+        )?;
+        let mut routed = origin::Fragment::plain("if ");
+        routed.push(self.prelude_op(PreludeOp::NativePlace, [value.rendered_source()]));
+        routed.push_text(" { ");
+        routed.push(native);
+        routed.push_text("; } else ");
+        routed.push(source);
+        Ok(Some(routed))
     }
 
     /// The element `iter().min()` and its kin pick from `values`, an
@@ -52653,6 +53003,21 @@ const VEC_METHODS: &[&str] = &[
     "swap_remove",
     "pop_front",
     "with_capacity",
+    "push",
+    "clear",
+    "truncate",
+    "reverse",
+    "append",
+    "resize",
+    "resize_with",
+    "retain",
+    "sort_by",
+    "sort_unstable_by",
+    "sort",
+    "sort_unstable",
+    "extend_move",
+    "extend_copy",
+    "extend_clone",
 ];
 
 /// `std::collections::VecDeque` in a body, by its path or as imported
@@ -52924,14 +53289,58 @@ fn time_method(args: &mut FnCallArgs) -> RawrResult {
 /// `insert(i, x)`, `remove(i)`, `swap_remove(i)`, `swap(a, b)`, `dedup()` and
 /// `drain(low, high, inclusive)` (`high` `-1` for an open end) on the array
 /// taken by reference, with Rust's panics.
-fn vec_method(args: &mut FnCallArgs) -> RawrResult {
+fn vec_method(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) -> RawrResult {
     let fail = |message: String| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
     let code = args[1].as_int().unwrap_or(-1);
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
+    if let Some(place) = crate::place::get(args[0]) {
+        use crate::place::Operation;
+        let name = VEC_METHODS
+            .get(usize::try_from(code).unwrap_or(usize::MAX))
+            .copied();
+        let (operation, indexes): (Operation, &[usize]) = match name {
+            Some("insert") => (Operation::Insert, &[2, 3]),
+            Some("remove") => (Operation::Remove, &[2]),
+            Some("swap_remove") => (Operation::SwapRemove, &[2]),
+            Some("swap") => (Operation::Swap, &[2, 3]),
+            Some("pop") => (Operation::Pop, &[]),
+            Some("fill") => (Operation::Fill, &[3]),
+            Some("dedup") => (Operation::Dedup, &[]),
+            Some("drain") => (Operation::Drain, &[2, 3, 4]),
+            Some("copy_from_slice") => (Operation::CopyFromSlice, &[3]),
+            Some("split_off") => (Operation::SplitOff, &[2]),
+            Some("push") => (Operation::Push, &[2]),
+            Some("clear") => (Operation::Clear, &[]),
+            Some("truncate") => (Operation::Truncate, &[2]),
+            Some("reverse") => (Operation::Reverse, &[]),
+            Some("append") => (Operation::Append, &[2]),
+            Some("extend_move") => (Operation::Extend(crate::place::ExtendMode::Move), &[2]),
+            Some("extend_copy") => (Operation::Extend(crate::place::ExtendMode::Copy), &[2]),
+            Some("extend_clone") => (Operation::Extend(crate::place::ExtendMode::Clone), &[2]),
+            Some("resize") => (Operation::Resize, &[2, 3]),
+            Some("resize_with") => (Operation::ResizeWith, &[2, 3]),
+            Some("retain") => (Operation::Retain, &[2]),
+            Some("sort") => (Operation::Sort { stable: true }, &[]),
+            Some("sort_unstable") => (Operation::Sort { stable: false }, &[]),
+            Some("sort_by") => (Operation::SortBy { stable: true }, &[2]),
+            Some("sort_unstable_by") => (Operation::SortBy { stable: false }, &[2]),
+            _ => return Err(invariant("native sequence operation has no typed dispatch")),
+        };
+        let mut operands = indexes
+            .iter()
+            .map(|index| args[*index].take())
+            .collect::<Vec<_>>();
+        return match context {
+            Some(context) => place.invoke_in(context, operation, &mut operands),
+            None => place.invoke(operation, &mut operands),
+        };
+    }
     let (a, b) = (at(args[2]), at(args[3]));
-    let value = args[3].clone();
+    // The operands move in, as Rust's `push(x)` and `insert(i, x)` do.
+    let first = args[2].take();
+    let value = args[3].take();
     let inclusive = args[4].as_bool().unwrap_or(false);
     let mut array = args[0]
         .as_array_mut()
@@ -52941,6 +53350,37 @@ fn vec_method(args: &mut FnCallArgs) -> RawrResult {
         .get(usize::try_from(code).unwrap_or(usize::MAX))
         .copied()
     {
+        Some("extend_move" | "extend_copy" | "extend_clone") => {
+            array.extend(
+                first
+                    .into_array()
+                    .map_err(|_| invariant("an extend source is not an array"))?,
+            );
+            Ok(Dynamic::UNIT)
+        }
+        Some("push") => {
+            array.push(first);
+            Ok(Dynamic::UNIT)
+        }
+        Some("clear") => {
+            array.clear();
+            Ok(Dynamic::UNIT)
+        }
+        Some("truncate") => {
+            array.truncate(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("reverse") => {
+            array.reverse();
+            Ok(Dynamic::UNIT)
+        }
+        Some("append") => {
+            let mut incoming = first
+                .into_array()
+                .map_err(|_| invariant("an append operand is not an array"))?;
+            array.append(&mut incoming);
+            Ok(Dynamic::UNIT)
+        }
         Some("insert") if a > len => fail(format!(
             "insertion index (is {a}) should be <= len (is {len})"
         )),
@@ -53037,17 +53477,42 @@ const STR_CHANGES: &[&str] = &[
     "split_off",
     "push",
     "push_str",
+    "retain",
 ];
 
 /// `STR_CHANGES`' `code` on the string taken by reference, by bytes and
 /// with Rust's panics.
-fn str_change(args: &mut FnCallArgs) -> RawrResult {
+fn str_change(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) -> RawrResult {
     let fail = |message: String| -> RawrResult {
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
     };
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let at = usize::try_from(args[2].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let operand = args[3].clone();
+    if let Some(place) = crate::place::get(args[0]) {
+        use crate::place::Operation;
+        let (operation, indexes): (Operation, &[usize]) = match STR_CHANGES.get(code).copied() {
+            Some("pop") => (Operation::Pop, &[]),
+            Some("clear") => (Operation::Clear, &[]),
+            Some("truncate") => (Operation::Truncate, &[2]),
+            Some("push") => (Operation::Push, &[3]),
+            Some("push_str") => (Operation::PushStr, &[3]),
+            Some("insert") => (Operation::Insert, &[2, 3]),
+            Some("insert_str") => (Operation::InsertStr, &[2, 3]),
+            Some("remove") => (Operation::Remove, &[2]),
+            Some("split_off") => (Operation::SplitOff, &[2]),
+            Some("retain") => (Operation::Retain, &[3]),
+            _ => return Err(invariant("native String operation has no typed dispatch")),
+        };
+        let mut operands = indexes
+            .iter()
+            .map(|index| args[*index].take())
+            .collect::<Vec<_>>();
+        return match context {
+            Some(context) => place.invoke_in(context, operation, &mut operands),
+            None => place.invoke(operation, &mut operands),
+        };
+    }
     let mut text = args[0]
         .write_lock::<ImmutableString>()
         .ok_or_else(|| invariant("a `String` is not a string at runtime"))?;
@@ -53065,6 +53530,11 @@ fn str_change(args: &mut FnCallArgs) -> RawrResult {
         }
     };
     match name {
+        "retain" => crate::place::text::retain_with(
+            context.ok_or_else(|| invariant("String::retain requires its script call context"))?,
+            operand,
+            |predicate| text.make_mut().retain(predicate),
+        ),
         "pop" => Ok(match text.make_mut().pop() {
             Some(c) => crate::option::some(c.into()),
             None => crate::option::none(),
@@ -53187,6 +53657,9 @@ fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
         return Ok(Dynamic::from(ImmutableString::from(text)));
     }
     if name == "debug" {
+        if let Some(place) = crate::place::get(args[0]) {
+            return place.invoke(crate::place::Operation::Debug, &mut []);
+        }
         let text = match args[0].as_char() {
             Ok(c) => format!("{c:?}"),
             Err(_) => format!("{:?}", args[0].clone_cast::<ImmutableString>().as_str()),

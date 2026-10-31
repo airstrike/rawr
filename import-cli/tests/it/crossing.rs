@@ -621,6 +621,43 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     );
 }
 
+#[test]
+fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
+    let (rawr, cargo) = both_printed("crossing-sequences", "sequences.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("local len=1 drops=0 capacity=8 allocation=true"),
+        "{rawr}"
+    );
+    assert!(rawr.contains("local final-drops=1"), "{rawr}");
+    assert!(
+        rawr.contains(
+            "counted mode=0 values=[1, 2, 3] clones=0 drops=0 capacity=6 allocation=true"
+        ),
+        "{rawr}"
+    );
+    assert!(
+        rawr.contains("counted mode=3 values=[1, 2, 3] clones=1 drops=1"),
+        "{rawr}"
+    );
+    assert!(
+        rawr.contains("slot values=[\"entry-slot\", \"slot call\"] cap=12 vector=true string=true"),
+        "{rawr}"
+    );
+    assert!(
+        rawr.contains(
+            "mode=8 values=[\"native-native\", \"native call\"] cap=16 vector=true string=true"
+        ),
+        "{rawr}"
+    );
+    assert!(
+        rawr.contains(
+            "closure values=[\"entry-closure\", \"closure call\"] cap=12 vector=true string=true"
+        ),
+        "{rawr}"
+    );
+}
+
 /// An edit to the body of a script impl's function, which native code calls
 /// through the proxy, takes effect at its next call, in the same process
 /// with the state kept.
