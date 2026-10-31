@@ -136,6 +136,9 @@ pub struct Builder {
     /// item and its instance's types (`rand::random::<f64>` and `::<u8>`).
     #[cfg(feature = "rust-import")]
     instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
+    /// One binding per proof-backed application, by its identity.
+    #[cfg(feature = "rust-import")]
+    applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
@@ -153,6 +156,9 @@ pub struct Facade {
     bindings: BTreeMap<host::item::Fingerprint, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     instances: BTreeMap<(host::item::Fingerprint, [u8; 32]), Shared<dyn Callback>>,
+    /// One binding per proof-backed application, by its identity.
+    #[cfg(feature = "rust-import")]
+    applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
@@ -488,6 +494,8 @@ impl Builder {
             bindings: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             instances: BTreeMap::new(),
+            #[cfg(feature = "rust-import")]
+            applications: BTreeMap::new(),
             structural: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             events: BTreeMap::new(),
@@ -1027,6 +1035,23 @@ impl Builder {
         Ok(self)
     }
 
+    /// Bind the generated adapter of one proof-backed application. A call of
+    /// the application's method carries its identity as its instance.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    pub fn bind_imported_application(
+        &mut self,
+        identity: [u8; 32],
+        callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>
+            + SendSync
+            + 'static,
+    ) -> Result<&mut Self, Error> {
+        self.applications
+            .entry(identity)
+            .or_insert_with(|| Shared::new(Contextual(callback)));
+        Ok(self)
+    }
+
     /// Bind one exact generated imported selector without widening to sibling overloads.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
@@ -1117,6 +1142,8 @@ impl Builder {
             bindings: self.bindings,
             #[cfg(feature = "rust-import")]
             instances: self.instances,
+            #[cfg(feature = "rust-import")]
+            applications: self.applications,
             structural: self.structural,
             #[cfg(feature = "rust-import")]
             events: self.events,
@@ -1532,10 +1559,14 @@ impl Registry {
         }
         match &requirement.binding {
             #[cfg(feature = "rust-import")]
-            Binding::Item(item) => requirement
-                .instance
-                .and_then(|instance| facade.instances.get(&(item.clone(), instance)))
-                .or_else(|| facade.bindings.get(item)),
+            Binding::Item(item) => match requirement.instance {
+                Some(instance) => facade
+                    .instances
+                    .get(&(item.clone(), instance))
+                    .or_else(|| facade.applications.get(&instance))
+                    .or_else(|| facade.bindings.get(item)),
+                None => facade.bindings.get(item),
+            },
             #[cfg(not(feature = "rust-import"))]
             Binding::Item(item) => facade.bindings.get(item),
             Binding::Structural(definition) => facade.structural.get(definition),

@@ -373,6 +373,18 @@ impl Metadata {
     }
 
     #[cfg(feature = "rustc-driver")]
+    /// Every package this resolution declares directly, by package id.
+    pub(crate) fn declared_packages(&self) -> BTreeSet<&str> {
+        self.declared
+            .values()
+            .filter_map(|index| self.package_id(*index).ok())
+            .collect()
+    }
+
+    pub(crate) fn root_package_id(&self) -> Option<&str> {
+        self.root_id().ok()
+    }
+
     fn extracts_alias(&self, alias: &str) -> bool {
         self.libraries.contains(alias)
     }

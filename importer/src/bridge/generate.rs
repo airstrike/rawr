@@ -37,7 +37,7 @@ use std::cell::RefCell;
 use __rawr_internal::{Dynamic, ImmutableString};
 
 #[derive(Clone, Copy)]
-struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], bound: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
+struct Adapter { identity: [u8; 32], signature: [u8; 32], selector: [u8; 32], instance: [u8; 32], bound: bool, application: bool, root: &'static str, witness: u8, arguments: u32, invoke: Invoke }
 type Invoke = fn(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>;
 type Project = fn(
     Box<dyn Any>,
@@ -2097,6 +2097,11 @@ fn imported_runtime(
                 builder.bind_imported(adapter.selector, move |call, values| runtime_invoke(adapter, call, values))?;
             }
         }
+        // A proof-backed application has no facade selector: a call reaches
+        // its adapter by the application's identity.
+        for adapter in adapters().copied().filter(|adapter| adapter.application && adapter.root == definition.root()) {
+            builder.bind_imported_application(adapter.identity, move |call, values| runtime_invoke(adapter, call, values))?;
+        }
         for proof in native.structural().iter().filter(|proof| proof.root() == definition.root()) {
             let adapter = adapters()
                 .copied()
@@ -2289,6 +2294,13 @@ fn compile_program(
         &facades,
         STRUCTURAL_ROWS,
         &mut native,
+    )
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
+    __rawr_internal::package::import::runner::admit_generated_applications(
+        &mut engine,
+        &facades,
+        rawr_applications::APPLICATIONS,
+        adapters().filter(|adapter| adapter.application).map(|adapter| adapter.identity),
     )
     .map_err(|error| std::io::Error::other(error.to_string()))?;
     progress(3)?;
@@ -5077,6 +5089,9 @@ fn render_source(
         writeln!(output, "mod {module};").map_err(|_| request::Error::Encoding)?;
     }
     output
+        .write_all(b"mod rawr_applications;\n")
+        .map_err(|_| request::Error::Encoding)?;
+    output
         .write_all(b"include!(\"rawr_impls.rs\");\n")
         .map_err(|_| request::Error::Encoding)?;
     sources.push((SOURCE_PATH.into(), main));
@@ -5107,8 +5122,9 @@ fn render_source(
             byte_array(&mut file, &instance_key(plan))?;
             write!(
                 file,
-                ", bound: {}, root: {:?}, witness: {}",
+                ", bound: {}, application: {}, root: {:?}, witness: {}",
                 plan.selector().is_some(),
+                plan.application_invocation().is_some(),
                 plan.export().root_alias(),
                 witness_mode(plan) | if returns_values(plan) { 0x80 } else { 0 }
             )
@@ -5131,7 +5147,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     matcher_name(plan)
                 )
@@ -5148,7 +5164,7 @@ fn render_source(
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
-                    ", bound: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
+                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 2, invoke: {} }},",
                     plan.export().root_alias(),
                     store_name(plan)
                 )
@@ -5170,6 +5186,9 @@ fn render_source(
         render_module_execution_tests(plans, indices, primitive, builder, &mut file)?;
         sources.push((path, file));
     }
+    let mut applications = Vec::new();
+    render_applications(plans, &mut applications)?;
+    sources.push((APPLICATIONS_PATH.into(), applications));
     let mut families = Vec::new();
     render_families(&mut families)?;
     view::render_families(&mut families)?;
@@ -5258,6 +5277,110 @@ const PROXIES_PATH: &str = "src/rawr_proxies.rs";
 /// The script's impls for the proxies (D594), included after the runtime
 /// they call, whose macros come first.
 const IMPLS_PATH: &str = "src/rawr_impls.rs";
+
+/// The proof-backed applications' isolated call helpers and their encoded
+/// applications, after every adapter module in path order.
+const APPLICATIONS_PATH: &str = "src/rawr_applications.rs";
+
+/// Render each application's helper module. A helper sees no inherited
+/// glob: `#[no_implicit_prelude]` removes the implicit prelude, then the
+/// module imports exactly the recorded prelude and traits of the source
+/// call's lexical scope, so method lookup sees what the source saw.
+fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let mut applications = Vec::new();
+    for plan in plans {
+        let Some(invocation) = plan.application_invocation() else {
+            continue;
+        };
+        applications.push(crate::surface::application::Application {
+            invocation: invocation.clone(),
+        });
+        let name = identity_name("application", plan);
+        writeln!(output, "#[no_implicit_prelude]\n#[allow(unused_imports, dead_code, non_snake_case)]\npub(crate) mod {name} {{").map_err(encoding)?;
+        if let Some(prelude) = &invocation.prelude {
+            writeln!(output, "    use ::{}::*;", prelude.join("::")).map_err(encoding)?;
+        }
+        for path in invocation.traits.iter() {
+            writeln!(output, "    use ::{} as _;", path.join("::")).map_err(encoding)?;
+        }
+        write!(output, "    pub(crate) fn call(receiver: &").map_err(encoding)?;
+        render_native(&invocation.native_receiver, output)?;
+        for (index, input) in invocation.native_inputs.iter().enumerate() {
+            write!(output, ", argument_{index}: ").map_err(encoding)?;
+            render_native(input, output)?;
+        }
+        output.write_all(b") -> ").map_err(encoding)?;
+        render_native(&invocation.native_output, output)?;
+        output.write_all(b" {\n        ").map_err(encoding)?;
+        let mut arguments = Vec::new();
+        argument_list(invocation.native_inputs.len(), 0, &mut arguments)?;
+        let arguments = String::from_utf8(arguments).map_err(|_| request::Error::Encoding)?;
+        match &invocation.expression {
+            crate::surface::application::Expression::Method { name } => {
+                // The source's receiver is a place of the type: method
+                // lookup starts there, not at the adapter's reference.
+                writeln!(output, "(*receiver).{name}({arguments})").map_err(encoding)?;
+            }
+            crate::surface::application::Expression::Ufcs { path, name } => {
+                let separator = if arguments.is_empty() { "" } else { ", " };
+                writeln!(
+                    output,
+                    "::{}::{name}(receiver{separator}{arguments})",
+                    path.join("::")
+                )
+                .map_err(encoding)?;
+            }
+        }
+        output.write_all(b"    }\n}\n\n").map_err(encoding)?;
+    }
+    let encoded = crate::surface::application::Application::encode_all(&applications)
+        .map_err(|_| request::Error::Encoding)?;
+    output
+        .write_all(b"pub(crate) static APPLICATIONS: &[u8] = &")
+        .map_err(encoding)?;
+    byte_array(output, &encoded)?;
+    output.write_all(b";\n").map_err(encoding)
+}
+
+fn render_native(
+    ty: &crate::surface::application::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    use crate::surface::application::Type;
+    let encoding = |_| request::Error::Encoding;
+    match ty {
+        Type::Primitive(name) => output.write_all(name.as_bytes()).map_err(encoding),
+        Type::Export { path, arguments } => {
+            write!(output, "::{}", path.join("::")).map_err(encoding)?;
+            if !arguments.is_empty() {
+                output.write_all(b"<").map_err(encoding)?;
+                for (index, argument) in arguments.iter().enumerate() {
+                    if index != 0 {
+                        output.write_all(b", ").map_err(encoding)?;
+                    }
+                    render_native(argument, output)?;
+                }
+                output.write_all(b">").map_err(encoding)?;
+            }
+            Ok(())
+        }
+        Type::Tuple(members) => {
+            output.write_all(b"(").map_err(encoding)?;
+            for member in members.iter() {
+                render_native(member, output)?;
+                output.write_all(b",").map_err(encoding)?;
+            }
+            output.write_all(b")").map_err(encoding)
+        }
+        Type::Reference { mutable, ty } => {
+            output
+                .write_all(if *mutable { b"&mut " } else { b"&" })
+                .map_err(encoding)?;
+            render_native(ty, output)
+        }
+    }
+}
 
 /// The per-generation stamps module, after every adapter module in path order.
 const SURFACE_PATH: &str = "src/rawr_surface.rs";
@@ -7835,15 +7958,30 @@ fn render_borrowed_receiver(
 ) -> Result<(), request::Error> {
     let encoding = |_| request::Error::Encoding;
     let mutable = matches!(receiver, Receiver::Mutable);
-    let mut call = format!("receiver.{}", plan.name()).into_bytes();
-    render_item_turbofish(
-        signature,
-        substitutions,
-        constants,
-        container_parameters,
-        &mut call,
-    )?;
-    call.write_all(b"(").map_err(encoding)?;
+    let mut call = if plan.application_invocation().is_some() {
+        // A proof-backed application calls its isolated helper, whose
+        // scope is the source call's (`render_applications`).
+        let mut call = format!(
+            "rawr_applications::{}::call(receiver",
+            identity_name("application", plan)
+        )
+        .into_bytes();
+        if !signature.inputs().is_empty() {
+            call.write_all(b", ").map_err(encoding)?;
+        }
+        call
+    } else {
+        let mut call = format!("receiver.{}", plan.name()).into_bytes();
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            &mut call,
+        )?;
+        call.write_all(b"(").map_err(encoding)?;
+        call
+    };
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
     call.write_all(lent_copy(signature).as_bytes())

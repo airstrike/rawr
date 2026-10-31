@@ -117,6 +117,9 @@ pub struct Definition {
     opens: bool,
     /// A `macro_rules!` macro's source.
     rules: Option<crate::Shared<MacroRules>>,
+    /// The proof-backed application this imported method stands for: its
+    /// call reaches the application's own adapter.
+    application: Option<[u8; 32]>,
 }
 
 /// How an imported method's borrow guard output is reached: Rawr types the
@@ -151,6 +154,7 @@ pub struct Fingerprint {
     guard: Option<Guard>,
     opens: bool,
     rules: Option<[u8; 32]>,
+    application: Option<[u8; 32]>,
 }
 
 impl Definition {
@@ -216,6 +220,7 @@ impl Definition {
                 .transpose()?,
             guard: self.guard,
             opens: self.opens,
+            application: self.application,
             rules: self.rules.clone(),
         })
     }
@@ -238,6 +243,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
                 krate: krate.into(),
@@ -270,6 +276,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -292,6 +299,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -312,6 +320,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -332,6 +341,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -353,6 +363,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -373,6 +384,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -396,6 +408,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -416,6 +429,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -437,6 +451,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -458,6 +473,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            application: None,
             rules: None,
         })
     }
@@ -528,6 +544,19 @@ impl Definition {
         self.imported.as_ref()
     }
 
+    /// This imported method as one proof-backed application.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn applied(mut self, identity: [u8; 32]) -> Self {
+        self.application = Some(identity);
+        self
+    }
+
+    /// The proof-backed application this item stands for, when it is one.
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn application(&self) -> Option<&[u8; 32]> {
+        self.application.as_ref()
+    }
+
     /// The item's output is a borrow guard reached as `guard` says.
     #[cfg(feature = "rust-import")]
     pub(crate) fn guarded(mut self, guard: Option<Guard>) -> Self {
@@ -579,6 +608,7 @@ impl Definition {
             imported,
             guard: self.guard,
             opens: self.opens,
+            application: self.application,
             rules: self.rules.as_deref().map(MacroRules::digest),
         }
     }
@@ -596,6 +626,7 @@ impl Definition {
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
             opens: self.opens,
+            application: self.application,
             rules: self.rules.as_deref().map(MacroRules::digest),
         })
     }
@@ -692,6 +723,7 @@ impl Definition {
             imported: self.imported.clone(),
             guard: self.guard,
             opens: self.opens,
+            application: self.application,
             rules: self.rules.clone(),
         })
     }

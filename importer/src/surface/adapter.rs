@@ -23,6 +23,10 @@ pub(crate) struct Plan {
     /// (D594).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     impls: Box<[crate::surface::instance::ScriptImpl]>,
+    /// The proof-backed application this method adapter calls through its
+    /// isolated helper, in place of the ordinary method expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    application: Option<Box<crate::surface::application::Invocation>>,
 }
 
 /// Stable private identity for one generated table entry.
@@ -265,6 +269,7 @@ impl Plan {
                 steps: steps.into_boxed_slice(),
             },
             impls: Box::default(),
+            application: None,
         })
     }
 
@@ -311,7 +316,39 @@ impl Plan {
             origin: clone_origin(origin)?,
             operation: clone_operation(contract, outcome.representability(), selected)?,
             impls: selected.impls().into(),
+            application: None,
         })
+    }
+
+    /// The adapter of one proof-backed application: a method adapter with
+    /// no classified selector, called through its isolated helper.
+    pub(super) fn application(invocation: &crate::surface::application::Invocation) -> Self {
+        Self {
+            identity: EntryIdentity(invocation.identity),
+            selector: None,
+            export: invocation.export.clone(),
+            name: invocation.call.name.clone(),
+            origin: invocation.origin.clone(),
+            operation: Operation::Method {
+                receiver: invocation.ownership,
+                signature: invocation.signature.clone(),
+                substitutions: Box::default(),
+                constants: Box::default(),
+                functions: Box::default(),
+                container_parameters: 0,
+                call: None,
+                slots: Box::default(),
+                crossings: Box::default(),
+            },
+            impls: Box::default(),
+            application: Some(Box::new(invocation.clone())),
+        }
+    }
+
+    pub(crate) fn application_invocation(
+        &self,
+    ) -> Option<&crate::surface::application::Invocation> {
+        self.application.as_deref()
     }
 
     /// The script's impls that cross with the instance's script types

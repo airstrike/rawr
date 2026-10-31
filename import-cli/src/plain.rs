@@ -81,6 +81,77 @@ impl crate::Profile for Plain {
     }
 }
 
+/// Why an imported call has no application.
+enum Proof {
+    /// Rust rejects the call, finds it ambiguous, or the closed rules
+    /// cannot decide it.
+    Rejected(String),
+    /// Acquiring or joining the facts failed.
+    Failed(crate::Error),
+}
+
+/// Prove one imported call from the dependencies' intrinsic facts and keep
+/// its application. The facts are acquired once per preparation.
+fn prove(
+    graph: &rawr::package::Graph,
+    limits: &rawr_import::cargo::Limits,
+    call: &rawr_import::surface::application::Call,
+    inventory: &mut Option<rawr_import::applicability::inventory::Acquired>,
+    applications: &mut Vec<rawr_import::surface::application::Application>,
+) -> Result<(), Proof> {
+    use crate::Error;
+    let acquired = match inventory {
+        Some(acquired) => acquired,
+        None => {
+            let request = |closure: &[rawr_import::cargo::config::Dependency]| {
+                let environment = Environment::capture()
+                    .map_err(Error::other)
+                    .map_err(Proof::Failed)?;
+                graph
+                    .rust_inventory_plain(environment, closure, limits)
+                    .map_err(Error::other)
+                    .map_err(Proof::Failed)?
+                    .ok_or_else(|| Proof::Failed(Error::other("the crate has no Rust dependency")))
+            };
+            let probe = request(&[])?;
+            let native = probe
+                .pinned_native(limits)
+                .map_err(Error::other)
+                .map_err(Proof::Failed)?;
+            // Every crate the build reaches is declared, so each crate that
+            // can implement a trait has its own complete partition.
+            let closure = probe
+                .closure_dependencies(&native, limits)
+                .map_err(Error::other)
+                .map_err(Proof::Failed)?;
+            let request = request(&closure)?;
+            let acquired =
+                rawr_import::applicability::inventory::Acquired::capture(request, &native, limits)
+                    .map_err(Error::other)
+                    .map_err(Proof::Failed)?;
+            inventory.insert(acquired)
+        }
+    };
+    let catalog = rawr_import::applicability::Catalog::join(std::slice::from_ref(acquired))
+        .map_err(Error::other)
+        .map_err(Proof::Failed)?;
+    let application = catalog
+        .prove_call(call, &graph.rust_edition())
+        .map_err(|rejection| Proof::Rejected(rejection.to_string()))?;
+    if applications
+        .iter()
+        .any(|known: &rawr_import::surface::application::Application| {
+            known.call().key() == call.key()
+        })
+    {
+        return Err(Proof::Failed(Error::other(
+            "a proved imported call was not admitted by its compilation",
+        )));
+    }
+    applications.push(application);
+    Ok(())
+}
+
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
     target: &rawr::project::Target,
@@ -108,6 +179,11 @@ fn prepare(
     let mut settlement = rawr_import::bindings::Settlement::default();
     let mut remembered = !crate_demand.is_empty();
     let seed = graph.rust_demand_seed(&[], None);
+    // Proof-backed applications of imported calls whose candidate depends
+    // on the call's receiver and lexical scope (D650), proved from the
+    // dependencies' intrinsic facts, acquired once.
+    let mut applications = Vec::new();
+    let mut inventory = None;
     let (demand, profile_contract, cached, native) = loop {
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
@@ -168,7 +244,7 @@ fn prepare(
                         // Async code compiles against the core's future
                         // (D513.3), whose facade the runner installs too.
                         let demand = rawr::future::facade::engine()
-                            .compile_imported(contract, snapshot)
+                            .compile_imported_with_applications(contract, snapshot, &applications)
                             .map_err(Error::Rawr)?;
                         let checked = Checked(*demand.contract_fingerprint().as_bytes());
                         Ok((demand, checked))
@@ -176,6 +252,22 @@ fn prepare(
                 );
                 let completed = match completed {
                     Ok(completed) => completed,
+                    Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
+                        if error.rust_application().is_some() =>
+                    {
+                        let call = error
+                            .rust_application()
+                            .ok_or_else(|| Error::other("imported call encoding"))?;
+                        prove(&graph, &limits, &call, &mut inventory, &mut applications).map_err(
+                            |reason| match reason {
+                                Proof::Rejected(reason) => {
+                                    Error::other(format!("{}\n  {reason}", Error::Rawr(error)))
+                                }
+                                Proof::Failed(failure) => failure,
+                            },
+                        )?;
+                        continue;
+                    }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if crate::new_demand(&error, &request_demand).is_some() =>
                     {

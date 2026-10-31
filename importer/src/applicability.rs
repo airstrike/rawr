@@ -8,6 +8,7 @@ use crate::api::{self, identity, ledger, model};
 use crate::surface;
 
 mod application;
+pub use application::Rejection;
 pub mod call;
 pub mod inventory;
 pub mod native;

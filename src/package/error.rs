@@ -32,6 +32,10 @@ pub struct Error {
     /// crate re-export, and whether it names a member of a type. An import
     /// demanding it may resolve it.
     rust_demand: Option<(Box<str>, bool, bool)>,
+    /// The encoded imported call a failure needs a proof-backed application
+    /// for. Proving it and compiling again may resolve it.
+    #[cfg(feature = "rust-import")]
+    rust_application: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -87,6 +91,8 @@ impl Error {
             sources: sources.into_boxed_slice(),
             kind: Kind::Parse { source, error },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -104,6 +110,8 @@ impl Error {
                 span,
             },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -121,6 +129,8 @@ impl Error {
                 primary,
             },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -138,6 +148,8 @@ impl Error {
                 secondary,
             },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -146,6 +158,8 @@ impl Error {
             sources: Box::default(),
             kind: Kind::Diagnostic(source),
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -161,6 +175,8 @@ impl Error {
                 error: failure.error,
             },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -173,6 +189,8 @@ impl Error {
             sources,
             kind: Kind::Compilation { evidence, error },
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -182,6 +200,8 @@ impl Error {
             sources: Box::default(),
             kind: Kind::Import(error),
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
     }
 
@@ -205,7 +225,23 @@ impl Error {
             sources: Box::default(),
             kind: Kind::ImportDiagnostic(report),
             rust_demand: None,
+            #[cfg(feature = "rust-import")]
+            rust_application: None,
         }
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_rust_application(mut self, call: Box<[u8]>) -> Self {
+        self.rust_application = Some(call);
+        self
+    }
+
+    /// The imported call this failure needs a proof-backed application for.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_application(&self) -> Option<rawr_import::surface::application::Call> {
+        serde_json::from_slice(self.rust_application.as_deref()?).ok()
     }
 
     #[cfg(feature = "rust-import")]

@@ -158,6 +158,10 @@ pub struct Registry {
     structural: Vec<structural::Definition>,
     #[cfg(feature = "rust-import")]
     families: Vec<family::Pending>,
+    /// Proof-backed applications, each by the key of the source call it
+    /// answers.
+    #[cfg(feature = "rust-import")]
+    applied: Vec<Applied>,
     items: Vec<item::Definition>,
     facades: Vec<facade::Dependency>,
     /// Facade re-exports, sorted: a path and the canonical path it names.
@@ -171,6 +175,15 @@ pub struct Registry {
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
+}
+
+/// One proof-backed application's host method, owned by its receiver's facade.
+#[cfg(feature = "rust-import")]
+#[derive(Clone, Debug)]
+pub(crate) struct Applied {
+    key: [u8; 32],
+    item: item::Definition,
+    owner: facade::Dependency,
 }
 
 #[cfg(feature = "rust-import")]
@@ -230,6 +243,8 @@ impl Registry {
             structural: Vec::new(),
             #[cfg(feature = "rust-import")]
             families: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            applied: Vec::new(),
             items: Vec::new(),
             facades: Vec::new(),
             aliases: Vec::new(),
@@ -281,6 +296,7 @@ impl Registry {
                     items.checked_add(1)?.checked_add(family.len())
                 })
             })
+            .and_then(|items| items.checked_add(self.applied.len()))
             .and_then(|items| items.checked_add(self.items.len()))
             .and_then(|items| items.checked_add(self.facades.len()));
         let mut bytes = Some(std::mem::size_of::<Self>());
@@ -315,6 +331,14 @@ impl Registry {
         }
         for family in &self.families {
             bytes = bytes.and_then(|bytes| bytes.checked_add(family.retained_bytes()?));
+        }
+        for applied in &self.applied {
+            bytes = bytes.and_then(|bytes| {
+                bytes
+                    .checked_add(std::mem::size_of::<Applied>())?
+                    .checked_add(applied.item.retained_bytes()?)?
+                    .checked_add(applied.owner.retained_bytes()?)
+            });
         }
         for definition in &self.items {
             bytes = bytes.and_then(|bytes| bytes.checked_add(definition.retained_bytes()?));
@@ -375,6 +399,17 @@ impl Registry {
             .map_err(|_| rawr_import::surface::Error::Allocation)?;
         for family in &self.families {
             clone.families.push(family.try_clone()?);
+        }
+        clone
+            .applied
+            .try_reserve_exact(self.applied.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for applied in &self.applied {
+            clone.applied.push(Applied {
+                key: applied.key,
+                item: applied.item.try_clone()?,
+                owner: applied.owner.try_clone()?,
+            });
         }
         clone
             .items
@@ -816,6 +851,52 @@ impl Registry {
         self.families
             .sort_by(|left, right| left.path().cmp(right.path()));
         Ok(())
+    }
+
+    /// Admit one proof-backed application's method, owned by the facade of
+    /// `root`. Its key is the source call's; one key has one application.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn admit_applied(
+        &mut self,
+        key: [u8; 32],
+        root: &str,
+        item: item::Definition,
+    ) -> Result<(), Error> {
+        let owner = self
+            .facades
+            .iter()
+            .find(|facade| facade.root() == root)
+            .cloned()
+            .ok_or_else(|| Error::MissingFacadeModule {
+                path: item.path().to_string().into(),
+                module: root.into(),
+            })?;
+        match self
+            .applied
+            .binary_search_by(|applied| applied.key.cmp(&key))
+        {
+            Ok(index) if self.applied[index].item.fingerprint() == item.fingerprint() => Ok(()),
+            Ok(_) => Err(Error::DuplicateFacadeOverloadInputs {
+                item: item.path().to_string().into(),
+            }),
+            Err(index) => {
+                self.applied.try_reserve(1).map_err(|_| Error::Allocation)?;
+                self.applied.insert(index, Applied { key, item, owner });
+                Ok(())
+            }
+        }
+    }
+
+    /// The proof-backed application answering the source call `key`.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn applied(
+        &self,
+        key: &[u8; 32],
+    ) -> Option<(&item::Definition, &facade::Dependency)> {
+        self.applied
+            .binary_search_by(|applied| applied.key.cmp(key))
+            .ok()
+            .map(|index| (&self.applied[index].item, &self.applied[index].owner))
     }
 
     #[cfg(feature = "rust-import")]

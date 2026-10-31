@@ -1177,6 +1177,91 @@ impl Request {
         self.resolve(native, limits)
     }
 
+    /// Every library crate this request's build reaches that it does not
+    /// declare, as an exact dependency at its resolved source, version and
+    /// features. An intrinsic inventory declares them too, so each crate
+    /// that can implement a trait has its own complete partition (D650.5).
+    /// This runs the normal resolution only: no metadata probe.
+    #[cfg(feature = "rustc-driver")]
+    pub fn closure_dependencies(
+        mut self,
+        native: &Native,
+        limits: &Limits,
+    ) -> Result<Vec<config::Dependency>> {
+        self.inventory = false;
+        self.demand = Box::default();
+        self.inputs_only = true;
+        let resolution = self.resolve(native, limits)?;
+        let metadata = &resolution.metadata;
+        let declared = metadata.declared_packages();
+        let root = metadata.root_package_id();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut dependencies = Vec::new();
+        for output in resolution.build_unit.artifacts() {
+            let library = output
+                .target_kinds()
+                .iter()
+                .any(|kind| matches!(kind.as_ref(), "lib" | "rlib"));
+            let proc_macro = output
+                .target_kinds()
+                .iter()
+                .any(|kind| kind.as_ref() == "proc-macro");
+            let package_id = output.package_id();
+            if !library
+                || proc_macro
+                || Some(package_id) == root
+                || declared.contains(package_id)
+                || !seen.insert(package_id.to_owned())
+            {
+                continue;
+            }
+            let package = metadata.package(package_id).ok_or_else(|| Error::Request {
+                field: "inventory closure",
+                reason: format!("`{package_id}` has no resolved package").into_boxed_str(),
+            })?;
+            let alias = output.crate_name();
+            let dependency = match package.source() {
+                unit::PackageSource::Path { .. } => {
+                    config::Dependency::path(alias, package.root(), limits)?
+                }
+                unit::PackageSource::Registry { cargo_id, .. }
+                    if cargo_id.starts_with(
+                        "registry+https://github.com/rust-lang/crates.io-index",
+                    ) || cargo_id.starts_with("sparse+https://index.crates.io/") =>
+                {
+                    config::Dependency::registry(
+                        alias,
+                        &format!("={}", package.version()),
+                        limits,
+                    )?
+                }
+                unit::PackageSource::Git { cargo_id, oid } => {
+                    let url = cargo_id
+                        .strip_prefix("git+")
+                        .and_then(|rest| rest.split(['?', '#']).next())
+                        .ok_or_else(|| Error::Request {
+                            field: "inventory closure",
+                            reason: format!("`{package_id}` has no git URL").into_boxed_str(),
+                        })?;
+                    config::Dependency::git(alias, url, oid, limits)?
+                }
+                unit::PackageSource::Registry { .. } => {
+                    return Err(Error::Request {
+                        field: "inventory closure",
+                        reason: format!(
+                            "`{package_id}` comes from a registry other than crates.io, which an intrinsic inventory cannot declare yet"
+                        )
+                        .into_boxed_str(),
+                    });
+                }
+            }
+            .package(package.name())?
+            .features(output.features().iter().map(AsRef::as_ref), false)?;
+            dependencies.push(dependency);
+        }
+        Ok(dependencies)
+    }
+
     /// Prepare the complete semantic owner before extraction, reusing an
     /// attested bundle when all current inputs still agree.
     #[cfg(feature = "rustc-driver")]
@@ -1248,6 +1333,30 @@ impl Request {
             attestation,
         };
         self.resolve_with(&native, limits, Some(&cached))
+    }
+
+    /// The pinned native toolchain this request's project uses, through the
+    /// shared toolchain node: no discovery when its attestation is current.
+    #[cfg(feature = "rustc-driver")]
+    pub fn pinned_native(&self, limits: &Limits) -> Result<Native> {
+        let context = crate::context::Context::capture_config(
+            &self.project_root,
+            &self.config,
+            &self.target,
+            limits,
+        )
+        .map_err(|error| Error::Request {
+            field: "toolchain node context",
+            reason: error.to_string().into_boxed_str(),
+        })?;
+        let attestation =
+            toolchain::cached(&context, &crate::metrics::Current).map_err(|source| {
+                Error::Node {
+                    operation: "pinned toolchain",
+                    source: Box::new(source),
+                }
+            })?;
+        Ok(Native::from_attestation(attestation.as_ref()))
     }
 
     /// Render the provisional manifest on the sealed request account
@@ -2696,7 +2805,6 @@ impl Request {
 impl Builder {
     /// Acquire complete intrinsic facts without consumer method demand.
     /// This separate acquisition is not served by legacy demand tables.
-    #[cfg(feature = "rustc-driver")]
     pub fn inventory(mut self) -> Self {
         self.inventory = true;
         self

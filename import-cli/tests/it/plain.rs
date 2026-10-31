@@ -272,6 +272,61 @@ fn main() {
     assert_eq!(text(&restored.stdout), "101 11 true\n");
 }
 
+/// One method name whose candidate depends on the call's lexical scope:
+/// each function imports a different trait in its own block. Rawr proves
+/// each call from the crates' intrinsic facts (D650) and the runner calls
+/// the native method through a helper that imports only that block's trait.
+#[test]
+fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lexical-applications");
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
+    let _ = fs::remove_dir_all(root.join("src"));
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[workspace]\n[package]\nname='lexical-applications'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nfacts-a={{path={:?}}}\nfacts-c={{path={:?}}}\n",
+            fixtures.join("applicability-a"),
+            fixtures.join("applicability-c"),
+        ),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn left() -> i64 {\n    use facts_c::Left;\n    facts_a::both().choose()\n}\nfn right() -> bool {\n    use facts_c::Right;\n    facts_a::both().choose()\n}\nfn main() {\n    println!(\"{} {}\", left(), right());\n}\n",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), "11 true\n");
+    }
+    let helpers =
+        fs::read_to_string(root.join("target/rawr/runner/src/rawr_applications.rs")).unwrap();
+    for expected in [
+        "#[no_implicit_prelude]",
+        "use ::facts_c::Left as _;",
+        "use ::facts_c::Right as _;",
+        "pub(crate) fn call(receiver: &::facts_a::Both) -> i64 {",
+        "pub(crate) fn call(receiver: &::facts_a::Both) -> bool {",
+        "(*receiver).choose()",
+    ] {
+        assert!(helpers.contains(expected), "{expected}\n{helpers}");
+    }
+    assert!(!helpers.contains("use super::*"));
+}
+
 /// A crate's bindings are shared per machine: a second project with the
 /// same program reads them from rawr's home, with no nightly build and no
 /// probe, and its next run takes the resolution back with no Cargo. semver

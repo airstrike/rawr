@@ -668,6 +668,34 @@ pub fn admit_generated_structural(
     Ok(())
 }
 
+/// Admit a generated runner's proof-backed applications into this compiler.
+/// Each must have an adapter the sealed demand generated for it; the runner
+/// never proves anything, it replays what the host proved.
+#[doc(hidden)]
+pub fn admit_generated_applications(
+    engine: &mut crate::Engine,
+    _definitions: &[host::facade::Definition],
+    encoded: &[u8],
+    adapters: impl Iterator<Item = [u8; 32]>,
+) -> Result<(), Error> {
+    let applications = rawr_import::surface::application::Application::decode_all(encoded)?;
+    let adapters = adapters.collect::<std::collections::BTreeSet<_>>();
+    if applications.len() != adapters.len()
+        || applications
+            .iter()
+            .any(|application| !adapters.contains(application.identity()))
+    {
+        return Err(Error::Surface(rawr_import::surface::Error::Canonical));
+    }
+    super::admit_applications(&mut engine.host_registry, &applications).map_err(|error| {
+        Error::FacadeEntry {
+            root: "<application>".into(),
+            path: error.to_string().into_boxed_str(),
+            source: Box::new(Error::Shape),
+        }
+    })
+}
+
 /// Admit structural bindings under the same account as the retained carrier.
 #[doc(hidden)]
 pub fn admit_generated_structural_retained(
