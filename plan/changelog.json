@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"A warm `rawr check` of an iced program no longer spends minutes classifying: definitions and implementations are looked up by hash instead of by scanning the whole graph. Upstream clock's warm check went from 176 s to 79 s.","issues":[437]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.34",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A warm `rawr check` of an iced program no longer spends minutes classifying: definitions and implementations are looked up by hash instead of by scanning the whole graph. Upstream clock's warm check went from 176 s to 79 s.","issues":[437]}
+      ]
+    },
     {
       "version": "0.3.33",
       "date": "2026-10-31",
