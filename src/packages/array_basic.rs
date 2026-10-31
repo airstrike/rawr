@@ -51,6 +51,25 @@ pub(crate) fn index_of_start_inner(
 
 #[export_module]
 pub mod array_functions {
+    /// Observe a typed external sequence without materializing its elements.
+    #[rawr_fn(name = "len", get = "len", pure, return_raw)]
+    pub fn native_len(place: &mut crate::place::Place) -> RawrResultOf<INT> {
+        place
+            .invoke(crate::place::Operation::Len, &mut [])?
+            .as_int()
+            .map_err(|_| {
+                ERR::ErrorRuntime(
+                    "native sequence length is not an integer".into(),
+                    Position::NONE,
+                )
+                .into()
+            })
+    }
+    /// Native String byte length uses the same checked storage observation.
+    #[rawr_fn(get = "bytes", pure, return_raw)]
+    pub fn native_bytes(place: &mut crate::place::Place) -> RawrResultOf<INT> {
+        native_len(place)
+    }
     /// Number of elements in the array.
     #[rawr_fn(name = "len", get = "len", pure)]
     pub fn len(array: &mut Array) -> INT {

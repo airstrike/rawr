@@ -142,6 +142,8 @@ pub mod packages;
 /// Parsed Rawr compilation units.
 pub mod parse;
 mod parser;
+/// Typed native places and ownership-preserving sequence operations.
+pub mod place;
 /// Compiler-validated local preview metadata.
 pub mod preview;
 /// Opaque data retained by resolved programs.

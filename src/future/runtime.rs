@@ -855,6 +855,29 @@ impl Callable {
     ) -> RawrResultOf<Dynamic> {
         let _entry = entry();
         let program = self.program();
+        self.invoke_places(&program, arguments, mutable)
+    }
+
+    /// Validate erased inputs and invoke mutable places in one selected
+    /// program generation. Validation and reconciliation cannot rebind the call.
+    pub fn call_places_checked(
+        &self,
+        arguments: &mut [Dynamic],
+        mutable: &[usize],
+        witnesses: &[Option<crate::host::runtime::Witness>],
+    ) -> RawrResultOf<Dynamic> {
+        let _entry = entry();
+        let program = self.program();
+        Self::validate_arguments(&program, arguments, witnesses)?;
+        self.invoke_places(&program, arguments, mutable)
+    }
+
+    fn invoke_places(
+        &self,
+        program: &Program,
+        arguments: &mut [Dynamic],
+        mutable: &[usize],
+    ) -> RawrResultOf<Dynamic> {
         let result = program.invoke(&self.function, arguments)?;
         let copied = match self.function.kind() {
             item::Kind::Function
@@ -886,7 +909,11 @@ impl Callable {
         let result = returned.next().unwrap_or(Dynamic::UNIT);
         for (index, value) in copied.iter().zip(returned) {
             if let Some(place) = arguments.get_mut(*index) {
-                *place = value;
+                // Native references carry direct authority. Their completed
+                // stores already happened, including on an earlier error.
+                if crate::place::get(place).is_none() {
+                    *place = value;
+                }
             }
         }
         Ok(result)
@@ -902,6 +929,15 @@ impl Callable {
     ) -> RawrResultOf<Dynamic> {
         let _entry = entry();
         let program = self.program();
+        Self::validate_arguments(&program, arguments, witnesses)?;
+        program.invoke(&self.function, arguments)
+    }
+
+    fn validate_arguments(
+        program: &Program,
+        arguments: &[Dynamic],
+        witnesses: &[Option<crate::host::runtime::Witness>],
+    ) -> RawrResultOf<()> {
         for (index, (argument, witness)) in arguments.iter().zip(witnesses).enumerate() {
             if let Some(witness) = witness {
                 program.validate(witness, argument).map_err(|reason| {
@@ -911,7 +947,7 @@ impl Callable {
                 })?;
             }
         }
-        program.invoke(&self.function, arguments)
+        Ok(())
     }
 }
 
@@ -1059,34 +1095,4 @@ fn send(job: Job) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_native_future_runs_where_it_is_polled_and_its_output_is_made_on_the_owner() {
-        struct Plain;
-        impl Host for Plain {
-            fn invoke(&self, _: &item::Value, _: &mut [Dynamic]) -> RawrResultOf<Dynamic> {
-                unreachable!()
-            }
-        }
-        serve(Rc::new(Plain));
-        let future = Future::join(vec![
-            Future::native(|| Box::pin(async { Box::new(|| Ok(Dynamic::from(1_i64))) as Finish })),
-            Future::ready(Dynamic::from(2_i64)),
-        ]);
-        let mut script = future.clone().into_script();
-        let waker = Waker::noop();
-        let mut cx = Context::from_waker(waker);
-        let std::task::Poll::Ready(Ok(output)) = script.poll_output(&mut cx) else {
-            panic!("the join is ready");
-        };
-        assert_eq!(format!("{output:?}"), "[1, 2]");
-        // A copy shares the future, which runs once.
-        let mut again = future.into_script();
-        assert!(matches!(
-            again.poll_output(&mut cx),
-            std::task::Poll::Ready(Err(_))
-        ));
-    }
-}
+mod tests;

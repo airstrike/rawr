@@ -845,6 +845,41 @@ impl Engine {
                         let mut idx_val_for_setter = idx_val.clone();
                         let idx_pos = x.lhs.start_position();
 
+                        if let Some(place) = crate::place::get(target.as_ref()) {
+                            let mut result = None;
+                            let mut new_val = new_val;
+                            let _ = place.with(
+                                crate::place::Operation::Element {
+                                    mutable: place.is_mutable(),
+                                },
+                                &mut [idx_val.clone()],
+                                &mut |child| {
+                                    let mut child = Target::TempValue(child);
+                                    let evaluated = self.eval_dot_index_chain_raw(
+                                        global,
+                                        caches,
+                                        s.as_deref_mut(),
+                                        this_ptr.as_deref_mut(),
+                                        root,
+                                        rhs,
+                                        &mut child,
+                                        &x.rhs,
+                                        idx_values,
+                                        new_val.take(),
+                                    )?;
+                                    result = Some(evaluated);
+                                    Ok(Dynamic::UNIT)
+                                },
+                            )?;
+                            return result.ok_or_else(|| {
+                                ERR::ErrorRuntime(
+                                    "native element continuation was not entered".into(),
+                                    op_pos,
+                                )
+                                .into()
+                            });
+                        }
+
                         let (try_setter, result) = {
                             let obj = target.as_mut();
 
@@ -913,6 +948,33 @@ impl Engine {
                         let new_scope = x!(s, b);
                         let idx_val = &mut idx_values.pop().unwrap();
                         let idx = &mut idx_val.clone();
+                        if let Some(place) = crate::place::get(obj) {
+                            if !op_info.is_op_assignment() {
+                                let _ = place.invoke(
+                                    crate::place::Operation::Set,
+                                    &mut [idx_val.clone(), new_val],
+                                )?;
+                                return Ok((Dynamic::UNIT, true));
+                            }
+                            let mut incoming = Some(new_val);
+                            let _ = place.with(
+                                crate::place::Operation::Element { mutable: true },
+                                &mut [idx_val.clone()],
+                                &mut |child| {
+                                    let mut child = Target::TempValue(child);
+                                    self.eval_op_assignment(
+                                        global,
+                                        caches,
+                                        op_info,
+                                        root,
+                                        &mut child,
+                                        incoming.take().expect("one element continuation"),
+                                    )?;
+                                    Ok(Dynamic::UNIT)
+                                },
+                            )?;
+                            return Ok((Dynamic::UNIT, true));
+                        }
                         let try_setter = match self.get_indexed_mut(
                             global, caches, new_scope, this_ptr, obj, idx, pos, op_pos, true, false,
                         ) {
@@ -978,6 +1040,14 @@ impl Engine {
                         let new_scope = x!(s, b);
                         let idx_val = &mut idx_values.pop().unwrap();
 
+                        if let Some(place) = crate::place::get(obj) {
+                            return place
+                                .invoke(
+                                    crate::place::Operation::CopyElement,
+                                    &mut [idx_val.clone()],
+                                )
+                                .map(|value| (value, false));
+                        }
                         self.get_indexed_mut(
                             global, caches, new_scope, this_ptr, obj, idx_val, pos, op_pos, false,
                             true,
