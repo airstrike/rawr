@@ -416,6 +416,42 @@ pub mod widgets {
         {
             Widget::boxed(self)
         }
+
+        /// The widget with each message it sends turned by `f`, as iced's
+        /// `Widget::map`, whose output names the callable's type.
+        fn map<F, B>(self, f: F) -> Map<Self, F, Message>
+        where
+            Self: Sized,
+            F: Fn(Message) -> B,
+        {
+            Map {
+                widget: self,
+                mapper: f,
+                input: std::marker::PhantomData,
+            }
+        }
+    }
+
+    /// A widget whose messages `F` turns, as iced's `widget::Map`.
+    pub struct Map<W, F, A> {
+        widget: W,
+        mapper: F,
+        input: std::marker::PhantomData<A>,
+    }
+
+    impl<W, A, B, F, Theme, Renderer> Widget<B, Theme, Renderer> for Map<W, F, A>
+    where
+        W: Widget<A, Theme, Renderer>,
+        F: Fn(A) -> B,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push("map".to_owned());
+            self.widget.labels(labels);
+        }
+
+        fn press(&self, label: &str) -> Option<B> {
+            self.widget.press(label).map(&self.mapper)
+        }
     }
 
     impl<T, Message, Theme, Renderer> Framed<Message, Theme, Renderer> for T where
@@ -737,6 +773,24 @@ pub mod canvas {
             Message: std::fmt::Debug,
         {
             format!("{:?} captured {}", self.message, self.captured)
+        }
+    }
+
+    /// An angle, as iced's `Degrees`: it compares with a number through
+    /// impls that write only `eq` and `partial_cmp`, so `<` and its kin
+    /// are std's provided methods of `PartialOrd<f32>`.
+    #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+    pub struct Degrees(pub f32);
+
+    impl PartialEq<f32> for Degrees {
+        fn eq(&self, other: &f32) -> bool {
+            self.0.eq(other)
+        }
+    }
+
+    impl PartialOrd<f32> for Degrees {
+        fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
+            self.0.partial_cmp(other)
         }
     }
 

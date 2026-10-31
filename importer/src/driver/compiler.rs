@@ -82,7 +82,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // whose associated type a selected signature projects from a parameter.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 34;
+const PROTOCOL_SCHEMA: u32 = 35;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3141,16 +3141,26 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             Some(AssociatedPathKind::Named) | None => None,
         };
+        // `PartialOrd`'s provided `lt`, `le`, `gt` and `ge`, which a crate's
+        // impl that writes only `partial_cmp` gives its type, as clock's
+        // `rotation < 180.0` of iced's `Degrees` calls (T412): its
+        // signature, which the impl's trait reference instantiates. Any
+        // other standard definition stays opaque.
+        let shape = if self.comparison_provided(def_id) {
+            self.local_shape(def_id)?
+        } else {
+            Shape::Sysroot {
+                compiler_kind: self
+                    .budget
+                    .owned(def_kind_text(self.tcx.def_kind(def_id)))?,
+            }
+        };
         let definition = Definition {
             id: self.id(def_id, namespace)?,
             display_path: self.definition_path(def_id)?,
             owner,
             visibility: Visibility::Public,
-            shape: Shape::Sysroot {
-                compiler_kind: self
-                    .budget
-                    .owned(def_kind_text(self.tcx.def_kind(def_id)))?,
-            },
+            shape,
             span: self.span(self.tcx.def_span(def_id))?,
             origin: match anonymous_support {
                 Some(_) => Origin::Synthesized {
@@ -3160,6 +3170,18 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             },
         };
         self.emit_definition(def_id, namespace, &definition, None)
+    }
+
+    /// `def_id` is one of `PartialOrd`'s provided comparisons, `lt`, `le`,
+    /// `gt` or `ge`, whose signature names nothing but the trait's own
+    /// parameters and `bool`.
+    fn comparison_provided(&self, def_id: DefId) -> bool {
+        self.tcx.def_kind(def_id) == DefKind::AssocFn
+            && self.tcx.lang_items().partial_ord_trait() == Some(self.tcx.parent(def_id))
+            && matches!(
+                self.tcx.item_name(def_id).as_str(),
+                "lt" | "le" | "gt" | "ge"
+            )
     }
 
     /// A `macro_rules!` macro's definition, read from its crate's source

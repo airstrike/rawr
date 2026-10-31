@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 61;
+const CLASSIFIER_VERSION: u32 = 63;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4199,6 +4199,21 @@ impl<P: api::Phase> Context<'_, P> {
                             receiver,
                         }
                     }
+                    // A trait's provided method that two of the type's own
+                    // impls of the trait share, as `PartialOrd::lt` of
+                    // `Degrees`'s `PartialOrd` and `PartialOrd<f32>` (T412):
+                    // each impl's own, so a call selects one by its argument.
+                    crate::surface::identity::Selector::Method { receiver, .. }
+                        if self.shared_provided(implementation, definition) =>
+                    {
+                        crate::surface::identity::Selector::Method {
+                            item: crate::surface::identity::Definition::text_member(
+                                implementation.id(),
+                                definition.id(),
+                            ),
+                            receiver,
+                        }
+                    }
                     selector => selector,
                 };
                 self.retain_selector(&selector)?;
@@ -4640,7 +4655,13 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             };
             let item = item.with_inferred(&[0], container_parameters + 1);
-            if item.call().is_some() || !item.crossings().is_empty() {
+            // A closure the output names is boxed, as iced's `Widget::map`
+            // gives `Map<Self, F, Message>` (T417): the call makes it as any
+            // generic method's call does.
+            let boxed = item.call().is_some()
+                && item.crossings().is_empty()
+                && output_boxes(item.signature().output());
+            if !boxed && (item.call().is_some() || !item.crossings().is_empty()) {
                 return Err(reject::Kind::CallableProtocol.into());
             }
             Ok(Representability::Invocation(callable::Invocation::new(
@@ -4883,6 +4904,29 @@ impl<P: api::Phase> Context<'_, P> {
             }
             None => self.classify_inherent_invocation(implementation, definition),
         }
+    }
+
+    /// Whether `definition` is a provided method of the trait
+    /// `implementation` implements that another impl of the trait for the
+    /// same type also has, as `PartialOrd::lt` is of both of `Degrees`'s
+    /// `PartialOrd` and `PartialOrd<f32>`.
+    fn shared_provided(
+        &self,
+        implementation: &model::Implementation,
+        definition: &model::Definition,
+    ) -> bool {
+        let (model::Owner::Definition(owner), model::Trait::Trait { id, .. }) =
+            (definition.owner(), implementation.trait_ref())
+        else {
+            return false;
+        };
+        owner == id
+            && self.graph.implementations().any(|other| {
+                other.id() != implementation.id()
+                    && matches!(other.trait_ref(), model::Trait::Trait { id: other_id, .. } if other_id == id)
+                    && other.self_type() == implementation.self_type()
+                    && other.associated().any(|associated| associated == definition.id())
+            })
     }
 
     /// A trait's default method as a member of the non-generic
@@ -6285,6 +6329,63 @@ impl<P: api::Phase> Context<'_, P> {
         }) {
             return Err(representability::reject::Kind::ScriptFutureType.into());
         }
+        // A closure's type the output names, as iced's `Widget::map(self, f:
+        // F) -> Map<Self, F, Message>` does: Rust's `Box<dyn Fn(A..) -> B>`,
+        // which the bridge boxes the script closure as, so the output is a
+        // type the runner can write (T417). Only a shared `Fn` the call
+        // makes, which no other input names.
+        let (output, callable_class) = match (&call, &callable_class) {
+            (
+                Some((callable, call_inputs, returned)),
+                Some(
+                    crate::surface::callable::Class::Borrowed(_)
+                    | crate::surface::callable::Class::Shared(_),
+                ),
+            ) if crossings.iter().all(|(crossing, ..)| crossing == callable)
+                && names_parameter(&output, *callable)
+                && inputs.iter().all(|input| {
+                    *input == representability::convert::Type::Parameter(*callable)
+                        || !names_parameter(input, *callable)
+                }) =>
+            {
+                let converted = call_inputs
+                    .iter()
+                    .map(|input| self.convert_closure_input(input))
+                    .collect::<Option<Vec<_>>>();
+                match (converted, self.convert_value(returned).ok()) {
+                    // The boxed closure lives as long as the value that
+                    // holds it, as a `'static` one does.
+                    (Some(converted), Some(returned)) => (
+                        replace_parameter(
+                            output,
+                            *callable,
+                            &representability::convert::Type::Nominal {
+                                definition: crate::surface::identity::Definition::callable(),
+                                arguments: converted.into_iter().chain([returned]).collect(),
+                            },
+                        ),
+                        Some(crate::surface::callable::Class::Shared(
+                            crate::surface::callable::shared::Proof::static_owned(
+                                crate::surface::callable::shared::Scope::Epoch,
+                            ),
+                        )),
+                    ),
+                    _ => (output, callable_class),
+                }
+            }
+            _ => (output, callable_class),
+        };
+        // A boxed closure is the closure Rawr makes, not a slot.
+        let crossings = match &call {
+            Some((callable, ..))
+                if !names_parameter(&output, *callable)
+                    && crossings.iter().all(|(crossing, ..)| crossing == callable)
+                    && output_boxes(&output) =>
+            {
+                Vec::new()
+            }
+            _ => crossings,
+        };
         // A script closure fills a callable parameter `B` as a type Rawr
         // has no name for, as it does a future parameter, so a signature
         // can name `B` only as the input that takes the closure. Freya's
@@ -7476,6 +7577,35 @@ impl<P: api::Phase> Context<'_, P> {
                         ty: Box::new(self.convert_value(target)?),
                     });
                 }
+                // `&f32` of a number, as `PartialOrd<f32>::lt(&self, &f32)`
+                // and `PartialEq<f32>::eq` take the right-hand side of
+                // clock's `rotation < 180.0` (T412): the number, lent.
+                model::Type::Primitive(_) => {
+                    if let Ok(
+                        scalar @ representability::convert::Type::Builtin(
+                            representability::convert::Builtin::Bool
+                            | representability::convert::Builtin::Char
+                            | representability::convert::Builtin::F32
+                            | representability::convert::Builtin::F64
+                            | representability::convert::Builtin::I8
+                            | representability::convert::Builtin::I16
+                            | representability::convert::Builtin::I32
+                            | representability::convert::Builtin::I64
+                            | representability::convert::Builtin::Isize
+                            | representability::convert::Builtin::U8
+                            | representability::convert::Builtin::U16
+                            | representability::convert::Builtin::U32
+                            | representability::convert::Builtin::U64
+                            | representability::convert::Builtin::Usize,
+                        ),
+                    ) = self.convert(target)
+                    {
+                        return Ok(representability::convert::Type::Borrowed {
+                            mutable: false,
+                            ty: Box::new(scalar),
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -7729,7 +7859,10 @@ fn provided_signature(
     }
     let own = model::Generics::new(
         own.into_boxed_slice(),
-        generics.predicates().cloned().collect(),
+        generics
+            .predicates()
+            .map(|predicate| substituted_predicate(predicate, &substitutions))
+            .collect(),
     );
     Ok(Some((
         substituted_signature(signature, &substitutions),
@@ -8167,6 +8300,76 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
     }
 }
 
+/// Whether `ty` names a boxed script closure (T417).
+fn output_boxes(ty: &representability::convert::Type) -> bool {
+    use representability::convert::Type;
+    match ty {
+        Type::Nominal { definition, .. }
+            if *definition == crate::surface::identity::Definition::callable() =>
+        {
+            true
+        }
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => arguments.iter().any(output_boxes),
+        Type::Option(inner)
+        | Type::Range(inner)
+        | Type::Borrowed { ty: inner, .. }
+        | Type::Sequence { element: inner, .. } => output_boxes(inner),
+        Type::Result(ok, err) => output_boxes(ok) || output_boxes(err),
+        _ => false,
+    }
+}
+
+/// `ty` with the type parameter `index` replaced by `with` at any depth.
+fn replace_parameter(
+    ty: representability::convert::Type,
+    index: u32,
+    with: &representability::convert::Type,
+) -> representability::convert::Type {
+    use representability::convert::Type;
+    let all = |types: Box<[Type]>| {
+        types
+            .into_vec()
+            .into_iter()
+            .map(|ty| replace_parameter(ty, index, with))
+            .collect::<Box<[_]>>()
+    };
+    let one = |ty: Box<Type>| Box::new(replace_parameter(*ty, index, with));
+    match ty {
+        Type::Parameter(parameter) if parameter == index => with.clone(),
+        Type::Nominal {
+            definition,
+            arguments,
+        } => Type::Nominal {
+            definition,
+            arguments: all(arguments),
+        },
+        Type::Script { path, arguments } => Type::Script {
+            path,
+            arguments: all(arguments),
+        },
+        Type::Tuple(members) => Type::Tuple(all(members)),
+        Type::Option(element) => Type::Option(one(element)),
+        Type::Range(element) => Type::Range(one(element)),
+        Type::Result(ok, err) => Type::Result(one(ok), one(err)),
+        Type::Borrowed { mutable, ty } => Type::Borrowed {
+            mutable,
+            ty: one(ty),
+        },
+        Type::Sequence {
+            element,
+            owned,
+            length,
+        } => Type::Sequence {
+            element: one(element),
+            owned,
+            length,
+        },
+        other => other,
+    }
+}
+
 /// `ty` with each future parameter `F` given as the core future of its
 /// synthetic output: a script future crosses there (D527).
 fn futurize(
@@ -8473,6 +8676,61 @@ fn substitute_parameters(
             lifetime: lifetime.clone(),
             mutability: *mutability,
             ty: Box::new(substitute_parameters(ty, substitutions)),
+        },
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => model::Type::Projection {
+            trait_id: trait_id.clone(),
+            associated: associated.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// `predicate` with each parameter in `substitutions` replaced, as a
+/// provided method's `F: Fn(Message) -> B` is at the indices its signature
+/// takes in an impl (T417).
+fn substituted_predicate(
+    predicate: &model::Predicate,
+    substitutions: &[((api::identity::Definition, u32), model::Type)],
+) -> model::Predicate {
+    let substitute = |ty: &model::Type| substitute_parameters(ty, substitutions);
+    match predicate {
+        model::Predicate::Bound { ty, bound } => model::Predicate::Bound {
+            ty: substitute(ty),
+            bound: match bound {
+                model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity,
+                    binders,
+                } => model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| match argument {
+                            model::Argument::Type(ty) => model::Argument::Type(substitute(ty)),
+                            other => other.clone(),
+                        })
+                        .collect(),
+                    polarity: *polarity,
+                    binders: binders.clone(),
+                },
+                other => other.clone(),
+            },
+        },
+        model::Predicate::ProjectionEquality { projection, ty } => {
+            model::Predicate::ProjectionEquality {
+                projection: substitute(projection),
+                ty: substitute(ty),
+            }
+        }
+        model::Predicate::TypeOutlives { ty, lifetime } => model::Predicate::TypeOutlives {
+            ty: substitute(ty),
+            lifetime: lifetime.clone(),
         },
         other => other.clone(),
     }

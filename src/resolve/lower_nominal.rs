@@ -692,7 +692,23 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
                 definition: proof.definition.clone(),
                 owner: proof.owner.clone(),
             },
-            arguments: all(arguments)?
+            arguments: arguments
+                .iter()
+                .map(|argument| match argument {
+                    // A closure a crate value holds, as iced's `Map<W, F,
+                    // A>` from `Widget::map` does: `fn(A) -> B`, as the
+                    // bridge boxes it (T417).
+                    Ty::Callable { inputs, output, .. }
+                    | Ty::Fn { inputs, output }
+                    | Ty::FnItem { inputs, output, .. }
+                    | Ty::FnChoice { inputs, output, .. } => {
+                        let mut types = all(inputs)?;
+                        types.push(named(output)?);
+                        Some(builtin(crate::item::type_ref::FN_TYPE, types))
+                    }
+                    argument => named(argument),
+                })
+                .collect::<Option<Vec<_>>>()?
                 .into_iter()
                 .map(type_ref::Argument::Type)
                 .collect(),
@@ -1888,6 +1904,27 @@ fn imported_surface_type(
             Type::Borrowed {
                 mutable: false,
                 ty: Box::new(Type::Builtin(Builtin::Str)),
+            }
+        }
+        // A script closure a crate value holds, as iced's `Map<W, F, A>`
+        // from `Widget::map` does: the `Box<dyn Fn(..) -> ..>` the bridge
+        // boxed it as (T417).
+        Ty::Callable { inputs, output, .. }
+        | Ty::Fn { inputs, output }
+        | Ty::FnItem { inputs, output, .. }
+        | Ty::FnChoice { inputs, output, .. } => {
+            let mut converted = imported.entries(inputs.len() + 1)?;
+            for input in inputs.iter() {
+                converted.push(imported_surface_type(
+                    inference, models, input, operation, imported,
+                )?);
+            }
+            converted.push(imported_surface_type(
+                inference, models, output, operation, imported,
+            )?);
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::callable(),
+                arguments: converted.into_boxed_slice(),
             }
         }
         Ty::ProfileMessage { payload, seal, .. } => {
@@ -17763,6 +17800,20 @@ impl<'a> Parser<'a> {
                         {
                             return Ok(intrinsic::Type::unit());
                         }
+                        // A closure the value holds, as iced's `Map<W, F,
+                        // A>` does: a function type, as a script struct's
+                        // `Box<dyn Fn(A) -> B>` field is (T417).
+                        if matches!(
+                            self.inference.resolve(argument),
+                            Ty::Fn { .. }
+                                | Ty::FnItem { .. }
+                                | Ty::FnChoice { .. }
+                                | Ty::Callable { .. }
+                        ) {
+                            return Ok(intrinsic::Type::Object(
+                                crate::item::type_ref::FN_TYPE.into(),
+                            ));
+                        }
                         self.proven_type(argument, operation, span)
                     })
                     .collect::<Result<Vec<_>, _>>()?
@@ -32921,7 +32972,25 @@ impl<'a> Parser<'a> {
         }
         let expression = span(lhs.span.start(), rhs.span.end());
         let receiver = self.operator_expr(lhs.rendered_source(), host.clone(), lhs.span);
-        self.pending_arguments = Some((vec![rhs.clone()], expression.end()));
+        // Rust's operator lends its right-hand side, as `rotation < 180.0`
+        // is `PartialOrd::lt(&rotation, &180.0)` (T412): a crate's
+        // comparison takes `&Rhs`.
+        let mut other = rhs.clone();
+        let lent = self.models.host_items(&path).is_some_and(|items| {
+            items.iter().any(|item| {
+                matches!(
+                    item.signature().parameters().first().map(|ty| ty.shape()),
+                    Some(crate::host::type_ref::Shape::Reference { mutable: false, .. })
+                )
+            })
+        });
+        if lent && !matches!(self.inference.resolve(&other.ty), Ty::Reference { .. }) {
+            other.ty = Ty::Reference {
+                mutable: false,
+                target: Box::new(self.inference.resolve(&other.ty)),
+            };
+        }
+        self.pending_arguments = Some((vec![other], expression.end()));
         let mut value = self.parse_host_method(receiver, method.into(), expression)?;
         value.span = expression;
         Ok(Some(value))
@@ -49951,6 +50020,37 @@ impl<'a> Parser<'a> {
                         };
                         self.unify_type(&expected, &actual)
                     })
+                    && self.unify_type(expected_output, actual_output)
+            }
+            // A closure a crate value holds, as `Map<W, F, A>` from iced's
+            // `Widget::map` does, is named `fn(A) -> B` in a signature, and
+            // the runner writes both as the bridge's boxed closure (T417).
+            (
+                Ty::Fn {
+                    inputs: expected_inputs,
+                    output: expected_output,
+                },
+                Ty::Callable {
+                    inputs: actual_inputs,
+                    output: actual_output,
+                    ..
+                },
+            )
+            | (
+                Ty::Callable {
+                    inputs: expected_inputs,
+                    output: expected_output,
+                    ..
+                },
+                Ty::Fn {
+                    inputs: actual_inputs,
+                    output: actual_output,
+                },
+            ) if expected_inputs.len() == actual_inputs.len() => {
+                expected_inputs
+                    .iter()
+                    .zip(actual_inputs.iter())
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             // A function item coerces to a `fn` pointer of its signature.

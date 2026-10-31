@@ -784,7 +784,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
                 candidates.push(implementation);
             });
-            let own = candidates.iter().copied().find(|implementation| {
+            let owned = |implementation: &DefId| {
                 tcx.impl_opt_trait_ref(*implementation)
                     .is_some_and(|reference| {
                         matches!(
@@ -792,7 +792,33 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             ty::Adt(definition, _) if definition.did() == adt
                         )
                     })
-            });
+            };
+            // A comparison overloads by its right-hand type, as iced's
+            // `Degrees` is `PartialOrd` with itself and with `f32`: the
+            // member of each of the type's own impls, and rustc picks one
+            // by the argument where the bridge calls it (T412).
+            let lang = tcx.lang_items();
+            if trait_generic
+                && (Some(trait_id) == lang.partial_ord_trait() || Some(trait_id) == lang.eq_trait())
+            {
+                let own = candidates.iter().copied().filter(owned).collect::<Vec<_>>();
+                if !own.is_empty() {
+                    for implementation in own {
+                        let Some(reference) = tcx.impl_opt_trait_ref(implementation) else {
+                            continue;
+                        };
+                        let obligation = AssociatedObligation {
+                            kind: AssociatedDemandKind::SelectedMember,
+                            trait_item: Some(trait_item),
+                            arguments: Some(reference.instantiate_identity().skip_norm_wip().args),
+                            param_env,
+                        };
+                        self.request_implementation(implementation, adt, Some(obligation))?;
+                    }
+                    continue;
+                }
+            }
+            let own = candidates.iter().copied().find(owned);
             let arguments = match own {
                 Some(implementation) if trait_generic => tcx
                     .impl_opt_trait_ref(implementation)

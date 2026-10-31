@@ -22,6 +22,7 @@ const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
 const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
+const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -253,6 +254,16 @@ impl Definition {
     #[must_use]
     pub fn future() -> Self {
         Self(Framed::new(FUTURE_DOMAIN).finish())
+    }
+
+    /// The type a script closure has where a crate's signature names the
+    /// closure's type `F` beyond the input that takes it, as iced's
+    /// `Widget::map(self, f: F) -> Map<Self, F, Message>` does: Rust's
+    /// `Box<dyn Fn(A..) -> B>`, whose arguments are its inputs, then its
+    /// output (T417).
+    #[must_use]
+    pub fn callable() -> Self {
+        Self(Framed::new(CALLABLE_DOMAIN).finish())
     }
 
     /// Rust's `std::time::Duration`, which crosses by value as Rawr's own

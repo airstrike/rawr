@@ -554,7 +554,9 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
 /// which `Cache::sketch` gives as `R::Geometry` (T318), and `Note<'a>`
 /// passes a lifetime and a defaulted theme on, as iced's `widget::Text`
 /// does. `Option::map` takes a crate function and a crate method named as
-/// values (T327). The output is `cargo run`'s.
+/// values (T327). `Cache::new()` with no annotation is the `Cache` a later
+/// use fixes, as the_matrix's `resize_with` fills a `Vec<canvas::Cache>`
+/// (T413). The output is `cargo run`'s.
 #[test]
 fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     let (rawr, cargo) = both_printed("crossing-canvas", "canvas.rs", "");
@@ -562,8 +564,55 @@ fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     assert_eq!(
         rawr,
         "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\n\
-         primary dial\nprimary face\nboard frame,dial\ngrouped group\nSome(7) captured true\nnote 3"
+         primary dial\nprimary face\nboard frame,dial\ngrouped group\nfresh fresh 3\n\
+         Some(7) captured true\nnote 3"
     );
+}
+
+/// iced's clock: a crate type compared with a number, `rotation < 180.0`,
+/// through `PartialOrd<f32>`, whose impl writes only `partial_cmp`, so `<`
+/// is std's provided `lt`. The type is also `PartialOrd` with itself, and
+/// rustc picks the impl by the right-hand side (T412). The output is
+/// `cargo run`'s.
+#[test]
+fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
+    let (rawr, cargo) = both_printed("crossing-compared", "compared.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "turn left\ntrue false false true false\ntrue false");
+}
+
+/// iced's bezier_tool and game_of_life: `.map(Message::Curve)` on a canvas
+/// whose program sends its own messages. The crate's `map` gives `Map<Self,
+/// F, Message>`, naming the closure's type, and the runner writes the
+/// closure as `Box<dyn Fn(Curve) -> Message>` (T417). The check compiles
+/// the runner; running it still misses `Canvas::map` in the runner's own
+/// facade.
+#[test]
+fn a_crate_method_whose_output_names_its_closure_type_checks() {
+    let root = root("crossing-mapped");
+    fs::copy(
+        root.join("variants").join("mapped.rs"),
+        root.join("src/main.rs"),
+    )
+    .unwrap();
+    let checked = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env(
+            "RAWR_HOME",
+            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home"),
+        )
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(checked.status.success(), "{output}");
 }
 
 /// iced's pick_list: `column!` boxes a string literal through the crate's
