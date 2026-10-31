@@ -4,10 +4,10 @@
 # The build stages run on the build host's own architecture. They cross-compile
 # for the target platform (amd64 or arm64) when it differs, so no emulation is
 # needed, and build natively when it matches (GitHub Actions on x86-64).
-# Rendering is tiny-skia on the CPU with the embedded Fira Sans font: the
-# runtime needs no GPU and no fonts. TLS (Discord's gateway and API) is
-# OpenSSL through native-tls: the build links the target's libssl-dev, and
-# the distroless cc runtime already ships libssl3 and the CA bundle.
+# A snippet runs on the interpreter alone: the runtime needs no GPU and no
+# fonts. TLS (Discord's gateway and API) is OpenSSL through native-tls: the
+# build links the target's libssl-dev, and the distroless cc runtime already
+# ships libssl3 and the CA bundle.
 
 FROM --platform=$BUILDPLATFORM rust:1.99.0-slim-bookworm AS toolchain
 ARG TARGETARCH
@@ -62,20 +62,9 @@ RUN . /cross.env && target="$(cat /target)" \
     && cargo build --release --locked --target "$target" -p rawr-play --features bot --bins \
     && install -D -m 0755 -t /out "target/$target/release/rawr-play" "target/$target/release/rawr-play-bot"
 
-# The fonts the renderer falls back to (CJK, emoji, symbols, mono), pinned
-# and checked by play/fetch-fonts.sh. Outside /usr/share/fonts, so iced's
-# system scan skips them; `--fonts` (PLAY_FONTS) maps them only.
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS fonts
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
-COPY play/fetch-fonts.sh /fetch-fonts.sh
-RUN sh /fetch-fonts.sh /fonts
-
 FROM gcr.io/distroless/cc-debian12:nonroot
 # The commit the image was built from, reported on the dashboard.
 ARG PLAY_VERSION=dev
 COPY --from=build /out/ /usr/local/bin/
-COPY --from=fonts /fonts/ /usr/share/rawr-play/fonts/
-ENV PLAY_WORKERS=1 PLAY_MEMORY_MB=1024 PLAY_VERSION=$PLAY_VERSION PLAY_FONTS=/usr/share/rawr-play/fonts
+ENV PLAY_WORKERS=1 PLAY_MEMORY_MB=1024 PLAY_VERSION=$PLAY_VERSION
 ENTRYPOINT ["/usr/local/bin/rawr-play-bot"]

@@ -1,38 +1,16 @@
-//! `rawr-play <file.rs|-> [--size WxH] [--theme dark|light] [--message M]...
-//! [--step N[=TEXT]]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->`
+//! `rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] -o <out|->`
 //!
-//! `--step N` clicks a full app's target `N` after its messages, counting
-//! from 0 in the targets of the view as it then is. `--step N=TEXT` types
-//! `TEXT` over text input `N`'s content and taps ⏎. A full app's image
-//! comes with an `action: <label>` line for each target of its last frame
-//! (`input: <label>` for a text input), in that order, and a
-//! `click: <label>` line for each step's target; they go where the note
-//! goes.
-//!
-//! `--time-ms N` is the wall-clock budget for a render. `--animation-ms N`
-//! is a full app's budget once its view changes (never less than
-//! `--time-ms`).
-//!
-//! `--fonts DIR` draws with iced's embedded faces and the fonts in `DIR`
-//! only, never the system's (the `?play` container's fonts; tests use it so
-//! a Mac's fonts cannot hide a missing glyph).
+//! `--time-ms N` is the wall-clock budget for a run.
 //!
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
-//! runs one of these per render, so `--memory-mb` caps the whole process.
+//! runs one of these per snippet, so `--memory-mb` caps the whole process.
 //!
-//! A snippet that uses iced writes its image. A full app whose view changes
-//! writes a GIF in any format, and a file named `.png`, `.jpg` or `.webp`
-//! is written with a `.gif` extension instead. `--still` writes the last
-//! frame as a still image. A note on the image (such as why an animation
-//! was cut) goes to stderr as a `note: ` line when writing to stdout. A
-//! plain program writes its
-//! output instead, as one JSON object (`rawr_play::Output::to_json`):
+//! A plain program writes its output as one JSON object
+//! (`rawr_play::Output::to_json`):
 //! `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],..}`.
-//! A result starting with `{` is text; no image starts with it. Errors
-//! (diagnostics, bad options) go to stderr with exit status 1, as before.
-//!
-//! `SIGUSR1` stops an animation's recording before its next frame. The
-//! frames so far are kept, and the note says someone else was waiting.
+//! A snippet that needs iced or an async runtime writes
+//! `{"kind":"unavailable","text":".."}` (`rawr_play::unavailable_json`).
+//! Errors (diagnostics, bad arguments) go to stderr with exit status 1.
 //!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
 //! server token on the bot's dashboard, and `rawr-play encrypt-server <id>...`
@@ -42,8 +20,7 @@
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rawr-play <file.rs|-> [--size WxH] [--theme dark|light] \
-[--message EXPR]... [--step N[=TEXT]]... [--format png|jpg|webp] [--still] [--time-ms N] [--animation-ms N] [--memory-mb N] [--fonts DIR] -o <out|->";
+const USAGE: &str = "usage: rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -85,11 +62,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     {
         return server_tokens(command == "decrypt-server", &args[1..]);
     }
-    stop_on_signal();
     let mut input = None;
     let mut output = None;
-    let mut format = None;
-    let mut options = rawr_play::Options::default();
+    let mut limits = rawr_play::Limits::default();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
@@ -102,28 +77,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
         };
         match arg.as_str() {
             "-o" | "--output" => output = Some(value("-o")?),
-            "--size" => options.size = Some(rawr_play::parse_size(&value("--size")?)?),
-            "--theme" => options.theme = value("--theme")?.parse()?,
-            "--message" => options.messages.push(value("--message")?),
-            "--step" => {
-                let step = rawr_play::message::parse_step(&value("--step")?)?;
-                options.steps.push(step);
-            }
-            "--format" => format = Some(value("--format")?.parse()?),
-            "--still" => options.still = true,
             "--time-ms" => {
-                options.limits.time =
-                    std::time::Duration::from_millis(number(value("--time-ms")?)?);
-            }
-            "--animation-ms" => {
-                options.limits.animation =
-                    std::time::Duration::from_millis(number(value("--animation-ms")?)?);
+                limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
             }
             "--memory-mb" => limit_memory(number(value("--memory-mb")?)?)?,
-            "--fonts" => {
-                let dir = value("--fonts")?;
-                rawr_iced::snapshot::fonts::use_only(std::path::Path::new(&dir))?;
-            }
             "-h" | "--help" => return Err(USAGE.to_owned()),
             _ if arg.starts_with('-') && arg != "-" => {
                 return Err(format!("unknown option `{arg}`\n{USAGE}"));
@@ -134,13 +91,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
     }
     let input = input.ok_or(USAGE)?;
     let output = output.ok_or(USAGE)?;
-    let format = match format {
-        Some(format) => format,
-        None => output
-            .rsplit_once('.')
-            .and_then(|(_, extension)| extension.parse().ok())
-            .unwrap_or_default(),
-    };
     let mut source = String::new();
     let read = if input == "-" {
         std::io::stdin().read_to_string(&mut source).map(drop)
@@ -148,82 +98,31 @@ fn run(args: Vec<String>) -> Result<(), String> {
         std::fs::read_to_string(&input).map(|text| source = text)
     };
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
-    let mut output = output;
-    let mut lines = Vec::new();
-    let (bytes, summary) = match rawr_play::run(&source, &options)
-        .map_err(|error| error.to_string())?
-    {
-        rawr_play::Outcome::Image(image) => {
-            lines =
-                rawr_play::message::lines(image.note.as_deref(), &image.actions, &image.clicked);
-            match image.picture {
-                rawr_play::Picture::Still(png) => {
-                    let bytes =
-                        rawr_play::encode(&png, format).map_err(|error| error.to_string())?;
-                    let summary = format!("{}x{}, {} bytes", png.width, png.height, bytes.len());
-                    (bytes, summary)
-                }
-                rawr_play::Picture::Animated(gif) => {
-                    if let Some((stem, "png" | "jpg" | "jpeg" | "webp")) = output.rsplit_once('.') {
-                        output = format!("{stem}.gif");
-                    }
-                    let play = if gif.looping { "loops" } else { "plays once" };
-                    let summary = format!(
-                        "GIF {}x{}, {} frames, {play}, {} bytes",
-                        gif.width,
-                        gif.height,
-                        gif.frames,
-                        gif.bytes.len()
-                    );
-                    (gif.bytes, summary)
-                }
+    let (bytes, summary) =
+        match rawr_play::run(&source, &limits).map_err(|error| error.to_string())? {
+            rawr_play::Outcome::Text(output) => {
+                let bytes = output.to_json().into_bytes();
+                let summary = format!("text, exit status {}, {} bytes", output.status, bytes.len());
+                (bytes, summary)
             }
-        }
-        rawr_play::Outcome::Text(output) => {
-            let bytes = output.to_json().into_bytes();
-            let summary = format!("text, exit status {}, {} bytes", output.status, bytes.len());
-            (bytes, summary)
-        }
-    };
+            rawr_play::Outcome::Unavailable(reason) => {
+                let bytes = rawr_play::unavailable_json(reason).into_bytes();
+                (bytes, reason.message().to_owned())
+            }
+        };
     if output == "-" {
         let mut stdout = std::io::stdout().lock();
         stdout
             .write_all(&bytes)
             .and_then(|()| stdout.flush())
             .map_err(|error| format!("cannot write the result: {error}"))?;
-        for line in lines {
-            eprintln!("{line}");
-        }
     } else {
         std::fs::write(&output, &bytes)
             .map_err(|error| format!("cannot write {output}: {error}"))?;
         println!("{output} ({summary})");
-        for line in lines {
-            println!("{line}");
-        }
     }
     Ok(())
 }
-
-/// Set [`rawr_play::CUT`] on `SIGUSR1`: the bot asks a long animation to
-/// stop and keep its frames.
-#[cfg(unix)]
-fn stop_on_signal() {
-    extern "C" fn cut(_: libc::c_int) {
-        rawr_play::CUT.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    // SAFETY: the handler only stores to an atomic, which is
-    // async-signal-safe.
-    unsafe {
-        libc::signal(
-            libc::SIGUSR1,
-            cut as extern "C" fn(libc::c_int) as libc::sighandler_t,
-        );
-    }
-}
-
-#[cfg(not(unix))]
-fn stop_on_signal() {}
 
 /// Cap this process's address space, so an allocation past it fails and the
 /// process aborts instead of exhausting the host.

@@ -1,31 +1,25 @@
-//! Plain programs: a snippet that does not use iced runs on the base
-//! language, as `rawr run` runs a file, and its output comes back as text.
+//! Plain programs: a snippet that needs neither iced nor an async runtime
+//! runs on the base language, as `rawr run` runs a file, and its output
+//! comes back as text.
 //!
-//! The snippet is parsed once. That parse gives the [`Facts`] the decision
-//! reads (rawr-iced's own [`Claims`]), and a plain program is compiled from
-//! that same parse. A snippet rawr-iced claims is handed to the renderer,
-//! which wraps it as a view and checks it itself, as `rawr` hands a program
-//! to the `rawr-iced` binary.
+//! The snippet is parsed once. That parse gives the [`Facts`] that say
+//! whether it runs here at all ([`rawr_snippet::route`]), and a plain
+//! program is compiled from that same parse.
 //!
 //! A snippet with items (`fn main`, a struct, ..) runs as written: its top
 //! level, then `fn main` if there is one. A snippet of statements alone is
 //! a block in a `fn main`, and the block's value is printed with `{:?}`
 //! unless it is `()`.
-//!
-//! An `async fn main`, as `#[tokio::main]` marks it, runs on rawr-iced's
-//! tokio (see [`run_async`]): its futures, timers, channels and
-//! `spawn_blocking` are that tokio's, on the simulated clock iced apps
-//! record on. Its output is text, as any plain program's.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use rawr::layer::{Claims, Facts};
+use rawr::layer::Facts;
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
 
-use crate::{Limits, PlayError, SOURCE_NAME};
-pub use rawr_snippet::plain::{async_main, program, AsyncMain};
-use rawr_snippet::plain::{async_program, quiet_program};
+use crate::{Limits, PlayError, Unavailable, SOURCE_NAME};
+pub use rawr_snippet::plain::program;
+use rawr_snippet::plain::quiet_program;
 
 /// Most output kept, in bytes; a program printing more is stopped.
 pub const MAX_OUTPUT: usize = 64 * 1024;
@@ -36,7 +30,8 @@ pub const TRUNCATED: &str = "… output truncated";
 /// The status of a program that panicked, as Rust's.
 pub const PANIC_STATUS: i32 = 101;
 
-const TIME_LIMIT: &str = "time limit exceeded";
+/// What a run stopped at its deadline reports.
+pub const TIME_LIMIT: &str = "time limit exceeded";
 const OUTPUT_LIMIT: &str = "output limit exceeded";
 
 /// Where a piece of output went.
@@ -75,9 +70,6 @@ pub struct Output {
     pub note: Option<String>,
 }
 
-/// The note on a plain program run with messages.
-pub const MESSAGES_IGNORED: &str = "messages are ignored for programs without iced";
-
 impl Output {
     fn push(&mut self, stream: Stream, text: &str) {
         let used: usize = self.chunks.iter().map(|(_, text)| text.len()).sum();
@@ -109,8 +101,7 @@ impl Output {
 
     /// `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],
     /// "truncated":false,"limit":false}`: what `rawr-play` writes for a
-    /// plain program where it writes an image for an iced one. It starts
-    /// with `{`, which no image does.
+    /// plain program.
     #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::json!({
@@ -195,11 +186,11 @@ impl Parsed {
         })
     }
 
-    /// Whether `claims` (rawr-iced's) takes this snippet: it names one of
-    /// their crates or uses a name of their prelude.
+    /// Why this snippet, written as `source`, doesn't run here: it needs
+    /// iced or an async runtime. `None` for a plain program.
     #[must_use]
-    pub fn claimed(&self, claims: &Claims) -> bool {
-        claims.claim_snippet(&self.facts)
+    pub fn unavailable(&self, source: &str) -> Option<Unavailable> {
+        rawr_snippet::route::unavailable(source, &self.facts)
     }
 
     /// Compile the parse and run it once; `source` is the snippet as the
@@ -289,13 +280,12 @@ impl Parsed {
                 if output.truncated || text.contains(OUTPUT_LIMIT) {
                     output.limit = true;
                 } else {
-                    let message = match crate::classify(&text, limits) {
-                        PlayError::Limit(reason) => {
+                    let message = match crate::limit(&text, limits) {
+                        Some(reason) => {
                             output.limit = true;
-                            // The renderer's wording names a render.
-                            reason.replace(crate::TIME_LIMIT, TIME_LIMIT)
+                            reason
                         }
-                        _ => {
+                        None => {
                             // A panic: Rust's exit status.
                             output.status = PANIC_STATUS;
                             // The user's span of the error. A position in
@@ -367,7 +357,7 @@ fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<M
         .set_max_map_size(limits.map_size)
         .on_progress(move |_| {
             if Instant::now() >= deadline {
-                Some(crate::TIME_LIMIT.into())
+                Some(TIME_LIMIT.into())
             } else if progress.lock().unwrap().truncated {
                 Some(OUTPUT_LIMIT.into())
             } else {
@@ -404,114 +394,6 @@ fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<M
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())
         .register_fn("sleep", move |_: rawr::FLOAT| refuse());
-}
-
-/// Run a snippet whose `main` is `async`, as `#[tokio::main]` runs it, and
-/// return its output as text. It runs on rawr-iced's tokio, whose timers
-/// follow the simulated clock iced apps record on: the clock moves only
-/// while a task waits on it, so a sleep costs no wall time. No window is
-/// made, and nothing is drawn.
-pub fn run_async(
-    source: &str,
-    main: &AsyncMain,
-    limits: &Limits,
-    deadline: Instant,
-) -> Result<Output, PlayError> {
-    let source = rawr_snippet::without_tests(source);
-    let program = async_program(&source, main);
-    let sink = Arc::new(Mutex::new(Output::default()));
-    let configured = {
-        let (limits, sink) = (limits.clone(), sink.clone());
-        move |engine: &mut Engine| sandbox(engine, &limits, deadline, &sink)
-    };
-    let compiler = rawr_iced::application::Compiler::configured(configured)
-        .map_err(|error| PlayError::Render(error.to_string()))?;
-    // The program boots on the simulated clock, so the times it reads are
-    // on it.
-    let _clock = rawr_iced::snapshot::clock::freeze();
-    // An inline `mod` needs the crate compiler, which reads the one file
-    // as a crate's root.
-    let checked = if rawr_snippet::has_top_level_mod(&program) {
-        compiler.check_named_crate_source(SOURCE_NAME, &program)
-    } else {
-        compiler.check_named_source(SOURCE_NAME, &program)
-    };
-    let prepared = checked.and_then(rawr_iced::application::Checked::prepare);
-    // The engine's progress callback ends a boot that runs past the
-    // deadline (or the output cap): that is the limit, not an error in the
-    // program.
-    let (finished, status, failures) = match prepared {
-        Ok(prepared) => {
-            let mut adapter = prepared.into_adapter();
-            let finished = rawr_iced::snapshot::run_tasks(
-                &mut adapter,
-                &rawr_iced::snapshot::Deadline::new(deadline),
-            );
-            let status = adapter
-                .refresh_title()
-                .ok()
-                .and_then(|status| status.parse::<i32>().ok());
-            let failures = adapter
-                .diagnostics()
-                .iter()
-                .map(|entry| entry.report().clone())
-                .collect::<Vec<_>>();
-            (finished, status, failures)
-        }
-        Err(error) => {
-            let report = error.report(diagnostic(&program));
-            if !terminated(&report) {
-                return Err(PlayError::Compile(crate::report(
-                    &report, &program, &source,
-                )));
-            }
-            (false, None, Vec::new())
-        }
-    };
-    drop(compiler);
-    let mut output = sink.lock().unwrap().clone();
-    if let Some(report) = failures.first() {
-        output.status = 1;
-        let text = rawr::diagnostic::render(report);
-        if output.truncated || text.contains(OUTPUT_LIMIT) {
-            output.limit = true;
-        } else {
-            let message = match crate::classify(&text, limits) {
-                PlayError::Limit(reason) => {
-                    output.limit = true;
-                    reason.replace(crate::TIME_LIMIT, TIME_LIMIT)
-                }
-                _ => {
-                    output.status = PANIC_STATUS;
-                    crate::panic(report, &program, &source)
-                }
-            };
-            output.push(Stream::Stderr, &format!("{}\n", message.trim_end()));
-        }
-    } else if !finished && !output.truncated {
-        output.status = 1;
-        output.limit = true;
-        output.push(Stream::Stderr, &format!("{TIME_LIMIT}\n"));
-    } else if status == Some(1) {
-        output.status = 1;
-    }
-    if output.truncated {
-        let marker = format!("\n{TRUNCATED}\n");
-        match output.chunks.last_mut() {
-            Some((Stream::Stderr, chunk)) => chunk.push_str(&marker),
-            _ => output.chunks.push((Stream::Stderr, marker)),
-        }
-        output.status = 1;
-        output.limit = true;
-    }
-    Ok(output)
-}
-
-/// Whether `report` is the engine's progress callback ending a run: the
-/// time limit or the output cap, never the program's own error.
-fn terminated(report: &rawr::diagnostic::Report) -> bool {
-    report.code() == rawr::diagnostic::code::RUNTIME_EVALUATION
-        && report.message() == "Script terminated"
 }
 
 /// The type of a statements-only snippet's final value when [`program`]

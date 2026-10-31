@@ -1,3 +1,0 @@
-# iced's examples, verbatim, as iced's own rustfmt (style edition 2024)
-# formats them.
-style_edition = "2024"

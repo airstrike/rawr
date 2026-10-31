@@ -3,7 +3,7 @@
 use crate::{without_tests, SOURCE_NAME};
 
 /// A rendered report as the user's own source shows it: what
-/// [`wrap`](crate::wrap) added to a line (the imports and `#[preview]` on
+/// [`program`](crate::plain::program) added to a line (the start of `fn main` on
 /// the first) is cut from the quoted line, its marker and its columns. A
 /// position on a line the wrapping added after the source moves to the end
 /// of the source's last line.
@@ -137,7 +137,7 @@ pub fn without_positions(line: &str) -> String {
 }
 
 /// Whether `line` and `column` (1-based, in `program`) fall in text the
-/// user wrote. Text that [`wrap`](crate::wrap) or a plain program's wrapping added is
+/// user wrote. Text that [`program`](crate::plain::program) added is
 /// not theirs.
 pub fn in_source(program: &str, source: &str, line: usize, column: usize) -> bool {
     let source = without_tests(source);

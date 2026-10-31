@@ -4,6 +4,10 @@ version = "0.1.0"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false
-description = "How a Rawr snippet becomes a program, shared by the ?play server and the browser"
+description = "How a Rawr snippet becomes a program, or why it can't run yet, shared by the ?play server and the browser"
 repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
+
+[dependencies]
+# The facts of a snippet's parse, which say whether it is iced's.
+rawr = { path = "../..", features = ["sync"] }

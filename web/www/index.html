@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rawr on the web</title>
-<style>html, body { margin: 0; height: 100%; } #iced { width: 100%; height: 100%; }</style>
+<style>body { margin: 16px; font-family: ui-monospace, monospace; }</style>
 </head>
 <body>
-<div id="iced"></div>
+<pre id="out"></pre>
 <script type="module">
-import init, { run, sample } from "./rawr_web.js";
+import init, { run_text } from "./rawr_web.js";
 await init();
-window.rawr = { run, sample };
-run(sample());
+window.rawr = { run_text };
+document.getElementById("out").textContent = run_text('println!("{}", 6 * 7);');
 </script>
 </body>
 </html>

@@ -1,22 +1,17 @@
-//! `rawr-play-bot`: run `?play` code blocks posted to Discord. An iced
-//! snippet replies with its image, a plain program with its output.
+//! `rawr-play-bot`: run `?play` code blocks posted to Discord. A plain
+//! program replies with its output. A snippet that needs iced or an async
+//! runtime replies with one message saying it doesn't run here yet.
 //!
-//! Each render runs in its own `rawr-play` process (beside this binary, or
-//! `PLAY_RENDERER`), so a render past `PLAY_TIMEOUT_MS` is killed and one
+//! Each snippet runs in its own `rawr-play` process (beside this binary, or
+//! `PLAY_RENDERER`), so a run past `PLAY_TIMEOUT_MS` is killed and one
 //! past `PLAY_MEMORY_MB` aborts without touching the bot.
 //!
 //! Env: `DISCORD_TOKEN` (or a file at `DISCORD_TOKEN_FILE`, else
 //! `~/.config/rawr-play/token`), `PLAY_WORKERS` (default 2),
-//! `PLAY_TIME_MS` (script time per render, default 2000),
-//! `PLAY_TIMEOUT_MS` (whole render, default 10000),
-//! `PLAY_ANIMATION_TIME_MS` (an animation's time per render, default 15000),
-//! `PLAY_IDLE_ANIMATION_TIME_MS` (an animation's time when nothing else is
-//! queued or running, default 60000),
-//! `PLAY_ANIMATION_ALLOWANCE_S` (animation time per user per window,
-//! default 90), `PLAY_ANIMATION_WINDOW_S` (that window, default 600),
-//! `PLAY_MEMORY_MB`
-//! (address space per render on Linux, default 1024), `PLAY_FORMAT`
-//! (png, webp or jpg; default png: Discord shows it unchanged), `PLAY_USER_PER_MIN` (default 4),
+//! `PLAY_TIME_MS` (script time per run, default 2000),
+//! `PLAY_TIMEOUT_MS` (whole run, default 10000),
+//! `PLAY_MEMORY_MB` (address space per run on Linux, default 1024),
+//! `PLAY_USER_PER_MIN` (default 4),
 //! `PLAY_CHANNEL_PER_MIN` (default 12), `PLAY_CHANNELS` (comma-separated
 //! channel IDs to answer in, overriding `/play-channel`), `PLAY_CONFIG_URL`
 //! or `PLAY_CONFIG_FILE` (where `/play-channel` choices persist; default
@@ -25,15 +20,11 @@
 //! image's commit, baked in at build).
 //!
 //! `PLAY_HTTP_PORT`, when set, serves the web playground's `POST /render`
-//! (the Worker is the only client); its renders share the render pool, but
-//! one at a time and never ahead of a waiting Discord render.
+//! (the Worker is the only client); its runs share the pool, but one at a
+//! time and never ahead of a waiting Discord run.
 //!
 //! Mods choose where the bot answers with `/play-channel add|remove|list`;
 //! a server with no channels chosen gets no answers.
-//!
-//! A full app's reply has a button for each target of its last frame
-//! (D516). A click replays the request with the history its button
-//! carries ([`rawr_play::click`]) and edits the reply in place.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -42,30 +33,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rawr_play::budget::{self, Budgets, Grant};
 use rawr_play::channels::{self, Channels, Parents, Store};
-use rawr_play::click::{self, Decision};
-use rawr_play::message::{self, Done, RateLimit, Reply, Shot};
+use rawr_play::message::{self, Done, RateLimit};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
-use rawr_play::Step;
 use serenity::all::{
-    ActionRowComponent, ButtonKind, ButtonStyle, Channel, ChannelId, ChannelType, Command,
-    CommandInteraction, CommandOptionType, ComponentInteraction, ComponentInteractionDataKind,
-    Context, CreateActionRow, CreateAttachment, CreateButton, CreateCommand, CreateCommandOption,
-    CreateInputText, CreateInteractionResponse, CreateInteractionResponseFollowup,
-    CreateInteractionResponseMessage, CreateMessage, CreateModal, CreateSelectMenu,
-    CreateSelectMenuKind, CreateSelectMenuOption, EditInteractionResponse, EditMessage,
-    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, InputTextStyle,
-    Interaction, InteractionContext, InteractionId, Message, MessageId, MessageUpdateEvent,
-    ModalInteraction, Permissions, ReactionType, Ready, ResolvedValue, UnavailableGuild,
+    Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType, Context,
+    CreateCommand, CreateCommandOption, CreateMessage, EditInteractionResponse, EditMessage,
+    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, Interaction,
+    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
+    ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
-use serenity::builder::Builder as _;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::Semaphore;
 
-/// Replies kept for re-rendering on edit.
+/// Replies kept for re-running on edit.
 const REMEMBERED: usize = 1024;
 
 /// Messages after an edited request searched for our reply to it, when
@@ -76,8 +59,6 @@ const REPLY_SEARCH: u8 = 50;
 const COMMAND: &str = "play-channel";
 
 struct Handler {
-    defaults: rawr_play::Options,
-    format: rawr_play::Format,
     shared: Arc<Shared>,
     /// Thread → parent, so a thread follows its parent channel.
     parents: Mutex<Parents>,
@@ -99,78 +80,33 @@ impl Drop for Answering<'_> {
     }
 }
 
-/// A render's result: the image or output, or its error text, how it
+/// A run's result: the output or message, or its error text, how it
 /// ended, how long.
-struct Rendered {
+struct Ran {
     result: Result<Done, String>,
     outcome: Outcome,
     millis: u128,
 }
 
-/// The render pool: `PLAY_WORKERS` child processes at once. A playground
-/// render waits its turn behind every Discord render that is waiting, and
-/// only one runs or waits at a time, so Discord waits for at most one.
+/// The run pool: `PLAY_WORKERS` child processes at once. A playground run
+/// waits its turn behind every Discord run that is waiting, and only one
+/// runs or waits at a time, so Discord waits for at most one.
 struct Renderer {
     path: PathBuf,
     workers: Semaphore,
     web: Semaphore,
     discord_waiting: AtomicUsize,
     memory_mb: u64,
+    /// `PLAY_TIME_MS`: the script time of one run.
+    time: Duration,
     timeout: Duration,
-    /// `PLAY_FONTS`: the renderer draws with these fonts only.
-    fonts: Option<String>,
-    /// Who may render an animation for longer, and the one longer render.
-    budgets: Mutex<Budgets>,
-    /// Renders queued or running, Discord's and the playground's. A render
-    /// that starts alone may use the idle budget; a newcomer cuts it.
-    pending: watch::Sender<usize>,
-}
-
-/// One render counted in [`Renderer::pending`] until dropped.
-struct Pending<'a>(&'a watch::Sender<usize>);
-
-impl<'a> Pending<'a> {
-    fn new(pending: &'a watch::Sender<usize>) -> Self {
-        pending.send_modify(|count| *count += 1);
-        Self(pending)
-    }
-}
-
-impl Drop for Pending<'_> {
-    fn drop(&mut self) {
-        self.0.send_modify(|count| *count -= 1);
-    }
-}
-
-/// A render's grant, finished when the render ends or is dropped.
-struct Held<'a> {
-    budgets: &'a Mutex<Budgets>,
-    grant: Grant,
-    started: Instant,
-}
-
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
-        let took = self.started.elapsed();
-        self.budgets
-            .lock()
-            .unwrap()
-            .finish(&self.grant, took, Instant::now());
-    }
 }
 
 impl Renderer {
-    /// Render in a child process for `user`; the child is killed when the
-    /// timeout drops it. `None`: a playground render found the playground
+    /// Run `request` in a child process; the child is killed when the
+    /// timeout drops it. `None`: a playground run found the playground
     /// busy.
-    async fn run(
-        &self,
-        request: &message::Request,
-        format: rawr_play::Format,
-        web: bool,
-        user: Option<String>,
-    ) -> Option<Rendered> {
-        let _pending = Pending::new(&self.pending);
+    async fn run(&self, request: &message::Request, web: bool) -> Option<Ran> {
         let _web = if web {
             let gate = tokio::time::timeout(self.timeout, self.web.acquire()).await;
             let gate = gate.ok()?.ok()?;
@@ -187,53 +123,25 @@ impl Renderer {
             self.discord_waiting.fetch_sub(1, Ordering::AcqRel);
         }
         let Ok(_permit) = permit else {
-            return Some(Rendered {
-                result: Err("render pool is closed".to_owned()),
+            return Some(Ran {
+                result: Err("the run pool is closed".to_owned()),
                 outcome: Outcome::Limit,
                 millis: 0,
             });
         };
         let started = Instant::now();
-        let alone = *self.pending.borrow() == 1;
-        let (grant, animation) = {
-            let mut budgets = self.budgets.lock().unwrap();
-            (
-                budgets.grant(user.as_deref(), started, alone),
-                budgets.animation,
-            )
-        };
-        let mut request = request.clone();
-        request.options.limits.animation = grant.animation;
-        let held = Held {
-            budgets: &self.budgets,
-            grant,
-            started,
-        };
-        let idle = held.grant.idle.then_some(started);
-        let (mut result, outcome) = self.spawn(&request, format, idle).await;
-        if let Ok(Done::Image(shot)) = &mut result {
-            shot.note =
-                budget::annotate(shot.note.take(), &held.grant, animation, started.elapsed());
-        }
-        drop(held);
-        Some(Rendered {
+        let (result, outcome) = self.spawn(request).await;
+        Some(Ran {
             result,
             outcome,
             millis: started.elapsed().as_millis(),
         })
     }
 
-    /// Run one render. `idle`: it started then on the idle budget, so a
-    /// newcomer cuts it once it is past the animation budget.
-    async fn spawn(
-        &self,
-        request: &message::Request,
-        format: rawr_play::Format,
-        idle: Option<Instant>,
-    ) -> (Result<Done, String>, Outcome) {
+    /// Run one snippet.
+    async fn spawn(&self, request: &message::Request) -> (Result<Done, String>, Outcome) {
         let child = tokio::process::Command::new(&self.path)
-            .args(request.args(format, self.memory_mb))
-            .args(self.fonts.iter().flat_map(|dir| ["--fonts", dir.as_str()]))
+            .args(message::args(self.time, self.memory_mb))
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -247,44 +155,22 @@ impl Renderer {
                     "rawr-play-bot: cannot start {}: {error}",
                     self.path.display()
                 );
-                return (Err("cannot start a render".to_owned()), Outcome::Limit);
+                return (Err("cannot start a run".to_owned()), Outcome::Limit);
             }
         };
         let code = request.code.clone().into_bytes();
         let mut stdin = child.stdin.take().expect("stdin is piped");
-        let id = child.id();
         let run = async move {
             let _ = stdin.write_all(&code).await;
             drop(stdin);
             child.wait_with_output().await
         };
-        let run = tokio::time::timeout(self.timeout, run);
-        let finished = match (idle, id) {
-            (Some(started), Some(id)) => {
-                let cutting = async {
-                    let mut pending = self.pending.subscribe();
-                    if pending.wait_for(|count| *count > 1).await.is_ok() {
-                        let at = self.budgets.lock().unwrap().cut_at(started, Instant::now());
-                        tokio::time::sleep_until(at.into()).await;
-                        cut(id);
-                    }
-                    std::future::pending::<()>().await;
-                };
-                tokio::pin!(run);
-                tokio::select! {
-                    biased;
-                    finished = &mut run => finished,
-                    () = cutting => unreachable!("the cut never finishes"),
-                }
-            }
-            _ => run.await,
-        };
-        match finished {
+        match tokio::time::timeout(self.timeout, run).await {
             Ok(Ok(output)) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let success = output.status.success();
                 let outcome = stats::classify(success, !output.stdout.is_empty(), &stderr);
-                let result = message::outcome(success, output.stdout, &stderr);
+                let result = message::outcome(success, &output.stdout, &stderr);
                 let outcome = match &result {
                     Ok(Done::Text(output)) => stats::classify_output(output),
                     _ => outcome,
@@ -292,12 +178,12 @@ impl Renderer {
                 (result, outcome)
             }
             Ok(Err(error)) => {
-                eprintln!("rawr-play-bot: render failed: {error}");
-                (Err("render crashed".to_owned()), Outcome::Limit)
+                eprintln!("rawr-play-bot: run failed: {error}");
+                (Err("the run crashed".to_owned()), Outcome::Limit)
             }
             Err(_) => (
                 Err(format!(
-                    "render timed out after {} ms",
+                    "the run timed out after {} ms",
                     self.timeout.as_millis()
                 )),
                 Outcome::Limit,
@@ -305,22 +191,6 @@ impl Renderer {
         }
     }
 }
-
-/// Ask render process `id` to stop before its next frame and keep the
-/// frames so far.
-#[cfg(unix)]
-fn cut(id: u32) {
-    if let Ok(id) = libc::pid_t::try_from(id) {
-        // SAFETY: kill only sends a signal; the child is still ours, since
-        // it has not been waited for.
-        unsafe {
-            libc::kill(id, libc::SIGUSR1);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn cut(_: u32) {}
 
 /// What the reporter task shares with the handler.
 struct Shared {
@@ -430,7 +300,7 @@ impl EventHandler for Handler {
             return;
         }
         // Parse first: only a `?play` message may need its thread's parent.
-        let Some(request) = message::parse(&msg.content, &self.defaults) else {
+        let Some(request) = message::parse(&msg.content) else {
             return;
         };
         if !self.listens(&context, msg.guild_id, msg.channel_id).await {
@@ -453,14 +323,12 @@ impl EventHandler for Handler {
         // Serenity re-sends typing every 7 s until it is dropped; Discord
         // shows it for 10 s.
         let typing = msg.channel_id.start_typing(&context.http);
-        let hash = request.as_ref().ok().map(click::hash);
-        let reply = self.reply(request, msg.guild_id, msg.author.id.get()).await;
+        let reply = self.reply(request, msg.guild_id).await;
         typing.stop();
-        self.send(&context, msg.channel_id, msg.id, reply, hash.as_deref())
-            .await;
+        self.send(&context, msg.channel_id, msg.id, reply).await;
     }
 
-    /// Re-render a `?play` request when its author edits it: edit our
+    /// Run a `?play` request again when its author edits it: edit our
     /// reply, found in memory or else on Discord, or reply anew.
     async fn message_update(
         &self,
@@ -477,7 +345,7 @@ impl EventHandler for Handler {
         if event.edited_timestamp.is_none() || event.author.as_ref().is_some_and(|a| a.bot) {
             return;
         }
-        let Some(request) = message::parse(&content, &self.defaults) else {
+        let Some(request) = message::parse(&content) else {
             return;
         };
         if !self
@@ -504,32 +372,15 @@ impl EventHandler for Handler {
             None => self.find_reply(&context, event.channel_id, event.id).await,
         };
         let typing = event.channel_id.start_typing(&context.http);
-        let hash = request.as_ref().ok().map(click::hash);
-        let reply = self.reply(request, event.guild_id, user).await;
+        let reply = self.reply(request, event.guild_id).await;
         typing.stop();
         let Some(reply_id) = reply_id else {
-            self.send(&context, event.channel_id, event.id, reply, hash.as_deref())
-                .await;
+            self.send(&context, event.channel_id, event.id, reply).await;
             return;
-        };
-        // The history starts over: the buttons are the new request's.
-        let builder = match reply {
-            Reply::Image(shot) => {
-                let (content, rows) = dressed(&shot, hash.as_deref(), &[]);
-                EditMessage::new()
-                    .content(content)
-                    .remove_all_attachments()
-                    .new_attachment(self.attachment(shot.bytes))
-                    .components(rows)
-            }
-            Reply::Text(text) => EditMessage::new()
-                .content(text)
-                .remove_all_attachments()
-                .components(Vec::new()),
         };
         match event
             .channel_id
-            .edit_message(&context.http, reply_id, builder)
+            .edit_message(&context.http, reply_id, EditMessage::new().content(reply))
             .await
         {
             Ok(_) => self.remember(event.id, reply_id),
@@ -616,11 +467,8 @@ impl EventHandler for Handler {
     }
 
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
-        let command = match interaction {
-            Interaction::Command(command) => command,
-            Interaction::Component(component) => return self.click(&context, &component).await,
-            Interaction::Modal(modal) => return self.submit(&context, &modal).await,
-            _ => return,
+        let Interaction::Command(command) = interaction else {
+            return;
         };
         if command.data.name != COMMAND {
             return;
@@ -698,177 +546,6 @@ impl Handler {
             .unwrap()
             .wait(user, now)
             .or_else(|| self.channel_rate.lock().unwrap().wait(channel.get(), now))
-    }
-
-    /// A click on one of our replies' buttons, or a pick from its menu:
-    /// see [`Self::press`]. A text input's button opens a modal instead,
-    /// whose submission comes to [`Self::submit`].
-    async fn click(&self, context: &Context, component: &ComponentInteraction) {
-        // A pick from the menu is the click its option's value names.
-        let picked = match &component.data.kind {
-            ComponentInteractionDataKind::StringSelect { values } => values.as_slice(),
-            _ => &[],
-        };
-        let id = click::chosen(&component.data.custom_id, picked);
-        let pressed = Pressed {
-            interaction: component.id,
-            token: &component.token,
-            reply: &component.message,
-            channel: component.channel_id,
-            guild: component.guild_id,
-            user: component.user.id.get(),
-        };
-        self.press(context, &pressed, id).await;
-    }
-
-    /// The text submitted in a text input's modal: the typed step
-    /// [`click::typed`] makes of the modal's `custom_id` (its button's),
-    /// pressed as [`Self::press`] presses a button.
-    async fn submit(&self, context: &Context, modal: &ModalInteraction) {
-        let Some(reply) = modal.message.as_deref() else {
-            return;
-        };
-        let text = modal
-            .data
-            .components
-            .iter()
-            .flat_map(|row| &row.components)
-            .find_map(|component| match component {
-                ActionRowComponent::InputText(input) if input.custom_id == click::TEXT => {
-                    input.value.clone()
-                }
-                _ => None,
-            })
-            .unwrap_or_default();
-        // An ID that isn't a text input's stays as it is, so it is stale.
-        let id = click::typed(&modal.data.custom_id, &text)
-            .unwrap_or_else(|| modal.data.custom_id.clone());
-        let pressed = Pressed {
-            interaction: modal.id,
-            token: &modal.token,
-            reply,
-            channel: modal.channel_id,
-            guild: modal.guild_id,
-            user: modal.user.id.get(),
-        };
-        self.press(context, &pressed, &id).await;
-    }
-
-    /// The button `id` pressed on one of our replies: checked as
-    /// [`click::decide`] says (refused privately). A text input's button
-    /// opens its modal. Otherwise the press is acknowledged within
-    /// Discord's 3 s, replayed with the history `id` carries, and the reply
-    /// edited with the new image and buttons. A replay that fails leaves
-    /// the reply as it was and tells the clicker privately.
-    async fn press(&self, context: &Context, pressed: &Pressed<'_>, id: &str) {
-        let respond = |response: CreateInteractionResponse| {
-            response.execute(&context.http, (pressed.interaction, pressed.token))
-        };
-        let channel = pressed.channel;
-        // The request this reply answers: in the payload, else fetched.
-        let referenced = match &pressed.reply.referenced_message {
-            Some(request) => Some((**request).clone()),
-            None => match pressed
-                .reply
-                .message_reference
-                .as_ref()
-                .and_then(|to| to.message_id)
-            {
-                Some(id) => channel.message(&context.http, id).await.ok(),
-                None => None,
-            },
-        };
-        let request = referenced.as_ref().and_then(|sent| {
-            let parsed = message::parse(&sent.content, &self.defaults)?.ok()?;
-            Some((parsed, sent.author.id.get(), sent.id))
-        });
-        let hash = request.as_ref().map(|(parsed, ..)| click::hash(parsed));
-        let user = pressed.user;
-        let mut claimed = None;
-        let decision = click::decide(
-            id,
-            hash.as_deref().zip(
-                request
-                    .as_ref()
-                    .map(|(parsed, author, _)| parsed.mine.then_some(*author)),
-            ),
-            user,
-            || self.throttle(user, channel),
-            || {
-                claimed = request.as_ref().and_then(|(.., id)| self.answering(*id));
-                claimed.is_some()
-            },
-        );
-        let private = |text: String| {
-            CreateInteractionResponse::Message(
-                CreateInteractionResponseMessage::new()
-                    .content(text)
-                    .ephemeral(true),
-            )
-        };
-        let steps = match decision {
-            Decision::Render(steps) => steps,
-            Decision::Busy => {
-                let _ = respond(CreateInteractionResponse::Acknowledge).await;
-                return;
-            }
-            Decision::Ask(room) => {
-                let label = label_of(pressed.reply, id).unwrap_or_default();
-                if let Err(error) = respond(modal(id, &label, room)).await {
-                    eprintln!("rawr-play-bot: cannot open a text input's modal: {error}");
-                }
-                return;
-            }
-            refused => {
-                let text = match refused {
-                    Decision::Wait(wait) => {
-                        self.shared
-                            .stats
-                            .lock()
-                            .unwrap()
-                            .rate_limited(pressed.guild.map(GuildId::get));
-                        click::wait_text(wait)
-                    }
-                    Decision::NotYours => click::NOT_YOURS.to_owned(),
-                    _ => click::STALE.to_owned(),
-                };
-                if let Err(error) = respond(private(text)).await {
-                    eprintln!("rawr-play-bot: cannot answer a click: {error}");
-                }
-                return;
-            }
-        };
-        if let Err(error) = respond(CreateInteractionResponse::Acknowledge).await {
-            eprintln!("rawr-play-bot: cannot acknowledge a click: {error}");
-            return;
-        }
-        let Some((mut request, ..)) = request else {
-            return;
-        };
-        request.options.steps.clone_from(&steps);
-        // The claim holds until the reply shows the new buttons.
-        let rendered = self.render(&request, pressed.guild, user).await;
-        let shot = match rendered {
-            Reply::Image(shot) => shot,
-            Reply::Text(text) => {
-                let followup = CreateInteractionResponseFollowup::new()
-                    .content(text)
-                    .ephemeral(true);
-                if let Err(error) = followup.execute(&context.http, (None, pressed.token)).await {
-                    eprintln!("rawr-play-bot: cannot answer a click: {error}");
-                }
-                return;
-            }
-        };
-        let (content, rows) = dressed(&shot, hash.as_deref(), &steps);
-        let edit = EditInteractionResponse::new()
-            .content(content)
-            .clear_attachments()
-            .new_attachment(self.attachment(shot.bytes))
-            .components(rows);
-        if let Err(error) = edit.execute(&context.http, pressed.token).await {
-            eprintln!("rawr-play-bot: cannot edit a clicked reply: {error}");
-        }
     }
 
     /// Run `/play-channel add|remove|list`; the reply text (ephemeral).
@@ -977,15 +654,6 @@ impl Handler {
         format!("?play {done} in <#{channel}>{via}.{note}")
     }
 
-    fn attachment(&self, image: Vec<u8>) -> CreateAttachment {
-        let extension = if message::is_gif(&image) {
-            "gif"
-        } else {
-            self.format.extension()
-        };
-        CreateAttachment::bytes(image, format!("play.{extension}"))
-    }
-
     /// Mark `request` as being answered; `None` while it already is.
     fn answering(&self, request: MessageId) -> Option<Answering<'_>> {
         let fresh = self.answering.lock().unwrap().insert(request);
@@ -1020,31 +688,10 @@ impl Handler {
     }
 
     /// Post `reply` in `channel` as a reply to `request`, and remember it.
-    /// An image gets a button for each target when the request's `hash`
-    /// is known.
-    async fn send(
-        &self,
-        context: &Context,
-        channel: ChannelId,
-        request: MessageId,
-        reply: Reply,
-        hash: Option<&str>,
-    ) {
-        let builder = CreateMessage::new().reference_message((channel, request));
-        let builder = match reply {
-            Reply::Image(shot) => {
-                let (content, rows) = dressed(&shot, hash, &[]);
-                let builder = builder
-                    .add_file(self.attachment(shot.bytes))
-                    .components(rows);
-                if content.is_empty() {
-                    builder
-                } else {
-                    builder.content(content)
-                }
-            }
-            Reply::Text(text) => builder.content(text),
-        };
+    async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: String) {
+        let builder = CreateMessage::new()
+            .reference_message((channel, request))
+            .content(reply);
         match channel.send_message(&context.http, builder).await {
             Ok(sent) => self.remember(request, sent.id),
             Err(error) => eprintln!("rawr-play-bot: cannot reply: {error}"),
@@ -1067,46 +714,32 @@ impl Handler {
         &self,
         request: Result<message::Request, String>,
         guild: Option<GuildId>,
-        user: u64,
-    ) -> Reply {
+    ) -> String {
         match request {
-            Err(error) => Reply::Text(message::error_text(&error)),
-            Ok(request) => self.render(&request, guild, user).await,
+            Err(error) => message::error_text(&error),
+            Ok(request) => self.run(&request, guild).await,
         }
     }
 
-    async fn render(&self, request: &message::Request, guild: Option<GuildId>, user: u64) -> Reply {
-        let user = (user != 0).then(|| format!("discord:{user}"));
-        let Some(rendered) = self
-            .shared
-            .renderer
-            .run(request, self.format, false, user)
-            .await
-        else {
-            return Reply::Text(message::error_text("render pool is busy"));
+    async fn run(&self, request: &message::Request, guild: Option<GuildId>) -> String {
+        let Some(ran) = self.shared.renderer.run(request, false).await else {
+            return message::error_text("the run pool is busy");
         };
-        self.shared.record(rendered.outcome, rendered.millis, guild);
-        match rendered.result {
-            Ok(Done::Image(mut shot)) => {
-                let notes: Vec<String> = message::image_note(&request.code)
-                    .map(str::to_owned)
-                    .into_iter()
-                    .chain(shot.note.take())
-                    .collect();
-                shot.note = (!notes.is_empty()).then(|| notes.join("\n"));
-                Reply::Image(shot)
-            }
-            Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
-            Err(text) => Reply::Text(message::error_text(&text)),
+        self.shared.record(ran.outcome, ran.millis, guild);
+        match ran.result {
+            Ok(Done::Text(output)) => message::output_text(&output),
+            Ok(Done::Unavailable(text)) => text,
+            Err(text) => message::error_text(&text),
         }
     }
 }
 
 /// Serve `POST /render` (the playground, through the Worker) and `GET
-/// /health` on `port`: a PNG, or a plain program's output as JSON
-/// (`rawr_play::Output::to_json`), on success; the error text as 422
-/// otherwise.
-async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
+/// /health` on `port`: a plain program's output as JSON
+/// (`rawr_play::Output::to_json`), or a snippet's
+/// `{"kind":"unavailable","text":..}` (`rawr_play::unavailable_json`), on
+/// success; the error text as 422 otherwise.
+async fn serve(shared: Arc<Shared>, port: u16) {
     use http_body_util::{BodyExt, Full, Limited};
     use hyper::body::{Bytes, Incoming};
     use hyper::{Method, Response, StatusCode};
@@ -1121,17 +754,14 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
             return;
         }
     };
-    let defaults = Arc::new(defaults);
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;
         };
         let shared = Arc::clone(&shared);
-        let defaults = Arc::clone(&defaults);
         tokio::spawn(async move {
             let service = hyper::service::service_fn(move |request: hyper::Request<Incoming>| {
                 let shared = Arc::clone(&shared);
-                let defaults = Arc::clone(&defaults);
                 async move {
                     let reply = |status: StatusCode, kind: &str, body: Vec<u8>| {
                         Response::builder()
@@ -1145,12 +775,6 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                     match (request.method(), request.uri().path()) {
                         (&Method::GET, "/health") => text(StatusCode::OK, "ok".into()),
                         (&Method::POST, "/render") => {
-                            let user = rawr_play::web::user(
-                                request
-                                    .headers()
-                                    .get(rawr_play::web::USER_HEADER)
-                                    .and_then(|value| value.to_str().ok()),
-                            );
                             let limit = rawr_play::web::MAX_CODE * 2 + 16 * 1024;
                             let body =
                                 match Limited::new(request.into_body(), limit).collect().await {
@@ -1162,14 +786,11 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                         )
                                     }
                                 };
-                            let render = match rawr_play::web::parse_render(&body, &defaults) {
-                                Ok(render) => render,
+                            let run = match rawr_play::web::parse_render(&body) {
+                                Ok(run) => run,
                                 Err(error) => return text(StatusCode::BAD_REQUEST, error),
                             };
-                            let format = rawr_play::Format::Png;
-                            let Some(rendered) =
-                                shared.renderer.run(&render, format, true, user).await
-                            else {
+                            let Some(ran) = shared.renderer.run(&run, true).await else {
                                 return text(
                                     StatusCode::SERVICE_UNAVAILABLE,
                                     "the playground is busy; try again in a moment".into(),
@@ -1179,29 +800,15 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                                 .stats
                                 .lock()
                                 .unwrap()
-                                .record_web(rendered.outcome, rendered.millis);
-                            match rendered.result {
-                                Ok(Done::Image(Shot {
-                                    bytes: image, note, ..
-                                })) => {
-                                    let kind = if rawr_play::message::is_gif(&image) {
-                                        "image/gif"
-                                    } else {
-                                        "image/png"
-                                    };
-                                    let mut response = Response::builder()
-                                        .status(StatusCode::OK)
-                                        .header("content-type", kind);
-                                    if let Some(note) = note {
-                                        response =
-                                            response.header("x-play-note", note.replace('\n', " "));
-                                    }
-                                    response.body(Full::new(Bytes::from(image)))
-                                }
-                                Ok(Done::Text(output)) => reply(
-                                    StatusCode::OK,
-                                    "application/json",
-                                    output.to_json().into_bytes(),
+                                .record_web(ran.outcome, ran.millis);
+                            let json = |body: String| {
+                                reply(StatusCode::OK, "application/json", body.into_bytes())
+                            };
+                            match ran.result {
+                                Ok(Done::Text(output)) => json(output.to_json()),
+                                Ok(Done::Unavailable(message)) => json(
+                                    serde_json::json!({ "kind": "unavailable", "text": message })
+                                        .to_string(),
                                 ),
                                 Err(error) => text(StatusCode::UNPROCESSABLE_ENTITY, error),
                             }
@@ -1215,133 +822,6 @@ async fn serve(shared: Arc<Shared>, defaults: rawr_play::Options, port: u16) {
                 .serve_connection(io, service)
                 .await;
         });
-    }
-}
-
-/// The text and buttons of an image reply to the request hashed `hash`,
-/// rendered after `steps`: its note and the clicks so far as subtext, a
-/// button for each of the first [`click::MAX_BUTTONS`] targets, five to a
-/// row, and a select menu for the rest. No `hash`, no buttons.
-fn dressed(shot: &Shot, hash: Option<&str>, steps: &[Step]) -> (String, Vec<CreateActionRow>) {
-    let mut made = hash.map_or_else(Vec::new, |hash| click::buttons(hash, steps, &shot.actions));
-    let full = hash.is_some() && made.is_empty() && !shot.actions.is_empty();
-    let lines: Vec<String> = shot
-        .note
-        .iter()
-        .cloned()
-        .chain(click::quiet(&shot.clicked, full))
-        .collect();
-    let content = subtext(&lines.join("\n"));
-    let more = made.split_off(made.len().min(click::MAX_BUTTONS));
-    let buttons: Vec<CreateButton> = made
-        .into_iter()
-        .map(|button| {
-            let made = CreateButton::new(button.id)
-                .label(button.label)
-                .style(ButtonStyle::Secondary);
-            // A text input's button opens a modal to type in.
-            if button.input {
-                made.emoji(pencil())
-            } else {
-                made
-            }
-        })
-        .collect();
-    let mut rows: Vec<CreateActionRow> = buttons
-        .chunks(5)
-        .map(|row| CreateActionRow::Buttons(row.to_vec()))
-        .collect();
-    if !more.is_empty() {
-        let placeholder = format!("{} more", more.len());
-        let options = more
-            .into_iter()
-            .map(|option| {
-                let made = CreateSelectMenuOption::new(option.label, option.id);
-                if option.input {
-                    made.emoji(pencil())
-                } else {
-                    made
-                }
-            })
-            .collect();
-        let menu = CreateSelectMenu::new(click::MORE, CreateSelectMenuKind::String { options })
-            .placeholder(placeholder);
-        rows.push(CreateActionRow::SelectMenu(menu));
-    }
-    (content, rows)
-}
-
-/// A button pressed, or a modal submitted, on one of our replies: what
-/// [`Handler::press`] answers.
-struct Pressed<'a> {
-    interaction: InteractionId,
-    token: &'a str,
-    /// The reply the button is on.
-    reply: &'a Message,
-    channel: ChannelId,
-    guild: Option<GuildId>,
-    user: u64,
-}
-
-/// The label of the button or menu option `id` names on `reply`.
-fn label_of(reply: &Message, id: &str) -> Option<String> {
-    reply
-        .components
-        .iter()
-        .flat_map(|row| &row.components)
-        .find_map(|component| match component {
-            ActionRowComponent::Button(button) => match &button.data {
-                ButtonKind::NonLink { custom_id, .. } if custom_id == id => button.label.clone(),
-                _ => None,
-            },
-            ActionRowComponent::SelectMenu(menu) => menu
-                .options
-                .iter()
-                .find(|option| option.value == id)
-                .map(|option| option.label.clone()),
-            _ => None,
-        })
-}
-
-/// The modal a text input's button `id`, labelled `label`, opens: one
-/// short text field of at most `room` characters. Its `custom_id` is the
-/// button's, so its submission carries the history.
-fn modal(id: &str, label: &str, room: usize) -> CreateInteractionResponse {
-    let field = CreateInputText::new(InputTextStyle::Short, "Text", click::TEXT)
-        .placeholder(label)
-        .max_length(u16::try_from(room).unwrap_or(u16::MAX))
-        .required(false);
-    CreateInteractionResponse::Modal(
-        CreateModal::new(id, click::title(label))
-            .components(vec![CreateActionRow::InputText(field)]),
-    )
-}
-
-/// The pencil on a text input's button: ✏️.
-fn pencil() -> ReactionType {
-    ReactionType::Unicode("\u{270f}\u{fe0f}".into())
-}
-
-/// `note` as Discord subtext, one `-# ` line per line.
-fn subtext(note: &str) -> String {
-    note.lines()
-        .map(|line| format!("-# {line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Read every file in `dir` once and drop the bytes: the kernel keeps them
-/// in its page cache for the renders that memory-map them.
-fn warm_fonts(dir: &std::path::Path) {
-    use std::io::Read;
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut buffer = vec![0; 1 << 20];
-    for entry in entries.flatten() {
-        if let Ok(mut file) = std::fs::File::open(entry.path()) {
-            while matches!(file.read(&mut buffer), Ok(n) if n > 0) {}
-        }
     }
 }
 
@@ -1416,13 +896,6 @@ async fn main() {
         },
         PathBuf::from,
     );
-    let format = match std::env::var("PLAY_FORMAT") {
-        Ok(value) => value.parse().unwrap_or_else(|error| {
-            eprintln!("rawr-play-bot: {error}");
-            std::process::exit(2);
-        }),
-        Err(_) => rawr_play::Format::Png,
-    };
     let only = message::channels(&std::env::var("PLAY_CHANNELS").unwrap_or_default())
         .unwrap_or_else(|error| {
             eprintln!("rawr-play-bot: PLAY_CHANNELS: {error}");
@@ -1437,35 +910,15 @@ async fn main() {
     let workers = usize::try_from(env_u64("PLAY_WORKERS", 2))
         .unwrap_or(2)
         .max(1);
-    let still = Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000));
     let shared = Arc::new(Shared {
         renderer: Renderer {
             path: renderer,
             workers: Semaphore::new(workers),
             web: Semaphore::new(1),
             discord_waiting: AtomicUsize::new(0),
-            pending: watch::Sender::new(0),
             memory_mb: env_u64("PLAY_MEMORY_MB", 1024),
+            time: Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000)),
             timeout: Duration::from_millis(env_u64("PLAY_TIMEOUT_MS", 10_000)),
-            fonts: std::env::var("PLAY_FONTS")
-                .ok()
-                .filter(|dir| !dir.is_empty()),
-            budgets: Mutex::new(Budgets::new(
-                still,
-                Duration::from_millis(env_u64(
-                    "PLAY_ANIMATION_TIME_MS",
-                    budget::ANIMATION.as_millis() as u64,
-                )),
-                Duration::from_millis(env_u64(
-                    "PLAY_IDLE_ANIMATION_TIME_MS",
-                    budget::IDLE.as_millis() as u64,
-                )),
-                Duration::from_secs(env_u64(
-                    "PLAY_ANIMATION_ALLOWANCE_S",
-                    budget::ALLOWANCE.as_secs(),
-                )),
-                Duration::from_secs(env_u64("PLAY_ANIMATION_WINDOW_S", budget::WINDOW.as_secs())),
-            )),
         },
         channels: tokio::sync::Mutex::new(
             Channels::from_json("", only.clone()).unwrap_or_default(),
@@ -1484,19 +937,12 @@ async fn main() {
     });
     #[cfg(unix)]
     tokio::spawn(exit_on_sigterm(Arc::clone(&shared)));
-    let mut defaults = rawr_play::Options::default();
-    defaults.limits.time = still;
-    // Read the bundled fonts once, so the page cache holds them before the
-    // first render maps them (a cold first CJK render ran past its budget).
-    if let Some(dir) = shared.renderer.fonts.clone() {
-        tokio::task::spawn_blocking(move || warm_fonts(std::path::Path::new(&dir)));
-    }
     // Listen first: the container counts as started once this port answers.
     if let Some(port) = std::env::var("PLAY_HTTP_PORT")
         .ok()
         .and_then(|port| port.parse().ok())
     {
-        tokio::spawn(serve(Arc::clone(&shared), defaults.clone(), port));
+        tokio::spawn(serve(Arc::clone(&shared), port));
     }
     shared.report.event("booting", &shared.version).await;
     shared.send_stats().await;
@@ -1508,8 +954,6 @@ async fn main() {
         )
     };
     let handler = Handler {
-        defaults,
-        format,
         shared: Arc::clone(&shared),
         parents: Mutex::new(Parents::new(REMEMBERED)),
         users: Mutex::new(per_minute("PLAY_USER_PER_MIN", 4)),

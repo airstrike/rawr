@@ -1,81 +1,53 @@
-//! A plain program: a snippet that does not use iced, as a program with a
-//! `fn main`.
+//! A plain program: a snippet that needs neither iced nor an async
+//! runtime, as a program with a `fn main`.
 
-/// Where a snippet's `async fn main` is, as rawr-play rewrites it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AsyncMain {
-    /// The byte offset of the name `main`.
-    pub name: usize,
-    /// The span of a `#[tokio::main]` (or `#[tokio::main(..)]`) on it.
-    pub attribute: Option<std::ops::Range<usize>>,
-    /// Whether it returns a value (a `Result`), which `?` and an `Err`
-    /// end the program with.
-    pub returns: bool,
-}
-
-/// The `async fn main` at the top level of `source`, with tests blanked.
+/// Whether `source` has an `async fn main` (or `pub async fn main`) at its
+/// top level, as `#[tokio::main]` marks one.
 #[must_use]
-pub fn async_main(source: &str) -> Option<AsyncMain> {
-    let mut offset = 0;
-    let mut attribute = None;
-    for line in source.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == 0 && trimmed.starts_with("#[tokio::main") {
-            let end = trimmed
-                .find(']')
-                .map_or(trimmed.trim_end().len(), |end| end + 1);
-            attribute = Some(offset..offset + end);
-        }
-        let rest = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
-        if indent == 0
-            && let Some(rest) = rest.strip_prefix("async fn main")
-            && rest.trim_start().starts_with('(')
-        {
-            let name = offset + (line.len() - rest.len()) - "main".len();
-            let signature = &source[name..];
-            let signature = &signature[..signature.find('{').unwrap_or(signature.len())];
-            return Some(AsyncMain {
-                name,
-                attribute,
-                returns: signature.contains("->"),
-            });
-        }
-        if !trimmed.is_empty() && !trimmed.starts_with("#[") && !trimmed.starts_with("//") {
-            attribute = None;
-        }
-        offset += line.len();
-    }
-    None
+pub fn has_async_main(source: &str) -> bool {
+    source.split('\n').any(|line| {
+        let rest = line.strip_prefix("pub ").unwrap_or(line);
+        rest.strip_prefix("async fn main")
+            .is_some_and(|rest| rest.trim_start().starts_with('('))
+    })
 }
 
-/// The program an `async fn main` runs as: the snippet with its `main`
-/// renamed `rawr_play_main` and its `#[tokio::main]` blanked, so every
-/// line keeps its number, and after it an app whose boot Task awaits it.
-pub fn async_program(source: &str, main: &AsyncMain) -> String {
-    let mut program = source.to_owned();
-    program.insert_str(main.name, "rawr_play_");
-    if let Some(attribute) = &main.attribute {
-        program.replace_range(attribute.clone(), &" ".repeat(attribute.len()));
+/// `source` with each `#[cfg(test)]` item (such as `mod tests { .. }`)
+/// blanked, keeping line numbers: a pasted example often ends with tests.
+#[must_use]
+pub fn without_tests(source: &str) -> String {
+    const ATTRIBUTE: &str = "#[cfg(test)]";
+    let mut out = source.to_owned();
+    let mut from = 0;
+    while let Some(found) = out[from..].find(ATTRIBUTE) {
+        let start = from + found;
+        let mut depth = 0usize;
+        let mut end = out.len();
+        for (offset, c) in out[start + ATTRIBUTE.len()..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' if depth > 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + ATTRIBUTE.len() + offset + 1;
+                        break;
+                    }
+                }
+                ';' if depth == 0 => {
+                    end = start + ATTRIBUTE.len() + offset + 1;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let blank: String = out[start..end]
+            .chars()
+            .map(|c| if c == '\n' { c } else { ' ' })
+            .collect();
+        out.replace_range(start..end, &blank);
+        from = start + blank.len();
     }
-    let run = if main.returns {
-        "match rawr_play_main().await { Ok(_) => 0, Err(error) => { eprintln!(\"Error: {error:?}\"); 1 } }"
-    } else {
-        "rawr_play_main().await; 0"
-    };
-    program.push_str(&format!(
-        "\n#[derive(Default)]\nstruct RawrPlayAsync {{ status: i64 }}\n\
-         #[derive(Debug, Clone)]\nenum RawrPlayDone {{ Done(i64) }}\n\
-         impl RawrPlayAsync {{\n\
-             fn start() -> (Self, iced::Task<RawrPlayDone>) {{ (Self {{ status: -1 }}, iced::Task::perform(rawr_play_run(), RawrPlayDone::Done)) }}\n\
-             fn update(&mut self, message: RawrPlayDone) {{ match message {{ RawrPlayDone::Done(status) => self.status = status }} }}\n\
-             fn view(&self) -> impl iced::Widget<RawrPlayDone> {{ iced::widget::text(\"\") }}\n\
-             fn title(&self) -> String {{ self.status.to_string() }}\n\
-         }}\n\
-         async fn rawr_play_run() -> i64 {{ {run} }}\n\
-         pub fn main() -> iced::Result {{ iced::application(RawrPlayAsync::start, RawrPlayAsync::update, RawrPlayAsync::view).title(RawrPlayAsync::title).run() }}\n"
-    ));
-    program
+    out
 }
 
 /// The program a snippet runs as. One with items runs as written. One of
@@ -95,7 +67,7 @@ pub fn quiet_program(source: &str) -> String {
 }
 
 fn wrapped(source: &str, show: bool) -> String {
-    let source = crate::without_tests(source);
+    let source = without_tests(source);
     if has_item(&source) {
         return source;
     }
@@ -190,7 +162,17 @@ pub fn has_item(source: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::program;
+    use super::{has_async_main, program};
+
+    #[test]
+    fn an_async_main_is_found_at_the_top_level() {
+        assert!(has_async_main("#[tokio::main]\nasync fn main() {}\n"));
+        assert!(has_async_main(
+            "pub async fn main() -> Result<(), String> { Ok(()) }\n"
+        ));
+        assert!(!has_async_main("fn main() {}\nasync fn helper() {}\n"));
+        assert!(!has_async_main("mod m {\n    async fn main() {}\n}\n"));
+    }
 
     #[test]
     fn plain_snippets_become_programs() {
