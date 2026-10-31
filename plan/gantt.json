@@ -88,7 +88,7 @@
         {"id":"callback-return-types","name":"Callback return types","start":47,"size":2,"state":"done","note":"Result callback parameters and returns keep their Rust signature; Ok and Err match native Cargo. #371","issues":[371],"milestone":"0.3"},
         {"id":"native-callback-mutation","name":"Native callback mutations","start":47,"size":4,"state":"now","note":"Typed places landed. Operation audit and Miri left. #365","issues":[365],"milestone":"0.4"},
         {"id":"struct-literals-live-edits","name":"Struct literals, live edits","start":44,"size":2,"state":"next","note":"#325, #326","issues":[325,326],"milestone":"0.4"},
-        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"next","note":"#317–#319, #327","issues":[317,318,319,327],"milestone":"0.4"},
+        {"id":"projections-function-values","name":"Projections, function values","start":44,"size":3,"state":"now","note":"#318 and #327 done; #317 and #319 remain","issues":[317,318,319,327],"milestone":"0.4"},
         {"id":"runner-build-gaps","name":"Runner-build gaps","start":45,"size":3,"state":"next","note":"events, exit, theme, modal. #335–#340","issues":[335,336,337,339,340,338],"milestone":"0.4"},
         {"id":"per-example-gaps","name":"Per-example gaps","start":47,"size":6,"state":"next","note":"About 18 examples. #314, #283, #328, #334","issues":[283,314,328,334,345],"milestone":"0.4"}
       ]

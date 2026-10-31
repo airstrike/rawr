@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
+      "entries": [
+        {"text":"A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it.","issues":[318]},
+        {"text":"A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions.","issues":[327]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.27",
@@ -732,7 +738,7 @@
     {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
@@ -741,7 +747,7 @@
     {"issue":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":329,"title":"`copies_tests::a_proxy_lends_its_state_to_script_functions_without_a_copy` counts 1000 copies…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":330,"title":"Calling a `&self` trait method on an opaque value fails in the runner build with E0282, because…","state":"open","category":"Shared dependency cache (D607)"},
@@ -825,7 +831,14 @@
     {"issue":408,"title":"A turbofish on a generic fn with an Fn parameter miscounts its arguments","state":"open","category":"Divergences from rustc"},
     {"issue":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"open","category":"Divergences from rustc"},
     {"issue":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open","category":"Divergences from rustc"},
-    {"issue":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":412,"title":"An imported type compared with a number is requested as a std provided method","state":"open","category":"No glue (D593)"},
+    {"issue":413,"title":"An alias with defaulted parameters in expression position leaves them open","state":"open","category":"No glue (D593)"},
+    {"issue":414,"title":"sierpinski_triangle fails with a surface instance mismatch","state":"open","category":"No glue (D593)"},
+    {"issue":415,"title":"A method returning a borrowed slice of a crate type gets no binding","state":"open","category":"No glue (D593)"},
+    {"issue":416,"title":"rand's random_range over a char range is untyped","state":"open","category":"No glue (D593)"},
+    {"issue":417,"title":"Widget::map, whose output names its callable F, is refused","state":"open","category":"No glue (D593)"},
+    {"issue":418,"title":"Widen tests of slots on generic-impl methods","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -1254,13 +1267,13 @@
           "name": "Projections, function values",
           "start": 44,
           "size": 3,
-          "state": "next",
-          "note": "#317–#319, #327",
+          "state": "now",
+          "note": "#318 and #327 done; #317 and #319 remain",
           "issues": [
             {"number":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open"},
-            {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"open"},
+            {"number":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed"},
             {"number":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open"},
-            {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"open"}
+            {"number":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed"}
           ],
           "milestone": "0.4"
         },
