@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.29",
+  "version": "0.3.30",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A crate type compares with a number through the crate's `PartialOrd<f32>` or `PartialEq<f32>`, as clock's `rotation < 180.0` does with iced's `Degrees`. When the type also compares with itself, the right-hand side picks the impl, as in rustc.","issues":[412]},
-        {"text":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's `Widget::map` does: the runner holds the closure as a `Box<dyn Fn(A) -> B>`. game_of_life gets past its `.map(..)`.","issues":[422],"refs":[417]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.30",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A crate type compares with a number through the crate's `PartialOrd<f32>` or `PartialEq<f32>`, as clock's `rotation < 180.0` does with iced's `Degrees`. When the type also compares with itself, the right-hand side picks the impl, as in rustc.","issues":[412]},
+          {"text":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's `Widget::map` does: the runner holds the closure as a `Box<dyn Fn(A) -> B>`. game_of_life gets past its `.map(..)`.","issues":[422],"refs":[417]}
+        ]
+      },
       {
         "version": "0.3.29",
         "date": "2026-10-31",
@@ -849,7 +851,7 @@
     {"issue":409,"title":"A closure before the argument that fixes its generic parameter gets no types","state":"open","category":"Divergences from rustc"},
     {"issue":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open","category":"Divergences from rustc"},
     {"issue":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":412,"title":"An imported type compared with a number is requested as a std provided method","state":"closed","category":"No glue (D593)"},
+    {"issue":412,"title":"An imported type compared with a number is requested as a std provided method","state":"closed","category":"No glue (D593)","release":"0.3.30"},
     {"issue":413,"title":"An alias with defaulted parameters in expression position leaves them open","state":"closed","category":"No glue (D593)"},
     {"issue":414,"title":"sierpinski_triangle fails with a surface instance mismatch","state":"open","category":"No glue (D593)"},
     {"issue":415,"title":"A method returning a borrowed slice of a crate type gets no binding","state":"open","category":"No glue (D593)"},
@@ -859,7 +861,7 @@
     {"issue":419,"title":"Path crates inside the project root keep no tables","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":420,"title":"Load only what a demand needs from a large whole table","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":421,"title":"Binding store unit tests fail under parallel test threads","state":"open","category":"Health"},
-    {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"open","category":"No glue (D593)"},
+    {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","release":"0.3.30"},
     {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"open","category":"No glue (D593)"},
     {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"open","category":"No glue (D593)"},
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"open","category":"No glue (D593)"},
