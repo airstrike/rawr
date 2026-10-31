@@ -118,6 +118,17 @@ fn demand_more(
     crate_demand.dedup();
 }
 
+/// Record that a program's check depends on proved applications.
+fn mark(applied: &std::path::Path) {
+    if applied.is_file() {
+        return;
+    }
+    if let Some(parent) = applied.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(applied, b"");
+}
+
 /// Why an imported call has no application.
 enum Proof {
     /// Rust rejects the call, finds it ambiguous, or the closed rules
@@ -405,7 +416,13 @@ fn prepare(
                             .as_ref()
                             .ok_or_else(|| Error::other("intrinsic facts"))?;
                         match prove(&graph, facts, &call, &mut applications) {
-                            Ok(()) => continue,
+                            Ok(()) => {
+                                // The check now depends on proved facts:
+                                // the next attempt is keyed by them already,
+                                // so the next run replays it (#400).
+                                mark(&applied);
+                                continue;
+                            }
                             Err(Proof::Failed(failure)) => return Err(failure),
                             // An unproved miss of a member the facade lacks
                             // is demanded as before; demanded already, it
@@ -468,10 +485,7 @@ fn prepare(
     if demand.application_catalogs().is_empty() {
         let _ = std::fs::remove_file(&applied);
     } else if keyed.is_none() {
-        if let Some(parent) = applied.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&applied, b"");
+        mark(&applied);
     }
     let adapter = current_adapter.ok_or_else(|| Error::other("the plain profile adapter"))?;
     let profile = rawr_import::composition::profile::prepare_retained(
