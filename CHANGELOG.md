@@ -6,6 +6,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+- A shared playground link shows the site's card with the program's first line of output. A share no longer keeps a theme, size or messages. (#442)
+- rawr no longer carries the application, preview and widget protocols, host operations and streams, or the importer's view recipes that rawr-iced drove: about 23,800 lines removed. Async code in any program uses rawr's own future, so `join!` and `async fn` work the same with or without iced. (#448; part of #439, #440)
 
 ## 0.3.34 (2026-10-31)
 
