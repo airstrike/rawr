@@ -1,9 +1,10 @@
 // The link preview for rawr.airstrike.fyi/bot/invite, drawn by Rawr itself
-// in RawrGallery's Ink sheet. Render it with:
-//   rawr-play play/deploy/cloudflare/og/card.rs --size 600x315 -o play/deploy/cloudflare/public/og/invite.png
+// in RawrGallery's Ink sheet. public/og/invite.png is committed as it was
+// drawn. rawr-play no longer renders iced, so nothing draws it again until
+// generated bindings reach ?play.
 use iced::theme::palette::Seed;
 use iced::widget::{button, column, container, row, space, text};
-use iced::{Border, Center, Color, Fill, Font, Theme, Widget, border};
+use iced::{border, Border, Center, Color, Fill, Font, Theme, Widget};
 
 pub fn main() -> iced::Result {
     iced::application(Card::default, Card::update, Card::view)
@@ -50,9 +51,14 @@ impl Card {
 
         let code = container(
             column![
-                text("?play").size(13).font(Font::MONOSPACE).style(text::primary),
+                text("?play")
+                    .size(13)
+                    .font(Font::MONOSPACE)
+                    .style(text::primary),
                 text("column![").size(13).font(Font::MONOSPACE),
-                text("    button(\"Increment\"),").size(13).font(Font::MONOSPACE),
+                text("    button(\"Increment\"),")
+                    .size(13)
+                    .font(Font::MONOSPACE),
                 text("    text(3).size(40),").size(13).font(Font::MONOSPACE),
                 text("]").size(13).font(Font::MONOSPACE),
             ]
@@ -64,7 +70,9 @@ impl Card {
 
         let rendered = container(
             column![
-                button(text("Increment").size(14)).on_press(Message::Increment).style(key),
+                button(text("Increment").size(14))
+                    .on_press(Message::Increment)
+                    .style(key),
                 text(3).size(40),
             ]
             .spacing(8)
@@ -76,7 +84,10 @@ impl Card {
 
         let lede = column![
             row![
-                text("//").size(11).font(Font::MONOSPACE).style(text::primary),
+                text("//")
+                    .size(11)
+                    .font(Font::MONOSPACE)
+                    .style(text::primary),
                 caption("DISCORD · ICED · FIRST FRAME"),
             ]
             .spacing(8),
@@ -107,7 +118,10 @@ impl Card {
 }
 
 fn caption(content: &str) -> iced::widget::Text<'static> {
-    text(content.to_string()).size(11).font(Font::MONOSPACE).style(text::secondary)
+    text(content.to_string())
+        .size(11)
+        .font(Font::MONOSPACE)
+        .style(text::secondary)
 }
 
 fn frame(color: Color) -> Border {

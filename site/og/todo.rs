@@ -1,7 +1,8 @@
 // The link preview for rawr.airstrike.fyi/todo, drawn by rawr itself in the
-// work plan's style: black on white, one red, Abitaro Sans. Render it with
-// static Abitaro Sans instances (400, 600, 800) beside the ?play fonts:
-//   rawr-play site/og/todo.rs --size 600x315 --theme light --fonts target/og/fonts -o site/public/og/todo.png
+// work plan's style: black on white, one red, Abitaro Sans.
+// site/public/og/todo.png is committed as it was drawn. rawr-play no longer
+// renders iced, so nothing draws it again until generated bindings reach
+// ?play.
 use iced::font::Weight;
 use iced::widget::{column, container, row, space, text};
 use iced::{Border, Center, Color, Fill, Font, Length, Theme, Widget};

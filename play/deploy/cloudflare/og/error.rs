@@ -1,6 +1,8 @@
-// The link preview of a shared playground snippet that did not render (a
-// code error or a limit), drawn by Rawr in RawrGallery's Ink sheet:
-//   rawr-play play/deploy/cloudflare/og/error.rs --size 600x315 -o play/deploy/cloudflare/public/og/play-error.png
+// The link preview of a shared playground snippet that did not run (a code
+// error or a limit), drawn by Rawr in RawrGallery's Ink sheet.
+// public/og/play-error.png is committed as it was drawn. rawr-play no longer
+// renders iced, so nothing draws it again until generated bindings reach
+// ?play.
 use iced::theme::palette::Seed;
 use iced::widget::{column, container, row, space, text};
 use iced::{Center, Color, Fill, Font, Theme, Widget};
@@ -38,12 +40,19 @@ impl Card {
         let mark = container(space().width(8).height(8)).style(|theme: &Theme| {
             container::Style::default().background(theme.palette().primary.base.color)
         });
-        let brand = row![mark, text("RAWR").size(13).font(Font::MONOSPACE), caption("PLAYGROUND")]
-            .spacing(10)
-            .align_y(Center);
+        let brand = row![
+            mark,
+            text("RAWR").size(13).font(Font::MONOSPACE),
+            caption("PLAYGROUND")
+        ]
+        .spacing(10)
+        .align_y(Center);
         let lede = column![
             row![
-                text("//").size(11).font(Font::MONOSPACE).style(text::primary),
+                text("//")
+                    .size(11)
+                    .font(Font::MONOSPACE)
+                    .style(text::primary),
                 caption("NO FRAME"),
             ]
             .spacing(8),
@@ -74,5 +83,8 @@ impl Card {
 }
 
 fn caption(content: &str) -> iced::widget::Text<'static> {
-    text(content.to_string()).size(11).font(Font::MONOSPACE).style(text::secondary)
+    text(content.to_string())
+        .size(11)
+        .font(Font::MONOSPACE)
+        .style(text::secondary)
 }

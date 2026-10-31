@@ -1,9 +1,10 @@
 // The link preview for rawr.airstrike.fyi, drawn by rawr itself in
-// RawrGallery's Ink sheet. Render it with:
-//   rawr-play site/og/card.rs --size 600x315 --fonts target/play/fonts -o site/public/og/card.png
+// RawrGallery's Ink sheet. site/public/og/card.png is committed as it was
+// drawn. rawr-play no longer renders iced, so nothing draws it again until
+// generated bindings reach ?play.
 use iced::theme::palette::Seed;
 use iced::widget::{column, container, row, space, text};
-use iced::{Border, Center, Color, Fill, Font, Theme, Widget, border};
+use iced::{border, Border, Center, Color, Fill, Font, Theme, Widget};
 
 pub fn main() -> iced::Result {
     iced::application(Card::default, Card::update, Card::view)
@@ -38,9 +39,13 @@ impl Card {
         let mark = container(space().width(8).height(8)).style(|theme: &Theme| {
             container::Style::default().background(theme.palette().primary.base.color)
         });
-        let brand = row![mark, text("rawr").size(13).font(Font::MONOSPACE), caption("pre-alpha")]
-            .spacing(10)
-            .align_y(Center);
+        let brand = row![
+            mark,
+            text("rawr").size(13).font(Font::MONOSPACE),
+            caption("pre-alpha")
+        ]
+        .spacing(10)
+        .align_y(Center);
 
         // The site's title: the word, and a line under it as wide as the word.
         let title = column![
@@ -92,10 +97,16 @@ fn file(how: &str, command: &str) -> impl Widget<Message> {
     .style(panel);
     let shell = container(
         row![
-            text("$").size(11).font(Font::MONOSPACE).style(text::secondary),
+            text("$")
+                .size(11)
+                .font(Font::MONOSPACE)
+                .style(text::secondary),
             code(command),
             space().width(Fill),
-            text("total: 27").size(11).font(Font::MONOSPACE).style(text::success),
+            text("total: 27")
+                .size(11)
+                .font(Font::MONOSPACE)
+                .style(text::success),
         ]
         .spacing(7),
     )
@@ -103,7 +114,9 @@ fn file(how: &str, command: &str) -> impl Widget<Message> {
     .width(Fill)
     .style(terminal);
 
-    column![header, column![source, shell]].spacing(5).width(Fill)
+    column![header, column![source, shell]]
+        .spacing(5)
+        .width(Fill)
 }
 
 fn code(line: &str) -> iced::widget::Text<'static> {
@@ -111,7 +124,10 @@ fn code(line: &str) -> iced::widget::Text<'static> {
 }
 
 fn caption(content: &str) -> iced::widget::Text<'static> {
-    text(content.to_string()).size(11).font(Font::MONOSPACE).style(text::secondary)
+    text(content.to_string())
+        .size(11)
+        .font(Font::MONOSPACE)
+        .style(text::secondary)
 }
 
 fn frame(color: Color) -> Border {

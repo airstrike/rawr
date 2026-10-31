@@ -1,66 +1,48 @@
 # rawr-play
 
-Run a Rawr snippet. A snippet that uses iced renders to a PNG. A full app
-whose view changes over time renders to a GIF (see `src/motion.rs`). A plain
-program runs and returns its output as text. One long-running process links
-`rawr` and `rawr-iced` as libraries. It runs no rustc and no importer per request. A
-snippet is checked as Rawr, its view is evaluated headlessly, and the result
-is rendered with the `rawr snapshot` path: tiny-skia, scale 1.0, and the
-embedded Fira Sans font. It needs no GPU, so it runs on any Linux VM or
-container.
+Run a Rawr snippet. A plain program runs and returns its output as text.
+One long-running bot links `rawr` as a library and starts one `rawr-play`
+process per snippet. It runs no rustc and no importer per request. It needs
+no GPU and no fonts, so it runs on any Linux VM or container.
 
-## Plain programs and iced snippets
+iced programs and async programs don't run here yet. Such a snippet gets
+one plain message instead of a run. They will run once generated bindings
+reach `?play` (prebuilt for the bot) and the playground (built for wasm).
 
-The snippet is parsed once. rawr-iced's manifest (`iced/manifest.toml`)
-says what is iced's, as it does for `rawr`. A snippet is iced's when it
-names the `iced` crate. It is also iced's when it uses a name of the
-manifest's `prelude` that it neither declares nor imports, such as `column!`
-or `text`. Every other snippet is a plain program.
+## Plain programs, and what doesn't run yet
+
+The snippet is parsed once. That parse says whether it runs here
+(`play/snippet/src/route.rs`, shared with rawr-web):
+
+- A snippet is iced's when it names the `iced` crate. It is also iced's
+  when it uses a name from `ICED_PRELUDE` that it neither declares nor
+  imports, such as `column!` or `text`. `ICED_PRELUDE` is routing data: the
+  names a snippet could once use without a `use`. It binds nothing. Such a
+  snippet gets `iced programs don't run here yet. They will once generated
+  bindings reach ?play and the playground.`
+- A snippet is async when its `main` is `async`, as `#[tokio::main]` marks
+  it, or when it names the `tokio` crate. Such a snippet gets `async
+  programs (`async fn main`, `#[tokio::main]`) don't run here yet. They will
+  once generated bindings reach ?play and the playground.`
+- Every other snippet is a plain program.
 
 A plain program runs on the base language from that same parse, as `rawr
 run` runs a file: its top level, then `fn main` if it has one. A snippet of
 statements alone becomes a block in `fn main`, read as Rust reads a block.
-The block's value is printed with `{:?}` unless it is `()`. So `1 + 2` prints
-`3`, and `1 + 2;` prints nothing. A `main` that returns `Err`
-prints `Error: ..` and exits with status 1. A `main` that is `async`, as
-`#[tokio::main] async fn main()` is, runs on rawr-iced's tokio with no
-window: its timers follow the simulated clock iced apps record on, and its
-output is text too. A panic exits with status 101,
-as in Rust. A limit exits with status 1. Output is capped at 64 KiB. A program that writes more
-is stopped and its output ends with `… output truncated`. Messages drive an iced app. A plain program runs without them, and its
-output carries the note "messages are ignored for programs without iced".
-
-## Snippet shapes for iced
-
-- A bare expression: `column![text("hi"), button("go")]`
-- A stateless view: `fn view() -> impl Widget<()> { ... }`
-- A full app: a type with `fn view(&self)` and `fn update(&mut self, message)`.
-  Messages (`--message` / `msg=`) are applied in order to `State::default()`
-  before the view renders.
-
-Expressions and `fn view()` snippets without `use` lines get the imports in
-the manifest's `prelude`. A snippet with its own `#[preview]` is refused (its size would
-bypass the 2048 cap); use `size=WxH` instead.
+The block's value is printed with `{:?}` unless it is `()`. So `1 + 2`
+prints `3`, and `1 + 2;` prints nothing. A `main` that returns `Err` prints
+`Error: ..` and exits with status 1. A panic exits with status 101, as in
+Rust. A limit exits with status 1. Output is capped at 64 KiB. A program
+that writes more is stopped and its output ends with `… output truncated`.
 
 ## CLI
 
 ```sh
-cargo run -p rawr-play -- hello.rs --size 400x300 --theme dark -o target/play/hello.png
-cargo run -p rawr-play -- counter.rs --message Message::Increment -o target/play/counter.webp
-echo 'text("hi")' | cargo run -p rawr-play -- - --format webp -o - > target/play/hi.webp
+cargo run -p rawr-play -- hello.rs -o target/play/hello.json
+echo '1 + 2' | cargo run -p rawr-play -- - -o -
 ```
 
-The format follows `--format png|jpg|webp`, else the output extension, else
-PNG. An animated render is always a GIF. A file named `.png`, `.jpg` or
-`.webp` is then written with a `.gif` extension instead. `--still` writes
-the last frame as a still image. A note on the image goes to stderr as a
-`note: ` line when the result goes to stdout. `--step N` (repeatable) clicks
-a full app's target `N` after its messages, counting from 0 in reading
-order. `--step N=TEXT` types `TEXT` over text input `N`'s content and taps
-⏎. A full app's image comes with an `action: <label>` line for each target
-of its last frame (`input: <label>` for a text input) and a
-`click: <label>` line for each step, beside the note. A plain program writes JSON where an image would go. The JSON is one
-object that starts with `{`, and no image does:
+A plain program writes one JSON object:
 
 ```json
 {"kind":"text","status":0,"output":[{"stream":"stdout","text":"total: 27\n"}],"truncated":false,"limit":false}
@@ -68,78 +50,37 @@ object that starts with `{`, and no image does:
 
 `output` holds the program's stdout and stderr in the order it wrote them.
 Each entry is one run of text from one stream. `status` is 0. It is 1 when
-`main` returned `Err` or a limit stopped it, and 101 when the program panicked. `limit`
-says whether a limit stopped it. `truncated` says whether the output passed
-64 KiB. `note`, when present, is a remark on the run, such as ignored messages. `--time-ms N` sets the script time budget and `--memory-mb N` caps the
-process's address space (`RLIMIT_AS`, Linux only). Errors go to stderr with
-exit status 1.
+`main` returned `Err` or a limit stopped it, and 101 when the program
+panicked. `limit` says whether a limit stopped it. `truncated` says whether
+the output passed 64 KiB. `note`, when present, is a remark on the run, such
+as an iterator that nothing consumed.
 
-## Formats
-
-UI renders are flat colour and text. The bot sends PNG by default, and
-`PLAY_FORMAT` picks another format. Discord shows a PNG unchanged. Lossless
-WebP is the smallest of the three:
-
-| Sample | PNG | WebP (lossless) | JPEG q90 |
-| --- | --- | --- | --- |
-| app, 640x400 | 13 KB | 7.6 KB | 18 KB |
-| layout, 400x300 | 8.4 KB | 5.3 KB | 9.3 KB |
-| styled card, 400x300 | 3.8 KB | 2.7 KB | 6.5 KB |
-
-JPEG is larger and blurs text edges; it is there for clients that need it.
+An iced or async snippet writes `{"kind":"unavailable","text":".."}` with
+its message. `--time-ms N` sets the script time budget, and `--memory-mb N`
+caps the process's address space (`RLIMIT_AS`, Linux only). Errors go to
+stderr with exit status 1.
 
 ## Bot
 
 The bot replies to a message whose first line starts with `?play`, or whose
 code fence info string contains `?play`. The snippet is the first code
-block: ` ```rust `, ` ```rawr ` or a bare fence. It answers with the image
-attached, or with the error text in a code block (at most 2000 characters).
-A plain program gets its output in a ` ```text ` block. Output longer than
-Discord allows is cut, with a note. A non-zero exit status follows the
-block.
-It ignores bots. When the author edits a message it already answered, it
-re-renders and edits its reply. Over the rate limit it reacts with ⏳ and
-does not render.
+block: ` ```rust `, ` ```rawr ` or a bare fence. A plain program gets its
+output in a ` ```text ` block. Output longer than Discord allows is cut,
+with a note. A non-zero exit status follows the block. An iced or async
+snippet gets its message as plain text. An error gets its text in a code
+block (at most 2000 characters). It ignores bots. When the author edits a
+message it already answered, it runs it again and edits its reply. Over the
+rate limit it reacts with ⏳ and does not run.
 
 ````text
-?play 320x200 light msg=Message::Increment
+?play
 ```rust
-column![text("hi"), button("go")]
+let xs = vec![3, 1, 2];
+xs.iter().sum::<i64>()
 ```
 ````
 
-Options: `size=WxH` (or a bare `WxH`, at most 2048 per side),
-`theme=dark|light` (or a bare `dark`/`light`), repeated `msg=EXPR`, and a
-bare `mine`, which lets only the request's author click its reply.
-
-An app's reply has a button for each target of its last frame, up to 20
-(D516). Past 20, a select menu in the fifth row holds up to 25 more. A
-button's `custom_id` carries the click history (`src/click.rs`), and so
-does each menu option's value, so a click or a pick replays the request
-with its messages and those steps and edits the reply, with no store.
-Anyone may click unless the request says `mine`, which the click reads
-from the request as it is now. A click is a run under the clicker's
-per-user and per-channel limits, one click renders per reply at a time,
-and a history stops at 24 clicks.
-
-A target is a text or an icon's container that shows a pointer, or a
-control that reports itself. iced's toggler, radio, slider and label-less
-checkbox report nothing to an `Operation`, so rawr-iced wraps each in
-`widget::reported`, which reports its bounds and its own label. Their
-buttons carry those labels, and one without a label is numbered (`#5`).
-A slider is two targets, `Slider −` and `Slider +`: a step on one moves
-the cursor over the slider and taps ↓ or ↑, which iced's slider reads as
-one step down or up.
-
-A text input reports itself too, labelled by its placeholder and never by
-its value. Its button carries a ✏️ and a `custom_id` ending in `?`, and a
-click opens a modal instead of rendering. The modal's `custom_id` is the
-button's. The submitted text joins the history as a typed step: the
-target's digit, `~`, a base-62 length and the text. So the text rides in
-every later button with no store, and `click::room` caps the modal so each
-ID stays within Discord's 100 characters. A replay clicks the input,
-selects its content with ⌘A (Ctrl+A off macOS), types the text a key at a
-time and taps ⏎. A secure input's text shows as dots in the clicks line.
+`?play` takes no options. A word after it on its line gets an error reply.
 
 ### Where it answers
 
@@ -162,128 +103,38 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `DISCORD_TOKEN` | — | Bot token; else read from `DISCORD_TOKEN_FILE`, else `~/.config/rawr-play/token` |
-| `PLAY_WORKERS` | 2 | Renders running at once |
-| `PLAY_TIME_MS` | 2000 | Script time budget per render (engine deadline) |
-| `PLAY_ANIMATION_TIME_MS` | 15000 | An animation's time budget, once its view changes |
-| `PLAY_IDLE_ANIMATION_TIME_MS` | 60000 | An animation's time budget when no other render is queued or running |
-| `PLAY_ANIMATION_ALLOWANCE_S` | 90 | Animation time per user in each window |
-| `PLAY_ANIMATION_WINDOW_S` | 600 | The rolling window for the allowance |
-| `PLAY_TIMEOUT_MS` | 10000 | Whole render; the render process is killed after it |
-| `PLAY_MEMORY_MB` | 1024 | Address-space cap per render process (Linux) |
-| `PLAY_FORMAT` | png | Reply image: png, webp (lossless) or jpg; PNG is shown unchanged by Discord |
-| `PLAY_USER_PER_MIN` | 4 | Renders per user per minute |
-| `PLAY_CHANNEL_PER_MIN` | 12 | Renders per channel per minute |
+| `PLAY_WORKERS` | 2 | Runs at once |
+| `PLAY_TIME_MS` | 2000 | Script time budget per run (engine deadline) |
+| `PLAY_TIMEOUT_MS` | 10000 | Whole run; the `rawr-play` process is killed after it |
+| `PLAY_MEMORY_MB` | 1024 | Address-space cap per run process (Linux) |
+| `PLAY_USER_PER_MIN` | 4 | Runs per user per minute |
+| `PLAY_CHANNEL_PER_MIN` | 12 | Runs per channel per minute |
 | `PLAY_RENDERER` | beside the bot | Path to the `rawr-play` binary |
 | `PLAY_CHANNELS` | — | Comma-separated channel IDs to answer in, overriding `/play-channel` |
 | `PLAY_CONFIG_URL` | — | `http://` URL whose GET/PUT load and save the `/play-channel` choices |
 | `PLAY_CONFIG_FILE` | `~/.config/rawr-play/channels.json` | File for the choices when `PLAY_CONFIG_URL` is unset |
 | `PLAY_REPORT_URL` | — | Where boot events (`POST /events`) and minute stats (`PUT /stats`) go; unset: stderr only |
 | `PLAY_VERSION` | `dev` | The image's commit, baked in by `push-image.sh` |
-| `PLAY_FONTS` | — | Fonts directory passed to each render as `--fonts` |
 | `PLAY_HTTP_PORT` | — | Serve the playground's `POST /render` on this port |
 | `PLAY_LOG_KEY` | — | 64 hex digits; servers are reported by token under it, and not at all without it |
 
-## Fonts
-
-The renderer draws with iced's embedded Fira Sans and, for anything it
-lacks, bundled Noto fonts: CJK (one collection; Han without a locale reads
-as Simplified Chinese, kana as Japanese, Hangul as Korean), color emoji,
-symbols, sans and mono. `play/fetch-fonts.sh DIR` fetches the pinned files
-and checks their hashes; the image puts them in `/usr/share/rawr-play/fonts`
-and sets `PLAY_FONTS`, which the bot passes to each render as `--fonts DIR`.
-With `--fonts` the renderer sees those files and nothing of the system's, on
-any machine, so a Mac's system fonts cannot hide a missing glyph (`cargo
-test -p rawr-play --test fonts` after `play/fetch-fonts.sh
-target/play/fonts`). The files are memory-mapped and read only when a glyph
-falls back to them: one release render on macOS peaked at 23.4 MB for ASCII
-and 26.0 MB for CJK with emoji (23.7 MB with system fonts).
-
 ## Limits and sandbox
 
-Snippets are untrusted. Each render is its own `rawr-play` process, started
-with an empty environment, reading the code on stdin and writing the image
+Snippets are untrusted. Each run is its own `rawr-play` process, started
+with an empty environment, reading the code on stdin and writing its result
 on stdout. The bot kills it at `PLAY_TIMEOUT_MS`. On Linux the process's
 address space is capped at `PLAY_MEMORY_MB`, so a runaway allocation aborts
-that render only and the bot replies "out of memory".
+that run only and the bot replies "out of memory".
 
-A plain program runs under the same process limits. Its Engine has the same
-limits as a render. Its output is capped at 64 KiB.
+Inside, a fresh Engine has: 1,000,000 operations per run, call depth of at
+most 32, 64 KiB strings, 65,536-element arrays and maps, and a wall-clock
+deadline checked from the progress callback. Each limit gets a plain reply
+such as `operation limit exceeded: more than 1000000 operations (an endless
+loop?)`.
 
-### Animation time
-
-Every render starts on the still budget, `PLAY_TIME_MS` (5 s on
-Cloudflare). A full app whose view changes may record up to
-`PLAY_ANIMATION_TIME_MS` (15 s). The switch happens at the second distinct
-frame. The app's scripts and the recording share that deadline. The
-simulated clock is unchanged, so the same snippet gives the same frames.
-Once the view changes, frames are drawn at 1x, half the scale of a still
-PNG. Each frame is encoded into the GIF as soon as it is recorded, so the
-encoding counts against the same deadline. A frame stores only the
-rectangle that changed, with its unchanged pixels transparent. Assembling
-the GIF after the deadline costs at most one more frame's encoding.
-`PLAY_TIMEOUT_MS` (80 s on Cloudflare) leaves room for the idle budget's
-60 s plus the start. The bot shows Discord's typing indicator while a
-render runs.
-
-The longer budget has three limits (`src/budget.rs`):
-
-- Each user gets 90 s of animation time in any 10 minutes. A Discord user
-  is keyed by ID. A playground caller is keyed by its IP's hash, which the
-  Worker sends in `x-play-user`. A render that runs past the still budget
-  counts its whole time. It may take the allowance to zero but not below.
-  A user with less than the still budget left gets the still budget.
-- One render at a time holds the longer budget, across Discord and the
-  playground. Others get the still budget while it runs.
-- A render that starts with no other render queued or running may use
-  `PLAY_IDLE_ANIMATION_TIME_MS` (60 s) instead, as far as its user's
-  allowance reaches. The allowance fits one full idle render.
-
-A newcomer does not wait for an idle render. When a request arrives, the
-bot sends the idle render's process `SIGUSR1`. It sends it at once when the
-render is past `PLAY_ANIMATION_TIME_MS`, and otherwise when the render gets
-there. The process stops recording before its next frame and keeps the
-frames so far.
-
-The CLI takes the budgets as `--time-ms` and `--animation-ms`. `SIGUSR1`
-cuts its recording the same way.
-
-The notes on an animated reply:
-
-| Case | Note |
-| --- | --- |
-| Frame or span cap | `Animation shown for the first 5 s.` |
-| The wall clock cut it | `Rendering stopped after 15 s, so the animation shows its first 2.3 s.` |
-| …and the user's allowance was used up | adds `Your animation time is used up for now. It frees up in 4 minutes.` |
-| …and another render held the longer budget | adds `Another animation was rendering at the same time. Run it again shortly for up to 15 s.` |
-| Someone else was waiting for an idle render | `Rendering stopped after 21.4 s, so the animation shows its first 2.3 s. It was cut short because someone else was waiting.` |
-| An idle render ran past 15 s otherwise | adds `The bot was otherwise idle, so this animation could render for up to 60 s.` |
-
-The landing page's Run results are not cached when the clock cut them.
-
-Inside, a fresh Engine has: 1,000,000 operations per evaluation, call depth
-of at most 32, 64 KiB strings, 65,536-element arrays and maps, and a
-wall-clock deadline checked from the progress callback. Canvas sides are at
-most 2048. Each limit gets a plain reply such as `operation limit exceeded:
-more than 1000000 operations (an endless loop?)`.
-
-The iced facade has no filesystem, network, process or environment
-functions, and `render_png` touches no files. Untyped functions
-(`fn f(x) { .. }`) still reach the base language, so `?play` also disables
-`print`, `debug`, `eval` and `import`, installs a module resolver that loads
-nothing, and replaces `sleep` with an error.
-
-A snippet reads no file. The one exception is the playground examples'
-own files, which `play/sandbox` (`rawr-play-sandbox`) ships inside the
-renderer and inside rawr-web, each pinned by its SHA-256. `include_bytes!`
-of exactly one of their paths (`../assets/sun.png` and the others of iced's
-`solar_system`) reads the shipped copy from a module the Engine holds, and
-any other path still fails. A shipped file's own bytes are left out of the
-array limit, so the 113 KB sun loads, and anything added to them counts. The same crate gives a snippet the parts of
-rand and tracing-subscriber that iced's examples use: `rand::rng()` is
-rand's own `StdRng`, seeded the same for every render as the clock is
-frozen the same, so a snippet's frames repeat. `tracing_subscriber::fmt::init()`
-installs tracing-subscriber's `fmt` subscriber, whose lines go nowhere in a
-render and to the console in the browser.
+A snippet reads no file. `include_str!`, `include_bytes!` and `std::fs` fail
+with `?play has no files`. The Engine disables `eval` and `import`, installs
+a module resolver that loads nothing, and replaces `sleep` with an error.
 
 ## Run locally
 
@@ -301,8 +152,7 @@ builds only the bot). The memory cap applies on Linux only.
 
 ## Deploy on Cloudflare Containers
 
-The renderer is tiny-skia on the CPU with the Fira Sans font compiled in.
-It needs no GPU and no system fonts. Its TLS is OpenSSL through native-tls.
+A run needs no GPU and no fonts. The bot's TLS is OpenSSL through native-tls.
 The distroless runtime image already ships libssl3 and a CA bundle. The bot
 only makes outbound connections (Discord's gateway), so one always-on
 container runs it. `play/deploy/cloudflare` is a Worker whose
@@ -312,7 +162,7 @@ container has no disk: the bot keeps `/play-channel` choices in the Durable
 Object's storage through `http://play-config.internal/channels`, a host the
 Worker intercepts for the container only (no public endpoint, no secret).
 The bot also reports its boot phases and aggregate stats there each minute
-(renders, code errors, limits, median and p95 time, rate-limited counts,
+(runs, code errors, limits, median and p95 time, rate-limited counts,
 servers and channels; no message content, user IDs or server names), and
 `https://rawr.airstrike.fyi/bot` shows them, with the last 50 boot events,
 as a page in RawrGallery's Ink sheet.
@@ -345,38 +195,36 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 ### Playground
 
 `https://rawr.airstrike.fyi/play` is a web playground: an editor
-(Tab indents, Ctrl/Cmd+Enter runs), dark/light, an optional size, messages
-(one `Message` expression per line, like `msg=`), iced's examples from
-`play/tests/fixtures` (embedded when the Worker is built) and the output: the
-PNG, a plain program's output as a terminal with its exit status, or the same
-error text the bot replies with. **Share** stores the code
-and options in the Durable Object under a content-addressed id
-(`/play/<id>`, at most 64 KiB; the same snippet is the same id).
+(Tab indents, Ctrl/Cmd+Enter runs), plain Rust examples from
+`play/tests/fixtures/rust` (embedded when the Worker is built) and the
+output: a plain program's output as a terminal with its exit status, an
+iced or async snippet's message, or the same error text the bot replies
+with. A run is in the browser by default (rawr-web, `web/`), and on the
+server on request. **Share** stores the code in the Durable Object under a
+content-addressed id (`/play/<id>`, at most 64 KiB; the same snippet is the
+same id).
 
-A shared link unfurls with its own first frame: `/play/<id>` carries Open
-Graph and Twitter card tags whose image is `/play/<id>.png`. That PNG is
-rendered once (concurrent first requests share the render; a share warms
-it), kept in the Durable Object's SQLite (at most 1 MiB) and in the edge
-cache, and served `immutable`, since an id is a content hash. A snippet that
-does not render gets an error card (`public/og/play-error.png`, drawn from
-`og/error.rs`), kept too. The preview asks for `still`, so an animated
-snippet's preview is its last frame as a PNG. A plain program's share keeps its output. Its
-link shows the site's card (`site/public/og/card.png`), and its first line
-of output is the description; a busy or unreachable renderer is retried after
-ten minutes. Uncached previews are limited per IP (10 a minute, 60 an hour),
-without Turnstile. Shares not visited (page or image) for 30 days are
-purged by the cron once a day, with their previews. The editor keeps the
-latest snippet in the browser (`localStorage`): bare `/play` restores it; a
-share shows the share until it is edited; Examples → Reset brings back the
-counter.
+A shared link unfurls with its first line of output as the description and
+the site's card (`site/public/og/card.png`) as the image. A busy or
+unreachable server is retried after ten minutes. Uncached previews are
+limited per IP (10 a minute, 60 an hour), without Turnstile. Shares not
+visited for 30 days are purged by the cron once a day, with their previews.
+The editor keeps the latest snippet in the browser (`localStorage`): bare
+`/play` restores it; a share shows the share until it is edited; Examples →
+Reset brings back the first example.
 
-Renders go Worker → Durable Object → the bot's HTTP port (`PLAY_HTTP_PORT`,
-8080, reachable only through the Durable Object) → the same child-process
-renderer as `?play`, with the same limits. The bot's `POST /render` answers
-with `image/png` or `image/gif`, or with `application/json` for a plain
-program's output. A note on an animation comes in the `x-play-note` header.
-Playground renders share the pool
-but run one at a time and never ahead of a waiting Discord render. Each IP
+The Worker still keeps a share's theme, size and messages, reads `?play`
+options on the site's Run blocks, and stores a PNG preview when the bot
+sends one. Those served iced snippets, and the bot no longer reads or sends
+them.
+
+Server runs go Worker → Durable Object → the bot's HTTP port
+(`PLAY_HTTP_PORT`, 8080, reachable only through the Durable Object) → the
+same child process as `?play`, with the same limits. The bot's `POST
+/render` reads `{"code": ..}` and answers with `application/json`: a plain
+program's output, or an iced or async snippet's message. Playground runs
+share the pool but run one at a time and never ahead of a waiting Discord
+run. Each IP
 (kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a
 minute; code is capped at 16 KiB; Cloudflare Turnstile (site key in
 `vars.TURNSTILE_SITEKEY`, secret `TURNSTILE_SECRET`) checks browsers. A
@@ -483,11 +331,8 @@ the account permission Containers: Edit. That gives these permissions:
 The template's other permissions (Workers KV, R2, Tail and Memberships) are
 harmless but unused.
 
-`instance_type` is `lite` (1/16 vCPU, 256 MiB): a render's peak RSS was
-27 MB for a 640x400 app, 41 MB for 100k widgets stopped at the time limit
-and 63 MB at the 2048x2048 maximum (macOS `/usr/bin/time -l`, release),
-so `PLAY_WORKERS=1` fits with room to spare. Switch to
-`basic` (1/4 vCPU, 1 GiB) for faster renders. With Docker installed,
+`instance_type` is `lite` (1/16 vCPU, 256 MiB), and `PLAY_WORKERS=1` fits
+in it. Switch to `basic` (1/4 vCPU, 1 GiB) for faster runs. With Docker installed,
 `docker build --platform linux/amd64 -f play/Dockerfile -t rawr-play .`
 from the repository root builds the same image.
 
