@@ -430,6 +430,7 @@
     {"t":"T427","issue":427,"title":"T427: the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T428","issue":428,"title":"T428: A revealed impl Widget loses the trait arguments the opaque type fixes","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T429","issue":429,"title":"T429: A tuple struct's constructor named through its module has no binding","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T430","issue":430,"title":"T430: Generated bindings collide with rawr-iced's hand-written entries","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D586"],"commit":null,"release":null}
+    {"t":"T430","issue":430,"title":"T430: Generated bindings collide with rawr-iced's hand-written entries","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D586"],"commit":null,"release":null},
+    {"t":"T431","issue":431,"title":"T431: On Linux, `rawr run` compiles rawr's runtime again","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
