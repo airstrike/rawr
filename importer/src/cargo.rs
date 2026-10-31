@@ -222,9 +222,12 @@ pub struct Closure {
     /// Each crate's name, compiler unit and native input witness.
     pub units: Vec<(Box<str>, Box<str>, [u8; 32])>,
     /// Each compiler unit's machine-wide key, for a crate whose whole
-    /// closure comes from registries and git commits and runs no build
-    /// script (`extract::shared`).
+    /// closure comes from registries and git commits (`extract::shared`).
     pub shared: BTreeMap<Box<str>, Box<str>>,
+    /// The packages that run a build script in a shared unit's closure,
+    /// for a unit with any: its entry is shared only where the project's
+    /// build gives the outputs the nightly's did (#403).
+    pub scripts: BTreeMap<Box<str>, Box<[Box<str>]>>,
     /// Where machine-wide entries live, under rawr's home.
     pub home: PathBuf,
 }
@@ -364,10 +367,21 @@ pub struct Resolution {
     #[cfg(feature = "rustc-driver")]
     capture: Option<crate::extract::plan::Capture>,
     /// Each library unit's machine-wide key, for a closure probe: set only
-    /// for a unit whose whole closure is immutable (`extract::shared`).
+    /// for a unit whose whole closure is immutable (`extract::shared`), with
+    /// the packages in it that run a build script.
     #[cfg(feature = "rustc-driver")]
-    closure_keys: BTreeMap<Box<str>, Box<str>>,
+    closure_keys: BTreeMap<Box<str>, ClosureKey>,
+    /// The nightly build's build-script outputs by package, for a capture
+    /// of intrinsic facts: an entry whose closure runs a build script is
+    /// shared only where the project's build gives the same (#403).
+    #[cfg(feature = "rustc-driver")]
+    nightly_scripts: crate::applicability::store::Scripts,
 }
+
+/// A unit's machine-wide key and the packages in its closure that run a
+/// build script.
+#[cfg(feature = "rustc-driver")]
+type ClosureKey = (Box<str>, Box<[Box<str>]>);
 
 /// Completed observations without consuming the request that must validate reuse.
 struct CompletedHarness {
@@ -392,6 +406,8 @@ struct CompletedHarness {
     settlement: Vec<crate::bindings::Settled>,
     #[cfg(feature = "rustc-driver")]
     closure_units: Option<Box<[u8]>>,
+    #[cfg(feature = "rustc-driver")]
+    nightly_scripts: crate::applicability::store::Scripts,
 }
 
 impl CompletedHarness {
@@ -422,11 +438,9 @@ impl CompletedHarness {
                 )
                 .into_iter()
                 // A closure that runs a build script may give the nightly
-                // other outputs than the project's own build, which only that
-                // build can compare (T275): its crate's entry stays with the
-                // project rather than be shared unverified (#399).
-                .filter(|(_, shared)| shared.scripts.is_empty())
-                .map(|(unit, shared)| (unit, shared.key))
+                // other outputs than the project's own build: its entry is
+                // shared only where they agree (#399, #403).
+                .map(|(unit, shared)| (unit, (shared.key, shared.scripts)))
                 .collect()
             }
             _ => BTreeMap::new(),
@@ -463,6 +477,8 @@ impl CompletedHarness {
             capture: self.capture,
             #[cfg(feature = "rustc-driver")]
             closure_keys,
+            #[cfg(feature = "rustc-driver")]
+            nightly_scripts: self.nightly_scripts,
         }
     }
 }
@@ -1338,17 +1354,19 @@ impl Request {
         }
         closure.aliases.sort_unstable();
         closure.units.sort_unstable();
-        closure.shared = resolution
-            .closure_keys
-            .iter()
-            .filter(|(unit, _)| {
-                closure
-                    .units
-                    .iter()
-                    .any(|(_, candidate, _)| candidate == *unit)
-            })
-            .map(|(unit, key)| (unit.clone(), key.clone()))
-            .collect();
+        for (unit, (key, scripts)) in &resolution.closure_keys {
+            if !closure
+                .units
+                .iter()
+                .any(|(_, candidate, _)| candidate == unit)
+            {
+                continue;
+            }
+            closure.shared.insert(unit.clone(), key.clone());
+            if !scripts.is_empty() {
+                closure.scripts.insert(unit.clone(), scripts.clone());
+            }
+        }
         closure.home = crate::store::home(resolution.context.cargo_home()).join("inventories");
         Ok(closure)
     }
@@ -2878,6 +2896,14 @@ impl Request {
         } else {
             None
         };
+        // A capture of intrinsic facts keeps what the nightly's build
+        // scripts gave, for its entries to be compared with the project's.
+        #[cfg(feature = "rustc-driver")]
+        let nightly_scripts = if self.inventory && !self.inputs_only {
+            crate::applicability::store::Scripts::observed(retained_build.build())
+        } else {
+            crate::applicability::store::Scripts::default()
+        };
         let observations = documents.map(|documents| Retained {
             documents,
             build: retained_build,
@@ -2903,6 +2929,8 @@ impl Request {
             settlement,
             #[cfg(feature = "rustc-driver")]
             closure_units,
+            #[cfg(feature = "rustc-driver")]
+            nightly_scripts,
         })
     }
 }
@@ -3173,6 +3201,12 @@ impl Builder {
 }
 
 impl Resolution {
+    /// What the nightly's build scripts gave a capture of intrinsic facts.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn take_nightly_scripts(&mut self) -> crate::applicability::store::Scripts {
+        std::mem::take(&mut self.nightly_scripts)
+    }
+
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn into_native_inputs(
         self,

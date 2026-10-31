@@ -530,11 +530,11 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
     assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
 }
 
-/// A crate whose whole closure comes from a registry and runs no build
-/// script keeps its intrinsic entry in rawr's home under a machine-wide key:
-/// a second project reads it back instead of publishing its own. Path
-/// crates, and crates whose closure runs a build script, keep theirs per
-/// project.
+/// A crate whose whole closure comes from a registry keeps its intrinsic
+/// entry in rawr's home under a machine-wide key: a second project reads it
+/// back instead of publishing its own. A closure that runs a build script
+/// gets there once the project's build gave its scripts the outputs the
+/// nightly's did (#403). Path crates keep theirs per project.
 #[test]
 fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-inventories");
@@ -605,11 +605,11 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        ["semver"],
-        "only the registry crate's entry is machine-wide"
+        ["camino", "semver"],
+        "only the registry crates' entries are machine-wide"
     );
-    // camino runs a build script, whose outputs only the project's own build
-    // can compare, so its entry stays with the project (#399).
+    // camino runs a build script: the first project captured its entry, and
+    // published it once its own build gave the nightly's outputs (#403).
     let local = entries(&first.join("target/rawr/inventories"));
     let local = local
         .iter()
@@ -622,11 +622,14 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     assert_eq!(
         entries(&home.join("inventories")),
         shared,
-        "the second project reads the shared entry back"
+        "the second project reads the shared entries back"
     );
-    assert!(entries(&second.join("target/rawr/inventories"))
-        .iter()
-        .any(|(name, _)| name == "camino"));
+    assert!(
+        !entries(&second.join("target/rawr/inventories"))
+            .iter()
+            .any(|(name, _)| name == "camino" || name == "semver"),
+        "the second project captures neither"
+    );
 }
 
 /// A crate's bindings are shared per machine: a second project with the
@@ -1136,6 +1139,87 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
         // `list!` doubles each element.
         "12\n",
     );
+}
+
+/// A macro defined in the selected crate itself, whose `$crate` is that
+/// crate, replays from the crate's whole table with no nightly process
+/// (#404). The crates sit outside the project, so they aren't workspace
+/// members and their tables are kept with the project (#398).
+#[test]
+fn a_whole_table_answers_the_selected_crates_own_macro() {
+    const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("whole-own-macro");
+    let crates = base.join("crates");
+    let root = base.join("app");
+    let _ = fs::remove_dir_all(&base);
+    for name in ["outer", "inner"] {
+        copy(&Path::new(MACROS).join(name), &crates.join(name));
+    }
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[workspace]\n[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nouter={{path={:?}}}\n",
+            crates.join("outer"),
+        ),
+    )
+    .unwrap();
+    fs::copy(
+        Path::new(MACROS).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let run = |source: &str, expected: &str| {
+        fs::write(root.join("src/main.rs"), source).unwrap();
+        let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
+        assert!(
+            run.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&run.stdout),
+            text(&run.stderr)
+        );
+        assert_eq!(text(&run.stdout), expected);
+    };
+    let traces = |since: std::time::SystemTime| {
+        fn walk(path: &Path, since: std::time::SystemTime, found: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, since, found);
+                } else if !path.to_string_lossy().ends_with(".lock")
+                    && entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .is_ok_and(|modified| modified > since)
+                {
+                    found.push(path);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for directory in ["build", "extraction"] {
+            walk(&root.join("target/rawr").join(directory), since, &mut found);
+        }
+        found
+    };
+    run(
+        "// rawr\nfn main() {\n    println!(\"{}\", outer::__offset());\n}\n",
+        "100\n",
+    );
+    assert!(
+        root.join("target/rawr/bindings").is_dir(),
+        "outer's whole table is kept with the project"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let saved = std::time::SystemTime::now();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    run(
+        "// rawr\nfn main() {\n    println!(\"{} {}\", outer::__offset(), outer::offset!(5));\n}\n",
+        "100 105\n",
+    );
+    let traces = traces(saved);
+    assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
 }
 
 /// A project that depends on a crate the runner also needs under a name of

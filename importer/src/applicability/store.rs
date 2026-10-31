@@ -5,10 +5,15 @@
 //! publication it read; a busy or unreadable entry is a miss. The witness
 //! is the project's view of the crate, so a store keyed by it is the
 //! project's. A crate whose whole closure is immutable has a machine-wide
-//! key instead (`shared_key`), and its entry lives in rawr's home.
+//! key instead (`shared_key`), and its entry lives in rawr's home. When
+//! that closure runs a build script, the entry goes to rawr's home only
+//! once the project's own build gave the outputs the nightly's did, and a
+//! project reads it from there only when its build gives them too (#403).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use super::inventory::Entry;
@@ -86,4 +91,48 @@ pub fn publish(directory: &Path, entry: &Entry) -> std::io::Result<()> {
         .encode()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
     home::publish(directory, &name(entry.key()), &[(ENTRY, &bytes)])
+}
+
+/// Build-script outputs by cargo package id: their cfgs, environment and a
+/// digest of their generated files (`crate::bindings::Script`).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Scripts(BTreeMap<String, Vec<crate::bindings::Script>>);
+
+impl Scripts {
+    /// What a build's build scripts gave, leaving out a package whose
+    /// generated files could not be read.
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn observed(build: &crate::input::build::Build) -> Self {
+        Self(
+            build
+                .binding_scripts()
+                .into_iter()
+                .filter_map(|(package, outputs)| Some((package, outputs?)))
+                .collect(),
+        )
+    }
+
+    /// What the project's last runner build gave, under its Rawr
+    /// directory; none when that build recorded nothing.
+    #[must_use]
+    pub fn project(rawr: &Path) -> Option<Self> {
+        let bytes =
+            std::fs::read(rawr.join("runner").join(crate::bindings::RUNNER_SCRIPTS)).ok()?;
+        serde_json::from_slice(&bytes).ok().map(Self)
+    }
+
+    pub(crate) const fn from_map(scripts: BTreeMap<String, Vec<crate::bindings::Script>>) -> Self {
+        Self(scripts)
+    }
+
+    /// Whether both gave each of `packages` the same outputs. A package
+    /// either lacks is a disagreement.
+    pub(crate) fn agree(&self, packages: &[Box<str>], other: &Self) -> bool {
+        packages.iter().all(|package| {
+            self.0
+                .get(package.as_ref())
+                .is_some_and(|outputs| other.0.get(package.as_ref()) == Some(outputs))
+        })
+    }
 }

@@ -15,6 +15,8 @@ pub struct Acquired {
     graph: api::Graph<api::Extracted>,
     facts: Facts,
     fingerprint: [u8; 32],
+    /// What the nightly's build scripts gave, which each entry keeps.
+    scripts: super::store::Scripts,
 }
 
 /// Intrinsic facts with their own independently classified ordinary contract.
@@ -126,12 +128,15 @@ impl Acquired {
         native: &crate::process::Native,
         limits: &cargo::Limits,
     ) -> Result<Self> {
-        let resolution = request.resolve(native, limits)?;
-        resolution.publication(native, limits, |resolution| {
+        let mut resolution = request.resolve(native, limits)?;
+        let scripts = resolution.take_nightly_scripts();
+        let mut acquired = resolution.publication(native, limits, |resolution| {
             resolution
                 .into_extraction_uncached(limits)?
                 .inventory(limits)
-        })
+        })?;
+        acquired.scripts = scripts;
+        Ok(acquired)
     }
 
     pub(crate) fn authenticate(graph: api::Graph<api::Extracted>, facts: Facts) -> Result<Self> {
@@ -146,6 +151,7 @@ impl Acquired {
             graph,
             facts,
             fingerprint: fingerprint.finalize().into(),
+            scripts: super::store::Scripts::default(),
         })
     }
 
@@ -177,6 +183,7 @@ impl Acquired {
             graph,
             facts,
             fingerprint,
+            ..
         } = self;
         let contract = graph.classify(&crate::classify::Policy::standard(), limits)?;
         Ok(Prepared {
@@ -216,7 +223,8 @@ impl Acquired {
 pub(super) type RelativeExport = (Box<[Box<str>]>, identity::Namespace, identity::Definition);
 
 /// The format of a shared crate entry.
-const ENTRY_SCHEMA: u32 = 1;
+/// 2: an entry keeps the nightly's build-script outputs (#403).
+const ENTRY_SCHEMA: u32 = 2;
 
 /// One crate's complete intrinsic facts, shared per machine under a key the
 /// crate's own native inputs set before any nightly build (D609.3). Its
@@ -229,6 +237,9 @@ pub struct Entry {
     crate_name: Box<str>,
     exports: Box<[RelativeExport]>,
     facts: Facts,
+    /// The outputs the nightly's build scripts gave when the facts were
+    /// captured, by package: the entry holds where a build gives the same.
+    scripts: super::store::Scripts,
     #[serde(skip)]
     fingerprint: [u8; 32],
 }
@@ -290,6 +301,34 @@ impl Entry {
 
     pub(super) const fn fingerprint(&self) -> &[u8; 32] {
         &self.fingerprint
+    }
+
+    /// The outputs the nightly's build scripts gave at capture.
+    #[must_use]
+    pub const fn scripts(&self) -> &super::store::Scripts {
+        &self.scripts
+    }
+
+    /// Whether `project`'s build gave each of `packages` the build-script
+    /// outputs the nightly gave when this entry was captured.
+    #[must_use]
+    pub fn scripts_agree(&self, packages: &[Box<str>], project: &super::store::Scripts) -> bool {
+        self.scripts.agree(packages, project)
+    }
+
+    /// A copy of this entry under another key, as a project's entry is
+    /// published to rawr's home under its machine-wide key.
+    pub fn clone_rekeyed(&self, key: [u8; 32]) -> Result<Self> {
+        Self {
+            schema: self.schema,
+            key,
+            crate_name: self.crate_name.clone(),
+            exports: self.exports.clone(),
+            facts: self.facts.clone(),
+            scripts: self.scripts.clone(),
+            fingerprint: [0; 32],
+        }
+        .seal()
     }
 }
 
@@ -361,6 +400,7 @@ impl Acquired {
                             .collect(),
                         partitions: Box::new([partition.clone()]),
                     },
+                    scripts: self.scripts.clone(),
                     fingerprint: [0; 32],
                 }
                 .seal()?,

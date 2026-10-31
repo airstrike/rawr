@@ -4,12 +4,26 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-    "entries": [
-      {"text":"A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it.","issues":[318]},
-      {"text":"A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions.","issues":[327]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.29",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A save that names any item of a dependency rawr has already read needs no nightly build, for large crates such as iced too. rawr reads each crate's whole API the first time a program reaches it.","issues":[281]},
+        {"text":"A macro defined in a dependency replays its `$crate` paths from that dependency's shared bindings.","issues":[404]},
+        {"text":"Trait facts of registry and git crates whose dependencies run build scripts are shared by every project on a machine, once a project's own build agrees with rawr's nightly.","issues":[403]}
+      ]
+    },
+    {
+      "version": "0.3.28",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it.","issues":[318]},
+        {"text":"A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions.","issues":[327]}
+      ]
+    },
     {
       "version": "0.3.27",
       "date": "2026-10-31",

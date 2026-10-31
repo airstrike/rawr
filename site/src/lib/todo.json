@@ -1,18 +1,29 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.27",
+  "version": "0.3.29",
   "examples": {"running":12,"total":56,"note":"custom_widget runs through generated bindings; most others stop further along"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],
-      "entries": [
-        {"text":"A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it.","issues":[318]},
-        {"text":"A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions.","issues":[327]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.","rawr-iced is being retired step by step, so that removing it ends up a no-op."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.29",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A save that names any item of a dependency rawr has already read needs no nightly build, for large crates such as iced too. rawr reads each crate's whole API the first time a program reaches it.","issues":[281]},
+          {"text":"A macro defined in a dependency replays its `$crate` paths from that dependency's shared bindings.","issues":[404]},
+          {"text":"Trait facts of registry and git crates whose dependencies run build scripts are shared by every project on a machine, once a project's own build agrees with rawr's nightly.","issues":[403]}
+        ]
+      },
+      {
+        "version": "0.3.28",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it.","issues":[318]},
+          {"text":"A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions.","issues":[327]}
+        ]
+      },
       {
         "version": "0.3.27",
         "date": "2026-10-31",
@@ -701,7 +712,7 @@
     {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
     {"issue":282,"title":"Upstream text stops at `RAWR-RESOLVE-UNKNOWN-MEMBER` on `…::Text::new`, from the `text!(..)`…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
     {"issue":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open","category":"No glue (D593)"},
     {"issue":284,"title":"Upstream pick_list stops at \"unknown member `String::_boxed`\": rawr types a string literal in…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
@@ -738,7 +749,7 @@
     {"issue":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.6"},
     {"issue":316,"title":"The import-cli `plain-*` fixtures still carry `rust-toolchain.toml` (the pinned nightly) and a…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":317,"title":"An alias of an associated type takes no parameters after D625, so `canvas::Geometry<Renderer>`…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":318,"title":"Methods that return a projection over a parameter, such as `Cache::draw` and…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
     {"issue":319,"title":"A crate method can't be passed as a function value (`Theme::to_string`), and a script function…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":320,"title":"A gnarly ?play snippet from #playground prints `24` under rustc and stops in rawr","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.22"},
     {"issue":321,"title":"The ?play bot has been down since about 12:18 UTC on 2026-10-28","state":"closed","category":"Shared dependency cache (D607)"},
@@ -747,7 +758,7 @@
     {"issue":324,"title":"A crate trait's associated type held as a script value (the_matrix's…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.16"},
     {"issue":325,"title":"A literal of a crate's struct, such as `events::Color { r, g, b }`, fails at runtime in a plain…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":326,"title":"A live edit to a script impl's shape, such as a changed signature or a function added, is not…","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":327,"title":"multitouch passes `canvas::Action::publish` as a function value, which must be monomorphic","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.28"},
     {"issue":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":329,"title":"`copies_tests::a_proxy_lends_its_state_to_script_functions_without_a_copy` counts 1000 copies…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":330,"title":"Calling a `&self` trait method on an opaque value fails in the runner build with E0282, because…","state":"open","category":"Shared dependency cache (D607)"},
@@ -823,8 +834,8 @@
     {"issue":400,"title":"A program's first proved call compiles it twice","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":401,"title":"A crate extracted whole also answers macros such as `column!` that a later program calls for the…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.26"},
     {"issue":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":403,"title":"Compare build-script outputs so build-script crates can share facts","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
+    {"issue":404,"title":"A whole table lacks the selected crate's own $crate root","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
     {"issue":405,"title":"A project that depends on serde fails to build its runner","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.27"},
     {"issue":406,"title":"A struct that implements `Iterator` can be passed where a generic parameter takes…","state":"closed","category":"Divergences from rustc","release":"0.3.26"},
     {"issue":407,"title":"An iterator passed to a function is collected in full at the call","state":"open","category":"Divergences from rustc"},
@@ -838,7 +849,10 @@
     {"issue":415,"title":"A method returning a borrowed slice of a crate type gets no binding","state":"open","category":"No glue (D593)"},
     {"issue":416,"title":"rand's random_range over a char range is untyped","state":"open","category":"No glue (D593)"},
     {"issue":417,"title":"Widget::map, whose output names its callable F, is refused","state":"open","category":"No glue (D593)"},
-    {"issue":418,"title":"Widen tests of slots on generic-impl methods","state":"open","category":"No glue (D593)"}
+    {"issue":418,"title":"Widen tests of slots on generic-impl methods","state":"open","category":"No glue (D593)"},
+    {"issue":419,"title":"Path crates inside the project root keep no tables","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":420,"title":"Load only what a demand needs from a large whole table","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":421,"title":"Binding store unit tests fail under parallel test threads","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1022,10 +1036,11 @@
           "name": "Macro $crate roots",
           "start": 37,
           "size": 2,
-          "state": "now",
+          "state": "done",
           "note": "column! without demand",
           "issues": [
-            {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open"}
+            {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed"},
+            {"number":404,"title":"A whole table lacks the selected crate's own $crate root","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -1065,12 +1080,12 @@
           "name": "Hit with no nightly",
           "start": 47,
           "size": 3,
-          "state": "now",
-          "note": "Path crates replay their project-kept tables; a new name in a large registry crate still runs the nightly. #398, #281",
+          "state": "done",
+          "note": "Every crate read whole; path crates kept with the project. #398, #281",
           "issues": [
             {"number":398,"title":"A new import path of a bound crate re-extracts the API","state":"closed"},
             {"number":402,"title":"Replay path crates' whole tables with no nightly run","state":"closed"},
-            {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"open"}
+            {"number":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed"}
           ],
           "milestone": "0.4"
         },

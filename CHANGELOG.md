@@ -6,6 +6,15 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - rawr-iced is being retired step by step, so that removing it ends up a no-op.
+
+## 0.3.29 (2026-10-31)
+
+- A save that names any item of a dependency rawr has already read needs no nightly build, for large crates such as iced too. rawr reads each crate's whole API the first time a program reaches it. (#281)
+- A macro defined in a dependency replays its `$crate` paths from that dependency's shared bindings. (#404)
+- Trait facts of registry and git crates whose dependencies run build scripts are shared by every project on a machine, once a project's own build agrees with rawr's nightly. (#403)
+
+## 0.3.28 (2026-10-31)
+
 - A crate method whose output is its type parameter's associated type works. iced's `cache.draw(renderer, size, |frame| ..)` on a `canvas::Cache` gives a `canvas::Geometry`, and its closure borrows the `&mut Frame` iced lends it. (#318)
 - A crate function or method named as a value can go where `Option::map` or `Result::map` takes a closure, as in `message.map(canvas::Action::publish)`. A crate alias reached through its module, as `canvas::Cache::with_group(group)`, has its type's associated functions. (#327)
 
