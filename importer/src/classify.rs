@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 63;
+const CLASSIFIER_VERSION: u32 = 64;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4655,13 +4655,7 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             };
             let item = item.with_inferred(&[0], container_parameters + 1);
-            // A closure the output names is boxed, as iced's `Widget::map`
-            // gives `Map<Self, F, Message>` (T417): the call makes it as any
-            // generic method's call does.
-            let boxed = item.call().is_some()
-                && item.crossings().is_empty()
-                && output_boxes(item.signature().output());
-            if !boxed && (item.call().is_some() || !item.crossings().is_empty()) {
+            if item.call().is_some() || !item.crossings().is_empty() {
                 return Err(reject::Kind::CallableProtocol.into());
             }
             Ok(Representability::Invocation(callable::Invocation::new(
