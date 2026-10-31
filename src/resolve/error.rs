@@ -67,12 +67,6 @@ pub enum Category {
     /// A `break` or `continue` with no label in a `while` condition, as
     /// rustc's E0590.
     UnlabeledJumpInWhileCondition,
-    /// The restricted application-root contract was violated.
-    InvalidApplication,
-    /// A local preview declaration cannot be normalized at compile time.
-    InvalidPreview,
-    /// A marked scripted-widget lifecycle is invalid.
-    InvalidWidget,
 }
 
 impl fmt::Display for Category {
@@ -109,9 +103,6 @@ impl fmt::Display for Category {
             Self::UnlabeledJumpInWhileCondition => {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
-            Self::InvalidApplication => formatter.write_str("invalid application"),
-            Self::InvalidPreview => formatter.write_str("invalid preview"),
-            Self::InvalidWidget => formatter.write_str("invalid widget protocol"),
         }
     }
 }
@@ -416,30 +407,6 @@ pub enum Error {
         /// The jump's span.
         at: Span,
     },
-    /// Restricted application-root discovery failed.
-    Application(crate::application::Error),
-    /// Local preview metadata or one of its exact callback proofs is invalid.
-    InvalidPreview {
-        /// Stable preview subject or referenced item name.
-        preview: ImmutableString,
-        /// Concise explanation of the rejected proof.
-        reason: ImmutableString,
-        /// Primary preview attribute, option, or signature span.
-        reference: Span,
-        /// Related subject or callback declaration, when useful.
-        declaration: Option<Span>,
-    },
-    /// A marked scripted-widget lifecycle cannot be promoted.
-    InvalidWidget {
-        /// Nominal widget or hook involved in the failure.
-        widget: ImmutableString,
-        /// Stable explanation of the rejected protocol proof.
-        reason: ImmutableString,
-        /// Primary marker, hook, or signature span.
-        reference: Span,
-        /// Related marker or hook declaration, when useful.
-        declaration: Option<Span>,
-    },
 }
 
 impl Error {
@@ -478,9 +445,6 @@ impl Error {
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
-            Self::Application(_) => Category::InvalidApplication,
-            Self::InvalidPreview { .. } => Category::InvalidPreview,
-            Self::InvalidWidget { .. } => Category::InvalidWidget,
         }
     }
 
@@ -519,9 +483,6 @@ impl Error {
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
             Self::Syntax { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
-            Self::Application(_) => "application",
-            Self::InvalidPreview { preview, .. } => preview.as_str(),
-            Self::InvalidWidget { widget, .. } => widget.as_str(),
         }
     }
 
@@ -560,9 +521,6 @@ impl Error {
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
-            Self::Application(error) => error.primary_span(),
-            Self::InvalidPreview { reference, .. } => *reference,
-            Self::InvalidWidget { reference, .. } => *reference,
         }
     }
 
@@ -607,9 +565,6 @@ impl Error {
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::UnlabeledJumpInWhileCondition { .. } => None,
-            Self::Application(error) => error.secondary_span(),
-            Self::InvalidPreview { declaration, .. } => *declaration,
-            Self::InvalidWidget { declaration, .. } => *declaration,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
             | Self::InvalidHostOperation { .. }
@@ -844,57 +799,6 @@ impl fmt::Display for Written<'_> {
             Error::Syntax { message, .. } => formatter.write_str(message),
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
-            Error::Application(error) => error.fmt(formatter),
-            Error::InvalidPreview {
-                preview,
-                reason,
-                reference,
-                ..
-            } => write!(
-                formatter,
-                "invalid preview `{preview}` at {reference}: {reason}"
-            ),
-            Error::InvalidWidget {
-                widget,
-                reason,
-                reference,
-                ..
-            } => write!(
-                formatter,
-                "invalid widget protocol for `{widget}` at {reference}: {reason}"
-            ),
-        }
-    }
-}
-
-impl From<crate::application::Error> for Error {
-    fn from(error: crate::application::Error) -> Self {
-        Self::Application(error)
-    }
-}
-
-impl From<crate::preview::Error> for Error {
-    fn from(error: crate::preview::Error) -> Self {
-        match error {
-            crate::preview::Error::Missing => Self::InvalidPreview {
-                preview: "catalog".into(),
-                reason: "program declares no `#[preview]` entries".into(),
-                reference: crate::Span::NONE,
-                declaration: None,
-            },
-            crate::preview::Error::Application(error) => Self::Application(error),
-            crate::preview::Error::ApplicationSemanticMismatch => Self::InvalidPreview {
-                preview: "catalog".into(),
-                reason: "final application contract does not match sealed staging semantics".into(),
-                reference: crate::Span::NONE,
-                declaration: None,
-            },
-            crate::preview::Error::RuntimeType { role } => Self::InvalidPreview {
-                preview: "catalog".into(),
-                reason: format!("preview {role} has no exact runtime representation").into(),
-                reference: crate::Span::NONE,
-                declaration: None,
-            },
         }
     }
 }

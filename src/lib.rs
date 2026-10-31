@@ -102,10 +102,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod reify;
 #[macro_use]
 mod defer;
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+mod digest;
 
 mod api;
-/// Compiler-proven Rawr application roots.
-pub mod application;
 mod ast;
 /// Compile-time capabilities proven for Rawr values and callables.
 pub mod capability;
@@ -144,8 +145,6 @@ pub mod parse;
 mod parser;
 /// Typed native places and ownership-preserving sequence operations.
 pub mod place;
-/// Compiler-validated local preview metadata.
-pub mod preview;
 /// Opaque data retained by resolved programs.
 pub mod program;
 /// Canonical Rawr source and project discovery.
@@ -175,8 +174,6 @@ mod tokenizer;
 pub mod type_def;
 mod types;
 mod value;
-/// Compiler-proven scripted-widget lifecycle protocols.
-pub mod widget;
 
 /// Error encountered when parsing a script.
 type PERR = ParseErrorType;

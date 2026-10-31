@@ -15,6 +15,8 @@ use std::hash::{Hash, Hasher};
 pub struct Fingerprint(crate::Shared<Parts>);
 
 #[derive(Clone)]
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 struct Parts {
     authority: Box<[Part]>,
     atoms: Box<[Atom]>,
@@ -29,6 +31,8 @@ enum Part {
 }
 
 #[derive(Clone, Debug)]
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 enum Atom {
     Marker(Marker),
     Count(usize),
@@ -272,11 +276,8 @@ fn write_type(encoder: &mut Encoder, ty: &type_ref::Type) {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2f00);
         writer.count(self.0.atoms.len());
         for atom in &self.0.atoms {
@@ -293,7 +294,7 @@ impl crate::preview::digest::Write for Fingerprint {
                     writer.text(path);
                 }
                 Atom::OpaqueHost => {
-                    return Err(crate::preview::digest::Error::OpaqueHostIdentity {
+                    return Err(crate::digest::Error::OpaqueHostIdentity {
                         context: "preview callback signature identity",
                     });
                 }
@@ -303,6 +304,8 @@ impl crate::preview::digest::Write for Fingerprint {
     }
 }
 
+// Only the imported event mapper digests, a rust-import build's.
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 fn signature_tag(marker: Marker) -> u16 {
     match marker {
         Marker::Version1 => 0x2f01,

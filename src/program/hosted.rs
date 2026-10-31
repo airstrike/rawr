@@ -19,7 +19,6 @@ pub(crate) struct Hosted {
     dependencies: Box<[host::facade::Dependency]>,
     requirements: Box<[host::runtime::Requirement]>,
     projections: Box<[host::projection::Site]>,
-    widgets: Box<[host::runtime::widget::Requirement]>,
     bound: OnceCell<Shared<host::runtime::Registry>>,
 }
 
@@ -29,14 +28,12 @@ impl Hosted {
         dependencies: Box<[host::facade::Dependency]>,
         requirements: Box<[host::runtime::Requirement]>,
         projections: Box<[host::projection::Site]>,
-        widgets: Box<[host::runtime::widget::Requirement]>,
     ) -> Self {
         Self {
             origin,
             dependencies,
             requirements,
             projections,
-            widgets,
             bound: OnceCell::new(),
         }
     }
@@ -52,13 +49,7 @@ impl Hosted {
     ) -> Result<Option<Shared<host::runtime::Registry>>, Box<EvalAltResult>> {
         let validate = |registry: &host::runtime::Registry| {
             registry
-                .validate(
-                    &self.dependencies,
-                    &self.requirements,
-                    &self.projections,
-                    &self.widgets,
-                    &[],
-                )
+                .validate(&self.dependencies, &self.requirements, &self.projections)
                 .map_err(|error| -> Box<EvalAltResult> {
                     EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE).into()
                 })

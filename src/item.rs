@@ -320,17 +320,6 @@ pub struct Attribute {
     pub arguments: Box<[type_ref::Path]>,
     /// Complete `#[...]` source span.
     pub span: Span,
-    pub(crate) preview: Option<crate::preview::Syntax>,
-}
-
-impl Attribute {
-    pub(crate) const fn preview(&self) -> Option<&crate::preview::Syntax> {
-        self.preview.as_ref()
-    }
-
-    pub(crate) fn is_widget(&self) -> bool {
-        is_attribute_path(&self.path, "widget")
-    }
 }
 
 /// A parsed top-level Rawr item.

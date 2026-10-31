@@ -1,7 +1,7 @@
 //! Immutable candidates for script-native program replacement.
 
-pub mod callback;
-pub mod compatibility;
+mod bound;
+mod catalog;
 pub mod installation;
 pub mod scheduler;
 pub mod source;
@@ -9,75 +9,59 @@ pub mod source;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{preview, program};
+use crate::program;
+
+pub use bound::BoundCatalog;
 
 /// Immutable metadata proving one completely validated generation.
 ///
 /// The executable payload is deliberately absent. A compiled [`Candidate`]
-/// owns that one-shot payload until bootstrap or compatibility-proven binding
-/// consumes it. Installed hosts retain this shareable proof for later
-/// compatibility comparisons without cloning evaluator authority.
+/// owns that one-shot payload until bootstrap binding consumes it.
 pub struct Generation {
     id: program::GenerationId,
     source: source::Graph,
     schemas: program::schema::Manifest,
-    callbacks: callback::Manifest,
-    application: bool,
-    previews: Box<[preview::Definition]>,
 }
 
 /// One compiled generation awaiting its sole native-runtime binding.
 ///
-/// Compatibility may inspect the immutable metadata, but only bootstrap or a
-/// consumed compatibility plan can move the private catalog to runtime
-/// binding.
+/// Only bootstrap can move the private catalog to runtime binding.
 pub struct Candidate {
     generation: Arc<Generation>,
-    catalog: preview::Catalog,
+    catalog: catalog::Catalog,
 }
 
 impl Candidate {
-    pub(crate) fn from_package(
-        executable: program::Executable,
-        source: source::Graph,
-    ) -> Result<Self, (program::source::Id, preview::Error)> {
-        let schemas = executable.schemas().clone();
-        let catalog = preview::Catalog::from_package_generation_executable(executable)?;
-        Ok(Self::from_catalog(catalog, schemas, source))
-    }
-
-    /// A generation of any program, a plain one included, with no host
-    /// profile to check its application against.
+    /// A generation of any program, a plain one included.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_plain(
         executable: program::Executable,
         source: source::Graph,
-    ) -> Result<Self, (program::source::Id, preview::Error)> {
+    ) -> Self {
         let schemas = executable.schemas().clone();
-        let catalog = preview::Catalog::from_package_generation_executable_plain(executable)?;
-        Ok(Self::from_catalog(catalog, schemas, source))
+        Self::from_catalog(
+            catalog::Catalog::from_executable(executable),
+            schemas,
+            source,
+        )
     }
 
     // Generation handles deliberately use Arc for stable cross-owner proof
     // identity even when one concrete catalog is confined to the host thread.
     #[allow(clippy::arc_with_non_send_sync)]
+    // A candidate is made only by a rust-import build.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     fn from_catalog(
-        catalog: preview::Catalog,
+        catalog: catalog::Catalog,
         schemas: program::schema::Manifest,
         source: source::Graph,
     ) -> Self {
         let id = catalog.generation();
-        let callbacks = callback::Manifest::from_catalog(&catalog, &schemas);
-        let application = catalog.has_application();
-        let previews = catalog.previews().to_vec().into_boxed_slice();
         Self {
             generation: Arc::new(Generation {
                 id,
                 source,
                 schemas,
-                callbacks,
-                application,
-                previews,
             }),
             catalog,
         }
@@ -127,24 +111,6 @@ impl Candidate {
     pub fn schemas(&self) -> &program::schema::Manifest {
         self.generation.schemas()
     }
-
-    /// Return the normalized callback proofs partitioned by live owner.
-    #[must_use]
-    pub fn callbacks(&self) -> &callback::Manifest {
-        self.generation.callbacks()
-    }
-
-    /// Return whether this candidate contains a validated application.
-    #[must_use]
-    pub fn has_application(&self) -> bool {
-        self.generation.has_application()
-    }
-
-    /// Return all compiler-validated preview descriptors in stable key order.
-    #[must_use]
-    pub fn previews(&self) -> &[preview::Definition] {
-        self.generation.previews()
-    }
 }
 
 impl Generation {
@@ -165,24 +131,6 @@ impl Generation {
     pub const fn schemas(&self) -> &program::schema::Manifest {
         &self.schemas
     }
-
-    /// Return the normalized application and preview callback proofs.
-    #[must_use]
-    pub const fn callbacks(&self) -> &callback::Manifest {
-        &self.callbacks
-    }
-
-    /// Return whether this generation contains a validated application.
-    #[must_use]
-    pub const fn has_application(&self) -> bool {
-        self.application
-    }
-
-    /// Return all compiler-validated preview descriptors in stable key order.
-    #[must_use]
-    pub const fn previews(&self) -> &[preview::Definition] {
-        &self.previews
-    }
 }
 
 impl fmt::Debug for Candidate {
@@ -193,8 +141,6 @@ impl fmt::Debug for Candidate {
             .field("packages", &self.source().packages().len())
             .field("sources", &self.source().sources().len())
             .field("schemas", &self.schemas().len())
-            .field("has_application", &self.has_application())
-            .field("previews", &self.previews().len())
             .finish_non_exhaustive()
     }
 }
@@ -207,8 +153,6 @@ impl fmt::Debug for Generation {
             .field("packages", &self.source.packages().len())
             .field("sources", &self.source.sources().len())
             .field("schemas", &self.schemas.len())
-            .field("has_application", &self.has_application())
-            .field("previews", &self.previews().len())
             .finish_non_exhaustive()
     }
 }

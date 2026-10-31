@@ -27,7 +27,7 @@ impl Contract {
         clippy::too_many_arguments,
         reason = "the endpoint proof bundle is intentionally indivisible"
     )]
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) fn new(
         path: host::path::Path,
         target: host::path::Path,
@@ -180,11 +180,8 @@ impl std::hash::Hash for Contract {
     }
 }
 
-impl crate::preview::digest::Write for Contract {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Contract {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2d00);
         writer.text(&self.path.to_string());
         writer.text(&self.target.to_string());

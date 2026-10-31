@@ -13,10 +13,6 @@ pub enum Kind {
     AssociatedValue,
     /// A free function in a module namespace.
     Function,
-    /// A symbolic asynchronous operation supplied by its owning facade.
-    Operation,
-    /// A symbolic stream operation supplied by its owning facade.
-    StreamOperation,
     /// A function whose meaning is supplied by the compiler.
     IntrinsicFunction,
     /// A bracketed list-builder macro whose meaning is supplied by the compiler.
@@ -109,7 +105,6 @@ pub struct Definition {
     signature: host::signature::Definition,
     outcome: host::usage::Outcome,
     evaluation: host::usage::Evaluation,
-    stream_identity: Option<host::stream::Version>,
     imported: Option<ImportedSelector>,
     guard: Option<Guard>,
     /// The output borrows what the call takes: the call opens a scope
@@ -149,7 +144,6 @@ pub struct Fingerprint {
     signature: host::signature::Fingerprint,
     outcome: host::usage::Outcome,
     evaluation: host::usage::Evaluation,
-    stream_identity: Option<host::stream::Version>,
     imported: Option<[u8; 32]>,
     guard: Option<Guard>,
     opens: bool,
@@ -198,7 +192,6 @@ impl Definition {
             signature: self.signature.try_clone()?,
             outcome: self.outcome,
             evaluation: self.evaluation,
-            stream_identity: self.stream_identity,
             imported: self
                 .imported
                 .as_ref()
@@ -225,7 +218,6 @@ impl Definition {
             signature: host::signature::Builder::new().finish(),
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -258,7 +250,6 @@ impl Definition {
             signature: signature.finish(),
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -281,7 +272,6 @@ impl Definition {
             signature: signature.finish(),
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -302,50 +292,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
-            imported: None,
-            guard: None,
-            opens: false,
-            application: None,
-            rules: None,
-        })
-    }
-
-    /// Declare a receiver-free symbolic operation with zero or more inputs and one output.
-    pub fn operation(
-        path: impl Into<ImmutableString>,
-        signature: host::signature::Definition,
-    ) -> Result<Self, host::Error> {
-        Ok(Self {
-            path: host::path::Path::parse(path)?,
-            kind: Kind::Operation,
-            receiver: None,
-            signature,
-            outcome: host::usage::Outcome::Conservative,
-            evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
-            imported: None,
-            guard: None,
-            opens: false,
-            application: None,
-            rules: None,
-        })
-    }
-
-    /// Declare a receiver-free symbolic stream operation with exact inputs and one item output.
-    pub fn stream_operation(
-        path: impl Into<ImmutableString>,
-        signature: host::signature::Definition,
-        identity: host::stream::Version,
-    ) -> Result<Self, host::Error> {
-        Ok(Self {
-            path: host::path::Path::parse(path)?,
-            kind: Kind::StreamOperation,
-            receiver: None,
-            signature,
-            outcome: host::usage::Outcome::Conservative,
-            evaluation: host::usage::Evaluation::Required,
-            stream_identity: Some(identity),
             imported: None,
             guard: None,
             opens: false,
@@ -366,7 +312,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -390,7 +335,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -411,7 +355,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -433,7 +376,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -455,7 +397,6 @@ impl Definition {
             signature,
             outcome: host::usage::Outcome::Conservative,
             evaluation: host::usage::Evaluation::Required,
-            stream_identity: None,
             imported: None,
             guard: None,
             opens: false,
@@ -512,12 +453,6 @@ impl Definition {
     #[must_use]
     pub const fn evaluation(&self) -> host::usage::Evaluation {
         self.evaluation
-    }
-
-    /// Return the explicit canonical identity protocol for a stream operation.
-    #[must_use]
-    pub const fn stream_identity(&self) -> Option<host::stream::Version> {
-        self.stream_identity
     }
 
     #[cfg(feature = "rust-import")]
@@ -590,7 +525,6 @@ impl Definition {
             signature: self.signature.fingerprint(),
             outcome: self.outcome,
             evaluation: self.evaluation,
-            stream_identity: self.stream_identity,
             imported,
             guard: self.guard,
             opens: self.opens,
@@ -608,7 +542,6 @@ impl Definition {
             signature: self.signature.try_fingerprint()?,
             outcome: self.outcome,
             evaluation: self.evaluation,
-            stream_identity: self.stream_identity,
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
             opens: self.opens,
@@ -630,11 +563,7 @@ impl Definition {
         let parent_is_root = &parent == root;
 
         match self.kind {
-            Kind::Value
-            | Kind::Function
-            | Kind::Operation
-            | Kind::StreamOperation
-            | Kind::IntrinsicFunction => {
+            Kind::Value | Kind::Function | Kind::IntrinsicFunction => {
                 if !parent_is_root && modules.binary_search(&parent).is_err() {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
@@ -697,7 +626,6 @@ impl Definition {
             receiver: self.receiver,
             outcome: self.outcome,
             evaluation: self.evaluation,
-            stream_identity: self.stream_identity,
             #[cfg(feature = "rust-import")]
             imported: self
                 .imported
@@ -735,11 +663,7 @@ impl Definition {
             && aliases.contains(&parent);
 
         match self.kind {
-            Kind::Value
-            | Kind::Function
-            | Kind::Operation
-            | Kind::StreamOperation
-            | Kind::IntrinsicFunction => {
+            Kind::Value | Kind::Function | Kind::IntrinsicFunction => {
                 if !parent_is_root && modules.binary_search(&parent).is_err() {
                     return Err(host::Error::MissingFacadeModule {
                         path: path.to_string().into(),
@@ -818,12 +742,9 @@ impl Fingerprint {
     }
 }
 
-impl crate::preview::digest::Write for Fingerprint {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::write_receiver;
+impl crate::digest::Write for Fingerprint {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::write_receiver;
 
         writer.tag(0x2500);
         writer.tag(0x2501);
@@ -838,8 +759,6 @@ impl crate::preview::digest::Write for Fingerprint {
             Kind::IntrinsicMethod => 0x2516,
             Kind::AssociatedFunction => 0x2517,
             Kind::Method => 0x2518,
-            Kind::Operation => 0x2519,
-            Kind::StreamOperation => 0x251a,
             Kind::MacroRules => 0x251b,
         });
         writer.tag(0x2503);
@@ -856,14 +775,6 @@ impl crate::preview::digest::Write for Fingerprint {
             host::usage::Evaluation::Required => 0x2531,
             host::usage::Evaluation::Elidable => 0x2532,
         });
-        writer.tag(0x2507);
-        match self.stream_identity {
-            Some(version) => {
-                writer.tag(0x2541);
-                writer.u32(version.get());
-            }
-            None => writer.tag(0x2542),
-        }
         writer.tag(0x2508);
         match self.imported {
             Some(identity) => {

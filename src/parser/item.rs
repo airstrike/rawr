@@ -282,7 +282,7 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
                     && let Some(item) =
                         parse_item_after_attribute_marker(input, &tokenizer_control, position)?
                 {
-                    bind_previews(item, &mut items)?;
+                    items.push(item);
                 }
             }
             // `private fn f()`: a name before `fn` is rustc's syntax error.
@@ -1189,25 +1189,6 @@ fn parse_attribute_after_marker(
 ) -> ParseResult<crate::item::Attribute> {
     expect(input, Token::LeftBracket, "after '#' in an attribute")?;
     let path = parse_path(input)?;
-    let is_preview = crate::item::is_attribute_path(&path, "preview");
-
-    if is_preview {
-        let mut preview = if matches!(input.peek(), Some((Token::LeftParen, _))) {
-            parse_preview_arguments(input, hash)?
-        } else {
-            crate::preview::Syntax::bare(Span::NONE)
-        };
-        let close = expect(input, Token::RightBracket, "to close an attribute")?;
-        let span = Span::new(hash, after(close, 1));
-        preview.span = span;
-        return Ok(crate::item::Attribute {
-            path,
-            arguments: Box::default(),
-            span,
-            preview: Some(preview),
-        });
-    }
-
     let mut arguments = Vec::new();
 
     // `#[cfg(predicate)]`: Rawr builds as rustc does without `--test`.
@@ -1225,18 +1206,18 @@ fn parse_attribute_after_marker(
             path,
             arguments: Box::default(),
             span: Span::new(hash, after(close, 1)),
-            preview: None,
         });
     }
 
     // A runtime's entry, `#[tokio::main(flavor = "current_thread")]`: its
     // arguments are the runtime's, which the shadow crate's native entry
-    // passes on as written (D513.4).
-    if path.segments.len() > 1
-        && path
-            .segments
-            .last()
-            .is_some_and(|segment| segment.name.text == "main")
+    // passes on as written (D513.4). `#[preview(..)]`'s are rustc's alone.
+    if (crate::item::is_attribute_path(&path, "preview")
+        || path.segments.len() > 1
+            && path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.name.text == "main"))
         && matches!(input.peek(), Some((Token::LeftParen, _)))
     {
         let mut depth = 0_usize;
@@ -1294,292 +1275,7 @@ fn parse_attribute_after_marker(
         path,
         arguments: arguments.into_boxed_slice(),
         span: Span::new(hash, after(close, 1)),
-        preview: None,
     })
-}
-
-fn parse_preview_arguments(
-    input: &mut TokenStream,
-    hash: Position,
-) -> ParseResult<crate::preview::Syntax> {
-    expect(input, Token::LeftParen, "after 'preview'")?;
-    let mut preview = crate::preview::Syntax::bare(Span::NONE);
-    let mut seen = std::collections::BTreeSet::new();
-
-    while !matches!(input.peek(), Some((Token::RightParen, _))) {
-        let key = parse_name(input, "as a preview option")?;
-        // `theme = path` is `themes = [path]`; one or the other.
-        let option = if key.text == "theme" {
-            "themes".into()
-        } else {
-            key.text.clone()
-        };
-        if !seen.insert(option) {
-            return Err(
-                PERR::MissingSymbol(format!("Duplicate preview option '{}'", key.text))
-                    .into_err(key.span.start()),
-            );
-        }
-        expect(input, Token::Equals, "after a preview option")?;
-
-        match key.text.as_str() {
-            "name" => preview.name = Some(parse_preview_text(input, "preview name")?),
-            "group" => preview.group = Some(parse_preview_text(input, "preview group")?),
-            "seed" => preview.seed = Some(parse_path(input)?),
-            "update" => preview.update = Some(parse_path(input)?),
-            "themes" => preview.themes = parse_preview_themes(input)?,
-            "theme" => preview.themes = Box::new([parse_path(input)?]),
-            "snapshot" => preview.snapshot = Some(parse_preview_flag(input)?),
-            "size" => preview.size = Some(parse_preview_size(input)?),
-            "bind" => preview.bind = Some(parse_preview_bind(input)?),
-            _ => {
-                return Err(PERR::MissingSymbol(format!(
-                    "Unknown preview option '{}'; expected name, group, seed, update, theme, themes, snapshot, size, or bind",
-                    key.text
-                ))
-                .into_err(key.span.start()));
-            }
-        }
-
-        match input.peek().expect("token streams always end with EOF") {
-            (Token::Comma, _) => {
-                input.next();
-                if matches!(input.peek(), Some((Token::RightParen, _))) {
-                    break;
-                }
-            }
-            (Token::RightParen, _) => break,
-            (_, position) => {
-                return Err(PERR::MissingToken(
-                    Token::Comma.into(),
-                    "between preview options".into(),
-                )
-                .into_err(*position));
-            }
-        }
-    }
-
-    let close = expect(input, Token::RightParen, "to close preview options")?;
-    preview.span = Span::new(hash, after(close, 1));
-    Ok(preview)
-}
-
-/// `bind = (a, b)`: the balanced, parenthesized argument tokens.
-fn parse_preview_bind(input: &mut TokenStream) -> ParseResult<crate::preview::Bind> {
-    let open = expect(input, Token::LeftParen, "to start preview `bind` arguments")?;
-    let mut tokens = vec![body_token(Token::LeftParen, open)];
-    let mut depth = 1_usize;
-    let close = loop {
-        let (token, position) = input.next().expect("token streams always end with EOF");
-        match &token {
-            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
-                depth += 1;
-            }
-            Token::RightParen | Token::RightBracket | Token::RightBrace => depth -= 1,
-            Token::EOF => {
-                return Err(PERR::MissingToken(
-                    ")".into(),
-                    "to close preview `bind` arguments".into(),
-                )
-                .into_err(position));
-            }
-            Token::LexError(error) => return Err(error.clone().into_err(position)),
-            _ => {}
-        }
-        tokens.push(body_token(token, position));
-        if depth == 0 {
-            break position;
-        }
-    };
-    Ok(crate::preview::Bind {
-        span: Span::new(open, after(close, 1)),
-        tokens,
-    })
-}
-
-/// Push a parsed file-level item, and for each `#[preview(name = .., bind =
-/// (a, b))]` on a free function a private constant of its parameters' type
-/// (their tuple, past one) holding the arguments, as Granita's `bind` does.
-/// That constant is the preview's `seed`, and the preview joins the group
-/// named after the function.
-fn bind_previews(
-    item: crate::item::Parsed,
-    items: &mut Vec<crate::item::Parsed>,
-) -> ParseResult<()> {
-    if let crate::item::Parsed::Function(mut function) = item {
-        let mut constants = Vec::new();
-        for (index, attribute) in function.header.attributes.iter_mut().enumerate() {
-            let Some(preview) = attribute.preview.as_mut() else {
-                continue;
-            };
-            let Some(bind) = preview.bind.take() else {
-                continue;
-            };
-            let refuse = |message: &str| {
-                Err(PERR::MissingSymbol(message.to_owned()).into_err(bind.span.start()))
-            };
-            if preview.seed.is_some() {
-                return refuse("a preview declares `bind` or `seed`, not both");
-            }
-            if preview.name.is_none() {
-                return refuse("a `bind` preview needs a `name`");
-            }
-            let ty = match function.parameters.as_ref() {
-                [] => return refuse("`bind` takes the arguments of a function with parameters"),
-                [parameter] => parameter.ty.clone(),
-                parameters => type_ref::Type::Tuple {
-                    members: parameters
-                        .iter()
-                        .map(|parameter| parameter.ty.clone())
-                        .collect(),
-                    span: bind.span,
-                },
-            };
-            let name = crate::item::Name {
-                text: format!("__rawr_bind_{}_{index}", function.name.text).into(),
-                span: bind.span,
-            };
-            preview.group.get_or_insert_with(|| crate::preview::Text {
-                value: function.name.text.clone(),
-                span: function.name.span,
-            });
-            preview.seed = Some(type_ref::Path {
-                segments: Box::new([type_ref::Segment {
-                    name: name.clone(),
-                    arguments: Box::default(),
-                    span: bind.span,
-                }]),
-                span: bind.span,
-                global: false,
-            });
-            preview.bound = true;
-            constants.push(crate::item::Parsed::Function(crate::item::Function {
-                header: crate::item::Header {
-                    attributes: Box::default(),
-                    visibility: None,
-                    span: bind.span,
-                },
-                name,
-                generics: Box::default(),
-                lifetimes: crate::item::Lifetimes::default(),
-                receiver_lifetime: None,
-                receiver: None,
-                parameters: Box::default(),
-                output: Some(ty),
-                body_span: bind.span,
-                body_syntax: crate::item::BodySyntax::new(bind.tokens),
-                constant: true,
-                asynchronous: false,
-                span: bind.span,
-            }));
-        }
-        items.push(crate::item::Parsed::Function(function));
-        items.extend(constants);
-        return Ok(());
-    }
-    items.push(item);
-    Ok(())
-}
-
-fn parse_preview_text(
-    input: &mut TokenStream,
-    description: &'static str,
-) -> ParseResult<crate::preview::Text> {
-    match input.next().expect("token streams always end with EOF") {
-        (Token::StringConstant(value), position) => {
-            let end = after(position, value.chars().count() + 2);
-            Ok(crate::preview::Text {
-                value: value.as_str().into(),
-                span: Span::new(position, end),
-            })
-        }
-        (Token::LexError(error), position) => Err(error.into_err(position)),
-        (_, position) => {
-            Err(PERR::MissingToken("string literal".into(), description.into()).into_err(position))
-        }
-    }
-}
-
-fn parse_preview_flag(input: &mut TokenStream) -> ParseResult<crate::preview::Flag> {
-    match input.next().expect("token streams always end with EOF") {
-        (Token::True, position) => Ok(crate::preview::Flag {
-            value: true,
-            span: token_span(position, "true"),
-        }),
-        (Token::False, position) => Ok(crate::preview::Flag {
-            value: false,
-            span: token_span(position, "false"),
-        }),
-        (Token::LexError(error), position) => Err(error.into_err(position)),
-        (_, position) => Err(PERR::MissingToken(
-            "boolean literal".into(),
-            "for preview snapshot inclusion".into(),
-        )
-        .into_err(position)),
-    }
-}
-
-fn parse_preview_themes(
-    input: &mut TokenStream,
-) -> ParseResult<Box<[crate::item::type_ref::Path]>> {
-    expect(input, Token::LeftBracket, "to start preview theme variants")?;
-    let mut themes = Vec::new();
-    while !matches!(input.peek(), Some((Token::RightBracket, _))) {
-        themes.push(parse_path(input)?);
-        match input.peek().expect("token streams always end with EOF") {
-            (Token::Comma, _) => {
-                input.next();
-                if matches!(input.peek(), Some((Token::RightBracket, _))) {
-                    break;
-                }
-            }
-            (Token::RightBracket, _) => break,
-            (_, position) => {
-                return Err(PERR::MissingToken(
-                    Token::Comma.into(),
-                    "between preview theme variants".into(),
-                )
-                .into_err(*position));
-            }
-        }
-    }
-    expect(
-        input,
-        Token::RightBracket,
-        "to close preview theme variants",
-    )?;
-    Ok(themes.into_boxed_slice())
-}
-
-fn parse_preview_size(input: &mut TokenStream) -> ParseResult<crate::preview::SizeSyntax> {
-    let open = expect(input, Token::LeftParen, "to start a preview logical size")?;
-    let width = parse_preview_dimension(input, "preview width")?;
-    expect(input, Token::Comma, "between preview width and height")?;
-    let height = parse_preview_dimension(input, "preview height")?;
-    let close = expect(input, Token::RightParen, "to close a preview logical size")?;
-    Ok(crate::preview::SizeSyntax {
-        width,
-        height,
-        span: Span::new(open, after(close, 1)),
-    })
-}
-
-fn parse_preview_dimension(input: &mut TokenStream, description: &'static str) -> ParseResult<u32> {
-    match input.next().expect("token streams always end with EOF") {
-        (Token::IntegerConstant(value), position) => u32::try_from(value)
-            .ok()
-            .filter(|value| *value > 0)
-            .ok_or_else(|| {
-                PERR::MissingSymbol(format!("{description} must be a positive u32 literal"))
-                    .into_err(position)
-            }),
-        (Token::LexError(error), position) => Err(error.into_err(position)),
-        (_, position) => Err(PERR::MissingToken(
-            "positive integer literal".into(),
-            description.into(),
-        )
-        .into_err(position)),
-    }
 }
 
 fn parse_use(
@@ -5456,85 +5152,6 @@ answer
         assert!(main.header.visibility.is_some());
         assert!(main.output.is_some());
         assert_eq!(unit.source().text(), source);
-    }
-
-    #[test]
-    fn parses_bounded_preview_metadata_without_general_attribute_expressions() {
-        let source = r#"
-#[preview]
-#[preview(
-    name = "forty two",
-    group = "counter",
-    seed = Counter::forty_two,
-    update = Counter::update,
-    themes = [Counter::theme, crate::themes::dark],
-    snapshot = false,
-    size = (640, 480),
-)]
-fn view(state: &Counter) -> iced::widget::Column<'_, Message> { () }
-"#;
-        let unit = Engine::new().parse_unit(source).unwrap();
-        let Parsed::Function(function) = &unit.items()[0] else {
-            panic!("expected preview function");
-        };
-        let bare = function.header.attributes[0].preview().unwrap();
-        assert!(bare.name.is_none());
-
-        let preview = function.header.attributes[1].preview().unwrap();
-        assert_eq!(preview.name.as_ref().unwrap().value, "forty two");
-        assert_eq!(preview.group.as_ref().unwrap().value, "counter");
-        assert_eq!(preview.seed.as_ref().unwrap().segments.len(), 2);
-        assert_eq!(preview.update.as_ref().unwrap().segments.len(), 2);
-        assert_eq!(preview.themes.len(), 2);
-        assert!(!preview.snapshot.unwrap().value);
-        assert_eq!(preview.size.unwrap().width, 640);
-        assert_eq!(preview.size.unwrap().height, 480);
-        assert!(!preview.span.is_none());
-
-        let unit = Engine::new()
-            .parse_unit("#[preview(theme = crate::themes::dark)] fn view() {}")
-            .unwrap();
-        let Parsed::Function(function) = &unit.items()[0] else {
-            panic!("expected preview function");
-        };
-        let preview = function.header.attributes[0].preview().unwrap();
-        assert_eq!(preview.themes.len(), 1, "`theme = x` is `themes = [x]`");
-    }
-
-    #[test]
-    fn rejects_unbounded_or_duplicate_preview_metadata() {
-        for (source, expected) in [
-            (
-                "#[preview(seed = Counter::new())] fn view() {}",
-                "between preview options",
-            ),
-            ("#[preview(name = label)] fn view() {}", "string literal"),
-            ("#[preview(snapshot = 1)] fn view() {}", "boolean literal"),
-            (
-                "#[preview(size = (0, 10))] fn view() {}",
-                "must be a positive u32 literal",
-            ),
-            (
-                "#[preview(themes = [theme()])] fn view() {}",
-                "between preview theme variants",
-            ),
-            (
-                "#[preview(name = \"a\", name = \"b\")] fn view() {}",
-                "Duplicate preview option",
-            ),
-            (
-                "#[preview(unknown = \"x\")] fn view() {}",
-                "Unknown preview option",
-            ),
-            (
-                "#[preview(theme = a::b, themes = [c])] fn view() {}",
-                "Duplicate preview option",
-            ),
-        ] {
-            let error = Engine::new().parse_unit(source).unwrap_err();
-            assert!(error.to_string().contains(expected), "{source}: {error}");
-            assert!(!error.position().is_none(), "{source}: {error}");
-        }
     }
 
     #[test]

@@ -35,7 +35,7 @@ pub struct SupportExport {
 }
 
 impl SignatureContract {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) fn new(
         path: host::path::Path,
         role: impl Into<ImmutableString>,
@@ -196,11 +196,8 @@ impl SupportExport {
 
 impl SignatureContract {}
 
-impl crate::preview::digest::Write for SignatureContract {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for SignatureContract {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2c00);
         writer.tag(0x2c01);
         writer.text(&self.path.to_string());

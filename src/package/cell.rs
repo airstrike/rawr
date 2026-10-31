@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::item::{self, type_ref};
-use crate::{parse, preview, source, ImmutableString, Position, Span};
+use crate::{parse, source, ImmutableString, Position, Span};
 
 const MAGIC: &[u8; 4] = b"RPCL";
 
@@ -464,7 +464,7 @@ macro_rules! record {
 record! {
     item::Name { text, span }
     item::Header { attributes, visibility, span }
-    item::Attribute { path, arguments, span, preview }
+    item::Attribute { path, arguments, span }
     item::Module { header, name, span, inline }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
@@ -488,11 +488,6 @@ record! {
     type_ref::Path { segments, span, global }
     type_ref::Segment { name, arguments, span }
     type_ref::Lifetime { name, span }
-    preview::Syntax { name, group, seed, update, themes, snapshot, size, bind, bound, span }
-    preview::Bind { span, tokens }
-    preview::Text { value, span }
-    preview::Flag { value, span }
-    preview::SizeSyntax { width, height, span }
 }
 
 impl Codec for item::Parsed {

@@ -9,12 +9,10 @@ pub mod facade;
 #[cfg(feature = "rust-import")]
 pub(crate) mod family;
 pub mod item;
-pub mod operation;
 pub(crate) mod path;
 pub(crate) mod projection;
 pub mod runtime;
 pub mod signature;
-pub mod stream;
 pub(crate) mod structural;
 pub mod support;
 pub mod type_def;
@@ -933,19 +931,6 @@ impl Registry {
         })
     }
 
-    pub(crate) fn stream_plan_types(
-        &self,
-    ) -> impl Iterator<Item = (&type_def::Definition, &facade::Dependency)> {
-        self.types.iter().filter_map(|definition| {
-            (definition.role() == type_def::Role::StreamPlan)
-                .then(|| {
-                    self.owner_for_path(definition.path_ref())
-                        .map(|owner| (definition, owner))
-                })
-                .flatten()
-        })
-    }
-
     /// Return the exact facade owner of a registered item.
     #[must_use]
     pub fn item_owner(&self, path: &str) -> Option<&facade::Dependency> {
@@ -961,14 +946,6 @@ impl Registry {
             .binary_search_by(|facade| facade.root().cmp(root.name()))
             .ok()
             .map(|index| self.facades[index].fingerprint())
-    }
-
-    pub(crate) fn facade_dependency(&self, root: &str) -> Option<facade::Dependency> {
-        let root = path::Path::parse(root).ok()?;
-        self.facades
-            .binary_search_by(|facade| facade.root().cmp(root.name()))
-            .ok()
-            .map(|index| self.facades[index].clone())
     }
 
     pub(crate) fn is_builtin(&self, path: &str) -> bool {

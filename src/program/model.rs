@@ -7,7 +7,6 @@ use crate::{capability, type_def, Dynamic, ImmutableString};
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) mod carry;
 #[cfg(feature = "rust-import")]
 pub(crate) mod island;
 
@@ -260,10 +259,6 @@ impl Model {
         path: &str,
     ) -> Option<&[Option<crate::host::runtime::type_ref::Type>]> {
         self.members.get(path).map(|types| &**types)
-    }
-
-    pub(crate) const fn generation(&self) -> GenerationId {
-        self.generation
     }
 
     pub(crate) fn prove_struct(

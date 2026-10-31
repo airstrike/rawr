@@ -4,7 +4,7 @@
 //! output to its admitted artifact, original request, epoch and publication
 //! gate. Native runtime binding remains mandatory before installation.
 
-use crate::{application, package, reload, Engine, Shared};
+use crate::{package, reload, Engine, Shared};
 
 use super::runner::account;
 use package::compile::captured;
@@ -16,10 +16,9 @@ pub use rawr_import::protocol::resident as wire;
 #[cfg(test)]
 mod tests;
 
-/// The same compiled candidate and its child-derived semantic/native evidence.
+/// The same compiled candidate and its child-derived native evidence.
 pub struct Compiled {
     candidate: reload::Candidate,
-    semantic: Option<application::SemanticFingerprint>,
     carrier: [u8; 32],
     coverage: [u8; 32],
 }
@@ -103,7 +102,6 @@ impl Engine {
         let candidate = output.candidate.retain_imported(attempt.finish());
         Ok(Outcome::Compiled(Compiled {
             candidate,
-            semantic: output.semantic,
             carrier,
             coverage,
         }))
@@ -122,14 +120,7 @@ impl Compiled {
 
     /// Consume the one-shot candidate and the evidence derived from that exact
     /// compilation. No second compile is needed for the eventual installation.
-    pub fn into_parts(
-        self,
-    ) -> (
-        reload::Candidate,
-        Option<application::SemanticFingerprint>,
-        [u8; 32],
-        [u8; 32],
-    ) {
-        (self.candidate, self.semantic, self.carrier, self.coverage)
+    pub fn into_parts(self) -> (reload::Candidate, [u8; 32], [u8; 32]) {
+        (self.candidate, self.carrier, self.coverage)
     }
 }

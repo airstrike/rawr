@@ -30,15 +30,9 @@ pub struct Executable {
     model: super::model::Model,
     schemas: super::schema::Manifest,
     callables: BTreeMap<item::Key, Callable>,
-    application: Option<crate::application::Entry>,
-    previews: Box<[crate::preview::Definition]>,
-    widgets: Box<[crate::widget::Definition]>,
-    widget_promotions: Box<[crate::widget::Promotion]>,
-    preview_fingerprint: crate::preview::Fingerprint,
     host_dependencies: Box<[host::facade::Dependency]>,
     runtime_requirements: Box<[host::runtime::Requirement]>,
     projection_requirements: Box<[host::projection::Site]>,
-    widget_requirements: Box<[host::runtime::widget::Requirement]>,
     /// Source evidence of compiled functions that are not callables (the
     /// functions of trait impls for builtin types), by source: an
     /// error inside one, reached from a callable, still names user source.
@@ -49,12 +43,6 @@ pub struct Executable {
     imported_owner: Option<crate::package::import::runner::account::support::Owner>,
 }
 
-pub(crate) trait ApplicationEvidence {
-    fn callable(&self, key: &item::Key) -> Option<&Callable>;
-    fn preview_fingerprint(&self) -> &crate::preview::Fingerprint;
-    fn host_dependencies(&self) -> &[host::facade::Dependency];
-}
-
 pub(crate) struct Callable {
     source: super::source::Id,
     value: item::Value,
@@ -63,21 +51,12 @@ pub(crate) struct Callable {
     /// (`fn update(state: &mut State, ..)`), bound as a method's receiver.
     this: Option<usize>,
     dispatch: Dispatch,
-    application: Option<crate::application::descriptor::Signature>,
     /// A free function's signature as written, for typed handles.
     signature: Option<super::signatures::Signature>,
     locations: Option<Locations>,
     /// A trait impl's function for a builtin or a crate's type, which other
     /// functions call as a helper too: its source evidence is theirs.
     helper: bool,
-}
-
-pub(crate) struct Evidence<'a> {
-    key: &'a item::Key,
-    source: &'a crate::diagnostic::Source,
-    declaration: crate::Span,
-    locations: Option<&'a Locations>,
-    helpers: Option<&'a [Location]>,
 }
 
 struct Locations {
@@ -270,12 +249,6 @@ impl Executable {
         let model = super::model::Model::new(generation, &program);
         let schemas = super::schema::Manifest::from_program(&program);
         let mut callables = collect_callables(&program);
-        let application = program
-            .application()
-            .map(|entry| collect_application(entry, &callables, &program));
-        let previews = program.previews().to_vec().into_boxed_slice();
-        let widgets = program.widgets().to_vec().into_boxed_slice();
-        let preview_fingerprint = crate::preview::Fingerprint::from_definitions(&previews);
         let (lowering, evidence) = lower(&program, &model)?;
         for closure in lowering.closures {
             insert_callable(
@@ -287,7 +260,6 @@ impl Executable {
                     arity: closure.arity,
                     this: None,
                     dispatch: Dispatch::Function(closure.dispatch),
-                    application: None,
                     signature: None,
                     locations: None,
                     helper: false,
@@ -306,15 +278,9 @@ impl Executable {
                 model,
                 schemas,
                 callables,
-                application,
-                previews,
-                widgets,
-                widget_promotions: lowering.widget_promotions,
-                preview_fingerprint,
                 host_dependencies: lowering.dependencies,
                 runtime_requirements: lowering.runtime_requirements,
                 projection_requirements: lowering.projection_requirements,
-                widget_requirements: lowering.widget_requirements,
                 helper_locations,
                 ast: lowering.ast,
                 #[cfg(feature = "rust-import")]
@@ -369,29 +335,6 @@ impl Executable {
         self.callables.get(key)
     }
 
-    pub(crate) const fn application(&self) -> Option<&crate::application::Entry> {
-        self.application.as_ref()
-    }
-
-    /// Return every compiler-validated local preview in stable key order.
-    pub const fn previews(&self) -> &[crate::preview::Definition] {
-        &self.previews
-    }
-
-    /// Return every compiler-validated scripted-widget protocol.
-    pub const fn widgets(&self) -> &[crate::widget::Definition] {
-        &self.widgets
-    }
-
-    /// Return every compiler-selected nominal-widget promotion site.
-    pub const fn widget_promotions(&self) -> &[crate::widget::Promotion] {
-        &self.widget_promotions
-    }
-
-    pub(crate) const fn preview_fingerprint(&self) -> &crate::preview::Fingerprint {
-        &self.preview_fingerprint
-    }
-
     pub(crate) const fn host_dependencies(&self) -> &[host::facade::Dependency] {
         &self.host_dependencies
     }
@@ -400,31 +343,10 @@ impl Executable {
         &self.runtime_requirements
     }
 
+    // A candidate is made only by a rust-import build.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) const fn projection_requirements(&self) -> &[host::projection::Site] {
         &self.projection_requirements
-    }
-
-    pub(crate) const fn widget_requirements(&self) -> &[host::runtime::widget::Requirement] {
-        &self.widget_requirements
-    }
-
-    pub(crate) fn preview_source(
-        &self,
-        location: crate::preview::Location,
-    ) -> Result<&crate::diagnostic::Source, super::source::Error> {
-        self.sources.resolve(location.source())
-    }
-
-    /// Consume this executable by requiring its compiler-selected application root.
-    pub fn require_application(
-        self,
-    ) -> Result<crate::application::Candidate, crate::application::Error> {
-        crate::application::Candidate::from_executable(self)
-    }
-
-    /// Consume this executable by requiring at least one validated preview.
-    pub fn require_previews(self) -> Result<crate::preview::Catalog, crate::preview::Error> {
-        crate::preview::Catalog::from_executable(self)
     }
 
     pub(crate) fn related_callable(&self, key: &item::Key) -> Option<&Callable> {
@@ -434,73 +356,6 @@ impl Executable {
             .filter(|(candidate, _)| candidate.same_unowned_path(key));
         let first = candidates.next()?.1;
         candidates.next().is_none().then_some(first)
-    }
-
-    pub(crate) fn callable_evidence<'a>(
-        &'a self,
-        callable: &'a Callable,
-    ) -> Result<Evidence<'a>, super::source::Error> {
-        let location = self.sources.key(callable.source.index());
-        let source = self.sources.resolve(location)?;
-        let locations = match callable.locations.as_ref() {
-            Some(locations) => {
-                self.sources.resolve(locations.source)?;
-                (locations.source == location).then_some(locations)
-            }
-            None => None,
-        };
-        let declaration = callable
-            .application_signature()
-            .map(crate::application::descriptor::Signature::declaration)
-            .unwrap_or(crate::Span::NONE);
-        Ok(Evidence {
-            key: callable.value.key(),
-            source,
-            declaration,
-            locations,
-            helpers: self
-                .helper_locations
-                .get(&location)
-                .map(|entries| &entries[..]),
-        })
-    }
-
-    /// The evidence that places `error`, an evaluation error of a callable
-    /// the host invoked with no callback of its own (a Task's async body):
-    /// that callable's, or the body in its source whose evidence holds the
-    /// error's deepest position (a function it called). `None` when no
-    /// evidence holds it.
-    pub(crate) fn error_evidence(&self, error: &super::Error) -> Option<Evidence<'_>> {
-        let super::Error::Evaluation { key, error } = error else {
-            return None;
-        };
-        let position = deepest_position(error);
-        if position.is_none() {
-            return None;
-        }
-        let (key, callable) = self.callables.get_key_value(key)?;
-        let location = self.sources.key(callable.source.index());
-        let source = self.sources.resolve(location).ok()?;
-        let helpers = self
-            .helper_locations
-            .get(&location)
-            .map(|entries| &entries[..]);
-        let locations = std::iter::once(callable)
-            .chain(self.callables.values())
-            .filter_map(|callable| callable.locations.as_ref())
-            .filter(|locations| locations.source == location)
-            .find(|locations| innermost(&locations.entries, position).is_some());
-        let in_helpers = helpers.is_some_and(|helpers| innermost(helpers, position).is_some());
-        if locations.is_none() && !in_helpers {
-            return None;
-        }
-        Some(Evidence {
-            key,
-            source,
-            declaration: crate::Span::NONE,
-            locations,
-            helpers,
-        })
     }
 
     pub(crate) const fn ast(&self) -> &AST {
@@ -517,7 +372,6 @@ impl Executable {
                 self.host_dependencies,
                 self.runtime_requirements,
                 self.projection_requirements,
-                self.widget_requirements,
             ));
         }
         ast
@@ -624,20 +478,6 @@ impl Executable {
     }
 }
 
-impl ApplicationEvidence for Executable {
-    fn callable(&self, key: &item::Key) -> Option<&Callable> {
-        self.callable(key)
-    }
-
-    fn preview_fingerprint(&self) -> &crate::preview::Fingerprint {
-        self.preview_fingerprint()
-    }
-
-    fn host_dependencies(&self) -> &[host::facade::Dependency] {
-        self.host_dependencies()
-    }
-}
-
 impl Callable {
     pub(crate) const fn value(&self) -> &item::Value {
         &self.value
@@ -654,12 +494,6 @@ impl Callable {
     pub(crate) const fn dispatch(&self) -> &Dispatch {
         &self.dispatch
     }
-
-    pub(crate) const fn application_signature(
-        &self,
-    ) -> Option<&crate::application::descriptor::Signature> {
-        self.application.as_ref()
-    }
 }
 
 fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable> {
@@ -668,18 +502,11 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
         .iter()
         .map(|definition| (definition.id(), definition))
         .collect();
-    let application_runtime = crate::application::RuntimeGraph::new(program);
     let mut callables = BTreeMap::new();
 
     for shell in program.items() {
         match &shell.kind {
             resolve::item::Kind::Function(function) => {
-                if program.application().is_some()
-                    && shell.source == program.source().entry()
-                    && function.name.text == "main"
-                {
-                    continue;
-                }
                 let key = shell
                     .key
                     .clone()
@@ -710,11 +537,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                         } else {
                             function.name.text.clone()
                         }),
-                        application: Some(application_function_signature(
-                            function,
-                            &definitions,
-                            &application_runtime,
-                        )),
                         signature: Some(super::signatures::Signature::from_resolved(function)),
                         locations: None,
                         helper: false,
@@ -755,7 +577,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                                     &variant.name,
                                 ),
                             },
-                            application: None,
                             signature: None,
                             locations: None,
                             helper: false,
@@ -797,12 +618,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 arity: definition.parameters().len() + usize::from(definition.receiver().is_some()),
                 this: None,
                 dispatch: Dispatch::Method(definition.symbol()),
-                application: Some(application_method_signature(
-                    definition,
-                    definitions[&definition.owner()],
-                    &definitions,
-                    &application_runtime,
-                )),
                 signature: None,
                 locations: None,
                 helper: false,
@@ -839,7 +654,6 @@ fn collect_callables(program: &resolve::Program) -> BTreeMap<item::Key, Callable
                 arity: definition.parameters().len() + usize::from(definition.receiver().is_some()),
                 this: None,
                 dispatch: Dispatch::Method(definition.symbol()),
-                application: None,
                 signature: None,
                 locations: None,
                 helper: true,
@@ -912,34 +726,6 @@ fn retain_locations(
         .collect()
 }
 
-impl Evidence<'_> {
-    pub(crate) const fn source(&self) -> &crate::diagnostic::Source {
-        self.source
-    }
-
-    pub(crate) const fn declaration(&self) -> crate::Span {
-        self.declaration
-    }
-
-    pub(crate) fn translate(&self, error: &super::Error) -> Option<crate::Span> {
-        let super::Error::Evaluation { key, error } = error else {
-            return None;
-        };
-        if key != self.key {
-            return None;
-        }
-        let position = deepest_position(error);
-        // The callable's own body, else a builtin-type impl function it
-        // called.
-        self.locations
-            .and_then(|locations| innermost(&locations.entries, position))
-            .or_else(|| {
-                self.helpers
-                    .and_then(|helpers| innermost(helpers, position))
-            })
-    }
-}
-
 fn span_width(span: crate::Span) -> (usize, usize) {
     (
         span.end()
@@ -961,215 +747,6 @@ fn deepest_position(error: &crate::EvalAltResult) -> crate::Position {
         }
         leaf => leaf.position(),
     }
-}
-
-impl Executable {
-    pub(crate) fn application_error_source(
-        &self,
-        error: &crate::application::Error,
-    ) -> super::source::Id {
-        application_error_source(
-            self.model_source(),
-            self.application(),
-            &self.callables,
-            error,
-        )
-    }
-
-    pub(crate) fn model_source(&self) -> super::source::Id {
-        self.source
-    }
-}
-
-fn application_error_source(
-    fallback: super::source::Id,
-    entry: Option<&crate::application::Entry>,
-    callables: &BTreeMap<item::Key, Callable>,
-    error: &crate::application::Error,
-) -> super::source::Id {
-    let Some(entry) = entry else {
-        return fallback;
-    };
-    let callback = match error {
-        crate::application::Error::InvalidCallbackKind { role, .. }
-        | crate::application::Error::InvalidReceiver { role, .. }
-        | crate::application::Error::InvalidArity { role, .. }
-        | crate::application::Error::InvalidOutput { role, .. }
-        | crate::application::Error::TypeMismatch { role, .. }
-        | crate::application::Error::UnsupportedRuntimeType { role, .. } => {
-            if role.contains("boot") {
-                entry.boot()
-            } else if role.contains("title") {
-                entry.title()
-            } else if role.contains("view") {
-                Some(entry.view())
-            } else {
-                Some(entry.update())
-            }
-        }
-        crate::application::Error::MissingDefault { .. }
-        | crate::application::Error::MissingCapability { .. } => Some(entry.update()),
-        _ => None,
-    };
-    callback
-        .and_then(|callback| callables.get(callback.key()))
-        .map_or(fallback, |callable| callable.source)
-}
-
-fn application_function_signature(
-    function: &resolve::item::Function,
-    definitions: &BTreeMap<type_def::Id, &type_def::Definition>,
-    runtime: &crate::application::RuntimeGraph,
-) -> crate::application::descriptor::Signature {
-    let output = function
-        .output
-        .as_ref()
-        .map(|output| crate::application::Type::from_resolved(output, definitions, runtime))
-        .unwrap_or_else(|| {
-            crate::application::Type::from_resolved(
-                &crate::resolve::type_ref::Type::Unit(function.body.span),
-                definitions,
-                runtime,
-            )
-        });
-    crate::application::descriptor::Signature::new(
-        None,
-        None,
-        function
-            .parameters
-            .iter()
-            .map(|parameter| {
-                crate::application::Type::from_resolved(&parameter.ty, definitions, runtime)
-            })
-            .collect(),
-        output,
-        function.name.span,
-        None,
-        function
-            .parameters
-            .iter()
-            .map(|parameter| parameter.span)
-            .collect(),
-        function
-            .output
-            .as_ref()
-            .map_or(function.body.span, resolved_type_span),
-    )
-}
-
-fn application_method_signature(
-    method: &crate::method::Definition,
-    owner: &type_def::Definition,
-    definitions: &BTreeMap<type_def::Id, &type_def::Definition>,
-    runtime: &crate::application::RuntimeGraph,
-) -> crate::application::descriptor::Signature {
-    crate::application::descriptor::Signature::new(
-        Some(crate::application::Type::from_definition(owner, runtime)),
-        method.receiver(),
-        method
-            .parameters()
-            .iter()
-            .map(|parameter| {
-                crate::application::Type::from_resolved(&parameter.ty, definitions, runtime)
-            })
-            .collect(),
-        crate::application::Type::from_resolved(method.output(), definitions, runtime),
-        method.name_span(),
-        method.receiver_span(),
-        method
-            .parameters()
-            .iter()
-            .map(|parameter| parameter.span)
-            .collect(),
-        resolved_type_span(method.output()),
-    )
-}
-
-fn resolved_type_span(ty: &crate::resolve::type_ref::Type) -> crate::Span {
-    match ty {
-        crate::resolve::type_ref::Type::Unit(span)
-        | crate::resolve::type_ref::Type::Tuple { span, .. }
-        | crate::resolve::type_ref::Type::Reference { span, .. } => *span,
-        crate::resolve::type_ref::Type::Path(path) => path.span,
-    }
-}
-
-fn collect_application(
-    entry: &resolve::application::Entry,
-    callables: &BTreeMap<item::Key, Callable>,
-    program: &resolve::Program,
-) -> crate::application::Entry {
-    // The statements before the entry, as written, so a runner can tell
-    // an edit to them.
-    let prelude = entry.prelude().map(|key| {
-        let text = entry
-            .prelude_span(program.items())
-            .zip(
-                program
-                    .items()
-                    .iter()
-                    .find(|shell| shell.key.as_ref() == Some(key)),
-            )
-            .map(|(span, shell)| span_text(program.source().text_at(shell.source), span))
-            .unwrap_or_default();
-        (
-            callables
-                .get(key)
-                .map(|callable| callable.value.clone())
-                .expect("the statements before the entry retain their executable item"),
-            text,
-        )
-    });
-    let value = |key: &item::Key| {
-        callables
-            .get(key)
-            .map(|callable| callable.value.clone())
-            .expect("resolved application callbacks retain stable executable items")
-    };
-
-    crate::application::Entry::new(
-        entry.form(),
-        entry.dependency().clone(),
-        entry.root_intrinsic().clone(),
-        entry.title_intrinsic().cloned(),
-        entry.theme_intrinsic().cloned(),
-        entry.subscription_intrinsic().cloned(),
-        entry.centered_intrinsic().cloned(),
-        entry.run_intrinsic().cloned(),
-        entry.boot().map(value),
-        prelude,
-        value(entry.update()),
-        value(entry.view()),
-        entry.title().map(value),
-        entry.theme().map(value),
-        entry.subscription().map(value),
-        entry.centered(),
-        entry.task().cloned(),
-        entry.theme_type().cloned(),
-        entry.subscription_type().cloned(),
-        entry.widget().cloned(),
-        entry.instant().cloned(),
-        entry.span(),
-    )
-}
-
-/// The text of `source` within `span`.
-fn span_text(source: &str, span: crate::Span) -> Box<str> {
-    let mut text = String::new();
-    let (mut line, mut column) = (1_u16, 0_u16);
-    for character in source.chars() {
-        if character == '\n' {
-            line = line.saturating_add(1);
-            column = 0;
-        } else {
-            column = column.saturating_add(1);
-        }
-        let position = crate::Position::new(line, column);
-        if position >= span.start() && position < span.end() {
-            text.push(character);
-        }
-    }
-    text.into()
 }
 
 fn insert_callable(

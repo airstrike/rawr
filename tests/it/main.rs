@@ -67,7 +67,6 @@ mod serde;
 mod side_effects;
 mod stack;
 mod static_host_imports;
-mod static_stream_operations;
 mod string;
 mod switch;
 mod symbolic_contract;
@@ -79,7 +78,6 @@ mod unary_minus;
 mod unit;
 mod var_scope;
 mod while_loop;
-mod widget_protocol;
 
 #[cfg(feature = "rust-import-driver")]
 mod rust_import;

@@ -563,9 +563,9 @@ fn a_marked_workspace_member_inherits_its_dependencies() {
     assert!(graph.declares_rust_import());
 }
 
-/// The `rawr` attribute crate: Rawr reads `#[preview]` and
-/// `#[rawr::preview]` itself, binds nothing for `use rawr::preview;` and
-/// imports nothing from the crate. rustc accepts the same files through the
+/// The `rawr` attribute crate: Rawr passes over `#[preview]` and
+/// `#[rawr::preview]`, binds nothing for `use rawr::preview;` and imports
+/// nothing from the crate. rustc accepts the same files through the
 /// crate without a warning. A function only previews call is not dead code,
 /// and neither is a function a preview names as its seed.
 #[test]
@@ -589,19 +589,6 @@ fn the_rawr_attribute_crate_builds_under_cargo_and_means_nothing_to_rawr() {
 
     let graph = graph(&root, None).unwrap();
     assert!(!graph.declares_rust_import());
-    let previews = graph
-        .previews()
-        .into_iter()
-        .map(|preview| (preview.name, preview.subject))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        previews,
-        [
-            ("greeting".into(), "rs_marker_attributes::greeting".into()),
-            ("seeded".into(), "rs_marker_attributes::shown".into()),
-            ("three".into(), "rs_marker_attributes::label::label".into()),
-        ]
-    );
 
     let output = Command::new(&cargo)
         .args(["run", "--quiet", "--offline"])

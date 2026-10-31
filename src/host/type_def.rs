@@ -139,8 +139,6 @@ pub enum Role {
     /// An ordinary facade-owned value type.
     #[default]
     Ordinary,
-    /// The unique durable carrier for symbolic stream subscription plans.
-    StreamPlan,
     /// A trait source names only as `impl Trait<..>`, which is its one
     /// projection's target: every implementor is that type (iced's `impl
     /// Widget<Message>` is an `Element<Message>`).
@@ -797,7 +795,7 @@ impl Argument {
 }
 
 impl Identity {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rust-import"))]
     pub(crate) const fn linked(identity: TypeId) -> Self {
         Self::Linked(native::Identity::from_type_id(identity))
     }
@@ -923,11 +921,8 @@ impl Variant {
     }
 }
 
-impl crate::preview::digest::Write for Contract {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Contract {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2600);
         writer.tag(0x2601);
         writer.text(&self.path.to_string());
@@ -945,7 +940,6 @@ impl crate::preview::digest::Write for Contract {
         writer.tag(0x2606);
         writer.tag(match self.role {
             Role::Ordinary => 0x2611,
-            Role::StreamPlan => 0x2612,
             Role::Trait => 0x2613,
         });
         writer.tag(0x2607);
@@ -998,11 +992,8 @@ impl crate::preview::digest::Write for Contract {
     }
 }
 
-impl crate::preview::digest::Write for Export {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Export {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2700);
         writer.tag(0x2701);
         writer.text(&self.facade_root.to_string());
@@ -1014,11 +1005,8 @@ impl crate::preview::digest::Write for Export {
     }
 }
 
-impl crate::preview::digest::Write for Projection {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
+impl crate::digest::Write for Projection {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
         writer.tag(0x2800);
         writer.tag(0x2801);
         match &self.target {

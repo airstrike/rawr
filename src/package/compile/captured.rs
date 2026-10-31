@@ -6,7 +6,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 mod native_tests;
 
-use crate::{application, host, package, reload, resolve, Engine, Scope};
+use crate::{host, package, reload, resolve, Engine, Scope};
 use rawr_import::runner::manifest::{self, coverage};
 use sha2::{Digest as _, Sha256};
 
@@ -14,7 +14,6 @@ use sha2::{Digest as _, Sha256};
 /// required before this candidate can enter a resident reload transaction.
 pub(crate) struct Output {
     pub(crate) candidate: reload::Candidate,
-    pub(crate) semantic: Option<application::SemanticFingerprint>,
     pub(crate) imported: resolve::lower_nominal::ImportedOutput,
 }
 
@@ -44,8 +43,7 @@ pub(crate) enum Error {
 }
 
 impl Output {
-    /// Compile any program, a plain one included, with no application
-    /// semantics to derive.
+    /// Compile any program, a plain one included.
     pub(crate) fn transform_plain<A: host::ImportAllocation>(
         engine: &Engine,
         snapshot: &package::snapshot::Snapshot,
@@ -108,21 +106,9 @@ impl Output {
                 }
             }
         })?;
-        let derived = reload::Candidate::from_package_plain(executable, source)
-            .map(|candidate| (candidate, None));
-        let (candidate, semantic) = derived.map_err(|(source, error)| {
-            package::Error::resolution(
-                sources,
-                resolve::package::Failure {
-                    primary: package::source::Id::from_index(source.index()),
-                    secondary: None,
-                    error: resolve::Error::from(error),
-                },
-            )
-        })?;
+        let candidate = reload::Candidate::from_package_plain(executable, source);
         Ok(Self {
             candidate,
-            semantic,
             imported,
         })
     }

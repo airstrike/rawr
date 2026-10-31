@@ -147,10 +147,6 @@ impl Witness {
     pub(crate) fn ty(&self) -> &Type {
         &self.ty
     }
-
-    pub(crate) fn argument(&self, index: usize) -> Option<&Type> {
-        self.ty.arguments().get(index)
-    }
 }
 
 impl fmt::Debug for Witness {

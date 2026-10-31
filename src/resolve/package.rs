@@ -199,24 +199,6 @@ impl<'a> Resolver<'a> {
 
             for parsed in &items {
                 if let crate::item::Parsed::Module(module) = parsed {
-                    if let Some(preview) = module
-                        .header
-                        .attributes
-                        .iter()
-                        .find_map(crate::item::Attribute::preview)
-                    {
-                        return Err(Failure {
-                            primary: context.source,
-                            secondary: None,
-                            error: Error::InvalidPreview {
-                                preview: module.name.text.clone(),
-                                reason: "`#[preview]` is supported only on functions and methods"
-                                    .into(),
-                                reference: preview.span,
-                                declaration: Some(module.name.span),
-                            },
-                        });
-                    }
                     let address = context.address(&module.name.text);
                     self.insert_declaration(
                         address.clone(),
@@ -385,39 +367,6 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn resolve_preview_paths(
-        &self,
-    ) -> Result<BTreeMap<(program::source::Id, Span), crate::preview::PathTarget>, Failure> {
-        let mut resolved = BTreeMap::new();
-        for unit in &self.units {
-            for parsed in unit.parsed.items() {
-                for syntax in preview_syntaxes(parsed) {
-                    for path in syntax
-                        .seed
-                        .iter()
-                        .chain(syntax.update.iter())
-                        .chain(syntax.themes.iter())
-                    {
-                        let segments = path_segments(path);
-                        if !self.is_script_path(&unit.context, &segments) {
-                            continue;
-                        }
-                        let target =
-                            self.resolve_preview_path(&unit.context, &segments, path.span)?;
-                        resolved.insert(
-                            (
-                                program::source::Id::from_index(unit.context.source.index()),
-                                path.span,
-                            ),
-                            target,
-                        );
-                    }
-                }
-            }
-        }
-        Ok(resolved)
-    }
-
     fn resolve_qualified_calls(&self) -> Result<ResolvedQualifiedCalls, Failure> {
         let mut resolved = ResolvedQualifiedCalls::default();
         for unit in &self.units {
@@ -527,83 +476,8 @@ impl<'a> Resolver<'a> {
         Ok(resolved)
     }
 
-    fn resolve_preview_path(
-        &self,
-        context: &Context,
-        segments: &[ImmutableString],
-        reference: Span,
-    ) -> Result<crate::preview::PathTarget, Failure> {
-        if segments.len() >= 3 {
-            let mut active = BTreeSet::new();
-            match self.resolve_path(
-                context,
-                &segments[..segments.len() - 1],
-                reference,
-                &mut active,
-            )? {
-                Target::Type(type_ref::Target::Script { identity, .. }) => {
-                    return Ok(crate::preview::PathTarget::Associated {
-                        owner: identity,
-                        member: segments
-                            .last()
-                            .expect("qualified preview paths have a member")
-                            .clone(),
-                    });
-                }
-                Target::Module | Target::Trait => {}
-                Target::Type(
-                    type_ref::Target::Builtin
-                    | type_ref::Target::Host { .. }
-                    | type_ref::Target::Parameter
-                    | type_ref::Target::Projection(..)
-                    | type_ref::Target::Alias(_),
-                )
-                | Target::Item(_)
-                | Target::HostItem { .. }
-                | Target::HostEndpoint { .. }
-                | Target::HostModuleItem { .. } => {
-                    return Err(Failure {
-                        primary: context.source,
-                        secondary: None,
-                        error: Error::InvalidPreview {
-                            preview: segments.join("::").into(),
-                            reason:
-                                "qualified preview callback prefix is not a script module or type"
-                                    .into(),
-                            reference,
-                            declaration: None,
-                        },
-                    });
-                }
-            }
-        }
-
-        let mut active = BTreeSet::new();
-        match self.resolve_path(context, segments, reference, &mut active)? {
-            Target::Item(key) => Ok(crate::preview::PathTarget::Item(key)),
-            Target::Module
-            | Target::Trait
-            | Target::Type(_)
-            | Target::HostItem { .. }
-            | Target::HostEndpoint { .. }
-            | Target::HostModuleItem { .. } => Err(Failure {
-                primary: context.source,
-                secondary: None,
-                error: Error::InvalidPreview {
-                    preview: segments.join("::").into(),
-                    reason:
-                        "preview callback path must resolve to a script function or associated item"
-                            .into(),
-                    reference,
-                    declaration: None,
-                },
-            }),
-        }
-    }
-
     fn resolve(mut self) -> Result<Program, Failure> {
         self.validate_exports()?;
-        let preview_paths = self.resolve_preview_paths()?;
         let qualified_calls = self.resolve_qualified_calls()?;
         let qualified_pattern_owners = self.resolve_qualified_pattern_owners()?;
         let mut shells = Vec::new();
@@ -709,18 +583,6 @@ impl<'a> Resolver<'a> {
             super::resolve_methods(&mut shells, &definitions, self.host)
                 .map_err(Failure::from_located)?;
         super::resolve_functions(&mut shells).map_err(Failure::from_located)?;
-        let application = super::application::resolve(
-            &mut shells,
-            &methods,
-            self.host,
-            Some(program::source::Id::from_index(self.entry_source.index())),
-        )
-        .map_err(|error| Failure {
-            primary: self.entry_source,
-            secondary: None,
-            error: Error::from(error),
-        })?;
-
         scripts.sort_by_key(|(source, ..)| source.index());
         let source_maps = scripts
             .iter()
@@ -739,7 +601,7 @@ impl<'a> Resolver<'a> {
             .find(|package| package.name() == self.package.as_str())
             .and_then(|package| package.entry().and(package.rust_crate()))
             .map(ImmutableString::from);
-        let mut program = Program {
+        let program = Program {
             #[cfg(feature = "rust-import")]
             native: self.native,
             package: self.package,
@@ -752,10 +614,6 @@ impl<'a> Resolver<'a> {
             types: definitions.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             builtin_methods: builtin_methods.into_boxed_slice(),
-            application,
-            previews: Box::new([]),
-            widgets: Box::new([]),
-            preview_paths,
             qualified_functions: qualified_calls.functions,
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
@@ -768,10 +626,6 @@ impl<'a> Resolver<'a> {
             lexical,
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
-        program.widgets =
-            crate::widget::resolve(&program, self.host).map_err(Failure::from_located)?;
-        program.previews =
-            crate::preview::resolve(&program, self.host).map_err(Failure::from_located)?;
         Ok(program)
     }
 
@@ -1702,37 +1556,6 @@ impl<'a> Resolver<'a> {
             },
         }
     }
-}
-
-fn preview_syntaxes(parsed: &crate::item::Parsed) -> Vec<&crate::preview::Syntax> {
-    fn collect<'a>(
-        header: &'a crate::item::Header,
-        syntaxes: &mut Vec<&'a crate::preview::Syntax>,
-    ) {
-        syntaxes.extend(
-            header
-                .attributes
-                .iter()
-                .filter_map(crate::item::Attribute::preview),
-        );
-    }
-
-    let mut syntaxes = Vec::new();
-    match parsed {
-        crate::item::Parsed::Function(function) => collect(&function.header, &mut syntaxes),
-        crate::item::Parsed::Impl(crate::item::Impl { functions, .. })
-        | crate::item::Parsed::Trait(crate::item::Trait { functions, .. }) => {
-            for function in functions {
-                collect(&function.header, &mut syntaxes);
-            }
-        }
-        crate::item::Parsed::Module(_)
-        | crate::item::Parsed::Use(_)
-        | crate::item::Parsed::Struct(_)
-        | crate::item::Parsed::Enum(_)
-        | crate::item::Parsed::TypeAlias(_) => {}
-    }
-    syntaxes
 }
 
 fn qualified_calls(parsed: &crate::item::Parsed) -> Vec<QualifiedCall> {

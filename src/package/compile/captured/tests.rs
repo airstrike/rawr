@@ -126,7 +126,6 @@ fn snapshot_pass_retains_candidate_and_native_uses_together() {
     let mut allocation = host::TestImportAllocation::default();
     let output = Output::transform_plain(&engine, &snapshot, &mut allocation).unwrap();
     assert_eq!(output.candidate.source().entry_source().text(), text);
-    assert!(output.candidate.has_application());
     assert_eq!(output.imported.uses.len(), 1);
     let use_ = &output.imported.uses[0];
     assert_eq!(use_.path, "native::echo");

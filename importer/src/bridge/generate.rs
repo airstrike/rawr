@@ -3208,7 +3208,7 @@ fn compile_resident(
         Err(error) => return Err(std::io::Error::other(error.to_string())),
     };
     let (compiled, ast) = compiled.with_top_level();
-    let (candidate, semantic, carrier, coverage) = compiled.into_parts();
+    let (candidate, carrier, coverage) = compiled.into_parts();
     if let Some(running) = resident.running
         && __rawr_internal::island::refusal(running, &candidate).is_some()
     {
@@ -3223,7 +3223,7 @@ fn compile_resident(
         observation: None,
         marked_main: snapshot.marked_root(),
     };
-    Ok(ResidentResult::Compiled(program, semantic.map(|semantic| *semantic.as_bytes()), carrier, coverage))
+    Ok(ResidentResult::Compiled(program, None, carrier, coverage))
 }
 
 fn resident_response(
@@ -4367,10 +4367,8 @@ fn live_protocol(
                     [engine.imported_native_snapshot(), None])?;
                 let (response_tag, diagnostic) = match output {
                     ResidentResult::Compiled(compiled) => {
-                        let (candidate, semantic, carrier, coverage) = compiled.into_parts();
-                        let compiled = attempt.compiled(
-                            carrier, coverage, semantic.map(|semantic| *semantic.as_bytes()),
-                        );
+                        let (candidate, carrier, coverage) = compiled.into_parts();
+                        let compiled = attempt.compiled(carrier, coverage, None);
                         pending = Some(PendingLive {
                             installation,
                             key: compiled.key(),

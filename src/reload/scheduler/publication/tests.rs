@@ -54,35 +54,6 @@ fn graph(path: &Path) -> source::Graph {
 }
 
 #[test]
-fn full_observation_survives_source_binding_validation_and_publication() {
-    let fixture = Fixture::new("publish");
-    let previous = graph(&fixture.root.join("previous.rs"));
-    let slot = Arc::new(Slot::new(source::Inputs::from_graph(&previous)));
-    let observed = slot.register(fixture.observed());
-    let native = fixture.root.join("native.rs");
-    assert!(slot.read().contains(&native));
-    assert!(!slot.read().current().contains(&native));
-    let staged = observed.bind(fixture.snapshot()).unwrap();
-    assert!(staged.inputs().contains(&native));
-    let validated = staged.revalidate().unwrap();
-    assert!(validated.inputs().contains(&native));
-    let retired = slot.reserve(&validated).unwrap().publish(validated);
-    assert_eq!(slot.read().staged(), 0);
-    assert!(slot.read().current().contains(&native));
-    assert!(slot
-        .read()
-        .contains(&fixture.root.join("missing/config.toml")));
-    assert!(slot
-        .read()
-        .contains(&fixture.root.join("native-tree/new.rs")));
-    assert!(!slot.read().contains(&fixture.root.join("previous.rs")));
-    assert!(retired
-        .previous()
-        .contains(&fixture.root.join("previous.rs")));
-    retired.release();
-}
-
-#[test]
 fn withdrawing_one_registration_preserves_other_and_current_coverage() {
     let fixture = Fixture::new("withdraw");
     let slot = Arc::new(Slot::new(fixture.inputs()));
@@ -147,24 +118,6 @@ fn full_observation_does_not_weaken_rawr_byte_validation() {
         .is_err());
     assert_eq!(slot.read().staged(), 0);
     assert!(!slot.read().contains(&fixture.root.join("native.rs")));
-}
-
-#[test]
-fn bound_observation_cannot_publish_into_a_foreign_slot() {
-    let fixture = Fixture::new("foreign");
-    let origin = Arc::new(Slot::new(fixture.inputs()));
-    let foreign = Arc::new(Slot::new(fixture.inputs()));
-    let validated = origin
-        .register(fixture.observed())
-        .bind(fixture.snapshot())
-        .unwrap()
-        .revalidate()
-        .unwrap();
-    assert!(foreign.reserve(&validated).is_none());
-    assert_eq!(origin.read().staged(), 1);
-    drop(validated);
-    assert_eq!(origin.read().staged(), 0);
-    assert_eq!(foreign.read().staged(), 0);
 }
 
 #[test]

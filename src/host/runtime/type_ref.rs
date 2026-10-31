@@ -409,23 +409,6 @@ impl Type {
             && owner == &export.dependency()
     }
 
-    pub(super) fn instantiates_export(&self, export: &host::type_def::Export) -> bool {
-        let Self::Host {
-            path,
-            identity,
-            arguments,
-            owner: Some(owner),
-        } = self
-        else {
-            return false;
-        };
-
-        path.as_str() == export.path()
-            && Some(*identity) == export.contract().runtime_identity()
-            && arguments.len() == export.parameters().len()
-            && owner == &export.dependency()
-    }
-
     pub(crate) fn validate(
         &self,
         value: &Dynamic,
@@ -631,13 +614,6 @@ impl Type {
         }
     }
 
-    pub(crate) fn from_resolved(
-        ty: &crate::resolve::type_ref::Type,
-        model: &program::model::Model,
-    ) -> Result<Self, Error> {
-        Self::from_resolved_in(ty, model, &[])
-    }
-
     /// [`Self::from_resolved`] with each generic parameter named in
     /// `parameters` given its type: a generic script type's member of a
     /// parameter's type takes the type its value was given (review 1).
@@ -816,12 +792,9 @@ impl Type {
     }
 }
 
-impl crate::preview::digest::Write for Type {
-    fn write(
-        &self,
-        writer: &mut crate::preview::digest::Writer,
-    ) -> Result<(), crate::preview::digest::Error> {
-        use crate::preview::digest::{write_option, write_script_identity, write_slice};
+impl crate::digest::Write for Type {
+    fn write(&self, writer: &mut crate::digest::Writer) -> Result<(), crate::digest::Error> {
+        use crate::digest::{write_option, write_script_identity, write_slice};
 
         match self {
             Self::Unit => writer.tag(0x2101),

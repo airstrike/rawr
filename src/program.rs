@@ -16,7 +16,6 @@ pub(crate) mod source;
 
 pub use authority::Authority;
 pub use error::{Aspect, Error};
-pub(crate) use executable::{ApplicationEvidence, Evidence};
 pub use executable::{Executable, Positions};
 pub use generation::GenerationId;
 pub(crate) use path::Path;

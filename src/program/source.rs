@@ -105,6 +105,8 @@ impl Source {
         self.aggregate
     }
 
+    // Only a rust-import build reads a source key.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn key(&self, id: Id) -> Key {
         self.table.key(id.index())
     }

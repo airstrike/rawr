@@ -2,8 +2,6 @@
 
 pub(crate) mod item;
 
-pub(crate) use item::CALLBACK_CLOSURE_PREFIX;
-
 use crate::api::options::LangOptions;
 use crate::ast::{
     ASTFlags, BinaryExpr, CaseBlocksList, EnumCase, Expr, FlowControl, FnCallExpr, FnCallHashes,

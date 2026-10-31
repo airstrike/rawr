@@ -4,11 +4,8 @@ mod call;
 #[cfg(feature = "rust-import")]
 pub mod event;
 pub mod invocation;
-pub mod operation;
-pub mod stream;
 pub(crate) mod type_ref;
 mod unwitnessed;
-pub(crate) mod widget;
 mod witness;
 
 pub use call::{Call, Equal, Error as WitnessError};
@@ -18,7 +15,6 @@ pub use witness::Witness;
 
 use crate::func::SendSync;
 use crate::{host, Dynamic, EvalAltResult, ImmutableString, Shared};
-use core::future;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -142,11 +138,8 @@ pub struct Builder {
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
-    operations: BTreeMap<host::item::Fingerprint, operation::Binding>,
-    streams: BTreeMap<host::item::Fingerprint, stream::Binding>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
-    widget: Option<widget::Binding>,
 }
 
 /// One finished runtime implementation of an exact compiler facade.
@@ -162,11 +155,8 @@ pub struct Facade {
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
     #[cfg(feature = "rust-import")]
     events: BTreeMap<event::Key, Shared<dyn Callback>>,
-    operations: BTreeMap<host::item::Fingerprint, operation::Binding>,
-    streams: BTreeMap<host::item::Fingerprint, stream::Binding>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
-    widget: Option<widget::Binding>,
 }
 
 /// Runtime facade implementations available to one application launch.
@@ -322,68 +312,6 @@ pub enum Error {
         /// Repeated structural owner path.
         operation: ImmutableString,
     },
-    /// One facade builder tried to bind the same exact async operation twice.
-    DuplicateOperationBinding {
-        /// Repeated qualified operation path.
-        item: ImmutableString,
-    },
-    /// One facade builder tried to bind the same exact stream operation twice.
-    DuplicateStreamBinding {
-        /// Repeated qualified stream operation path.
-        item: ImmutableString,
-    },
-    /// A selected operation names no item in this exact compiler facade.
-    UnknownOperation {
-        /// Exact facade root.
-        facade: ImmutableString,
-        /// Requested qualified operation path.
-        item: ImmutableString,
-    },
-    /// A selected runtime operation belongs to a different facade contract.
-    OperationFacadeMismatch {
-        /// Exact runtime facade root.
-        facade: ImmutableString,
-        /// Rejected qualified operation path.
-        item: ImmutableString,
-    },
-    /// A selected facade item is not a symbolic async operation.
-    InvalidOperationKind {
-        /// Rejected qualified item path.
-        item: ImmutableString,
-        /// Actual static facade item kind.
-        actual: host::item::Kind,
-    },
-    /// A selected operation does not match an exact declared overload.
-    OperationSignatureMismatch {
-        /// Rejected qualified operation path.
-        item: ImmutableString,
-    },
-    /// A selected stream names no item in this exact compiler facade.
-    UnknownStream {
-        /// Exact facade root.
-        facade: ImmutableString,
-        /// Requested qualified stream operation path.
-        item: ImmutableString,
-    },
-    /// A selected runtime stream belongs to a different facade contract.
-    StreamFacadeMismatch {
-        /// Exact runtime facade root.
-        facade: ImmutableString,
-        /// Rejected qualified stream operation path.
-        item: ImmutableString,
-    },
-    /// A selected facade item is not a symbolic stream operation.
-    InvalidStreamKind {
-        /// Rejected qualified item path.
-        item: ImmutableString,
-        /// Actual static facade item kind.
-        actual: host::item::Kind,
-    },
-    /// A selected stream does not match an exact declared overload.
-    StreamSignatureMismatch {
-        /// Rejected qualified stream operation path.
-        item: ImmutableString,
-    },
     /// One facade builder tried to attest the same generic type twice.
     DuplicateTypeAttestation {
         /// Repeated qualified type path.
@@ -419,26 +347,6 @@ pub enum Error {
         /// Required structural owner path.
         operation: ImmutableString,
     },
-    /// The matching runtime facade does not bind a selected async operation.
-    MissingOperationBinding {
-        /// Required qualified operation path.
-        item: ImmutableString,
-    },
-    /// A runtime operation binding disagrees with its opaque compiler proof.
-    OperationProofMismatch {
-        /// Rejected qualified operation path.
-        item: ImmutableString,
-    },
-    /// The matching runtime facade does not bind a selected stream operation.
-    MissingStreamBinding {
-        /// Required qualified stream operation path.
-        item: ImmutableString,
-    },
-    /// A runtime stream binding disagrees with its opaque compiler proof.
-    StreamProofMismatch {
-        /// Rejected qualified stream operation path.
-        item: ImmutableString,
-    },
     /// The matching runtime facade does not implement a retained projection.
     MissingProjectionBinding {
         /// Required semantic projection edge.
@@ -447,30 +355,6 @@ pub enum Error {
     /// An exact generic host type has no facade-owned attestor.
     MissingTypeAttestation {
         /// Required exact generic host type.
-        ty: ImmutableString,
-    },
-    /// The facade has no owned one-parameter type with this Rust identity.
-    UnknownWidgetType {
-        /// Exact facade root.
-        facade: ImmutableString,
-        /// Requested Rust representation.
-        ty: ImmutableString,
-    },
-    /// More than one facade class uses the requested widget representation.
-    AmbiguousWidgetType {
-        /// Exact facade root.
-        facade: ImmutableString,
-        /// Ambiguous Rust representation.
-        ty: ImmutableString,
-    },
-    /// One facade builder tried to bind its private widget activator twice.
-    DuplicateWidgetBinding {
-        /// Exact facade root.
-        facade: ImmutableString,
-    },
-    /// The matching runtime facade has no activator for the exact widget target.
-    MissingWidgetBinding {
-        /// Required exact open widget target.
         ty: ImmutableString,
     },
 }
@@ -499,11 +383,8 @@ impl Builder {
             structural: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             events: BTreeMap::new(),
-            operations: BTreeMap::new(),
-            streams: BTreeMap::new(),
             projections: BTreeMap::new(),
             attestations: BTreeMap::new(),
-            widget: None,
         }
     }
 
@@ -526,171 +407,6 @@ impl Builder {
     #[must_use]
     pub fn has_type_attestation(&self, path: &str) -> bool {
         self.attestations.contains_key(path)
-    }
-
-    /// Bind one exact symbolic operation to an executor-neutral async factory.
-    ///
-    /// The native error never crosses the binding. `normalize` transforms it
-    /// into the operation's declared output representation; the resulting
-    /// value remains untrusted until the selected output proof validates it.
-    #[cfg(feature = "sync")]
-    pub fn bind_operation<F, N, E, Fut>(
-        &mut self,
-        selected: &host::item::Definition,
-        factory: F,
-        normalize: N,
-    ) -> Result<&mut Self, Error>
-    where
-        F: Fn(host::operation::Arguments) -> Fut + SendSync + 'static,
-        N: Fn(E) -> Dynamic + SendSync + 'static,
-        Fut: future::Future<Output = Result<Dynamic, E>> + Send + 'static,
-        E: 'static,
-    {
-        self.bind_operation_inner(selected, factory, normalize)
-    }
-
-    /// Bind one exact symbolic operation to an executor-neutral async factory.
-    ///
-    /// The native error never crosses the binding. `normalize` transforms it
-    /// into the operation's declared output representation; the resulting
-    /// value remains untrusted until the selected output proof validates it.
-    #[cfg(not(feature = "sync"))]
-    pub fn bind_operation<F, N, E, Fut>(
-        &mut self,
-        selected: &host::item::Definition,
-        factory: F,
-        normalize: N,
-    ) -> Result<&mut Self, Error>
-    where
-        F: Fn(host::operation::Arguments) -> Fut + SendSync + 'static,
-        N: Fn(E) -> Dynamic + SendSync + 'static,
-        Fut: future::Future<Output = Result<Dynamic, E>> + 'static,
-        E: 'static,
-    {
-        self.bind_operation_inner(selected, factory, normalize)
-    }
-
-    fn bind_operation_inner<F, N, E, Fut>(
-        &mut self,
-        selected: &host::item::Definition,
-        factory: F,
-        normalize: N,
-    ) -> Result<&mut Self, Error>
-    where
-        F: Fn(host::operation::Arguments) -> Fut + SendSync + 'static,
-        N: Fn(E) -> Dynamic + SendSync + 'static,
-        Fut: operation::Await<E>,
-        E: 'static,
-    {
-        let item: ImmutableString = selected.path().into();
-        if selected
-            .path_ref()
-            .segments()
-            .first()
-            .is_none_or(|root| root.as_str() != self.definition.root())
-        {
-            return Err(Error::OperationFacadeMismatch {
-                facade: self.definition.root().into(),
-                item,
-            });
-        }
-        let Some(overloads) = self.definition.overloads(&item) else {
-            return Err(Error::UnknownOperation {
-                facade: self.definition.root().into(),
-                item,
-            });
-        };
-        if selected.kind() != host::item::Kind::Operation {
-            return Err(Error::InvalidOperationKind {
-                item,
-                actual: selected.kind(),
-            });
-        }
-        let fingerprint = selected.fingerprint();
-        let Some(definition) = overloads
-            .iter()
-            .find(|definition| definition.fingerprint() == fingerprint)
-            .cloned()
-        else {
-            return Err(Error::OperationSignatureMismatch { item });
-        };
-        if self.operations.contains_key(&fingerprint) {
-            return Err(Error::DuplicateOperationBinding { item });
-        }
-        self.operations.insert(
-            fingerprint,
-            operation::Binding::new(definition, factory, normalize),
-        );
-        Ok(self)
-    }
-
-    /// Bind one exact symbolic stream operation to canonical argument identity
-    /// and an executor-neutral native stream factory.
-    ///
-    /// `encode` must be deterministic and side-effect-free. It runs once per
-    /// validated argument before the factory can start.
-    /// `normalize` turns each native error item into the declared output
-    /// representation; that value remains untrusted until bound issuance.
-    pub fn bind_stream_operation<F, I, N, E, S>(
-        &mut self,
-        selected: &host::item::Definition,
-        encode: I,
-        factory: F,
-        normalize: N,
-    ) -> Result<&mut Self, Error>
-    where
-        F: Fn(host::stream::Arguments) -> S + SendSync + 'static,
-        I: Fn(
-                usize,
-                &Dynamic,
-                &mut host::stream::identity::Writer,
-            ) -> Result<(), host::stream::identity::Error>
-            + SendSync
-            + 'static,
-        N: Fn(E) -> Dynamic + SendSync + 'static,
-        S: stream::Native<E>,
-        E: 'static,
-    {
-        let item: ImmutableString = selected.path().into();
-        if selected
-            .path_ref()
-            .segments()
-            .first()
-            .is_none_or(|root| root.as_str() != self.definition.root())
-        {
-            return Err(Error::StreamFacadeMismatch {
-                facade: self.definition.root().into(),
-                item,
-            });
-        }
-        let Some(overloads) = self.definition.overloads(&item) else {
-            return Err(Error::UnknownStream {
-                facade: self.definition.root().into(),
-                item,
-            });
-        };
-        if selected.kind() != host::item::Kind::StreamOperation {
-            return Err(Error::InvalidStreamKind {
-                item,
-                actual: selected.kind(),
-            });
-        }
-        let fingerprint = selected.fingerprint();
-        let Some(definition) = overloads
-            .iter()
-            .find(|definition| definition.fingerprint() == fingerprint)
-            .cloned()
-        else {
-            return Err(Error::StreamSignatureMismatch { item });
-        };
-        if self.streams.contains_key(&fingerprint) {
-            return Err(Error::DuplicateStreamBinding { item });
-        }
-        self.streams.insert(
-            fingerprint,
-            stream::Binding::new(definition, encode, factory, normalize),
-        );
-        Ok(self)
     }
 
     /// Bind one exact source-owned direct projection to a native conversion.
@@ -844,34 +560,6 @@ impl Builder {
             self.attestations.insert(path, attestor.clone());
         }
         Ok(ImportedTypeAttestation { selector, rows })
-    }
-
-    /// Bind this facade's exact open widget carrier materialization.
-    ///
-    /// The selected carrier is the facade-owned one-parameter type with Rust
-    /// identity `T`. The callback receives only the compiler-proven durable
-    /// descriptor and a sealed witness for the exact target instantiation.
-    pub fn bind_widget<T: 'static>(
-        &mut self,
-        callback: impl Fn(crate::widget::Descriptor, Witness) -> Result<Dynamic, Box<EvalAltResult>>
-            + SendSync
-            + 'static,
-    ) -> Result<&mut Self, Error> {
-        if self.widget.is_some() {
-            return Err(Error::DuplicateWidgetBinding {
-                facade: self.definition.root().into(),
-            });
-        }
-        let binding = widget::Binding::bind::<T>(&self.definition, callback).map_err(|error| {
-            let facade = self.definition.root().into();
-            let ty = std::any::type_name::<T>().into();
-            match error {
-                widget::Error::Unknown => Error::UnknownWidgetType { facade, ty },
-                widget::Error::Ambiguous => Error::AmbiguousWidgetType { facade, ty },
-            }
-        })?;
-        self.widget = Some(binding);
-        Ok(self)
     }
 
     /// Bind one exact qualified facade item to a native callback.
@@ -1147,11 +835,8 @@ impl Builder {
             structural: self.structural,
             #[cfg(feature = "rust-import")]
             events: self.events,
-            operations: self.operations,
-            streams: self.streams,
             projections: self.projections,
             attestations: self.attestations,
-            widget: self.widget,
         }
     }
 }
@@ -1234,8 +919,6 @@ impl Registry {
         dependencies: &[host::facade::Dependency],
         requirements: &[Requirement],
         projections: &[host::projection::Site],
-        widgets: &[widget::Requirement],
-        boundary_types: &[type_ref::Type],
     ) -> Result<(), Error> {
         for dependency in dependencies {
             let Some(facade) = self.facades.get(dependency.root()) else {
@@ -1281,17 +964,6 @@ impl Registry {
             }
             self.validate_type_attestations(projection.source())?;
             self.validate_type_attestations(projection.target())?;
-        }
-        for requirement in widgets {
-            if self.widget_binding(requirement).is_none() {
-                return Err(Error::MissingWidgetBinding {
-                    ty: requirement.target().to_string().into(),
-                });
-            }
-            self.validate_type_attestations(requirement.target())?;
-        }
-        for ty in boundary_types {
-            self.validate_type_attestations(ty)?;
         }
         Ok(())
     }
@@ -1347,61 +1019,8 @@ impl Registry {
         binding.invoke(&call, args)
     }
 
-    /// Join one compiler-selected symbolic operation to its exact native binding.
-    ///
-    /// This transformation neither invokes the factory nor polls its future.
-    pub fn select_operation(
-        &self,
-        proof: &host::operation::Proof,
-    ) -> Result<operation::Selected, Error> {
-        let Some(facade) = self.facades.get(proof.owner().root()) else {
-            return Err(Error::MissingFacade {
-                facade: proof.owner().root().into(),
-            });
-        };
-        if &facade.dependency != proof.owner() {
-            return Err(Error::FacadeMismatch {
-                facade: proof.owner().root().into(),
-            });
-        }
-        let Some(binding) = facade.operations.get(proof.fingerprint()) else {
-            return Err(Error::MissingOperationBinding {
-                item: proof.path().into(),
-            });
-        };
-        binding
-            .select(&facade.dependency, proof)
-            .ok_or_else(|| Error::OperationProofMismatch {
-                item: proof.path().into(),
-            })
-    }
-
-    /// Join one compiler-selected symbolic stream to its exact native binding.
-    ///
-    /// Selection neither invokes the identity encoder nor starts the factory.
-    pub fn select_stream(&self, proof: &host::stream::Proof) -> Result<stream::Selected, Error> {
-        let Some(facade) = self.facades.get(proof.owner().root()) else {
-            return Err(Error::MissingFacade {
-                facade: proof.owner().root().into(),
-            });
-        };
-        if &facade.dependency != proof.owner() {
-            return Err(Error::FacadeMismatch {
-                facade: proof.owner().root().into(),
-            });
-        }
-        let Some(binding) = facade.streams.get(proof.fingerprint()) else {
-            return Err(Error::MissingStreamBinding {
-                item: proof.path().into(),
-            });
-        };
-        binding
-            .select(&facade.dependency, proof)
-            .ok_or_else(|| Error::StreamProofMismatch {
-                item: proof.path().into(),
-            })
-    }
-
+    // Only a rust-import build issues one.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn witness_for(&self, ty: &type_ref::Type) -> Witness {
         Witness::issue(self.witness, ty.clone())
     }
@@ -1476,43 +1095,6 @@ impl Registry {
         Ok(result)
     }
 
-    pub(crate) fn activate_widget(
-        &self,
-        requirement: &widget::Requirement,
-        descriptor: crate::widget::Descriptor,
-        model: &crate::program::model::Model,
-    ) -> Result<Dynamic, Box<EvalAltResult>> {
-        let position = descriptor.promotion().location().span().start();
-        let Some(binding) = self.widget_binding(requirement) else {
-            return Err(EvalAltResult::ErrorRuntime(
-                format!(
-                    "missing scripted-widget activation for `{}`",
-                    requirement.target()
-                )
-                .into(),
-                position,
-            )
-            .into());
-        };
-        let witness = Witness::issue(self.witness, requirement.target().clone());
-        let result = binding.activate(descriptor, witness)?;
-        requirement
-            .target()
-            .validate(&result, model, self)
-            .map_err(|error| {
-                Box::new(EvalAltResult::ErrorRuntime(
-                    format!(
-                        "scripted-widget activation returned `{}`, expected `{}`: {error}",
-                        result.type_name(),
-                        requirement.target()
-                    )
-                    .into(),
-                    position,
-                ))
-            })?;
-        Ok(result)
-    }
-
     pub(crate) fn attest(
         &self,
         owner: &host::facade::Dependency,
@@ -1581,17 +1163,6 @@ impl Registry {
             return None;
         }
         facade.projections.get(key)
-    }
-
-    fn widget_binding(&self, requirement: &widget::Requirement) -> Option<&widget::Binding> {
-        let facade = self.facades.get(requirement.owner().root())?;
-        if &facade.dependency != requirement.owner() {
-            return None;
-        }
-        facade
-            .widget
-            .as_ref()
-            .filter(|binding| binding.accepts(requirement))
     }
 
     fn validate_type_attestations(&self, ty: &type_ref::Type) -> Result<(), Error> {
@@ -1820,51 +1391,6 @@ impl fmt::Display for Error {
                 formatter,
                 "duplicate generated structural binding for `{operation}`"
             ),
-            Self::DuplicateOperationBinding { item } => {
-                write!(
-                    formatter,
-                    "duplicate runtime operation binding for `{item}`"
-                )
-            }
-            Self::DuplicateStreamBinding { item } => {
-                write!(formatter, "duplicate runtime stream binding for `{item}`")
-            }
-            Self::UnknownOperation { facade: root, item } => {
-                write!(
-                    formatter,
-                    "the bindings of `{root}` have no operation `{item}`"
-                )
-            }
-            Self::OperationFacadeMismatch { facade: root, item } => write!(
-                formatter,
-                "operation `{item}` does not belong to the bindings of `{root}`"
-            ),
-            Self::InvalidOperationKind { item, actual } => write!(
-                formatter,
-                "runtime operation `{item}` has item kind {actual:?}"
-            ),
-            Self::OperationSignatureMismatch { item } => write!(
-                formatter,
-                "runtime operation `{item}` does not match an exact declared signature"
-            ),
-            Self::UnknownStream { facade: root, item } => {
-                write!(
-                    formatter,
-                    "the bindings of `{root}` have no stream `{item}`"
-                )
-            }
-            Self::StreamFacadeMismatch { facade: root, item } => write!(
-                formatter,
-                "stream operation `{item}` does not belong to the bindings of `{root}`"
-            ),
-            Self::InvalidStreamKind { item, actual } => write!(
-                formatter,
-                "runtime stream `{item}` has item kind {actual:?}"
-            ),
-            Self::StreamSignatureMismatch { item } => write!(
-                formatter,
-                "runtime stream `{item}` does not match an exact declared signature"
-            ),
             Self::DuplicateTypeAttestation { ty } => {
                 write!(formatter, "duplicate runtime type attestation for `{ty}`")
             }
@@ -1893,20 +1419,6 @@ impl fmt::Display for Error {
                 formatter,
                 "missing generated structural binding for `{operation}`"
             ),
-            Self::MissingOperationBinding { item } => {
-                write!(formatter, "missing runtime operation binding for `{item}`")
-            }
-            Self::OperationProofMismatch { item } => write!(
-                formatter,
-                "runtime operation binding for `{item}` does not match its compiler proof"
-            ),
-            Self::MissingStreamBinding { item } => {
-                write!(formatter, "missing runtime stream binding for `{item}`")
-            }
-            Self::StreamProofMismatch { item } => write!(
-                formatter,
-                "runtime stream binding for `{item}` does not match its compiler proof"
-            ),
             Self::MissingProjectionBinding { projection } => {
                 write!(
                     formatter,
@@ -1919,39 +1431,18 @@ impl fmt::Display for Error {
                     "missing exact runtime type attestation for `{ty}`"
                 )
             }
-            Self::UnknownWidgetType { facade: root, ty } => {
-                write!(
-                    formatter,
-                    "the bindings of `{root}` have no open widget carrier represented by `{ty}`"
-                )
-            }
-            Self::AmbiguousWidgetType { facade: root, ty } => {
-                write!(
-                    formatter,
-                    "the bindings of `{root}` have multiple open widget carriers represented by `{ty}`"
-                )
-            }
-            Self::DuplicateWidgetBinding { facade: root } => {
-                write!(formatter, "duplicate private widget binding for `{root}`")
-            }
-            Self::MissingWidgetBinding { ty } => {
-                write!(formatter, "missing private widget binding for `{ty}`")
-            }
         }
     }
 }
 
 #[cfg(test)]
 mod witness_tests {
-    use super::{invocation, type_ref, witness, Call, WitnessError};
-    use crate::{host, receiver};
+    use super::{type_ref, witness, Call, WitnessError};
+    use crate::receiver;
     use std::any::TypeId;
 
     #[derive(Clone)]
     struct Carrier;
-
-    #[derive(Clone)]
-    struct Scoped;
 
     #[test]
     fn witnesses_distinguish_exact_logical_instantiations_with_one_outer_type() {
@@ -2053,104 +1544,6 @@ mod witness_tests {
         );
     }
 
-    #[test]
-    fn invocation_value_requires_the_exact_mutable_facade_receiver() {
-        let authority = witness::Authority::issue();
-        let (export, receiver) = scoped(facade("scoped", 1));
-        let invocation = invocation::Invocation::bind(export, 42_u64).unwrap();
-        let proof = invocation.proof();
-        let operands = [receiver.clone()];
-        let output = type_ref::Type::unit();
-        let call = Call::item(
-            authority,
-            &operands,
-            &output,
-            Some(receiver::Mode::Mutable),
-            Some(&proof),
-        );
-
-        assert_eq!(*call.invocation::<u64>().unwrap(), 42);
-        assert_eq!(
-            call.invocation::<String>().unwrap_err(),
-            WitnessError::InvocationPayloadMismatch
-        );
-
-        let (_, foreign_receiver) = scoped(facade("foreign", 1));
-        let foreign_operands = [foreign_receiver];
-        let foreign = Call::item(
-            authority,
-            &foreign_operands,
-            &output,
-            Some(receiver::Mode::Mutable),
-            Some(&proof),
-        );
-        assert_eq!(
-            foreign.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationReceiverMismatch
-        );
-
-        let shared = Call::item(
-            authority,
-            &operands,
-            &output,
-            Some(receiver::Mode::Shared),
-            Some(&proof),
-        );
-        assert_eq!(
-            shared.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationRequiresMutableReceiver
-        );
-
-        let owned = Call::item(
-            authority,
-            &operands,
-            &output,
-            Some(receiver::Mode::Owned),
-            Some(&proof),
-        );
-        assert_eq!(
-            owned.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationRequiresMutableReceiver
-        );
-
-        let ordinary = Call::item(authority, &[], &output, None, Some(&proof));
-        assert_eq!(
-            ordinary.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationRequiresMutableReceiver
-        );
-
-        let projection = Call::projection(authority, &receiver, &output);
-        assert_eq!(
-            projection.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationRequiresMutableReceiver
-        );
-
-        let unavailable = Call::item(
-            authority,
-            &operands,
-            &output,
-            Some(receiver::Mode::Mutable),
-            None,
-        );
-        assert_eq!(
-            unavailable.invocation::<u64>().unwrap_err(),
-            WitnessError::InvocationUnavailable
-        );
-    }
-
-    #[test]
-    fn invocation_binding_rejects_owned_facade_storage() {
-        let mut facade =
-            host::facade::Builder::new("owned", host::facade::Abi::new(1).unwrap()).unwrap();
-        facade.type_::<Scoped>("Renderer", &[], &[]).unwrap();
-        let export = facade.finish().unwrap().export_type("Renderer").unwrap();
-
-        assert_eq!(
-            invocation::Invocation::bind(export, ()).unwrap_err(),
-            invocation::Error::OwnedStorage
-        );
-    }
-
     fn carrier(argument: type_ref::Type) -> type_ref::Type {
         type_ref::Type::host(
             "test::Carrier".into(),
@@ -2159,48 +1552,24 @@ mod witness_tests {
             None,
         )
     }
-
-    fn facade(root: &str, abi: u32) -> host::facade::Definition {
-        let mut facade =
-            host::facade::Builder::new(root, host::facade::Abi::new(abi).unwrap()).unwrap();
-        facade.invocation_type::<Scoped>("Renderer", &[]).unwrap();
-        facade.finish().unwrap()
-    }
-
-    fn scoped(facade: host::facade::Definition) -> (host::type_def::Export, type_ref::Type) {
-        let export = facade.export_type("Renderer").unwrap();
-        let receiver = type_ref::Type::host(
-            export.path().into(),
-            TypeId::of::<Scoped>(),
-            Box::new([]),
-            Some(export.dependency()),
-        );
-        (export, receiver)
-    }
 }
 
 impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
-    use super::{type_ref, widget, Builder, Registry, Witness};
+    use super::{type_ref, Builder, Registry};
     use crate::program::{model::Model, GenerationId};
     use crate::types::nominal;
-    use crate::{host, resolve, type_def, Dynamic, Engine, Shared};
+    #[cfg(feature = "rust-import")]
+    use crate::Shared;
+    use crate::{host, resolve, type_def, Dynamic, Engine};
     use std::any::TypeId;
 
     #[derive(Clone)]
     struct ErasedGeneric {
         logical_argument: &'static str,
     }
-
-    #[derive(Clone)]
-    struct OpenWidget {
-        witness: Option<Witness>,
-    }
-
-    #[derive(Clone)]
-    struct OtherWidget;
 
     #[derive(Clone)]
     struct DependencyValue;
@@ -2684,172 +2053,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn widget_activation_is_required_on_the_exact_facade() {
-        let facade = widget_facade("iced", 1);
-        let (_descriptor, requirement, _model) = widget_requirement(&facade);
-        let mut registry = Registry::new();
-        registry.install(Builder::new(facade).finish()).unwrap();
-        install_lifecycle(&mut registry);
-
-        assert!(matches!(
-            registry.validate(
-                &[requirement.owner().clone()],
-                &[],
-                &[],
-                &[requirement],
-                &[],
-            ),
-            Err(super::Error::MissingWidgetBinding { .. })
-        ));
-    }
-
-    #[test]
-    fn widget_binding_rejects_ambiguous_runtime_carrier_identity() {
-        let mut facade =
-            host::facade::Builder::new("iced", host::facade::Abi::new(1).unwrap()).unwrap();
-        facade.module("widget").unwrap();
-        facade
-            .type_::<OpenWidget>("widget::First", &["Message"], &[])
-            .unwrap();
-        facade
-            .type_::<OpenWidget>("widget::Second", &["Message"], &[])
-            .unwrap();
-        let mut runtime = Builder::new(facade.finish().unwrap());
-
-        assert!(matches!(
-            runtime.bind_widget::<OpenWidget>(|_, witness| {
-                Ok(Dynamic::from(OpenWidget {
-                    witness: Some(witness),
-                }))
-            }),
-            Err(super::Error::AmbiguousWidgetType { .. })
-        ));
-    }
-
-    #[test]
-    fn widget_activation_cannot_borrow_a_foreign_facade_binding() {
-        let facade = widget_facade("iced", 1);
-        let (_descriptor, requirement, _model) = widget_requirement(&facade);
-        let foreign = widget_facade("foreign", 1);
-        let mut foreign_runtime = Builder::new(foreign);
-        foreign_runtime
-            .bind_widget::<OpenWidget>(|_, witness| {
-                Ok(Dynamic::from(OpenWidget {
-                    witness: Some(witness),
-                }))
-            })
-            .unwrap();
-        let mut registry = Registry::new();
-        registry.install(Builder::new(facade).finish()).unwrap();
-        install_lifecycle(&mut registry);
-        registry.install(foreign_runtime.finish()).unwrap();
-
-        assert!(matches!(
-            registry.validate(
-                &[requirement.owner().clone()],
-                &[],
-                &[],
-                &[requirement],
-                &[],
-            ),
-            Err(super::Error::MissingWidgetBinding { .. })
-        ));
-    }
-
-    #[test]
-    fn widget_activation_rejects_another_target_class_in_the_same_facade() {
-        let facade = widget_facade("iced", 1);
-        let (_descriptor, requirement, _model) = widget_requirement(&facade);
-        let owner = requirement.owner().clone();
-        let target = type_ref::Type::host(
-            "iced::widget::Other".into(),
-            TypeId::of::<OtherWidget>(),
-            requirement.target().arguments().to_vec().into_boxed_slice(),
-            Some(owner.clone()),
-        );
-        let wrong = widget::Requirement::bind(owner, target);
-        let mut runtime = Builder::new(facade);
-        runtime
-            .bind_widget::<OpenWidget>(|_, witness| {
-                Ok(Dynamic::from(OpenWidget {
-                    witness: Some(witness),
-                }))
-            })
-            .unwrap();
-        let mut registry = Registry::new();
-        registry.install(runtime.finish()).unwrap();
-        install_lifecycle(&mut registry);
-
-        assert!(matches!(
-            registry.validate(&[wrong.owner().clone()], &[], &[], &[wrong], &[]),
-            Err(super::Error::MissingWidgetBinding { .. })
-        ));
-    }
-
-    #[test]
-    fn widget_activation_output_must_attest_its_exact_target() {
-        let facade = widget_facade("iced", 1);
-        let (descriptor, requirement, model) = widget_requirement(&facade);
-        let mut runtime = Builder::new(facade);
-        runtime
-            .bind_type_attestation("iced::Element", |value, expected| {
-                value
-                    .read_lock::<OpenWidget>()
-                    .and_then(|value| expected.attest_witness(value.witness.as_ref()))
-            })
-            .unwrap();
-        runtime
-            .bind_widget::<OpenWidget>(|_, _| Ok(Dynamic::from(OpenWidget { witness: None })))
-            .unwrap();
-        let mut registry = Registry::new();
-        registry.install(runtime.finish()).unwrap();
-        install_lifecycle(&mut registry);
-
-        let error = registry
-            .activate_widget(&requirement, descriptor, &model)
-            .unwrap_err();
-        assert!(error.to_string().contains("failed exact type attestation"));
-    }
-
-    #[test]
-    fn widget_activation_issues_the_exact_target_witness() {
-        let facade = widget_facade("iced", 1);
-        let mut engine = Engine::new();
-        engine.register_host_facade(facade.clone()).unwrap();
-        engine.register_host_facade(lifecycle_facade()).unwrap();
-        let engine = Shared::new(engine);
-        let authority = engine.compile_authority(widget_source()).unwrap();
-        let view = authority
-            .items()
-            .find(|item| item.key().name() == "view")
-            .unwrap()
-            .clone();
-        let mut runtime = Builder::new(facade);
-        runtime
-            .bind_type_attestation("iced::Element", |value, expected| {
-                value
-                    .read_lock::<OpenWidget>()
-                    .and_then(|value| expected.attest_witness(value.witness.as_ref()))
-            })
-            .unwrap();
-        runtime
-            .bind_widget::<OpenWidget>(|_, witness| {
-                Ok(Dynamic::from(OpenWidget {
-                    witness: Some(witness),
-                }))
-            })
-            .unwrap();
-        let mut registry = Registry::new();
-        registry.install(runtime.finish()).unwrap();
-        install_lifecycle(&mut registry);
-
-        let value = authority
-            .invoke_bound(&view, &mut [], Shared::new(registry))
-            .unwrap();
-        assert!(value.read_lock::<OpenWidget>().is_some());
-    }
-
     fn generic_facade() -> host::facade::Definition {
         let mut facade =
             host::facade::Builder::new("generic", host::facade::Abi::new(1).unwrap()).unwrap();
@@ -2945,63 +2148,6 @@ mod tests {
             .item(host::item::Definition::function("inspect", signature.finish()).unwrap())
             .unwrap();
         facade.finish().unwrap()
-    }
-
-    fn widget_facade(root: &str, abi: u32) -> host::facade::Definition {
-        let mut facade =
-            host::facade::Builder::new(root, host::facade::Abi::new(abi).unwrap()).unwrap();
-        facade.module("widget").unwrap();
-        facade
-            .type_::<OpenWidget>("Element", &["Message"], &[])
-            .unwrap();
-        facade
-            .type_::<OtherWidget>("widget::Other", &["Message"], &[])
-            .unwrap();
-        facade.finish().unwrap()
-    }
-
-    fn widget_requirement(
-        facade: &host::facade::Definition,
-    ) -> (
-        crate::widget::Descriptor,
-        widget::Requirement,
-        crate::program::model::Model,
-    ) {
-        let mut engine = Engine::new();
-        engine.register_host_facade(facade.clone()).unwrap();
-        engine.register_host_facade(lifecycle_facade()).unwrap();
-        let executable = engine.compile_executable(widget_source()).unwrap();
-        let promotion = executable.widget_promotions()[0].clone();
-        let requirement = executable.widget_requirements()[0].clone();
-        let model = executable.model().clone();
-        (
-            crate::widget::Descriptor::new(promotion, Dynamic::UNIT),
-            requirement,
-            model,
-        )
-    }
-
-    fn lifecycle_facade() -> host::facade::Definition {
-        host::facade::Builder::new("rawr_iced", host::facade::Abi::new(1).unwrap())
-            .unwrap()
-            .finish()
-            .unwrap()
-    }
-
-    fn install_lifecycle(registry: &mut Registry) {
-        registry
-            .install(Builder::new(lifecycle_facade()).finish())
-            .unwrap();
-    }
-
-    fn widget_source() -> &'static str {
-        r#"
-            struct Dial;
-            enum Message { Tick }
-            #[widget]
-            impl Dial {}
-            pub fn view() -> iced::Element<Message> { Dial {} }
-        "#
     }
 
     fn empty_model() -> Model {
