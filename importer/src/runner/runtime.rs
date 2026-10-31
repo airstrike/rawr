@@ -841,6 +841,12 @@ fn compile(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The toolchain's Cargo runs without its rustup proxy, so the runtime's
+    // build scripts need the library path the proxy would have set, as the
+    // project's own build does.
+    if let Some(loader) = environment.loader_path(&toolchain.rustc) {
+        command.env(crate::cargo::config::LOADER_PATH, loader);
+    }
     let mut child = command.spawn().map_err(io(
         "launch the build of rawr's runtime",
         toolchain.cargo.clone(),
