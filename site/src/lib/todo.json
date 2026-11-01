@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A program's own native function that takes `impl AsRef<str>` and returns an `impl Trait`, as download_progress's `download` does, no longer stops the check with an internal error. A program with native modules and a path dependency inside its directory builds instead of failing with a lockfile collision.","issues":[568]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.70",
@@ -1346,9 +1351,9 @@
     {"issue":565,"title":"Importer messages about overloads and surface instances name rawr's machinery","state":"closed","category":"Divergences from rustc","release":"0.3.60"},
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","release":"0.3.59"},
-    {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)"},
+    {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"closed","category":"No glue (D593)"},
     {"issue":569,"title":"A generic crate function passed as a value is refused","state":"closed","category":"No glue (D593)","release":"0.3.62"},
-    {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"open","category":"Divergences from rustc"},
+    {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"closed","category":"Divergences from rustc"},
     {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
     {"issue":572,"title":"A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc"},
     {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"open","category":"Health"},
@@ -1398,7 +1403,10 @@
     {"issue":617,"title":"A struct update ..T::default() on a crate type panics","state":"open","category":"No glue (D593)"},
     {"issue":618,"title":"A program trait's associated function on a crate type, called by the type's name, is refused","state":"open","category":"Divergences from rustc"},
     {"issue":619,"title":"A derived Default with a crate-type field fails at runtime","state":"open","category":"No glue (D593)"},
-    {"issue":620,"title":"An empty match on Infallible is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":620,"title":"An empty match on Infallible is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":621,"title":"A closure input that is a std trait's associated type of a type parameter","state":"open","category":"No glue (D593)"},
+    {"issue":622,"title":"A path dependency builds twice when the program has native modules","state":"open","category":"No glue (D593)"},
+    {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
