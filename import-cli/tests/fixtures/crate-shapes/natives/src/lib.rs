@@ -324,3 +324,42 @@ pub mod form {
         Plain(value.into())
     }
 }
+
+/// Trait impls on a type with a const parameter, as palette's `impl<T>
+/// Lookup<u8, T> for ArrayTable<256>` is, and on a type whose defaulted
+/// parameter the impl leaves out, as `impl Size for Hsl` is `Hsl<Srgb>`.
+pub mod table {
+    pub enum Table<const N: usize> {}
+
+    pub struct Srgb;
+
+    pub struct Hsl<S = Srgb>(pub u32, std::marker::PhantomData<S>);
+
+    pub trait Size {
+        fn size(&self) -> usize;
+    }
+
+    impl Size for Table<4> {
+        fn size(&self) -> usize {
+            4
+        }
+    }
+
+    impl Size for Hsl {
+        fn size(&self) -> usize {
+            self.0 as usize
+        }
+    }
+
+    impl Srgb {
+        /// A table the program reaches, as palette's `Srgb::get_u8_to_f32_lut`
+        /// reaches `ArrayTable<256>`.
+        pub fn table() -> Option<&'static Table<4>> {
+            None
+        }
+    }
+
+    pub fn hsl(value: u32) -> Hsl {
+        Hsl(value, std::marker::PhantomData)
+    }
+}

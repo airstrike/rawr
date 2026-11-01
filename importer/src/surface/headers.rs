@@ -122,13 +122,18 @@ impl<'g> Headers<'g> {
                 if !self.declared.contains(&definition) {
                     return None;
                 }
+                // The facade declares a type's type and const parameters, as
+                // palette's `ArrayTable<const N: usize>`, and no lifetimes.
+                // A const argument is one no facade type can write, as the
+                // classifier refuses it in a signature.
                 convert::Type::Nominal {
                     definition: crate::surface::identity::Definition::authenticated(definition),
                     arguments: arguments
                         .iter()
                         .filter_map(|argument| match argument {
                             model::Argument::Type(ty) => Some(self.ty(ty)),
-                            _ => None,
+                            model::Argument::Const(_) => Some(None),
+                            model::Argument::Lifetime(_) => None,
                         })
                         .collect::<Option<_>>()?,
                 }
