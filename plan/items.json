@@ -601,6 +601,11 @@
     {"t":"T598","issue":598,"title":"T598: Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T599","issue":599,"title":"T599: geometry: an impl Widget whose body is nested containers can't be named","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T600","issue":600,"title":"T600: loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T601","issue":601,"title":"T601: Remove the runner's always-None event mapper","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T601","issue":601,"title":"T601: Remove the runner's always-None event mapper","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T602","issue":602,"title":"T602: Derive paths resolve to crate macros; helper attributes kept as source text","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T603","issue":603,"title":"T603: Evaluate #[cfg_attr(..)] on items, fields and variants","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T604","issue":604,"title":"T604: Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T605","issue":605,"title":"T605: Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T606","issue":606,"title":"T606: Two rawr integration tests fail on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
