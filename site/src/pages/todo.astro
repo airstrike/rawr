@@ -4,9 +4,12 @@
 // the TODO items, and two private documents, the decisions and their code.
 // The data comes from plan/ through src/lib/todo.ts; issues are named #N.
 //
-// Gantt: bar length is complexity, not time. Each group folds, and the chart
-// rescales to the groups that are open. Each row links its GitHub issues; a
-// row with many folds them behind a count.
+// Gantt: bar length is complexity, not time. Milestones are the top level,
+// in version order, then the rows with none. Under each milestone come the
+// groups with rows in it, so a group can appear under several. Milestones
+// whose rows are all done, before the first with work left, start folded.
+// Milestones and groups fold, and the chart rescales to the rows that show.
+// Each row links its GitHub issues; a row with many folds them behind a count.
 //
 // Without JavaScript the tabs switch through :target, and the TODO filters
 // are radio buttons. With it, a tab is <html data-tab>, so a switch doesn't
@@ -17,7 +20,30 @@ import Text from "../components/todo/Text.astro";
 import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, UPDATED, VERSION, categories, issueUrl, parts, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
-const open = GROUPS.filter((g) => g.open).flatMap((g) => g.rows);
+// Milestones by version, ascending, then the rows with no milestone. Each
+// holds the groups that have rows in it, in the chart's group order.
+const byVersion = (a: string, b: string) => {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+};
+const versions = [...new Set(rows.flatMap((r) => (r.milestone ? [r.milestone] : [])))].sort(byVersion);
+const sections = [...versions, undefined]
+  .map((m) => ({
+    id: m ? `ms-${m}` : "ms-none",
+    title: m ?? "No milestone yet",
+    groups: GROUPS.map((g) => ({ ...g, rows: g.rows.filter((r) => r.milestone === m) })).filter((g) => g.rows.length),
+  }))
+  .filter((m) => m.groups.length);
+const finished = (m: (typeof sections)[number]) => m.groups.every((g) => g.rows.every((r) => r.state === "done"));
+// Folded: done, and before the first milestone with work left.
+const current = sections.findIndex((m) => !finished(m));
+const milestones = sections.map((m, i) => ({
+  ...m,
+  open: current < 0 ? i === sections.length - 1 : i >= current,
+  rows: m.groups.flatMap((g) => g.rows),
+}));
+const open = milestones.filter((m) => m.open).flatMap((m) => m.rows);
 const lo = Math.floor(Math.min(...open.map((r) => r.start)) / 5) * 5;
 const hi = Math.ceil(Math.max(...open.map((r) => r.start + r.size)) / 5) * 5;
 const span = hi - lo;
@@ -42,8 +68,8 @@ const TABS = [
   { id: "code", name: "Code" },
 ];
 const DOCS = { decisions: "Decisions", code: "Decision code" } as const;
-const tally = (g: (typeof GROUPS)[number]) => {
-  const n = (s: Row["state"]) => g.rows.filter((r) => r.state === s).length;
+const tally = (rows: Row[]) => {
+  const n = (s: Row["state"]) => rows.filter((r) => r.state === s).length;
   return [n("done") && `${n("done")} done`, n("now") && `${n("now")} in progress`, n("next") && `${n("next")} next`]
     .filter(Boolean)
     .join(" · ");
@@ -86,7 +112,6 @@ const tally = (g: (typeof GROUPS)[number]) => {
     --rule: #000;
     --grid: #e8e8e8;
     --quiet: #6b6b6b;
-    --ms: 2.5rem;
     --name: 13rem;
     --note: 15rem;
     --cols: 8;
@@ -132,9 +157,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .bar.done, .key.done { background: var(--ink); }
   .bar.now, .key.now { background: var(--red); }
   .bar.next, .key.next { border: 1px solid var(--ink); background: transparent; }
-  .row, .axis { display: grid; grid-template-columns: var(--ms) var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
-  .ms { align-self: start; padding-top: 1px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
-  .ms.next { color: var(--quiet); font-weight: 600; }
+  .row, .axis { display: grid; grid-template-columns: var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
   .axis {
     position: sticky; top: 0; z-index: 1; background: var(--paper);
     padding: 14px 0 8px; font-size: 11px; font-weight: 600; color: var(--quiet);
@@ -144,21 +167,23 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .scale span { position: absolute; transform: translateX(-50%); }
   .scale span:first-child { transform: none; }
   .scale span:last-child { transform: translateX(-100%); }
-  details.group { margin-top: 22px; }
-  .group > summary {
+  details.milestone { margin-top: 32px; }
+  .milestone > summary, .group > summary {
     list-style: none; cursor: pointer;
-    display: grid; grid-template-columns: calc(var(--ms) + 20px + var(--name)) 1fr auto; column-gap: 20px; align-items: baseline;
-    border-top: 2px solid var(--rule); padding: 9px 0 7px;
+    display: grid; grid-template-columns: var(--name) 1fr auto; column-gap: 20px; align-items: baseline;
   }
+  .milestone > summary { border-top: 4px solid var(--rule); padding: 10px 0 8px; }
+  .milestone > summary .v { font-size: 24px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; white-space: nowrap; }
+  details.group { margin-top: 14px; }
+  .group > summary { border-top: 1px solid var(--rule); padding: 8px 0 6px; }
   summary::-webkit-details-marker { display: none; }
   summary .t { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
   summary .s { font-size: 13px; font-weight: 500; }
   summary .c { font-size: 12px; color: var(--quiet); display: inline-flex; gap: 14px; align-items: baseline; }
   summary .c::after { content: "+"; font-size: 18px; font-weight: 400; line-height: 0; color: var(--ink); width: 10px; text-align: center; }
-  details.group[open] > summary .c::after { content: "−"; }
+  details.group[open] > summary .c::after, details.milestone[open] > summary .c::after { content: "−"; }
   summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
-  .row.turn { border-top: 1px solid var(--rule); }
   .name { font-weight: 600; }
   .note { color: var(--quiet); font-size: 13px; }
   .note a, .refs a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
@@ -284,7 +309,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
   .doc hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
   @media (max-width: 1100px) {
     :root { --note: 0px; }
-    .row, .axis { grid-template-columns: var(--ms) var(--name) 1fr; }
+    .row, .axis { grid-template-columns: var(--name) 1fr; }
     .note, .axis .pad-r { display: none; }
   }
   @media (max-width: 640px) {
@@ -301,12 +326,10 @@ const tally = (g: (typeof GROUPS)[number]) => {
     .figures div:nth-child(n + 3) { border-top: 1px solid var(--rule); }
     .figures .n { font-size: 40px; }
     .legend .say { margin-left: 0; flex-basis: 100%; }
-    .row, .axis { grid-template-columns: var(--ms) 1fr; row-gap: 4px; }
-    .row .track { grid-column: 2; }
-    .note { grid-column: 2; }
+    .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
     .axis .pad-l { display: none; }
     .note { display: block; font-size: 12px; }
-    .group > summary { grid-template-columns: 1fr auto; }
+    .milestone > summary, .group > summary { grid-template-columns: 1fr auto; }
     summary .s { grid-column: 1; grid-row: 2; }
     summary .c { grid-column: 2; grid-row: 1 / span 2; }
   }
@@ -337,37 +360,40 @@ const tally = (g: (typeof GROUPS)[number]) => {
     <span><i class="key done"></i>{label.done}</span>
     <span><i class="key now"></i>{label.now}</span>
     <span><i class="key next"></i>{label.next}</span>
-    <span class="say">Bar length is complexity, how much code changes. It is not time. The scale fits the open groups.</span>
+    <span class="say">Bar length is complexity, how much code changes. It is not time. The scale fits the rows that are open.</span>
   </div>
 
   <div class="axis" aria-hidden="true">
-    <span class="pad-ms"></span>
     <span class="pad-l"></span>
     <div class="scale" id="scale">{ticks.map((t) => <span style={`left:${pct(t - lo)}`}>{t}</span>)}</div>
     <span class="pad-r"></span>
   </div>
 
-  {GROUPS.map((g) => (
-    <details class="group" open={g.open} id={g.id}>
-      <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g)}</span></summary>
-      {g.rows.map((r, i) => (
-        <div class={`row${i > 0 && r.milestone !== g.rows[i - 1].milestone ? " turn" : ""}`} id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
-          <span class={`ms${r.state === "done" ? "" : " next"}`} title={r.milestone && `Milestone ${r.milestone}`}>{r.milestone !== g.rows[i - 1]?.milestone && r.milestone}</span>
-          <div>
-            <span class="name">{r.name}</span>
-            {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
-            {r.issues.length > 4 && (
-              <details class="refs">
-                <summary>{count(r)}</summary>
-                <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
-              </details>
-            )}
-          </div>
-          <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
-            <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
-          </div>
-          <span class="note"><Text text={r.note} /></span>
-        </div>
+  {milestones.map((m) => (
+    <details class="milestone" open={m.open} id={m.id}>
+      <summary><span class="v">{m.title}</span><span class="s">{m.groups.map((g) => g.title).join(" · ")}</span><span class="c">{tally(m.rows)}</span></summary>
+      {m.groups.map((g) => (
+        <details class="group" open id={`${m.id}-${g.id}`}>
+          <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g.rows)}</span></summary>
+          {g.rows.map((r) => (
+            <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
+              <div>
+                <span class="name">{r.name}</span>
+                {r.issues.length > 0 && r.issues.length <= 4 && <span class="refs">{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>}
+                {r.issues.length > 4 && (
+                  <details class="refs">
+                    <summary>{count(r)}</summary>
+                    <span>{r.issues.map((i) => <a class={i.state} href={issueUrl(i.number)} title={hover(i)}>#{i.number}</a>)}</span>
+                  </details>
+                )}
+              </div>
+              <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
+                <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
+              </div>
+              <span class="note"><Text text={r.note} /></span>
+            </div>
+          ))}
+        </details>
       ))}
     </details>
   ))}
@@ -447,12 +473,13 @@ const tally = (g: (typeof GROUPS)[number]) => {
 </footer>
 
 <script is:inline>
-  // Fit the axis to the rows of the open groups, on 5-unit lines.
+  // Fit the axis to the rows that show (their milestone and group are both
+  // open), on 5-unit lines.
   (() => {
     const rows = [...document.querySelectorAll(".row")];
     const scale = document.getElementById("scale");
     const fit = () => {
-      const open = rows.filter((r) => r.closest("details.group").open);
+      const open = rows.filter((r) => r.closest("details.group").open && r.closest("details.milestone").open);
       const use = open.length ? open : rows;
       const lo = Math.floor(Math.min(...use.map((r) => +r.dataset.start)) / 5) * 5;
       const hi = Math.ceil(Math.max(...use.map((r) => +r.dataset.start + +r.dataset.size)) / 5) * 5;
@@ -472,7 +499,7 @@ const tally = (g: (typeof GROUPS)[number]) => {
         }),
       );
     };
-    for (const d of document.querySelectorAll("details.group")) d.addEventListener("toggle", fit);
+    for (const d of document.querySelectorAll("details.group, details.milestone")) d.addEventListener("toggle", fit);
     fit();
   })();
 </script>

@@ -4,7 +4,8 @@
 //
 // On the chart, bar length is relative complexity, how much code changes, and
 // never time. All bars share one axis, from the first work to the last
-// planned, and the page rescales it to the groups that are open.
+// planned, and the page rescales it to the rows that are open. The page
+// nests the chart by milestone, then group; a group's `open` is not read.
 //
 // todo.json is written by plan/plan.mjs from plan/gantt.json,
 // plan/changelog.json and plan/items.json. Issues are named #N throughout.
