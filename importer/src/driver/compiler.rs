@@ -82,7 +82,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // whose associated type a selected signature projects from a parameter.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 36;
+const PROTOCOL_SCHEMA: u32 = 37;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
