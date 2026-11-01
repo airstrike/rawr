@@ -59,6 +59,9 @@ pub struct Outcome {
     pub failure: Option<String>,
     /// Each error and warning as data (see [`crate::diagnostic`]).
     pub diagnostics: Vec<serde_json::Value>,
+    /// Cargo's `build-script-executed` messages, one JSON line each: what
+    /// the project's toolchain gave its build scripts (D609.4).
+    pub build_scripts: Vec<String>,
 }
 
 impl Outcome {
@@ -111,6 +114,10 @@ impl Outcome {
             let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
+            if message["reason"] == "build-script-executed" {
+                outcome.build_scripts.push(line.to_owned());
+                continue;
+            }
             if message["reason"] != "compiler-message" {
                 continue;
             }
@@ -243,6 +250,11 @@ impl Running {
             command
                 .args(["check", "--message-format=json", "--manifest-path"])
                 .arg(manifest);
+            // From the crate's directory, as `cargo check` run there picks
+            // its toolchain: its build-script outputs are the project's.
+            if let Some(directory) = manifest.parent().filter(|_| manifest.is_absolute()) {
+                command.current_dir(directory);
+            }
         }
         let mut child = command
             .stdin(Stdio::null())
@@ -356,6 +368,11 @@ pub fn begin(graph: &rawr::package::Graph) -> Option<Pending> {
 /// End `rawr check`: Rawr's result first, then cargo's under its own
 /// heading. Returns whether both passed.
 pub fn conclude(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option<Pending>) -> bool {
+    concluded(checked, cargo.map(Pending::finish))
+}
+
+/// [`conclude`] with cargo's status already read.
+pub fn concluded(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option<Status>) -> bool {
     let checked = match checked {
         Ok(source) => {
             println!("Checked {}", source.display());
@@ -366,8 +383,7 @@ pub fn conclude(checked: Result<&Path, &rawr::diagnostic::Report>, cargo: Option
             false
         }
     };
-    let cargo_failed = cargo.is_some_and(|cargo| {
-        let status = cargo.finish();
+    let cargo_failed = cargo.is_some_and(|status| {
         if let Status::Finished(outcome) = &status {
             crate::diagnostic::record(&outcome.diagnostics);
         }

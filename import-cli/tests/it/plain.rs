@@ -726,6 +726,60 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     assert!(!nightly(again));
 }
 
+/// `rawr check` publishes what it extracts once the `cargo check` beside it
+/// gives the nightly's build-script outputs, as a run does after its runner
+/// build: a second project's check then reads the bindings from rawr's home,
+/// with no nightly build and no probe (D609.4, #661).
+#[test]
+fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() {
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("checked-sharing-home");
+    let _ = fs::remove_dir_all(home.join("bindings"));
+    let projects = ["first", "second"]
+        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("checked-{name}")));
+    for root in &projects {
+        let _ = fs::remove_dir_all(root);
+        copy(Path::new(FIXTURE), root);
+    }
+    let [first, second] = &projects;
+    let check = |root: &Path| {
+        let checked = rawr_import_with_home(root, &["check"], &home);
+        assert!(
+            checked.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&checked.stdout),
+            text(&checked.stderr)
+        );
+        assert!(text(&checked.stdout).contains("cargo check passed"));
+    };
+    let nightly = |root: &Path| {
+        let probed = fs::read_dir(root.join("target/rawr/extraction"))
+            .map(|entries| entries.count())
+            .unwrap_or_default();
+        root.join("target/rawr/build").exists() || probed != 0
+    };
+
+    check(first);
+    assert!(
+        nightly(first),
+        "the first project starts with cold bindings"
+    );
+    assert!(
+        !first.join("target/rawr/runner").exists(),
+        "a check builds no runner"
+    );
+    let published = fs::read_dir(home.join("bindings"))
+        .unwrap()
+        .filter(|entry| {
+            let meta = entry.as_ref().unwrap().path().join("meta.json");
+            fs::read_to_string(meta).is_ok_and(|meta| meta.contains("\"crate_name\":\"semver\""))
+        })
+        .count();
+    assert_eq!(published, 1, "the check published semver's bindings");
+
+    check(second);
+    assert!(!nightly(second), "the second project reads the home");
+}
+
 /// The declared inputs of a shared immutable crate are checked before both
 /// `check` and a remembered warm run consume its API. The unchanged path still
 /// shares across projects without a nightly build.

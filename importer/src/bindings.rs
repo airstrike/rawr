@@ -453,10 +453,30 @@ impl Settlement {
         let Some(rawr) = &self.rawr else {
             return Ok(());
         };
+        let stable = runner_scripts(rawr);
+        self.settle_with(stable)
+    }
+
+    /// [`Settlement::settle`] after `rawr check`, whose project build is the
+    /// `cargo check` beside it: `messages` are that build's JSON messages,
+    /// whose `build-script-executed` lines give the project toolchain's
+    /// build-script outputs (D609.4, #661).
+    ///
+    /// # Errors
+    ///
+    /// As [`Settlement::settle`].
+    pub fn settle_checked(self, messages: &[u8]) -> Result<(), String> {
+        let stable = scripts_from_messages(messages);
+        self.settle_with(stable)
+    }
+
+    fn settle_with(self, stable: Option<BTreeMap<String, Vec<Script>>>) -> Result<(), String> {
+        let Some(rawr) = self.rawr.clone() else {
+            return Ok(());
+        };
         if self.entries.is_empty() {
             return Ok(());
         }
-        let stable = runner_scripts(rawr);
         let mut refused = None;
         // The preparation loop settles a table once for each demand it
         // extracts, and each probe names the external crates its demand
@@ -528,7 +548,7 @@ impl Settlement {
                     // This project's own extraction, as its probe would give
                     // it again: drift shows in the build, as it does for a
                     // table the run extracted.
-                    if directory == staged(rawr) {
+                    if directory == staged(&rawr) {
                         continue;
                     }
                     let differs = scripts.iter().find(|(package, recorded)| {
