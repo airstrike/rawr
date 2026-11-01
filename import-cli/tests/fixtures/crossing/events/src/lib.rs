@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 
+pub mod choices;
 pub mod classic;
 pub mod color;
 pub mod controls;

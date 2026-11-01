@@ -470,6 +470,18 @@ fn a_crate_structs_string_field_is_read_in_place() {
     );
 }
 
+/// A `&self` method's `&[T]`, as iced's `combo_box::State::options`, is
+/// lent in place for as long as the receiver's borrow lasts (#687), for `T`
+/// a `String` and a crate struct: `.len()`, indexing, a `for` loop and
+/// `.iter().position(..)` read the native elements, and the struct's clone
+/// counter shows none was copied. The output is `cargo run`'s.
+#[test]
+fn a_slice_a_method_lends_from_its_receiver_is_read_in_place() {
+    let (rawr, cargo) = both_printed("crossing-options", "options.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.ends_with("heavy at Some(1), 0 clones"), "{rawr}");
+}
+
 #[test]
 fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
     let (rawr, cargo) = both_printed("crossing-fields", "fields.rs", "");

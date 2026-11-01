@@ -466,6 +466,38 @@ impl Place {
     }
 }
 
+/// Reach the value a checked native place names as the concrete type `T`,
+/// as a generated field read or `&self` method reaches its receiver when
+/// that receiver is an element of a native slice or vector. The value is
+/// borrowed inside one claim of the place's root, for `visit` alone. A
+/// place of another concrete type is refused.
+pub fn reach_as<T: 'static, R>(
+    place: &Place,
+    mutable: bool,
+    visit: impl FnOnce(Access<'_, T>) -> RawrResultOf<R>,
+) -> RawrResultOf<R> {
+    let mut visit = Some(visit);
+    let mut result = None;
+    let mismatch = || failure("the native operand has another concrete type");
+    let _: Dynamic = place
+        .storage
+        .reach(&place.witness, &[], mutable, &mut |value| {
+            let visit = visit
+                .take()
+                .ok_or_else(|| failure("a native value was reached twice"))?;
+            result = Some(match value {
+                Access::Shared(value) => {
+                    visit(Access::Shared(value.downcast_ref().ok_or_else(mismatch)?))
+                }
+                Access::Mutable(value) => {
+                    visit(Access::Mutable(value.downcast_mut().ok_or_else(mismatch)?))
+                }
+            });
+            Ok(Dynamic::UNIT)
+        })?;
+    result.ok_or_else(|| failure("a native value was not reached"))?
+}
+
 /// A native place carried by a Dynamic, copied as authority, not contents.
 #[must_use]
 pub fn get(value: &Dynamic) -> Option<Place> {

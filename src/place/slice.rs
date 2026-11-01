@@ -57,30 +57,7 @@ impl<E: Policy> Storage for Source<E> {
         rest: Option<&mut crate::scope::Rest<'_>>,
     ) -> RawrResult {
         self.access(operation.mutable(), |value| {
-            let Some((&at, path)) = path.split_first() else {
-                return invoke::<E>(value, witness, operation, arguments, rest);
-            };
-            let element = witness
-                .sequence_element()
-                .ok_or_else(|| failure("a native slice has no element witness"))?;
-            match value {
-                Access::Shared(value) => E::project(
-                    Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
-                    &element,
-                    path,
-                    operation,
-                    arguments,
-                    rest,
-                ),
-                Access::Mutable(value) => E::project(
-                    Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
-                    &element,
-                    path,
-                    operation,
-                    arguments,
-                    rest,
-                ),
-            }
+            invoke_at::<E>(value, witness, path, operation, arguments, rest)
         })
     }
 
@@ -91,20 +68,156 @@ impl<E: Policy> Storage for Source<E> {
         mutable: bool,
         visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
     ) -> RawrResult {
-        let Some((&at, path)) = path.split_first() else {
+        if path.is_empty() {
             return Err(failure("a native slice is reached by its own descriptor"));
-        };
-        self.access(mutable, |value| match value {
-            Access::Shared(value) => E::reach_element(
-                Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+        }
+        self.access(mutable, |value| reach_at::<E>(value, path, visit))
+    }
+
+    fn copies(&self, path: &[usize]) -> bool {
+        path.split_first()
+            .is_some_and(|(_, path)| E::copies_at(path))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Run `operation` on the slice, or on the element `path` names below it,
+/// under the claim already held on the slice.
+fn invoke_at<E: Policy>(
+    value: Access<'_, [E::Value]>,
+    witness: &Witness,
+    path: &[usize],
+    operation: Operation,
+    arguments: &mut [Dynamic],
+    rest: Option<&mut crate::scope::Rest<'_>>,
+) -> RawrResult {
+    let Some((&at, path)) = path.split_first() else {
+        return invoke::<E>(value, witness, operation, arguments, rest);
+    };
+    let element = witness
+        .sequence_element()
+        .ok_or_else(|| failure("a native slice has no element witness"))?;
+    match value {
+        Access::Shared(value) => E::project(
+            Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+            &element,
+            path,
+            operation,
+            arguments,
+            rest,
+        ),
+        Access::Mutable(value) => E::project(
+            Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+            &element,
+            path,
+            operation,
+            arguments,
+            rest,
+        ),
+    }
+}
+
+/// Reach the element `path` names below the slice, under the claim already
+/// held on the slice.
+fn reach_at<E: Policy>(
+    value: Access<'_, [E::Value]>,
+    path: &[usize],
+    visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+) -> RawrResult {
+    let Some((&at, path)) = path.split_first() else {
+        return Err(failure("a native slice is reached by its own descriptor"));
+    };
+    match value {
+        Access::Shared(value) => E::reach_element(
+            Access::Shared(value.get(at).ok_or_else(out_of_bounds)?),
+            path,
+            visit,
+        ),
+        Access::Mutable(value) => E::reach_element(
+            Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
+            path,
+            visit,
+        ),
+    }
+}
+
+/// How a slice a native method lends from its receiver is reached: claim
+/// the receiver, call the method again, and hand its slice to the visitor
+/// for one operation.
+#[cfg(feature = "sync")]
+type Lend<T> = dyn Fn(&mut dyn FnMut(&[T]) -> RawrResult) -> RawrResult + Send + Sync;
+#[cfg(not(feature = "sync"))]
+type Lend<T> = dyn Fn(&mut dyn FnMut(&[T]) -> RawrResult) -> RawrResult;
+
+/// A shared slice a native method lends from its receiver, as iced's
+/// `combo_box::State::options(&self) -> &[T]` does (#687). The place holds
+/// no reference to the slice. Each operation claims the receiver and calls
+/// the method again, so the slice is borrowed for that operation alone, as
+/// a projection borrows its element (D651). The borrow checker keeps the
+/// receiver borrowed while Rust's borrow of the slice lives, so each call
+/// gives the same slice. No element is copied.
+struct Lending<E: Policy> {
+    lend: Box<Lend<E::Value>>,
+}
+
+impl<E: Policy> Lending<E> {
+    fn access<R>(
+        &self,
+        mutable: bool,
+        visit: impl FnOnce(&[E::Value]) -> RawrResultOf<R>,
+    ) -> RawrResultOf<R> {
+        if mutable {
+            return Err(failure("the native slice is shared"));
+        }
+        let mut visit = Some(visit);
+        let mut result = None;
+        let _: Dynamic = (self.lend)(&mut |value| {
+            let visit = visit
+                .take()
+                .ok_or_else(|| failure("a lent native slice was reached twice"))?;
+            result = Some(visit(value));
+            Ok(Dynamic::UNIT)
+        })?;
+        result.ok_or_else(|| failure("a lent native slice was not reached"))?
+    }
+}
+
+impl<E: Policy> Storage for Lending<E> {
+    fn invoke(
+        &self,
+        witness: &Witness,
+        path: &[usize],
+        operation: Operation,
+        arguments: &mut [Dynamic],
+        rest: Option<&mut crate::scope::Rest<'_>>,
+    ) -> RawrResult {
+        self.access(operation.mutable(), |value| {
+            invoke_at::<E>(
+                Access::Shared(value),
+                witness,
                 path,
-                visit,
-            ),
-            Access::Mutable(value) => E::reach_element(
-                Access::Mutable(value.get_mut(at).ok_or_else(out_of_bounds)?),
-                path,
-                visit,
-            ),
+                operation,
+                arguments,
+                rest,
+            )
+        })
+    }
+
+    fn reach(
+        &self,
+        _witness: &Witness,
+        path: &[usize],
+        mutable: bool,
+        visit: &mut dyn FnMut(Access<'_, dyn Any>) -> RawrResult,
+    ) -> RawrResult {
+        if path.is_empty() {
+            return Err(failure("a native slice is reached by its own descriptor"));
+        }
+        self.access(mutable, |value| {
+            reach_at::<E>(Access::Shared(value), path, visit)
         })
     }
 
@@ -116,6 +229,42 @@ impl<E: Policy> Storage for Source<E> {
     fn as_any(&self) -> &dyn Any {
         self
     }
+}
+
+/// The shared slice a native method lends from its receiver (#687), reached
+/// through `lend` at each operation: `lend` claims the receiver, calls the
+/// method and hands its slice to the visitor it takes.
+#[cfg(feature = "sync")]
+pub fn lent_by<E: Policy>(
+    witness: &Witness,
+    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + Send + Sync + 'static,
+) -> RawrResult {
+    lending::<E>(witness, Box::new(lend))
+}
+
+/// The shared slice a native method lends from its receiver (#687), reached
+/// through `lend` at each operation: `lend` claims the receiver, calls the
+/// method and hands its slice to the visitor it takes.
+#[cfg(not(feature = "sync"))]
+pub fn lent_by<E: Policy>(
+    witness: &Witness,
+    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
+) -> RawrResult {
+    lending::<E>(witness, Box::new(lend))
+}
+
+fn lending<E: Policy>(witness: &Witness, lend: Box<Lend<E::Value>>) -> RawrResult {
+    if !witness
+        .sequence_element()
+        .is_some_and(|element| E::accepts(&element))
+    {
+        return Err(failure("a native slice has the wrong element witness"));
+    }
+    Ok(Dynamic::from(Place {
+        witness: witness.clone(),
+        mutable: false,
+        storage: Shared::new(Lending::<E> { lend }),
+    }))
 }
 
 fn out_of_bounds() -> Box<crate::EvalAltResult> {
@@ -175,6 +324,9 @@ pub fn reach<E: Policy, R>(
     }
     if let Some(source) = place.storage.as_any().downcast_ref::<Source<E>>() {
         return source.access(mutable, visit);
+    }
+    if let Some(lending) = place.storage.as_any().downcast_ref::<Lending<E>>() {
+        return lending.access(mutable, |value| visit(Access::Shared(value)));
     }
     super::reach::<super::sequence::Vector<E>, _>(place, witness, mutable, |value| match value {
         Access::Shared(value) => visit(Access::Shared(value)),
