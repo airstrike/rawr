@@ -2085,6 +2085,61 @@ const fn structural_use(kind: crate::host::structural::Kind) -> &'static str {
     }
 }
 
+/// A type the crate fixes, as the associated type `<S as Future>::Output`
+/// that the type filling `S` binds: Rust's own `Option`, `Result`, tuple or
+/// `Vec` of what it holds, never `rawr::Value`, since native code gives or
+/// takes it at that type. Anything else is as `imported_surface_type`
+/// converts it.
+#[cfg(feature = "rust-import")]
+fn fixed_surface_type(
+    inference: &Inference,
+    models: &Models,
+    ty: &Ty,
+    operation: Span,
+    imported: &mut ImportedContext<'_>,
+) -> Result<rawr_import::classify::representability::convert::Type, Error> {
+    use rawr_import::classify::representability::convert::Type;
+    Ok(match inference.resolved_ref(ty) {
+        Ty::Option(element) => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Option(Box::new(fixed_surface_type(
+                inference, models, element, operation, imported,
+            )?))
+        }
+        Ty::Result(ok, err) => {
+            imported.retain_checked(Some(2), Some(2 * std::mem::size_of::<Type>()))?;
+            Type::Result(
+                Box::new(fixed_surface_type(
+                    inference, models, ok, operation, imported,
+                )?),
+                Box::new(fixed_surface_type(
+                    inference, models, err, operation, imported,
+                )?),
+            )
+        }
+        Ty::Tuple(members) if !members.is_empty() => {
+            let mut converted = imported.entries(members.len())?;
+            for member in members.iter() {
+                converted.push(fixed_surface_type(
+                    inference, models, member, operation, imported,
+                )?);
+            }
+            Type::Tuple(converted.into_boxed_slice())
+        }
+        Ty::Array { element, .. } => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Sequence {
+                element: Box::new(fixed_surface_type(
+                    inference, models, element, operation, imported,
+                )?),
+                owned: true,
+                length: None,
+            }
+        }
+        _ => imported_surface_type(inference, models, ty, operation, imported)?,
+    })
+}
+
 /// A value type Rust can't name in the runner, as a script struct or a
 /// tuple holding one: a generic Rust item takes it as `rawr::Value`
 /// (D513.2), which carries it as it is.
@@ -48127,7 +48182,19 @@ impl<'a> Parser<'a> {
                 self.reaches_host = true;
             }
             let length = self.related_array_length(item, name, ty);
-            let mut surface = imported_surface_type(
+            // An associated type a relation reads, as `S::Output` of the
+            // type filling `S`, is the crate's: Rust's own type.
+            let fixed = item.signature().relations().iter().any(|relation| {
+                relation.associated().is_some()
+                    && matches!(relation.arguments(),
+                        [crate::host::signature::Pattern::Parameter(parameter)] if parameter == name)
+            });
+            let convert = if fixed {
+                fixed_surface_type
+            } else {
+                imported_surface_type
+            };
+            let mut surface = convert(
                 &self.inference,
                 &self.models,
                 ty,

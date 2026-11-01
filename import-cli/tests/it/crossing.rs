@@ -905,36 +905,17 @@ fn a_closure_takes_the_item_a_native_opaque_type_binds() {
 }
 
 /// iced's `Task::sip` also takes `impl FnOnce(<S as Future>::Output) ->
-/// T`. Rawr can't make that closure yet, so the call is reported at its
-/// span, naming the item and why, in Rust's terms (D664).
+/// T` with `S: Core`: a std trait's associated type of its own type
+/// parameter. The program's own native `impl Straw<u32, u32, String>` fills
+/// `S`, and binds `Future::Output` through `Sipper` and `Core`, as sipper's
+/// traits do. Two variants fill the two callables, and the second takes the
+/// `Result<u32, String>` that binding decides, as rustc reads it (#621). The
+/// output is `cargo run`'s.
 #[test]
-fn a_closure_of_a_future_parameters_output_is_reported_at_the_call() {
-    let root = root("crossing-finished");
-    fs::copy(
-        root.join("variants").join("finished.rs"),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("check")
-        .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(!check.status.success(), "{stderr}");
-    assert!(stderr.contains("main.rs:16:36-16:42"), "{stderr}");
-    assert!(
-        stderr.contains(
-            "rawr has no binding for `finish`: it takes a closure whose input is an \
-             associated type of a type parameter"
-        ),
-        "{stderr}"
-    );
+fn a_closure_takes_the_output_a_native_opaque_future_binds() {
+    let (rawr, cargo) = both_printed("crossing-finished", "finished.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
 
 /// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`

@@ -6903,7 +6903,7 @@ fn opaque_consumers<'p>(
 ) -> Result<Vec<&'p Plan>, request::Error> {
     let mut consumers = Vec::new();
     for plan in cohort {
-        if opaque_operand(plan)?.is_some_and(|(_, opaque)| opaque == *key) {
+        if opaque_operand(plan)?.is_some_and(|(_, opaque)| same_opaque(&opaque, key)) {
             consumers.push(plan);
         }
     }
@@ -6957,7 +6957,7 @@ fn opaque_table_source(
             } => substituted(signature.output(), signature, substitutions)?,
             _ => convert::Type::Unit,
         };
-        let other = first_opaque(&produced).is_some_and(|produced| *produced != key);
+        let other = first_opaque(&produced).is_some_and(|produced| !same_opaque(produced, &key));
         let inner = if other {
             opaque_table_source(consumer, cohort, profile, facade)?
         } else {
@@ -12532,8 +12532,10 @@ thread_local! {
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
     /// The opaque `impl Trait` types functions give, by identity, which Rust
     /// code can't write: spelled `_`, for rustc to infer (`surface::opaque`).
-    static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeSet<[u8; 32]>> =
-        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    /// Each with the positions of the arguments that are the associated
+    /// types its bounds bind.
+    static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[u32]>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The imported types that carry lifetimes (D558 tier 1), by identity:
     /// how many lifetime parameters each declares, and whether it is
     /// `Debug` and `Clone`.
@@ -13662,12 +13664,10 @@ impl TypePaths {
                 .into_iter()
                 .flat_map(crate::surface::facade::Plan::facades)
             {
-                opaque.extend(
-                    owner
-                        .types()
-                        .filter(|ty| ty.opaque())
-                        .map(|ty| *ty.identity()),
-                );
+                opaque.extend(owner.types().filter(|ty| ty.opaque()).map(|ty| {
+                    let associated = ty.associated().map(|(_, _, position)| position).collect();
+                    (*ty.identity(), associated)
+                }));
             }
         });
         COPY_TYPES.with_borrow_mut(|copy| {
@@ -13779,7 +13779,7 @@ impl Drop for TypePaths {
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
-        OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
+        OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -13817,7 +13817,43 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
 
 /// Whether `definition` is an opaque `impl Trait` type a function gives.
 fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
-    OPAQUE_TYPES.with_borrow(|opaque| opaque.contains(definition.as_bytes()))
+    OPAQUE_TYPES.with_borrow(|opaque| opaque.contains_key(definition.as_bytes()))
+}
+
+/// Whether `this` and `other` are one opaque type: the same definition at
+/// the same arguments, other than the associated types its bounds bind.
+/// Those follow from the rest, as rustc fixes them, and the program may
+/// hold one as a value of its own, as a `Result<u32, String>` it reads
+/// from `Future::Output`.
+fn same_opaque(this: &convert::Type, other: &convert::Type) -> bool {
+    match (this, other) {
+        (
+            convert::Type::Nominal {
+                definition,
+                arguments,
+            },
+            convert::Type::Nominal {
+                definition: other_definition,
+                arguments: other_arguments,
+            },
+        ) if definition == other_definition && arguments.len() == other_arguments.len() => {
+            OPAQUE_TYPES.with_borrow(|opaque| {
+                let associated = opaque
+                    .get(definition.as_bytes())
+                    .map_or(&[][..], |associated| &associated[..]);
+                arguments
+                    .iter()
+                    .zip(other_arguments.iter())
+                    .enumerate()
+                    .all(|(position, (this, other))| {
+                        this == other
+                            || u32::try_from(position)
+                                .is_ok_and(|position| associated.contains(&position))
+                    })
+            })
+        }
+        _ => this == other,
+    }
 }
 
 /// Whether `ty` holds an opaque `impl Trait` type a function gives.

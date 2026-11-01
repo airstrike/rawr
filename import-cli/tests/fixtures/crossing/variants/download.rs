@@ -44,8 +44,33 @@ impl std::fmt::Display for Image {
     }
 }
 
-/// The length of `url`, once the download is done, as a future.
-pub fn finished(url: impl AsRef<str>) -> impl Future<Output = u32> {
-    let length = url.as_ref().len() as u32;
-    async move { length }
+/// The length of `url` as the download's progress, and three times it or
+/// an error as its output, behind `impl Straw<..>`, as iced's
+/// download_progress's `download` gives.
+pub fn finished(url: impl AsRef<str>) -> impl events::Straw<u32, u32, String> {
+    Finished(url.as_ref().len() as u32)
+}
+
+struct Finished(u32);
+
+impl Future for Finished {
+    type Output = Result<u32, String>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::task::Poll::Ready(match self.0 {
+            0 => Err("empty".to_owned()),
+            length => Ok(length * 3),
+        })
+    }
+}
+
+impl events::Sip for Finished {
+    type Item = u32;
+
+    fn sipped(self) -> Vec<u32> {
+        vec![self.0]
+    }
 }
