@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 66;
+const CLASSIFIER_VERSION: u32 = 67;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5025,6 +5025,37 @@ impl<P: api::Phase> Context<'_, P> {
         }
     }
 
+    /// The trait a method of `implementation` is called through when the
+    /// impl has parameters its type doesn't name, the `inferred` ones: the
+    /// trait at the impl's arguments other than `Self`, which name them,
+    /// as rustc reads `Renderer` from the `impl Widget<Part>` a value is
+    /// (T428). `None` for an inherent impl, or one whose arguments Rawr
+    /// can't write.
+    fn through(
+        &self,
+        implementation: &model::Implementation,
+        inferred: &[u32],
+    ) -> Option<representability::convert::Type> {
+        let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+            return None;
+        };
+        if inferred.is_empty() {
+            return None;
+        }
+        let arguments = arguments
+            .iter()
+            .skip(1)
+            .filter_map(|argument| match argument {
+                model::Argument::Type(ty) => Some(self.convert(ty).ok()),
+                _ => None,
+            })
+            .collect::<Option<Box<[_]>>>()?;
+        Some(representability::convert::Type::Nominal {
+            definition: crate::surface::identity::Definition::of(id),
+            arguments,
+        })
+    }
+
     /// A method of a trait's impl for `&str`, as iced's `impl<Message,
     /// Theme, Renderer> Widget<Message, Theme, Renderer> for &str` gives
     /// `_boxed`: an invocation whose instance is `&'static str`, Rawr's
@@ -5080,7 +5111,9 @@ impl<P: api::Phase> Context<'_, P> {
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            let item = item.with_inferred(&inferred, parameters.len());
+            let item = item
+                .with_inferred(&inferred, parameters.len())
+                .with_through(self.through(implementation, &inferred));
             if item.call().is_some() || !item.crossings().is_empty() {
                 return Err(reject::Kind::CallableProtocol.into());
             }
@@ -5272,7 +5305,9 @@ impl<P: api::Phase> Context<'_, P> {
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
-            let item = item.with_inferred(&inferred, parameters.len());
+            let item = item
+                .with_inferred(&inferred, parameters.len())
+                .with_through(self.through(implementation, &inferred));
             // An invocation's signature declares each of its parameters, and
             // an argument's `impl Fn(..)` has no name to declare, as in
             // Freya's `Callback<A, R>::new(impl FnMut(A) -> R + 'static)`,

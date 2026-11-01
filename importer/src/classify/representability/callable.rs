@@ -168,6 +168,12 @@ impl Item {
         self
     }
 
+    /// This item of a trait impl, called through the trait at `through`.
+    pub(crate) fn with_through(mut self, through: Option<super::convert::Type>) -> Self {
+        self.signature = self.signature.with_through(through);
+        self
+    }
+
     /// This item of an impl that fixes some of its type's arguments, at
     /// that instance.
     pub(crate) fn with_instance(mut self, instance: super::convert::Type) -> Self {

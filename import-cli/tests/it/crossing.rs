@@ -606,16 +606,21 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
 /// made of its parameter (T462) and one of a `&'static str` (T428) take no
 /// input's lifetime, and a canvas behind one is mapped (T424) and boxed by
 /// `column!` through the trait's own `boxed`, as `Map`'s impl has
-/// parameters its type doesn't. The output is `cargo run`'s.
+/// parameters its type doesn't. A button behind `impl Widget<Part>` is
+/// mapped too: its impl of `Widget` is at any renderer, so `map` is called
+/// through the trait at the arguments `impl Widget<Part>` fixes (T428). The
+/// output is `cargo run`'s.
 #[test]
 fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
     let (rawr, cargo) = both_printed("crossing-opaque", "opaque.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 0 [Increment] [Decrement] map canvas[primary value 0#1]")
-            && rawr.contains("4 message Decrement")
-            && rawr
-                .ends_with("last view pad 0 [Increment] [Decrement] map canvas[primary value 2#1]"),
+        rawr.contains(
+            "1 view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary value 0#1]"
+        ) && rawr.contains("4 message Part(Down)")
+            && rawr.ends_with(
+                "last view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary value 1#1]"
+            ),
         "{rawr}"
     );
 }

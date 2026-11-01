@@ -1110,7 +1110,8 @@ fn clone_signature(source: &signature::Signature) -> Result<signature::Signature
     )
     .with_guard(source.guard())
     .with_scope(source.scope())
-    .with_instance(source.instance().map(clone_type).transpose()?))
+    .with_instance(source.instance().map(clone_type).transpose()?)
+    .with_through(source.through().map(clone_type).transpose()?))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {
