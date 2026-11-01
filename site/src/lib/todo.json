@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`==` and `!=` choose the `PartialEq` impl rustc chooses: references compare through what they refer to, `String`, `str` and `&str` compare with each other, and `Vec`s, slices and arrays compare element by element. `&String == &str`, `&str == String`, `Vec<u8> == [u8; 3]` and `names.iter().position(|name| name == \"Serif\")` compile, and `&a < &b` compares what the references point to. A comparison rustc refuses gets its E0277, \"can't compare `X` with `Y`\", at the operator, with rustc's help and note.","issues":[699]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.93",
@@ -1651,7 +1656,13 @@
     {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
     {"issue":696,"title":"node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health"},
     {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"},
-    {"issue":698,"title":"A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"open","category":"No glue (D593)"}
+    {"issue":698,"title":"A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"open","category":"No glue (D593)"},
+    {"issue":699,"title":"`==` and comparisons resolve through PartialEq/PartialOrd impls, including `&String == &str`","state":"open","category":"Divergences from rustc"},
+    {"issue":700,"title":"A program's `impl PartialEq<Rhs> for T` with Rhs other than Self is accepted and chosen by `==`","state":"open","category":"Divergences from rustc"},
+    {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"open","category":"Divergences from rustc"},
+    {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
+    {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
+    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `==` and `!=` choose the `PartialEq` impl rustc chooses: references compare through what they refer to, `String`, `str` and `&str` compare with each other, and `Vec`s, slices and arrays compare element by element. `&String == &str`, `&str == String`, `Vec<u8> == [u8; 3]` and `names.iter().position(|name| name == "Serif")` compile, and `&a < &b` compares what the references point to. A comparison rustc refuses gets its E0277, "can't compare `X` with `Y`", at the operator, with rustc's help and note. (#699)
 
 ## 0.3.93 (2026-11-01)
 
