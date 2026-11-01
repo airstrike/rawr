@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.81 (2026-11-01)
+
 - A program whose dependencies patch a crate, such as fount with `iced_core` patched to git, no longer fails every run with "changed during the build". rawr no longer asks Cargo for its metadata and unit graph again after a build or before publishing, which saves two to four Cargo processes per fresh resolution. Edits to manifests, the lock or the Cargo configuration during a build are still caught by their digests. (#655)
 
 ## 0.3.80 (2026-11-01)
