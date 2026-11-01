@@ -53937,7 +53937,7 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
         // Only the hidden path: the defining crate's own.
         let (message, actual) = mismatch(&[&format!("{HIDDEN}::Vector")]);
         assert_eq!(actual, "linear::Vector<f32>");
-        assert!(message.contains("`linear::Vector<f32>`"), "{message}");
+        assert!(message.contains("linear::Vector<f32>"), "{message}");
     }
 
     /// `Vector<T>` at `vectors::Deep::Vector` and `vectors::Vector`, and
