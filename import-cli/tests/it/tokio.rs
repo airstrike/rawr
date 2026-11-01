@@ -111,25 +111,27 @@ fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     );
 }
 
-/// A path to a module's item rawr has no binding for is rustc's E0425 at
-/// the module the program wrote, as `label::describe` of a program's own
-/// `mod label;` whose function names another crate's type (#677).
+/// A program module's function names another crate's type as rustc
+/// resolves a path into a dependency, through that crate: `label::describe`
+/// of a program's own `mod label;` takes `&shelf::Font`, `label::owned`
+/// takes one by value and `label::make` gives one (#685). `cargo run`
+/// prints the same.
 #[test]
-fn a_module_item_without_a_binding_is_not_found_in_its_module() {
+fn a_module_function_names_another_crates_type() {
     let root = fixture("tokio-borrowed");
     fs::write(
         root.join("src/label.rs"),
-        "pub fn describe(font: &shelf::Font) -> String {\n    font.family.clone()\n}\n",
+        "pub fn describe(font: &shelf::Font) -> String {\n    format!(\"{} of {}\", font.family, font.bytes.len())\n}\n\npub fn owned(font: shelf::Font) -> String {\n    font.family\n}\n\npub fn make(family: &str) -> shelf::Font {\n    shelf::font(String::from(family), 2)\n}\n",
     )
     .unwrap();
     fs::write(
         root.join("src/main.rs"),
-        "// rawr\nmod label;\n\nfn main() {\n    let font = shelf::font(String::from(\"Georgia\"), 3);\n    println!(\"{}\", label::describe(&font));\n}\n",
+        "// rawr\nmod label;\n\nfn main() {\n    let font = shelf::font(String::from(\"Georgia\"), 3);\n    println!(\"{}\", label::describe(&font));\n    let made = label::make(\"Inter\");\n    println!(\"{}\", label::describe(&made));\n    println!(\"{}\", label::owned(made));\n}\n",
     )
     .unwrap();
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("check")
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
         .arg(&root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
@@ -137,14 +139,10 @@ fn a_module_item_without_a_binding_is_not_found_in_its_module() {
         .env_remove("RAWR_VERBOSE")
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(!check.status.success(), "stderr:\n{stderr}");
-    assert!(
-        stderr.contains("error[E0425]: cannot find function `describe` in module `label`")
-            && stderr.contains("not found in `label`")
-            && stderr.contains("its signature names a Rust type that Rawr can't name yet"),
-        "stderr:\n{stderr}"
-    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(stdout, "Georgia of 3\nInter of 2\nInter\n");
 }
 
 #[test]

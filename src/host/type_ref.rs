@@ -153,8 +153,14 @@ pub(crate) enum Shape {
     Parameter(host::path::Path),
 }
 
+/// The crate types a facade's items name: each it declares, with its
+/// parameter count, and each another facade declares, with that facade's
+/// export, in identity order.
 #[cfg(feature = "rust-import")]
-pub(crate) struct ImportedTypes(Box<[(host::type_def::import::Identity, usize)]>);
+pub(crate) struct ImportedTypes {
+    declared: Box<[(host::type_def::import::Identity, usize)]>,
+    foreign: Box<[(host::type_def::import::Identity, host::type_def::Export)]>,
+}
 
 #[cfg(not(feature = "rust-import"))]
 pub(crate) struct ImportedTypes;
@@ -672,8 +678,29 @@ impl Type {
                 identity,
                 arguments,
             } => {
+                for argument in arguments.iter_mut() {
+                    argument
+                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
+                }
+                // A type another facade declares is that facade's, as a
+                // path into a dependency is that crate's.
+                if let Some(export) = imported.foreign(identity) {
+                    assert_eq!(
+                        export.parameters().len(),
+                        arguments.len(),
+                        "a crate type's use in `{item}` gives `{}` its declared parameters",
+                        export.path()
+                    );
+                    allocation
+                        .retain_checked(Some(1), export.retained_bytes())
+                        .map_err(|_| host::Error::Allocation)?;
+                    let export = Box::new(export.try_clone().map_err(|_| host::Error::Allocation)?);
+                    let arguments = std::mem::take(arguments);
+                    self.0 = Shape::External { export, arguments };
+                    return Ok(());
+                }
                 // The importer declares each crate type its bindings' items
-                // name.
+                // name, here or in another facade.
                 let expected = imported.parameters(identity).unwrap_or_else(|| {
                     panic!("the bindings declare each crate type `{item}`'s signature names")
                 });
@@ -688,10 +715,6 @@ impl Type {
                         .find(|definition| definition.identity().imported() == Some(identity))
                         .map_or_else(|| "?".to_owned(), host::type_def::Definition::path)
                 );
-                for argument in arguments {
-                    argument
-                        .resolve_imported(root, types, parameters, imported, item, allocation)?;
-                }
             }
             Shape::External { export, arguments } => {
                 if export.parameters().len() != arguments.len() {
@@ -946,12 +969,18 @@ impl ImportedTypes {
         }
         entries.sort_unstable();
         entries.dedup();
-        Ok(Self(entries.into_boxed_slice()))
+        Ok(Self {
+            declared: entries.into_boxed_slice(),
+            foreign: Box::default(),
+        })
     }
 
+    /// The types a facade's items name: those of `types`, and those of
+    /// `foreign`, which other facades declare.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_imported_facade<A: host::ImportAllocation + ?Sized>(
         types: &[host::type_def::Definition],
+        mut foreign: Box<[(host::type_def::import::Identity, host::type_def::Export)]>,
         allocation: &mut A,
     ) -> Result<Self, host::Error> {
         let count = types
@@ -976,7 +1005,11 @@ impl ImportedTypes {
         }
         entries.sort_unstable();
         entries.dedup();
-        Ok(Self(entries.into_boxed_slice()))
+        foreign.sort_unstable_by_key(|(identity, _)| *identity);
+        Ok(Self {
+            declared: entries.into_boxed_slice(),
+            foreign,
+        })
     }
 
     #[cfg(not(feature = "rust-import"))]
@@ -986,10 +1019,23 @@ impl ImportedTypes {
 
     #[cfg(feature = "rust-import")]
     fn parameters(&self, identity: &host::type_def::import::Identity) -> Option<usize> {
-        self.0
+        self.declared
             .binary_search_by(|(candidate, _)| candidate.cmp(identity))
             .ok()
-            .map(|index| self.0[index].1)
+            .map(|index| self.declared[index].1)
+    }
+
+    /// The export of the facade that declares a type this one names and
+    /// doesn't declare.
+    #[cfg(feature = "rust-import")]
+    fn foreign(
+        &self,
+        identity: &host::type_def::import::Identity,
+    ) -> Option<&host::type_def::Export> {
+        self.foreign
+            .binary_search_by(|(candidate, _)| candidate.cmp(identity))
+            .ok()
+            .map(|index| &self.foreign[index].1)
     }
 }
 

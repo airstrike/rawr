@@ -727,11 +727,10 @@ fn imported_resolution_report(
             evidence.push(retained);
             continue;
         }
-        // An item whose signature names a type its crate's facade does not
-        // declare is left out of the facade, as a function beside a module
-        // of its name can be (`mod text` and `fn text`).
-        let declared =
-            declared.get_or_insert_with(|| paths.declared(outcome.export().root_alias()));
+        // An item whose signature names a type no facade declares is left
+        // out of the facade, as a function beside a module of its name can
+        // be (`mod text` and `fn text`).
+        let declared = declared.get_or_insert_with(|| paths.declared());
         if !names_declared(outcome, declared)
             && let Some(origin) = outcome.origin()
         {
@@ -1119,11 +1118,9 @@ fn augment_external(
             {
                 Some(representability::reject::Kind::CallableProtocol.describe())
             }
-            // An item whose signature names a type its crate's facade does
-            // not declare, as a program module's `fn describe(version:
-            // &semver::Version)` names another crate's type, is left out of
-            // the facade (`names_declared`).
-            _ if !names_declared(outcome, &paths.declared(outcome.export().root_alias())) => {
+            // An item whose signature names a type no facade declares is
+            // left out of the facade (`names_declared`).
+            _ if !names_declared(outcome, &paths.declared()) => {
                 Some("its signature names a Rust type that Rawr can't name yet")
             }
             _ => None,
@@ -1217,15 +1214,12 @@ impl<'contract> ImportedPaths<'contract> {
         self.entries[start..end].iter().map(|entry| entry.outcome)
     }
 
-    /// The crate types the facade of `root` declares, as the facade build
-    /// reads them: each struct and enum outcome's definition.
-    fn declared(
-        &self,
-        root: &str,
-    ) -> std::collections::BTreeSet<rawr_import::surface::identity::Definition> {
+    /// The crate types a facade's items can name, as the facade build reads
+    /// them: each struct and enum outcome's definition, in its own facade or
+    /// in the one it resolves the type through.
+    fn declared(&self) -> std::collections::BTreeSet<rawr_import::surface::identity::Definition> {
         self.entries
             .iter()
-            .filter(|entry| entry.outcome.export().root_alias() == root)
             .filter(|entry| entry.outcome.variant().is_none())
             .filter(|entry| {
                 matches!(
@@ -1797,40 +1791,186 @@ fn install(
     shapes
         .try_reserve_exact(shape_count)
         .map_err(|_| Error::Allocation)?;
-    // An item whose signature names a type its own facade does not declare
-    // (one the importer could not model, or one only another crate exports)
-    // is unavailable by itself, as in the facade plan the runner builds. A
-    // facade resolves only the types it declares.
-    for facade in facades {
-        let declared = facade
-            .entries
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.outcome.representability(),
-                    Representability::Struct(_) | Representability::Enum(_)
+    // A facade resolves a type it names and another facade declares through
+    // that facade, which is built first, as in the facade plan the runner
+    // builds (`facade::Resolution`). An item whose signature names a type
+    // no facade declares (one the importer could not model) is unavailable
+    // by itself.
+    let declared = facades
+        .iter()
+        .map(|facade| {
+            facade
+                .entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.outcome.representability(),
+                        Representability::Struct(_) | Representability::Enum(_)
+                    )
+                })
+                .map(|entry| entry.definition)
+                .chain(
+                    opaque_types(contract, facade)
+                        .into_iter()
+                        .map(|(_, definition, ..)| definition),
                 )
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    let resolution = rawr_import::surface::facade::Resolution::new(
+        &declared
+            .iter()
+            .map(|declared| {
+                declared
+                    .iter()
+                    .map(|definition| *definition.as_bytes())
+                    .collect()
             })
-            .map(|entry| entry.definition)
-            .chain(
-                opaque_types(contract, &facade)
-                    .into_iter()
-                    .map(|(_, definition, ..)| definition),
-            )
+            .collect::<Vec<_>>(),
+        &facades.iter().map(facade_named).collect::<Vec<_>>(),
+    );
+    let mut facades = facades.into_iter().map(Some).collect::<Vec<_>>();
+    let mut built = vec![None; facades.len()];
+    for &index in resolution.order() {
+        let facade = facades[index].take().expect("each facade is built once");
+        let through = resolution.through(index);
+        let resolved = declared[index]
+            .iter()
+            .copied()
+            .chain(through.iter().map(|(identity, _)| {
+                rawr_import::surface::identity::Definition::authenticated(*identity)
+            }))
             .collect::<std::collections::BTreeSet<_>>();
-        let (definition, families) = build(contract, facade, &declared, &mut shapes, allocation)?;
+        allocation.retain_checked(
+            Some(through.len()),
+            through.len().checked_mul(std::mem::size_of::<(
+                host::type_def::import::Identity,
+                host::type_def::Export,
+            )>()),
+        )?;
+        let foreign = through
+            .iter()
+            .map(|(identity, provider)| {
+                let identity = host::type_def::import::Identity::new(*identity);
+                let export = built[*provider]
+                    .as_ref()
+                    .and_then(|provider: &host::facade::Definition| {
+                        provider.export_imported(&identity)
+                    })
+                    .expect("a facade is built after those it resolves through");
+                (identity, export)
+            })
+            .collect();
+        let (definition, families) = build(
+            contract,
+            facade,
+            &declared[index],
+            &resolved,
+            foreign,
+            &mut shapes,
+            allocation,
+        )?;
         let (items, bytes) = definition.registry_usage();
         allocation.retain_checked(items, bytes)?;
-        registry.install(definition)?;
+        registry.install(definition.clone())?;
         registry.defer_imported(families)?;
+        built[index] = Some(definition);
     }
     Ok(())
+}
+
+/// Each crate type a facade's items name, as `names_declared` reads them,
+/// other than those every facade has (`facade::Facade::named`).
+fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
+    fn walk(
+        ty: &representability::convert::Type,
+        named: &mut std::collections::BTreeSet<[u8; 32]>,
+    ) {
+        use representability::convert::Type;
+        match ty {
+            Type::Nominal {
+                definition,
+                arguments,
+            } => {
+                if !rawr_import::surface::identity::Definition::is_projected(definition.as_bytes())
+                    && *definition != rawr_import::surface::identity::Definition::callable()
+                {
+                    named.insert(*definition.as_bytes());
+                }
+                for argument in arguments {
+                    walk(argument, named);
+                }
+            }
+            Type::FunctionItem { input, output } | Type::Result(input, output) => {
+                walk(input, named);
+                walk(output, named);
+            }
+            Type::Option(element)
+            | Type::Borrowed { ty: element, .. }
+            | Type::Range(element)
+            | Type::Sequence { element, .. }
+            | Type::ProfileMessage {
+                payload: element, ..
+            } => walk(element, named),
+            Type::Tuple(members)
+            | Type::Script {
+                arguments: members, ..
+            } => {
+                for member in members {
+                    walk(member, named);
+                }
+            }
+            Type::Inferred | Type::Unit | Type::Builtin(_) | Type::Parameter(_) => {}
+        }
+    }
+    fn outcome(
+        outcome: rawr_import::classify::Outcome<'_>,
+        named: &mut std::collections::BTreeSet<[u8; 32]>,
+    ) {
+        let (signature, call, crossings) = match outcome.representability() {
+            Representability::Function(plan) => (plan.signature(), None, &[][..]),
+            Representability::Method(plan) => (plan.signature(), None, &[][..]),
+            Representability::FunctionItem(plan) => {
+                (plan.signature(), plan.call(), plan.crossings())
+            }
+            Representability::Invocation(plan) => (plan.signature(), plan.call(), plan.crossings()),
+            Representability::Constant(plan) => return walk(plan.ty(), named),
+            _ => return,
+        };
+        for input in signature.inputs() {
+            walk(input, named);
+        }
+        walk(signature.output(), named);
+        for callable in call.into_iter().chain(crossings) {
+            for input in callable.inputs() {
+                walk(input, named);
+            }
+            walk(callable.output(), named);
+        }
+    }
+    let mut named = std::collections::BTreeSet::new();
+    for entry in &facade.entries {
+        outcome(entry.outcome, &mut named);
+        for associated in entry
+            .outcome
+            .implementations()
+            .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+        {
+            outcome(associated, &mut named);
+        }
+    }
+    for (_, associated) in facade.text_members.iter().chain(&facade.self_members) {
+        outcome(*associated, &mut named);
+    }
+    named
 }
 
 fn build(
     contract: &rawr_import::Contract<rawr_import::Classified>,
     mut facade: Facade<'_>,
     declared: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
+    resolved: &std::collections::BTreeSet<rawr_import::surface::identity::Definition>,
+    foreign: Box<[(host::type_def::import::Identity, host::type_def::Export)]>,
     shapes: &mut Vec<(
         rawr_import::surface::identity::Definition,
         crate::Shared<host::type_def::Shape>,
@@ -2136,7 +2276,7 @@ fn build(
 
     for entry in &facade.entries {
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
-        if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
+        if let Some(item) = item.filter(|_| names_declared(entry.outcome, resolved)) {
             builder.imported_item(item)?;
             if let Some(values) =
                 imported_values(&types, entry.relative.as_ref(), entry.outcome, allocation)?
@@ -2177,7 +2317,7 @@ fn build(
             // methods are reached through the type's values.
             let alias = matches!(entry.outcome.representability(), Representability::Value(_));
             if let Some(item) = imported_item(&types, &path, associated, allocation)?
-                .filter(|_| names_declared(associated, declared))
+                .filter(|_| names_declared(associated, resolved))
                 .filter(|item| !alias || item.receiver().is_none())
             {
                 builder.imported_item(item)?;
@@ -2200,7 +2340,7 @@ fn build(
         if plan.receiver()
             != Some(rawr_import::classify::representability::ownership::Receiver::Owned)
             || !writes_declared(plan.signature(), None, &[])
-            || !names_declared(*associated, declared)
+            || !names_declared(*associated, resolved)
         {
             continue;
         }
@@ -2231,7 +2371,7 @@ fn build(
         let Representability::Invocation(plan) = associated.representability() else {
             continue;
         };
-        if !writes_declared(plan.signature(), None, &[]) || !names_declared(*associated, declared) {
+        if !writes_declared(plan.signature(), None, &[]) || !names_declared(*associated, resolved) {
             continue;
         }
         let selector_bytes = associated.identity().selector().retained_bytes();
@@ -2370,7 +2510,9 @@ fn build(
     for path in &facade.derives {
         builder.derive(path)?;
     }
-    builder.finish_imported(allocation).map_err(Error::from)
+    builder
+        .finish_imported(foreign, allocation)
+        .map_err(Error::from)
 }
 
 fn imported_item(

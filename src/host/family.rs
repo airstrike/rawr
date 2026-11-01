@@ -167,7 +167,9 @@ mod tests {
         builder
             .imported_item(method(2, host::type_ref::Builtin::Bool))
             .unwrap();
-        builder.finish_imported(&mut allocation).unwrap()
+        builder
+            .finish_imported(Box::default(), &mut allocation)
+            .unwrap()
     }
 
     #[test]
@@ -286,7 +288,9 @@ mod tests {
             for method in methods {
                 builder.imported_item(method).unwrap();
             }
-            let (definition, pending) = builder.finish_imported(&mut allocation).unwrap();
+            let (definition, pending) = builder
+                .finish_imported(Box::default(), &mut allocation)
+                .unwrap();
             assert!(pending.is_empty());
             let methods = definition.items().collect::<Vec<_>>();
             assert_eq!(methods.len(), 1);
@@ -349,7 +353,9 @@ mod tests {
         builder.type_::<()>("Marker", &[], &[]).unwrap();
         builder.imported_item(from(1)).unwrap();
         builder.imported_item(from(2)).unwrap();
-        let (ordinary, families) = builder.finish_imported(&mut allocation).unwrap();
+        let (ordinary, families) = builder
+            .finish_imported(Box::default(), &mut allocation)
+            .unwrap();
         assert_eq!(families.len(), 1);
         assert_eq!(families[0].len(), 2);
         let mut engine = crate::Engine::new();
