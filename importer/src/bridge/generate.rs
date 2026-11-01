@@ -1889,7 +1889,7 @@ fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
         output.push(0);
     } else if value.is::<bool>() {
         output.push(1);
-        output.push(u8::from(value.try_cast_result::<bool>().map_err(|_| Error::TypeMismatch)?));
+        output.push(<u8 as From<bool>>::from(value.try_cast_result::<bool>().map_err(|_| Error::TypeMismatch)?));
     } else if value.is::<i64>() {
         output.push(2);
         push_bytes(output, &value.try_cast_result::<i64>().map_err(|_| Error::TypeMismatch)?.to_le_bytes())?;
@@ -1898,7 +1898,7 @@ fn encode_value(value: Dynamic, output: &mut Vec<u8>) -> Result<(), Error> {
         push_bytes(output, &value.try_cast_result::<f64>().map_err(|_| Error::TypeMismatch)?.to_bits().to_le_bytes())?;
     } else if value.is::<char>() {
         output.push(4);
-        push_bytes(output, &u32::from(value.try_cast_result::<char>().map_err(|_| Error::TypeMismatch)?).to_le_bytes())?;
+        push_bytes(output, &<u32 as From<char>>::from(value.try_cast_result::<char>().map_err(|_| Error::TypeMismatch)?).to_le_bytes())?;
     } else if value.is::<ImmutableString>() {
         let value = value.try_cast_result::<ImmutableString>().map_err(|_| Error::TypeMismatch)?;
         output.push(5);
@@ -4340,7 +4340,7 @@ fn live_protocol(
             43 if begun.is_none() && pending.is_none() && payload.as_slice() == key => {
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
-                response[32] = u8::from(transport.take_refresh());
+                response[32] = <u8 as From<bool>>::from(transport.take_refresh());
                 send_frame(&mut stream, 44, &response)?;
             }
             43 => return Err(std::io::Error::other("invalid refresh poll transition")),
@@ -4629,7 +4629,7 @@ fn live_protocol(
                 let refresh = retired?;
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
-                response[32] = u8::from(refresh);
+                response[32] = <u8 as From<bool>>::from(refresh);
                 send_frame(&mut stream, 13, &response)?;
                 return Ok(());
             }
@@ -4752,7 +4752,7 @@ fn run_protocol() -> std::io::Result<()> {
                 // means it could not carry over, and the window says why.
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
-                response[32] = u8::from(profile.seed_state(&payload[32..]));
+                response[32] = <u8 as From<bool>>::from(profile.seed_state(&payload[32..]));
                 send_frame(&mut stream, 49, &response)?;
             }
             35 if admitted && !observed && payload.len() > 32 && payload[..32] == key => {
@@ -11704,7 +11704,7 @@ fn render_give(
             writeln!(output, "    int_into({value}).map(Dynamic::from)")
         }
         convert::Type::Builtin(convert::Builtin::F32) => {
-            writeln!(output, "    Ok(Dynamic::from(f64::from({value})))")
+            writeln!(output, "    Ok(Dynamic::from(<f64 as From<f32>>::from({value})))")
         }
         // An output Rawr cannot hold: its `Display` text.
         convert::Type::Builtin(convert::Builtin::Text) => {
@@ -12036,7 +12036,7 @@ fn render_to_dynamic(
             write!(output, "int_into({value}).map(Dynamic::from)")
         }
         convert::Type::Builtin(convert::Builtin::F32) => {
-            write!(output, "Ok::<Dynamic, Error>(Dynamic::from(f64::from({value})))")
+            write!(output, "Ok::<Dynamic, Error>(Dynamic::from(<f64 as From<f32>>::from({value})))")
         }
         // An output Rawr keeps as its text, as a `Cow<str>` (D558 slice 2).
         convert::Type::Builtin(convert::Builtin::Text) => {
@@ -12064,7 +12064,7 @@ fn render_to_dynamic(
             }
             convert::Type::Builtin(convert::Builtin::F32) => write!(
                 output,
-                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(f64::from(range.start)..f64::from(range.end))) }}"
+                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(<f64 as From<f32>>::from(range.start)..<f64 as From<f32>>::from(range.end))) }}"
             ),
             convert::Type::Builtin(convert::Builtin::I64) => {
                 write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
@@ -12075,7 +12075,7 @@ fn render_to_dynamic(
             ),
             convert::Type::Builtin(convert::Builtin::Char) => write!(
                 output,
-                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(i64::from(u32::from(range.start))..i64::from(u32::from(range.end)))) }}"
+                "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(<i64 as From<u32>>::from(<u32 as From<char>>::from(range.start))..<i64 as From<u32>>::from(<u32 as From<char>>::from(range.end)))) }}"
             ),
             _ => {
                 return Err(request::Error::Drift {
