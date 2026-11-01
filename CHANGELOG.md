@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A function returning `Option<impl Trait>` (or a Result, Vec, box or tuple of one) takes the open type arguments of its value from the written bound's defaults, and a crate function's opaque output implements its bounds' traits. (#623)
+- A struct update `..base` of a generic crate struct, as `Rgb { red, ..Rgb::default() }`, copies the fields it takes when their type is Copy, instead of panicking. (#617)
 
 ## 0.3.73 (2026-11-01)
 
