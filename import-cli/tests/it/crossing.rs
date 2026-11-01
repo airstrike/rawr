@@ -614,7 +614,9 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
 /// does. `Option::map` takes a crate function and a crate method named as
 /// values (T327). `Cache::new()` with no annotation is the `Cache` a later
 /// use fixes, as the_matrix's `resize_with` fills a `Vec<canvas::Cache>`
-/// (T413). The output is `cargo run`'s.
+/// (T413). `Path::new(|p| ..)`, re-exported from that crate, takes a
+/// one-shot closure the crate lends a `&mut Builder`, as bezier_tool's does
+/// (#477). The output is `cargo run`'s.
 #[test]
 fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     let (rawr, cargo) = both_printed("crossing-canvas", "canvas.rs", "");
@@ -623,7 +625,7 @@ fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
         rawr,
         "sketch circle,line\ncleared []\nboard frame\nprimary arc\nprimary hand\n\
          primary dial\nprimary face\nboard frame,dial\ngrouped group\nfresh fresh 3\n\
-         Some(7) captured true\nnote 3"
+         Some(7) captured true\nnote 3\npath 1,2"
     );
 }
 

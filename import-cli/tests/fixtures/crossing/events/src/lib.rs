@@ -719,6 +719,9 @@ pub mod widgets {
 pub mod canvas {
     use crate::widgets::fallback;
 
+    /// A traced shape, re-exported as iced's `canvas::{Path, path}` are.
+    pub use parts::geometry::{path, Path};
+
     /// A cache at the crate's renderer: an alias that passes its parameter
     /// on, defaulted to another alias, as iced's `canvas::Cache<Renderer =
     /// crate::Renderer> = geometry::Cache<Renderer>`.

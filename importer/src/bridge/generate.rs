@@ -10084,7 +10084,9 @@ fn render_slot(
                 ));
             }
             // A native value the function borrows `&mut`: lent for the
-            // call alone, as a script impl's function is (D558.3).
+            // call alone, as a script impl's function is (D558.3). A
+            // closure gives each `&mut` parameter back after its value, as
+            // `Path::new(|p| ..)`'s does, so it is one of the call's places.
             convert::Type::Borrowed {
                 mutable: borrowed_mutably,
                 ty,
@@ -10097,6 +10099,9 @@ fn render_slot(
                 let borrow = if *borrowed_mutably { "&mut " } else { "&" };
                 parameters.push(format!("{name}: {borrow}{rust}"));
                 values.push(lent_value(position, *borrowed_mutably, &rust));
+                if *borrowed_mutably {
+                    mutable.push(position.to_string());
+                }
                 lends.push((position, *borrowed_mutably, rust));
             }
             convert::Type::Borrowed {

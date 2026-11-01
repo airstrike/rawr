@@ -141,6 +141,35 @@ pub fn mixed(flag: bool) -> Element<'static, Message> {
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
+struct UiShell;
+
+/// iced's `Shell<'_, Message>` names a lifetime and then its one type
+/// parameter, which counts as one type argument, as rustc counts it
+/// (#566).
+#[test]
+fn language_a_lifetime_then_a_type_argument_count_as_one_type_argument() {
+    let mut builder =
+        crate::host::facade::Builder::new("iced", crate::host::facade::Abi::new(1).unwrap())
+            .unwrap();
+    builder.module("advanced").unwrap();
+    builder
+        .type_::<UiShell>("advanced::Shell", &["Message"], &[])
+        .unwrap();
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
+    engine
+        .compile_executable(
+            r#"
+use iced::advanced::Shell;
+enum Message { Go }
+pub fn publish(shell: &mut Shell<'_, Message>) {}
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
 #[test]
 fn language_loops() {
     let value = run(r#"

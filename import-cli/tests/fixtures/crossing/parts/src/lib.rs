@@ -62,6 +62,50 @@ pub mod geometry {
             Self::new()
         }
     }
+
+    pub use path::Path;
+
+    /// A traced shape and what traces it, as iced_graphics's
+    /// `geometry::path`.
+    pub mod path {
+        /// The points a builder traced, as iced_graphics's `Path`.
+        pub struct Path {
+            points: Vec<i64>,
+        }
+
+        impl Path {
+            /// The path `f` traces on a builder it borrows, as
+            /// iced_graphics's `Path::new(f: impl FnOnce(&mut Builder))`.
+            pub fn new(f: impl FnOnce(&mut Builder)) -> Self {
+                let mut builder = Builder { points: Vec::new() };
+                f(&mut builder);
+                Path {
+                    points: builder.points,
+                }
+            }
+
+            /// The traced points, in order.
+            pub fn points(&self) -> String {
+                self.points
+                    .iter()
+                    .map(i64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        }
+
+        /// What traces a path, as iced_graphics's `path::Builder`.
+        pub struct Builder {
+            points: Vec<i64>,
+        }
+
+        impl Builder {
+            /// Traces a line to `point`.
+            pub fn line_to(&mut self, point: i64) {
+                self.points.push(point);
+            }
+        }
+    }
 }
 
 /// Text at a theme, as iced_core's `widget::Text<'a, Theme>`.

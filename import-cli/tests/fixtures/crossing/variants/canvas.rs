@@ -6,9 +6,10 @@
 // on, as iced's `widget::Text` does. `Cache::sketch` gives the renderer's
 // associated type, as iced's `Cache::draw` does, and `Action::publish` and
 // `Action::and_capture` are named as values, as multitouch names them.
-// The alias's defaulted parameter is what a later use fixes.
+// The alias's defaulted parameter is what a later use fixes. `Path::new`
+// takes a closure that traces on a builder it lends.
 
-use events::canvas::{self, Cache, Geometry, Note};
+use events::canvas::{self, Cache, Geometry, Note, Path};
 
 #[derive(Default)]
 struct Sketch {
@@ -74,4 +75,11 @@ fn main() {
         action.map(|action| action.summary()).unwrap_or_default()
     );
     println!("{}", note(3).text());
+    // An associated function whose one-shot closure takes a `&mut` borrow
+    // the crate lends it, as bezier_tool's `Path::new(|p| ..)` (#477).
+    let path = Path::new(|p| {
+        p.line_to(1);
+        p.line_to(2);
+    });
+    println!("path {}", path.points());
 }
