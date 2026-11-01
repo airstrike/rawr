@@ -10,6 +10,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image. (#492)
 - The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour. (#450)
 - The importer no longer carries the request path for rawr-iced's host profile. (#487; part of #451)
+- `rawr mcp` has an `inspect` tool that reads a running program's values: the bindings in scope where the program is, or one binding by name or file. Each value prints as the program's `{:?}` would, and a crate type without `Debug` says so as rustc does. Programs with Rust dependencies don't answer it yet. (#488)
 
 ## 0.3.46 (2026-10-31)
 

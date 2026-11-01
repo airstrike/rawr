@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-10-31",
+  "updated": "2026-11-01",
   "version": "0.3.46",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
@@ -12,7 +12,8 @@
         {"text":"The /todo chart puts milestones at the top level, each with the epics that have work in it.","issues":[501]},
         {"text":"CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image.","issues":[492]},
         {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]},
-        {"text":"The importer no longer carries the request path for rawr-iced's host profile.","issues":[487],"refs":[451]}
+        {"text":"The importer no longer carries the request path for rawr-iced's host profile.","issues":[487],"refs":[451]},
+        {"text":"`rawr mcp` has an `inspect` tool that reads a running program's values: the bindings in scope where the program is, or one binding by name or file. Each value prints as the program's `{:?}` would, and a crate type without `Debug` says so as rustc does. Programs with Rust dependencies don't answer it yet.","issues":[488]}
       ]
     },
     "releases": [
@@ -1082,7 +1083,12 @@
     {"issue":506,"title":"Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)"},
     {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"open","category":"No glue (D593)"},
     {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"open","category":"Divergences from rustc"},
-    {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"}
+    {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
+    {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"open","category":"Health"},
+    {"issue":511,"title":"inspect reads callers' frames","state":"open","category":"Health"},
+    {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
+    {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
+    {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1612,10 +1618,15 @@
           "name": "Read a running program's values",
           "start": 53,
           "size": 3,
-          "state": "next",
-          "note": "rawr mcp and the editor",
+          "state": "now",
+          "note": "rawr mcp inspect reads values; dependencies, frames and the editor remain",
           "issues": [
-            {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open"}
+            {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open"},
+            {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"open"},
+            {"number":511,"title":"inspect reads callers' frames","state":"open"},
+            {"number":512,"title":"inspect prints bindings by their declared type","state":"open"},
+            {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open"},
+            {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"open"}
           ],
           "milestone": "0.5"
         },

@@ -509,6 +509,11 @@
     {"t":"T506","issue":506,"title":"T506: Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T507","issue":507,"title":"T507: The ?play universe runner spends its time budget before a snippet's main","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T508","issue":508,"title":"T508: Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T509","issue":509,"title":"T509: Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T509","issue":509,"title":"T509: Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T510","issue":510,"title":"T510: inspect answers for programs with Rust dependencies","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
+    {"t":"T511","issue":511,"title":"T511: inspect reads callers' frames","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
+    {"t":"T512","issue":512,"title":"T512: inspect prints bindings by their declared type","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
+    {"t":"T513","issue":513,"title":"T513: A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
+    {"t":"T514","issue":514,"title":"T514: Debug adapter: an editor reads a running program's values","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null}
   ]
 }
