@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.82",
+  "version": "0.3.83",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A closure gets the output of the async block given to `Task::future`. In `Task::future(async move { fount::system::load(&font).await }).then(|bytes| match bytes { .. })`, `bytes` is the `Result` that `load` gives, as rustc reads it, and a `Result` holding a crate's own error crosses as itself.","issues":[652]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.83",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A closure gets the output of the async block given to `Task::future`. In `Task::future(async move { fount::system::load(&font).await }).then(|bytes| match bytes { .. })`, `bytes` is the `Result` that `load` gives, as rustc reads it, and a `Result` holding a crate's own error crosses as itself.","issues":[652]}
+        ]
+      },
       {
         "version": "0.3.82",
         "date": "2026-11-01",
@@ -1526,7 +1528,7 @@
     {"issue":649,"title":"Lease an async fn's borrowed arguments to its future","state":"closed","category":"No glue (D593)","release":"0.3.80"},
     {"issue":650,"title":"Lend a crate struct's field in place with no copy (D683.1)","state":"open","category":"No glue (D593)"},
     {"issue":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc"},
-    {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"closed","category":"No glue (D593)"},
+    {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"closed","category":"No glue (D593)","release":"0.3.83"},
     {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc"},
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
