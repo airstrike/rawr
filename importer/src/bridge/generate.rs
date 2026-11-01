@@ -6291,7 +6291,7 @@ fn witness_mode(plan: &Plan) -> u8 {
         } if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) => {
             1
         }
-        Operation::StructField { field, .. } if !copy_field(field.ty()) => 2,
+        Operation::StructField { field, .. } if !shared_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
             ..
@@ -6330,6 +6330,32 @@ fn copy_field(ty: &convert::Type) -> bool {
     copy_scalar(ty)
         || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
         || matches!(ty, convert::Type::Sequence { element, length: Some(_), .. } if copy_scalar(element))
+}
+
+/// Whether reading a struct's field of type `ty` leaves the struct whole:
+/// a Copy field, or one Rawr holds as its own value (`plain_value`). The
+/// runner's `shared_field` and the compiler's field read agree with it.
+fn shared_field(ty: &convert::Type) -> bool {
+    copy_field(ty) || plain_value(ty)
+}
+
+/// Whether `ty` holds no native value: a number, `bool`, `char`, `String`
+/// or the unit, alone or in an `Option`, a `Result`, a `Vec`, an array or a
+/// tuple. Rawr holds such a value as its own, so a field of it is read as
+/// Rust reads it, in place.
+fn plain_value(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Unit => true,
+        convert::Type::Builtin(builtin) => {
+            builtin.rust_name().is_some() || *builtin == convert::Builtin::String
+        }
+        convert::Type::Option(inner) | convert::Type::Sequence { element: inner, .. } => {
+            plain_value(inner)
+        }
+        convert::Type::Result(ok, err) => plain_value(ok) && plain_value(err),
+        convert::Type::Tuple(members) => members.iter().all(plain_value),
+        _ => false,
+    }
 }
 
 /// A variant of a non-generic enum also has a matcher: the variant's
@@ -6587,7 +6613,7 @@ fn structural_kind(plan: &Plan) -> Option<String> {
         }
         Operation::StructField { field, .. } => format!(
             "__rawr_internal::package::import::runner::StructuralKind::Field {{ copy: {} }}",
-            copy_field(field.ty())
+            shared_field(field.ty())
         ),
         Operation::EnumVariant { .. } => {
             "__rawr_internal::package::import::runner::StructuralKind::Variant".to_string()
@@ -7148,6 +7174,29 @@ fn render_adapter_body(
                 writeln!(
                     output,
                     "    let output = arguments.arena.shared::<{path}, _>(handle, |input| input.{})?;",
+                    field.name()
+                )
+                .map_err(request::unwritable)?;
+            } else if plain_value(field.ty()) {
+                // A field Rawr holds as its own value, as a `String`: read
+                // through the value where it is, which stays whole, as Rust
+                // reads `font.family` without moving `font`.
+                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut output = None;
+        access(lent.nonce().bits(), &mut |receiver| output = Some(Clone::clone(&receiver.{name})))
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
+        return {{", name = field.name()).map_err(request::unwritable)?;
+                render_give(field.ty(), "output", output)?;
+                writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+                output
+                    .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
+                    .map_err(request::unwritable)?;
+                writeln!(
+                    output,
+                    "    let output = arguments.arena.shared::<{path}, _>(handle, |input| Clone::clone(&input.{}))?;",
                     field.name()
                 )
                 .map_err(request::unwritable)?;
@@ -14428,7 +14477,7 @@ fn render_module_execution_tests(
     for index in indices {
         let plan = &plans[*index];
         let consumes = match plan.operation() {
-            Operation::StructField { field, .. } => !copy_field(field.ty()),
+            Operation::StructField { field, .. } => !shared_field(field.ty()),
             Operation::Method {
                 receiver,
                 signature,

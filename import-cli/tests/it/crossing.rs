@@ -427,6 +427,19 @@ fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
     assert!(rawr.contains("last view pad 0"), "{rawr}");
 }
 
+/// A crate struct's `String` field is read in place, as Rust reads it:
+/// `format!`, a method, `&` and `==` leave the struct whole, and a
+/// by-value use moves only that field. The output is `cargo run`'s.
+#[test]
+fn a_crate_structs_string_field_is_read_in_place() {
+    let (rawr, cargo) = both_printed("crossing-caption", "caption.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "[quartz] Pixels(16.0) 6 quartz true\nquartz Pixels(16.0) quartz"
+    );
+}
+
 #[test]
 fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
     let (rawr, cargo) = both_printed("crossing-fields", "fields.rs", "");

@@ -442,6 +442,13 @@ fn defaulted<'a>(
         .unwrap_or(ty)
 }
 
+/// Whether reading a field of type `ty` leaves its struct whole, as the
+/// generated bridge's `shared_field` reads it: a Copy field, or one Rawr
+/// holds as its own value.
+fn shared_field(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> bool {
+    copy_scalar(ty, facade) || ty.plain_value()
+}
+
 /// Whether a field of type `ty` is read as a copy, as the generated bridge
 /// reads it: a scalar, an imported Copy type of `facade`, or an `Option` or
 /// `Result` of them.
@@ -532,7 +539,7 @@ fn structural_path<'facade>(
                             }
                         } else {
                             StructuralKind::Field {
-                                copy: copy_scalar(defaulted(field.ty(), definition), facade),
+                                copy: shared_field(defaulted(field.ty(), definition), facade),
                             }
                         },
                     )

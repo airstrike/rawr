@@ -715,6 +715,23 @@ impl Type {
         &self.0
     }
 
+    /// Whether this type holds no native value: a number, `bool`, `char`,
+    /// `String` or the unit, alone or in an `Option`, a `Result`, a `Vec`,
+    /// an array or a tuple. Rawr holds such a value as its own, so a field
+    /// of it is read in place, as the generated bridge's `plain_value` reads
+    /// it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn plain_value(&self) -> bool {
+        match &self.0 {
+            Shape::Unit => true,
+            Shape::Builtin(builtin) => builtin.name().is_some(),
+            Shape::Option(inner) | Shape::Array { element: inner, .. } => inner.plain_value(),
+            Shape::Result(ok, err) => ok.plain_value() && err.plain_value(),
+            Shape::Tuple(members) => members.iter().all(Self::plain_value),
+            _ => false,
+        }
+    }
+
     pub(crate) fn collect_exports<'a>(&'a self, exports: &mut Vec<&'a host::type_def::Export>) {
         match &self.0 {
             Shape::Tuple(members) => {
