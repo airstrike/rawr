@@ -11012,6 +11012,10 @@ struct Parser<'a> {
     closures: Vec<ClosureScope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
     moved_at: BTreeMap<Span, Span>,
+    /// Reads of a crate struct's field that leave the struct whole, by
+    /// their span: a by-value use moves that field out, as Rust's partial
+    /// move (`move_local`).
+    shared_field_reads: BTreeSet<Span>,
     /// Places Rust can't move out of that the lowering gives no place of
     /// their own (`*r`, `*rc`, `[s][0]`), by their span: rustc's code and
     /// message for a move out of one.
@@ -11414,6 +11418,7 @@ impl<'a> Parser<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
+            shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),
@@ -21256,6 +21261,15 @@ impl<'a> Parser<'a> {
     /// the value drops with its new owner. A closure's capture moves only in
     /// a `move` closure or async block, which owns it.
     fn move_local(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
+        // A crate struct's field read in place: its by-value use moves the
+        // field out of the struct, which the move check follows.
+        if value.lvalue.is_none()
+            && self.shared_field_reads.contains(&value.span)
+            && self.moves_by_value(&value.ty)
+        {
+            self.flow().moved(value.span.start());
+            return Ok(());
+        }
         if let Some((code, message)) = self.unmovable.get(&value.span)
             && self.moves_by_value(&value.ty)
         {
@@ -21790,6 +21804,21 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Whether `ty` holds no native value: a number, `bool`, `char`,
+    /// `String` or the unit, alone or in an `Option`, a `Result`, a `Vec`,
+    /// an array or a tuple, as the generated bridge's `plain_value` reads a
+    /// field's type. Rawr holds such a value as its own.
+    #[cfg(feature = "rust-import")]
+    fn plain_value(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) | Ty::String => true,
+            Ty::Option(inner) | Ty::Array { element: inner, .. } => self.plain_value(&inner),
+            Ty::Result(ok, err) => self.plain_value(&ok) && self.plain_value(&err),
+            Ty::Tuple(members) => members.iter().all(|member| self.plain_value(member)),
+            _ => false,
+        }
+    }
+
     /// `value.field` of an imported struct: a read, or, before `=`, the
     /// field's store (`store_imported_field`).
     #[cfg(feature = "rust-import")]
@@ -22091,15 +22120,21 @@ impl<'a> Parser<'a> {
             Some(&definition),
         )?;
         let operation = span(receiver.span.start(), member_span.end());
-        let copy = self.type_provides(&ty, capability::Kind::Copy);
-        if !copy {
+        // A Copy field, or one Rawr holds as its own value (a `String`), is
+        // read where it is and leaves the struct whole, as Rust reads
+        // `font.family`; a by-value use moves only the field (`move_local`).
+        // Any other field takes the struct.
+        let shared = self.type_provides(&ty, capability::Kind::Copy) || self.plain_value(&ty);
+        if shared {
+            self.shared_field_reads.insert(operation);
+        } else {
             self.consume_imported_value(&receiver, &path, operation)?;
         }
         let imported = ImportedOperation {
-            kind: crate::host::structural::Kind::Field { copy },
+            kind: crate::host::structural::Kind::Field { copy: shared },
             operands: vec![(receiver.ty.clone(), receiver.span, true)].into_boxed_slice(),
             output: ty.clone(),
-            receiver: Some(if copy {
+            receiver: Some(if shared {
                 crate::receiver::Mode::Shared
             } else {
                 crate::receiver::Mode::Owned

@@ -1,0 +1,12 @@
+[package]
+name = "tokio-borrowed"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+shelf = { path = "shelf" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]

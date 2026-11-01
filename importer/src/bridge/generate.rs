@@ -6319,7 +6319,7 @@ fn witness_mode(plan: &Plan) -> u8 {
         } if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) => {
             1
         }
-        Operation::StructField { field, .. } if !copy_field(field.ty()) => 2,
+        Operation::StructField { field, .. } if !shared_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
             ..
@@ -6358,6 +6358,32 @@ fn copy_field(ty: &convert::Type) -> bool {
     copy_scalar(ty)
         || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
         || matches!(ty, convert::Type::Sequence { element, length: Some(_), .. } if copy_scalar(element))
+}
+
+/// Whether reading a struct's field of type `ty` leaves the struct whole:
+/// a Copy field, or one Rawr holds as its own value (`plain_value`). The
+/// runner's `shared_field` and the compiler's field read agree with it.
+fn shared_field(ty: &convert::Type) -> bool {
+    copy_field(ty) || plain_value(ty)
+}
+
+/// Whether `ty` holds no native value: a number, `bool`, `char`, `String`
+/// or the unit, alone or in an `Option`, a `Result`, a `Vec`, an array or a
+/// tuple. Rawr holds such a value as its own, so a field of it is read as
+/// Rust reads it, in place.
+fn plain_value(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Unit => true,
+        convert::Type::Builtin(builtin) => {
+            builtin.rust_name().is_some() || *builtin == convert::Builtin::String
+        }
+        convert::Type::Option(inner) | convert::Type::Sequence { element: inner, .. } => {
+            plain_value(inner)
+        }
+        convert::Type::Result(ok, err) => plain_value(ok) && plain_value(err),
+        convert::Type::Tuple(members) => members.iter().all(plain_value),
+        _ => false,
+    }
 }
 
 /// A variant of a non-generic enum also has a matcher: the variant's
@@ -6615,7 +6641,7 @@ fn structural_kind(plan: &Plan) -> Option<String> {
         }
         Operation::StructField { field, .. } => format!(
             "__rawr_internal::package::import::runner::StructuralKind::Field {{ copy: {} }}",
-            copy_field(field.ty())
+            shared_field(field.ty())
         ),
         Operation::EnumVariant { .. } => {
             "__rawr_internal::package::import::runner::StructuralKind::Variant".to_string()
@@ -6802,8 +6828,12 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
-    // A scope frame's call takes what it borrows into the frame.
-    if signature.scope().is_some() {
+    // A scope frame's call takes what it borrows into the frame. A future
+    // holds what it borrows after the call, as fount's `async fn load(font:
+    // &Font)` does: its inputs are leased from their slots instead (D683.2).
+    if signature.scope().is_some()
+        || is_future(&substituted(signature.output(), signature, substitutions)?)
+    {
         return Ok(Vec::new());
     }
     let mut lent = Vec::new();
@@ -7333,6 +7363,29 @@ fn render_adapter_body(
                     field.name()
                 )
                 .map_err(request::unwritable)?;
+            } else if plain_value(field.ty()) {
+                // A field Rawr holds as its own value, as a `String`: read
+                // through the value where it is, which stays whole, as Rust
+                // reads `font.family` without moving `font`.
+                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut output = None;
+        access(lent.nonce().bits(), &mut |receiver| output = Some(Clone::clone(&receiver.{name})))
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
+        return {{", name = field.name()).map_err(request::unwritable)?;
+                render_give(field.ty(), "output", output)?;
+                writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+                output
+                    .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
+                    .map_err(request::unwritable)?;
+                writeln!(
+                    output,
+                    "    let output = arguments.arena.shared::<{path}, _>(handle, |input| Clone::clone(&input.{}))?;",
+                    field.name()
+                )
+                .map_err(request::unwritable)?;
             } else {
                 writeln!(
                     output,
@@ -7509,7 +7562,20 @@ fn render_adapter_body(
                 }
                 // A native call lends the arena to the script closures it
                 // calls back, as Freya's `launch` calls `fn app()` (D551.6).
-                if lazy {
+                let rebound = if lazy {
+                    future_borrows(signature, substitutions)?
+                } else {
+                    String::new()
+                };
+                if lazy && !rebound.is_empty() {
+                    // A future that borrows its inputs holds what lends them
+                    // for its life: a leased value, or a value made for the
+                    // call (D683.2).
+                    writeln!(
+                        output,
+                        "    let output = __rawr_profile_host::task::lazy(move || async move {{\n{rebound}        {call}.await\n    }});"
+                    )
+                } else if lazy {
                     writeln!(
                         output,
                         "    let output = __rawr_profile_host::task::lazy(move || {call});"
@@ -11232,6 +11298,35 @@ fn render_take_input(
         .map_err(request::unwritable)
 }
 
+/// The statements that move what lends each borrowed input into a future
+/// and borrow it there again, as `render_take_input` bound it: a leased
+/// value (`render_lease`) or a value made for the call. Empty when no input
+/// borrows.
+fn future_borrows(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
+    let mut rebound = String::new();
+    for (local, ty) in signature.inputs().iter().enumerate() {
+        let convert::Type::Borrowed { mutable, ty: lent } =
+            substituted(ty, signature, substitutions)?
+        else {
+            continue;
+        };
+        if !mutable && is_made_for_call(&lent) {
+            rebound.push_str(&format!(
+                "        let argument_{local}_made = argument_{local}_made;\n        let argument_{local} = &argument_{local}_made;\n"
+            ));
+        } else {
+            let borrow = if mutable { "" } else { "&*" };
+            rebound.push_str(&format!(
+                "        #[allow(unused_mut)]\n        let mut argument_{local}_held = argument_{local}_held;\n        let argument_{local} = {borrow}argument_{local}_held.get_mut();\n"
+            ));
+        }
+    }
+    Ok(rebound)
+}
+
 /// A `&T` or `&mut T` input of a value in the arena, as ratatui's
 /// `render_stateful_widget` takes `&mut ListState`: the value leaves its
 /// slot for the call, which refuses every other use meanwhile (E0499), and
@@ -14664,7 +14759,7 @@ fn render_module_execution_tests(
     for index in indices {
         let plan = &plans[*index];
         let consumes = match plan.operation() {
-            Operation::StructField { field, .. } => !copy_field(field.ty()),
+            Operation::StructField { field, .. } => !shared_field(field.ty()),
             Operation::Method {
                 receiver,
                 signature,

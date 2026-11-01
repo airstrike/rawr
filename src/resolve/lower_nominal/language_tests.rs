@@ -10071,6 +10071,29 @@ main();
     );
 }
 
+/// `std::fs::read` gives a file's bytes as a `Vec<u8>` in an `io::Result`,
+/// as a program reads a font file to load it, and a missing file's error
+/// kind, as rustc gives them.
+#[test]
+fn language_std_fs_read_gives_bytes() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(
+        printed(&format!(
+            r#"
+fn main() {{
+    let bytes: Vec<u8> = std::fs::read(String::from({path:?})).unwrap();
+    println!("{{}} {{}}", bytes.len(), bytes[0]);
+    let missing = std::fs::read(String::from("/no/such/file/rawr"));
+    println!("{{:?}}", missing.map_err(|error| error.kind()));
+}}
+main();
+"#
+        )),
+        format!("{} {}\nErr(NotFound)\n", bytes.len(), bytes[0])
+    );
+}
+
 /// `std::process::id()` is the running process's id, a `u32`, as rustc
 /// gives it.
 #[test]

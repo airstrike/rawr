@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 82;
+const CLASSIFIER_VERSION: u32 = 83;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6708,6 +6708,7 @@ impl<P: api::Phase> Context<'_, P> {
         if !receiver_binder_is_exact(signature)
             && !late_binders_lend_strings(signature)
             && !late_binders_lend_inputs(signature)
+            && !self.async_lends_inputs(signature)
             && !opens_copies
         {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
@@ -7640,6 +7641,32 @@ impl<P: api::Phase> Context<'_, P> {
                 })?;
                 Some(substitute_parameters(output, &substitutions))
             })
+    }
+
+    /// An `async fn` whose own lifetimes only lend its inputs to its future,
+    /// as fount's `async fn load(font: &Font) -> Result<Vec<u8>, Error>`:
+    /// each input that borrows is a `&T` or `&mut T` of a value that holds
+    /// no borrow, which the future leases for its life (D683.2), and the
+    /// future's output names none of the function's own lifetimes.
+    fn async_lends_inputs(&self, signature: &model::Signature) -> bool {
+        signature.async_function()
+            && matches!(
+                signature.receiver(),
+                model::Receiver::None | model::Receiver::Value { .. }
+            )
+            && signature
+                .inputs()
+                .any(|input| matches!(input, model::Type::Reference { .. }))
+            && signature.inputs().all(|input| match input {
+                model::Type::Reference { ty, .. } => {
+                    !is_str_reference(input) && !names_late_lifetime(ty)
+                }
+                input => !names_late_lifetime(input),
+            })
+            && matches!(signature.output(), model::Type::ImplTrait { bounds, .. }
+                if self
+                    .future_bound_output(bounds)
+                    .is_some_and(|output| !names_late_lifetime(output)))
     }
 
     /// `T` of an `impl Future<Output = T>` bound list.
