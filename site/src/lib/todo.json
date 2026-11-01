@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A program whose dependencies patch a crate, such as fount with `iced_core` patched to git, no longer fails every run with \"changed during the build\". rawr no longer asks Cargo for its metadata and unit graph again after a build or before publishing, which saves two to four Cargo processes per fresh resolution. Edits to manifests, the lock or the Cargo configuration during a build are still caught by their digests.","issues":[655]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.80",
@@ -1509,7 +1514,12 @@
     {"issue":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc"},
     {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"open","category":"No glue (D593)"},
     {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc"},
-    {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health"}
+    {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health"},
+    {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc"},
+    {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":659,"title":"std::fs inside an async block","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

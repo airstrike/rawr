@@ -654,6 +654,11 @@
     {"t":"T651","issue":651,"title":"T651: rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T652","issue":652,"title":"T652: A closure's input comes from an async block's output (D683.5)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T653","issue":653,"title":"T653: std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T654","issue":654,"title":"T654: A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T654","issue":654,"title":"T654: A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T655","issue":655,"title":"T655: Stop re-running Cargo after each build to compare its output byte for byte","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T656","issue":656,"title":"T656: Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D684"],"commit":null,"release":null},
+    {"t":"T657","issue":657,"title":"T657: A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664","D683","D684"],"commit":null,"release":null},
+    {"t":"T658","issue":658,"title":"T658: ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D684"],"commit":null,"release":null},
+    {"t":"T659","issue":659,"title":"T659: std::fs inside an async block","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
