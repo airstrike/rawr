@@ -70,6 +70,14 @@ pub(crate) struct Sharing {
     /// The project's own bindings, for crates whose closure reaches a path
     /// package (#398). They never enter rawr's home.
     pub(crate) local: Option<PathBuf>,
+    /// The tables this project extracted that are not settled yet
+    /// (`crate::bindings::stage`): a later demand of the same resolution
+    /// replays them with no nightly build or probe.
+    pub(crate) staged: Option<PathBuf>,
+    /// Every crate the probe loaded, the selected crates' whole closure,
+    /// bound to this graph's units: a table's later demand may name any of
+    /// them, and replays only with each bound.
+    pub(crate) loaded: Vec<crate::bindings::External>,
 }
 
 impl Sharing {
@@ -500,8 +508,10 @@ impl Plan {
         keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
         bindings: PathBuf,
         local: PathBuf,
+        staged: PathBuf,
     ) -> Self {
         self.sharing.local = Some(local);
+        self.sharing.staged = Some(staged);
         for entry in self.entries.iter() {
             if let Some(shared) = keys.get(&entry.unit_key) {
                 self.sharing
@@ -540,10 +550,16 @@ impl Plan {
         let mut leases = Vec::new();
         for (index, entry) in self.entries.iter().enumerate() {
             let shared = self.sharing.keys.get(&entry.unit_correlation)?;
-            let bindings = self.sharing.directory(shared)?;
+            // The settled table, or one this project extracted and has not
+            // settled yet.
+            let (bindings, read) = [self.sharing.directory(shared), self.sharing.staged.as_ref()]
+                .into_iter()
+                .flatten()
+                .find_map(|bindings| {
+                    Some((bindings, crate::bindings::read(bindings, &shared.key)?))
+                })?;
             // Inputs are checked before any replay: a path crate's files,
             // as a git crate's declared ones (#398).
-            let read = crate::bindings::read(bindings, &shared.key)?;
             let inputs = read.meta.inputs.as_ref()?.validate(current)?;
             let table = serde_json::from_slice::<engine::Table>(&read.table).ok()?;
             if table.schema != engine::TABLE_SCHEMA {
@@ -1064,7 +1080,7 @@ impl Probe {
     }
 
     fn validate_outputs_with_inventory(
-        self,
+        mut self,
         build: &crate::input::build::Build,
         graph: &unit::BuildGraph,
         metadata: &unit::Metadata,
@@ -1319,6 +1335,14 @@ impl Probe {
                     let (length, digest) =
                         artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
                     insert_artifact(&mut artifacts, path, length, digest, &mut allocation)?;
+                }
+                let record = crate::bindings::External {
+                    crate_name: loaded.crate_name.clone(),
+                    stable_crate_id: loaded.stable_crate_id.clone(),
+                    unit_key: authority.map(|authority| authority.semantic_key.to_string()),
+                };
+                if !self.sharing.loaded.contains(&record) {
+                    self.sharing.loaded.push(record);
                 }
             }
         }
@@ -1620,7 +1644,15 @@ impl Capture {
             return Vec::new();
         };
         let handshakes = self.handshakes();
-        let externals = self.invocations.external_records();
+        let mut externals = self.invocations.external_records();
+        for loaded in &self.sharing.loaded {
+            if !externals.iter().any(|external| {
+                external.crate_name == loaded.crate_name
+                    && external.stable_crate_id == loaded.stable_crate_id
+            }) {
+                externals.push(loaded.clone());
+            }
+        }
         let nightly = build.binding_scripts();
         let mut settled = Vec::new();
         for (correlation, shared) in &self.sharing.keys {
@@ -1667,6 +1699,11 @@ impl Capture {
             });
         }
         settled
+    }
+
+    /// Where this project's unsettled tables wait (`Sharing::staged`).
+    pub(crate) fn staged(&self) -> Option<&Path> {
+        self.sharing.staged.as_deref()
     }
 
     /// Each sidecar's handshake, read again; one that changed is left out.

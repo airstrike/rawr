@@ -489,6 +489,7 @@ impl Request {
             shared,
             crate::bindings::directory(cached.context.cargo_home()),
             cached.context.rawr().join("bindings"),
+            crate::bindings::staged(cached.context.rawr()),
         );
         let command_target = extraction_plan.command_target()?;
         Ok(cargo::Harness {
