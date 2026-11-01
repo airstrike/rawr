@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`rawr check` of a program with its own Rust modules reuses its dependencies' shared bindings in a new project and extracts only the program's own crate: upstream download_progress takes 1 nightly build and 1 extraction instead of 3 and 3.","issues":[672]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.89",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"`rawr check` of a program with its own Rust modules reuses its dependencies' shared bindings in a new project and extracts only the program's own crate: upstream download_progress takes 1 nightly build and 1 extraction instead of 3 and 3.","issues":[672]}
+      ]
+    },
     {
       "version": "0.3.88",
       "date": "2026-11-01",

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.88",
+  "version": "0.3.89",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr check` of a program with its own Rust modules reuses its dependencies' shared bindings in a new project and extracts only the program's own crate: upstream download_progress takes 1 nightly build and 1 extraction instead of 3 and 3.","issues":[672]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.89",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`rawr check` of a program with its own Rust modules reuses its dependencies' shared bindings in a new project and extracts only the program's own crate: upstream download_progress takes 1 nightly build and 1 extraction instead of 3 and 3.","issues":[672]}
+        ]
+      },
       {
         "version": "0.3.88",
         "date": "2026-11-01",
@@ -1594,7 +1596,7 @@
     {"issue":669,"title":"?play's universe runner names a widget's theme from its impl (E0121)","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":670,"title":"Impl headers keep impls whose self type is a reference","state":"open","category":"No glue (D593)"},
     {"issue":671,"title":"`.into()` to a type with no From impl gives rustc's E0277","state":"open","category":"Divergences from rustc"},
-    {"issue":672,"title":"A program with its own Rust modules reads shared bindings in a second project","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":672,"title":"A program with its own Rust modules reads shared bindings in a second project","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.89"},
     {"issue":673,"title":"symbolic_contract::real_extracted_contract_is_snapshot_bound_positioned_and_symbolic fails on main","state":"open","category":"Health"},
     {"issue":674,"title":"A literal lent to `impl Into<Cow<'static, str>>` or a std trait's 'static impl lives for the program","state":"open","category":"No glue (D593)"},
     {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
