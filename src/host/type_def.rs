@@ -93,6 +93,8 @@ pub enum Shape {
         fields: Box<[Field]>,
         /// Whether every field required to construct the value is visible.
         constructible: bool,
+        /// The first public field rawr can't hold, which a literal names.
+        unsupported: Option<Box<Unsupported>>,
     },
     /// Exact source-visible enum variants.
     Enum(Box<[Variant]>),
@@ -130,6 +132,17 @@ pub struct Variant {
     imported: ImportedSelector,
     #[cfg(feature = "rust-import")]
     imported_fingerprint: [u8; 32],
+    unsupported: Option<Box<Unsupported>>,
+}
+
+/// A public field of an imported struct or variant whose type rawr can't
+/// hold, as the crate writes it: why a literal can't build the value.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Unsupported {
+    /// The field's name.
+    pub field: ImmutableString,
+    /// The field's type, as the crate writes it.
+    pub ty: ImmutableString,
 }
 
 /// Whether a facade type may be named by checked Rawr source.
@@ -948,7 +961,23 @@ impl Variant {
             constructible,
             imported,
             imported_fingerprint,
+            unsupported: None,
         }
+    }
+
+    /// The variant, with `unsupported` as its first public field rawr
+    /// can't hold.
+    #[cfg(feature = "rust-import")]
+    #[must_use]
+    pub(crate) fn with_unsupported(mut self, unsupported: Option<Unsupported>) -> Self {
+        self.unsupported = unsupported.map(Box::new);
+        self
+    }
+
+    /// The first public field rawr can't hold.
+    #[must_use]
+    pub fn unsupported(&self) -> Option<&Unsupported> {
+        self.unsupported.as_deref()
     }
 
     /// Return the unchanged Rust variant name.

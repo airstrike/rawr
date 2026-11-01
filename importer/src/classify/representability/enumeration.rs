@@ -10,6 +10,9 @@ pub struct Variant {
     fields: Box<[super::structure::Field]>,
     constructible: bool,
     span: crate::api::model::Span,
+    /// The first public field rawr can't hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsupported: Option<super::structure::Unsupported>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -61,7 +64,24 @@ impl Variant {
             fields,
             constructible,
             span,
+            unsupported: None,
         }
+    }
+
+    /// The variant, with `unsupported` as the first public field rawr
+    /// can't hold.
+    pub(crate) fn with_unsupported(
+        mut self,
+        unsupported: Option<super::structure::Unsupported>,
+    ) -> Self {
+        self.unsupported = unsupported;
+        self
+    }
+
+    /// The first public field rawr can't hold.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<&super::structure::Unsupported> {
+        self.unsupported.as_ref()
     }
 
     #[must_use]
@@ -213,12 +233,25 @@ impl Plan {
     }
 
     /// Drop the variant fields `keep` refuses. A variant that lost one cannot
-    /// be built, as with a private field.
-    pub(crate) fn retain_fields(&mut self, mut keep: impl FnMut(&super::structure::Field) -> bool) {
+    /// be built, as with a private field, and `written` names the first one
+    /// it lost.
+    pub(crate) fn retain_fields(
+        &mut self,
+        mut keep: impl FnMut(&super::structure::Field) -> bool,
+        mut written: impl FnMut(&super::structure::Field) -> super::structure::Unsupported,
+    ) {
         for variant in &mut self.variants {
             let before = variant.fields.len();
             let mut fields = std::mem::take(&mut variant.fields).into_vec();
-            fields.retain(|field| keep(field));
+            let mut unsupported = variant.unsupported.take();
+            fields.retain(|field| {
+                let kept = keep(field);
+                if !kept && unsupported.is_none() {
+                    unsupported = Some(written(field));
+                }
+                kept
+            });
+            variant.unsupported = unsupported;
             if fields.len() != before {
                 variant.constructible = false;
             }

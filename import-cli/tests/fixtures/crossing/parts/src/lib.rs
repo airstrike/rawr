@@ -187,6 +187,104 @@ pub mod geometry {
     }
 }
 
+/// iced_graphics's modules that iced re-exports as `advanced::graphics`.
+pub mod graphics {
+    pub mod color {
+        //! Colors packed for shaders, as iced_graphics's `color`.
+
+        /// A color, as iced_core's `Color`.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub struct Color {
+            /// Red.
+            pub r: f32,
+            /// Green.
+            pub g: f32,
+            /// Blue.
+            pub b: f32,
+            /// Alpha.
+            pub a: f32,
+        }
+
+        impl From<[f32; 4]> for Color {
+            fn from([r, g, b, a]: [f32; 4]) -> Self {
+                Color { r, g, b, a }
+            }
+        }
+
+        /// A color packed as four floats, as iced_graphics's `Packed`: its
+        /// only field is private, so only `pack` makes one.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        #[repr(C)]
+        pub struct Packed([f32; 4]);
+
+        /// `color`, packed.
+        pub fn pack(color: impl Into<Color>) -> Packed {
+            let Color { r, g, b, a } = color.into();
+            Packed([r, g, b, a])
+        }
+    }
+
+    pub mod mesh {
+        //! Triangles, as iced_graphics's `mesh`.
+
+        /// A vertex with its own color, as iced_graphics's `SolidVertex2D`.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        #[repr(C)]
+        pub struct SolidVertex2D {
+            /// Where it is.
+            pub position: [f32; 2],
+            /// Its color.
+            pub color: super::color::Packed,
+        }
+
+        /// Vertices and the indices of their triangles, as iced_graphics's
+        /// `mesh::Indexed`.
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct Indexed<T> {
+            /// The vertices.
+            pub vertices: Vec<T>,
+            /// Three indices per triangle.
+            pub indices: Vec<u32>,
+        }
+
+        /// A mesh, as iced_graphics's `Mesh`.
+        #[derive(Debug, Clone, PartialEq)]
+        pub enum Mesh {
+            /// Vertices of one color each.
+            Solid {
+                /// Its vertices and triangles.
+                buffers: Indexed<SolidVertex2D>,
+                /// How far it is moved.
+                offset: [f32; 2],
+            },
+        }
+
+        /// A vertex whose shade a function gives, which rawr can't hold.
+        pub struct Shaded {
+            /// Where it is.
+            pub position: [f32; 2],
+            /// Its shade at a point.
+            pub shade: fn(f32) -> f32,
+        }
+
+        /// What `mesh` draws, as a renderer's `draw_mesh` would.
+        pub fn describe(mesh: &Mesh) -> String {
+            let Mesh::Solid { buffers, offset } = mesh;
+            format!(
+                "{} vertices, last {:?}, {} triangles at {offset:?}",
+                buffers.vertices.len(),
+                buffers.vertices.last(),
+                buffers.indices.len() / 3,
+            )
+        }
+
+        /// Where `shaded` is, and its shade there.
+        pub fn shade(shaded: &Shaded) -> f32 {
+            (shaded.shade)(shaded.position[0])
+        }
+    }
+}
+
 /// Text at a theme, as iced_core's `widget::Text<'a, Theme>`.
 pub struct Note<'a, Theme> {
     text: String,

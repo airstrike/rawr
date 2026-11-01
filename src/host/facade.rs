@@ -2225,6 +2225,7 @@ mod imported_allocation_tests {
                         constructor: None,
                         fields: Box::default(),
                         constructible: false,
+                        unsupported: None,
                     }
                     .into(),
                     &mut host::TestImportAllocation::default(),

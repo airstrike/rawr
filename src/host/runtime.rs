@@ -2080,6 +2080,7 @@ mod tests {
                     constructor: None,
                     fields: Box::default(),
                     constructible: false,
+                    unsupported: None,
                 },
                 ImportedShape::Enum => host::type_def::Shape::Enum(Box::default()),
             }

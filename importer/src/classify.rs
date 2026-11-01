@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 77;
+const CLASSIFIER_VERSION: u32 = 78;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3552,14 +3552,228 @@ fn drop_unnameable_fields(graph: &api::Graph<impl api::Phase>, plans: &mut [Defi
         })
         .map(|(definition, _)| definition)
         .collect::<std::collections::BTreeSet<_>>();
+    let models = graph
+        .definitions()
+        .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
+        .collect::<std::collections::BTreeMap<_, _>>();
     for plan in plans {
         let keep =
             |field: &representability::structure::Field| field_type_nameable(field.ty(), &nominal);
+        let model = models.get(&plan.definition).copied();
+        // The field as the crate writes it, which a literal's message names.
+        let lost = |field: &representability::structure::Field| {
+            let ty = model.and_then(|model| match (model.kind(), field.selector()) {
+                (model::Kind::Struct { fields, generics }, _) => fields
+                    .public_fields()
+                    .iter()
+                    .find(|declared| declared.index() == field.index())
+                    .map(|declared| written(graph, generics, declared.ty())),
+                (
+                    model::Kind::Enum { variants, generics },
+                    crate::surface::identity::Selector::EnumVariant { index, .. },
+                ) => variants
+                    .get(*index as usize)?
+                    .fields()
+                    .find(|declared| declared.index() == field.index())
+                    .map(|declared| written(graph, generics, declared.ty())),
+                _ => None,
+            });
+            representability::structure::Unsupported::new(
+                field.name().into(),
+                ty.unwrap_or_default().into(),
+            )
+        };
         match &mut plan.representability {
-            R::Struct(structure) => structure.retain_fields(keep),
-            R::Enum(enumeration) => enumeration.retain_fields(keep),
+            R::Struct(structure) => structure.retain_fields(keep, lost),
+            R::Enum(enumeration) => enumeration.retain_fields(keep, lost),
             _ => {}
         }
+    }
+}
+
+/// `ty` as Rust writes it in a message: each definition by its own name,
+/// each parameter by the name `generics` gives it, and lifetimes elided.
+fn written(
+    graph: &api::Graph<impl api::Phase>,
+    generics: &model::Generics,
+    ty: &model::Type,
+) -> String {
+    let mut text = String::new();
+    write_type(graph, generics, ty, &mut text);
+    text
+}
+
+fn write_type(
+    graph: &api::Graph<impl api::Phase>,
+    generics: &model::Generics,
+    ty: &model::Type,
+    text: &mut String,
+) {
+    let name = |id: &api::identity::Definition| {
+        graph
+            .definition_index(id)
+            .and_then(|index| graph.definitions().nth(index))
+            .and_then(|definition| definition.display_path().last())
+            .unwrap_or("_")
+            .to_owned()
+    };
+    let parameter = |index: u32| {
+        generics
+            .parameters()
+            .find(|parameter| parameter.index() == index)
+            .map_or("_", model::Parameter::name)
+            .to_owned()
+    };
+    let arguments = |arguments: &[model::Argument], text: &mut String| {
+        let mut first = true;
+        for argument in arguments {
+            let before = text.len();
+            text.push_str(if first { "<" } else { ", " });
+            match argument {
+                model::Argument::Type(ty) => write_type(graph, generics, ty, text),
+                model::Argument::Const(value) => write_const(generics, value, text),
+                model::Argument::Lifetime(_) => {
+                    text.truncate(before);
+                    continue;
+                }
+            }
+            first = false;
+        }
+        if !first {
+            text.push('>');
+        }
+    };
+    match ty {
+        model::Type::Primitive(primitive) => text.push_str(primitive),
+        model::Type::Definition {
+            id,
+            arguments: given,
+        } => {
+            text.push_str(&name(id));
+            arguments(given, text);
+        }
+        model::Type::Parameter { index, .. } => text.push_str(&parameter(*index)),
+        model::Type::SelfType(_) => text.push_str("Self"),
+        model::Type::Tuple(members) => {
+            text.push('(');
+            for (position, member) in members.iter().enumerate() {
+                if position > 0 {
+                    text.push_str(", ");
+                }
+                write_type(graph, generics, member, text);
+            }
+            if members.len() == 1 {
+                text.push(',');
+            }
+            text.push(')');
+        }
+        model::Type::Slice(element) => {
+            text.push('[');
+            write_type(graph, generics, element, text);
+            text.push(']');
+        }
+        model::Type::Array { element, length } => {
+            text.push('[');
+            write_type(graph, generics, element, text);
+            text.push_str("; ");
+            write_const(generics, length, text);
+            text.push(']');
+        }
+        model::Type::Reference { mutability, ty, .. } => {
+            text.push_str(match mutability {
+                model::Mutability::Shared => "&",
+                model::Mutability::Mutable => "&mut ",
+            });
+            write_type(graph, generics, ty, text);
+        }
+        model::Type::RawPointer { mutability, ty } => {
+            text.push_str(match mutability {
+                model::Mutability::Shared => "*const ",
+                model::Mutability::Mutable => "*mut ",
+            });
+            write_type(graph, generics, ty, text);
+        }
+        model::Type::FunctionPointer(signature) => {
+            text.push_str("fn(");
+            for (position, input) in signature.inputs().enumerate() {
+                if position > 0 {
+                    text.push_str(", ");
+                }
+                write_type(graph, generics, input, text);
+            }
+            text.push(')');
+            if !matches!(signature.output(), model::Type::Tuple(members) if members.is_empty()) {
+                text.push_str(" -> ");
+                write_type(graph, generics, signature.output(), text);
+            }
+        }
+        model::Type::TraitObject { bounds, .. } => {
+            text.push_str("dyn ");
+            let mut first = true;
+            for bound in bounds {
+                if let model::ObjectBound::Trait(model::Bound::Trait {
+                    trait_id,
+                    arguments: given,
+                    ..
+                }) = bound
+                {
+                    if !first {
+                        text.push_str(" + ");
+                    }
+                    text.push_str(&name(trait_id));
+                    arguments(given, text);
+                    first = false;
+                }
+            }
+        }
+        model::Type::ImplTrait { bounds, .. } => {
+            text.push_str("impl ");
+            let mut first = true;
+            for bound in bounds {
+                if let model::Predicate::Bound {
+                    bound: model::Bound::Trait { trait_id, .. },
+                    ..
+                } = bound
+                {
+                    if !first {
+                        text.push_str(" + ");
+                    }
+                    text.push_str(&name(trait_id));
+                    first = false;
+                }
+            }
+        }
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments: given,
+        } => {
+            text.push('<');
+            match given.first() {
+                Some(model::Argument::Type(ty)) => write_type(graph, generics, ty, text),
+                _ => text.push_str("Self"),
+            }
+            text.push_str(" as ");
+            text.push_str(&name(trait_id));
+            text.push_str(">::");
+            text.push_str(&name(associated));
+        }
+        model::Type::Never => text.push('!'),
+    }
+}
+
+fn write_const(generics: &model::Generics, value: &model::Const, text: &mut String) {
+    match value {
+        model::Const::Literal { value, .. } => {
+            text.push_str(value.trim_end_matches("_usize").trim_end_matches("usize"))
+        }
+        model::Const::Parameter { index, .. } => text.push_str(
+            generics
+                .parameters()
+                .find(|parameter| parameter.index() == *index)
+                .map_or("_", model::Parameter::name),
+        ),
+        model::Const::Unevaluated { .. } => text.push('_'),
     }
 }
 
@@ -5571,14 +5785,21 @@ impl<P: api::Phase> Context<'_, P> {
             .try_reserve_exact(fields.public_fields().len())
             .map_err(|_| Error::Allocation)?;
         let mut constructible = fields.public_complete() && !fields.non_exhaustive();
+        let mut unsupported = None;
         for field in fields.public_fields() {
-            // A public field of a type Rawr cannot hold (palette's
-            // `standard: PhantomData<S>`) is unavailable by itself. The
-            // struct stays, without a constructor, as with a private field.
+            // A public field of a type Rawr cannot hold is unavailable by
+            // itself. The struct stays, without a constructor, and a
+            // literal of it names the field (D664).
             let ty = match self.convert_field(field.ty()) {
                 Ok(ty) => ty,
                 Err(Failure::Reject(_)) => {
                     constructible = false;
+                    unsupported.get_or_insert_with(|| {
+                        representability::structure::Unsupported::new(
+                            field.name().into(),
+                            written(self.graph, generics, field.ty()).into(),
+                        )
+                    });
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -5632,7 +5853,8 @@ impl<P: api::Phase> Context<'_, P> {
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
-        ))
+        )
+        .with_unsupported(unsupported))
     }
 
     /// An input native code gives a script closure: a value, or a copy of
@@ -5833,6 +6055,7 @@ impl<P: api::Phase> Context<'_, P> {
                 .map_err(|_| Error::Allocation)?;
             let mut constructible =
                 variant.field_set().public_complete() && !variant.field_set().non_exhaustive();
+            let mut unsupported = None;
             for field in variant.fields() {
                 if !matches!(field.visibility(), model::Visibility::Public) {
                     constructible = false;
@@ -5840,11 +6063,17 @@ impl<P: api::Phase> Context<'_, P> {
                 }
                 // A field of a type Rawr cannot hold is unavailable by
                 // itself, as in a struct. The variant stays and cannot be
-                // built.
-                let ty = match self.convert(field.ty()) {
+                // built, and a literal of it names the field.
+                let ty = match self.convert_held(field.ty()) {
                     Ok(ty) => ty,
                     Err(Failure::Reject(_)) => {
                         constructible = false;
+                        unsupported.get_or_insert_with(|| {
+                            representability::structure::Unsupported::new(
+                                field.name().into(),
+                                written(self.graph, generics, field.ty()).into(),
+                            )
+                        });
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -5862,14 +6091,17 @@ impl<P: api::Phase> Context<'_, P> {
             }
             self.retain_str(variant.name())?;
             self.retain_span(variant.span())?;
-            admitted.push(representability::enumeration::Variant::new(
-                variant_selector,
-                variant.name().into(),
-                variant.field_set().form(),
-                fields.into_boxed_slice(),
-                constructible,
-                variant.span().clone(),
-            ));
+            admitted.push(
+                representability::enumeration::Variant::new(
+                    variant_selector,
+                    variant.name().into(),
+                    variant.field_set().form(),
+                    fields.into_boxed_slice(),
+                    constructible,
+                    variant.span().clone(),
+                )
+                .with_unsupported(unsupported),
+            );
         }
         Ok(representability::enumeration::Plan::new(
             parameters,
@@ -6735,7 +6967,26 @@ impl<P: api::Phase> Context<'_, P> {
     fn convert_field(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
         match borrowed_argument(ty) {
             Some(target) => self.convert_borrowed(target),
-            None => self.convert(ty),
+            None => self.convert_held(ty),
+        }
+    }
+
+    /// A field's type as a struct or variant holds it: as `convert`, and an
+    /// array of a known length, as iced_graphics's `SolidVertex2D` has
+    /// `position: [f32; 2]`, which Rawr's array of that length fills and
+    /// reads, as a `From<[u16; 2]>` case takes it.
+    fn convert_held(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        match ty {
+            model::Type::Array { element, length } => {
+                let length =
+                    array_length(length).ok_or(representability::reject::Kind::ArrayType)?;
+                Ok(representability::convert::Type::Sequence {
+                    element: Box::new(self.convert_value(element)?),
+                    owned: true,
+                    length: Some(length),
+                })
+            }
+            ty => self.convert(ty),
         }
     }
 

@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 31;
+const SCHEMA: u32 = 32;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -552,6 +552,9 @@ pub enum Shape {
         constructor: Option<super::identity::Selector>,
         fields: Box<[Field]>,
         constructible: bool,
+        /// The first public field rawr can't hold, which a literal names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unsupported: Option<Unsupported>,
     },
     /// Enum variants in declaration order.
     Enum { variants: Box<[Variant]> },
@@ -583,6 +586,36 @@ pub struct Variant {
     fields: Box<[Field]>,
     constructible: bool,
     selector: super::identity::Selector,
+    /// The first public field rawr can't hold, which a literal names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsupported: Option<Unsupported>,
+}
+
+/// A public field whose type rawr can't hold, as the crate writes it.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Unsupported {
+    field: Box<str>,
+    ty: Box<str>,
+}
+
+impl Unsupported {
+    /// The field's name.
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+    /// The field's type, as the crate writes it.
+    pub fn ty(&self) -> &str {
+        &self.ty
+    }
+}
+
+fn unsupported(
+    plan: Option<&crate::classify::representability::structure::Unsupported>,
+) -> Option<Unsupported> {
+    plan.map(|plan| Unsupported {
+        field: plan.field().into(),
+        ty: plan.ty().into(),
+    })
 }
 
 /// One exact imported item overload.
@@ -1273,6 +1306,7 @@ impl Plan {
                                 constructor: None,
                                 fields: Box::default(),
                                 constructible: false,
+                                unsupported: None,
                             },
                         });
                     }
@@ -1718,6 +1752,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             constructor: None,
             fields: Box::default(),
             constructible: false,
+            unsupported: None,
         },
     })
     .collect::<Vec<_>>()
@@ -1795,6 +1830,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                     constructor: None,
                     fields: Box::default(),
                     constructible: false,
+                    unsupported: None,
                 },
             },
         );
@@ -1840,6 +1876,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
             constructor: None,
             fields: Box::default(),
             constructible: false,
+            unsupported: None,
         },
     };
     let iced = iced_semantic_fixture();
@@ -1913,6 +1950,7 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
         shape: Shape::Struct {
             form: Form::Unit,
             constructible: constructor.is_some(),
+            unsupported: None,
             constructor,
             fields: Box::default(),
         },
@@ -2944,7 +2982,15 @@ impl Shape {
                 constructor,
                 fields,
                 constructible,
+                ..
             } => Some((*form, constructor.as_ref(), fields, *constructible)),
+            Self::Enum { .. } => None,
+        }
+    }
+    /// The first public field of a struct rawr can't hold.
+    pub const fn unsupported(&self) -> Option<&Unsupported> {
+        match self {
+            Self::Struct { unsupported, .. } => unsupported.as_ref(),
             Self::Enum { .. } => None,
         }
     }
@@ -2984,6 +3030,10 @@ impl Variant {
     /// Return whether source construction is admitted.
     pub const fn constructible(&self) -> bool {
         self.constructible
+    }
+    /// The first public field of the variant rawr can't hold.
+    pub const fn unsupported(&self) -> Option<&Unsupported> {
+        self.unsupported.as_ref()
     }
     /// Return the semantic variant selector.
     pub const fn selector(&self) -> &super::identity::Selector {
@@ -3118,6 +3168,7 @@ fn type_definition(
                         .transpose()?,
                     fields: fields(plan.fields(), plan.parameters())?,
                     constructible: plan.constructible(),
+                    unsupported: unsupported(plan.unsupported()),
                 },
             ),
             Representability::Enum(plan) => {
@@ -3131,6 +3182,7 @@ fn type_definition(
                         fields: fields(variant.fields(), plan.parameters())?,
                         constructible: variant.constructible(),
                         selector: variant.selector().try_clone()?,
+                        unsupported: unsupported(variant.unsupported()),
                     });
                 }
                 (

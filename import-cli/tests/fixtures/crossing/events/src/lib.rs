@@ -354,8 +354,15 @@ impl<T, E> Task<Result<T, E>> {
     }
 }
 
-/// A message no program sends.
-pub enum Never {}
+/// A message no program sends: std's `Infallible`, as iced's `Never` is.
+pub use std::convert::Infallible as Never;
+
+/// iced's `advanced`: iced_graphics's modules, which another crate defines.
+pub mod advanced {
+    pub mod graphics {
+        pub use parts::graphics::{color, mesh};
+    }
+}
 
 /// The update logic of a program: any `Fn(&mut State, Message)` whose
 /// output turns into a task.

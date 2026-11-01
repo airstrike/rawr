@@ -113,6 +113,7 @@ fn structure(engine: &mut Engine) -> identity::Selector {
                     field,
                 )]),
                 constructible: true,
+                unsupported: None,
             }),
             &mut host::TestImportAllocation::default(),
         )
