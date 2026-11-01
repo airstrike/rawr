@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.45",
+  "version": "0.3.46",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"An operator on a crate type picks the impl its right-hand side matches and takes that impl's `Output`, as rustc does. iced's `Point - Point` is a `Vector`, so game_of_life's `translation + (cursor_position - start) * (1.0 / self.scaling)` checks. Every operator on a crate type now also compiles in the generated runner.","issues":[502]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.46",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"An operator on a crate type picks the impl its right-hand side matches and takes that impl's `Output`, as rustc does. iced's `Point - Point` is a `Vector`, so game_of_life's `translation + (cursor_position - start) * (1.0 / self.scaling)` checks. Every operator on a crate type now also compiles in the generated runner.","issues":[502]}
+        ]
+      },
       {
         "version": "0.3.45",
         "date": "2026-10-31",
@@ -1064,7 +1066,7 @@
     {"issue":499,"title":"A crate type reached only through a path dependency can't be named by the runner","state":"open","category":"No glue (D593)"},
     {"issue":500,"title":"Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc"},
     {"issue":501,"title":"Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health"},
-    {"issue":502,"title":"game_of_life: Point minus Point is not typed as iced's Vector","state":"closed","category":"No glue (D593)"},
+    {"issue":502,"title":"game_of_life: Point minus Point is not typed as iced's Vector","state":"closed","category":"No glue (D593)","release":"0.3.46"},
     {"issue":503,"title":"Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer"},
     {"issue":504,"title":"Judge a crate alias the only name of its type per root crate","state":"closed","category":"No glue (D593)","release":"0.3.45"},
     {"issue":505,"title":"Generated runners name the trait in primitive From calls","state":"closed","category":"No glue (D593)","release":"0.3.45"},
