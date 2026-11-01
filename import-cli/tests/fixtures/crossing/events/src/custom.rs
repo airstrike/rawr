@@ -17,6 +17,25 @@ macro_rules! framed {
 pub trait Renderer {
     /// Fills `quad` with `color`.
     fn fill_quad(&mut self, quad: Quad, color: crate::Color);
+
+    /// Starts moving what is filled by `offset`.
+    fn start_translation(&mut self, offset: u32) {
+        let _ = offset;
+    }
+
+    /// Stops moving what is filled.
+    fn end_translation(&mut self) {}
+
+    /// Fills what `f` fills moved by `offset`, as iced's provided
+    /// `with_translation(&mut self, v, f: impl FnOnce(&mut Self))`.
+    fn with_translation(&mut self, offset: u32, f: impl FnOnce(&mut Self))
+    where
+        Self: Sized,
+    {
+        self.start_translation(offset);
+        f(self);
+        self.end_translation();
+    }
 }
 
 /// A quad a renderer fills, as iced's `renderer::Quad`.
@@ -53,6 +72,7 @@ mod backend {
 /// A renderer whose concrete backend types are not publicly nameable.
 pub struct Composite<A, B> {
     recorder: Recorder,
+    offset: u32,
     backends: PhantomData<(A, B)>,
 }
 
@@ -63,6 +83,7 @@ pub type Aliased = Composite<backend::Primary, backend::Secondary>;
 pub fn aliased() -> Aliased {
     Composite {
         recorder: Recorder::default(),
+        offset: 0,
         backends: PhantomData,
     }
 }
@@ -137,6 +158,19 @@ pub fn nested(value: Nested<u8>) -> u8 {
 impl<A, B> Renderer for Composite<A, B> {
     fn fill_quad(&mut self, quad: Quad, color: crate::Color) {
         self.recorder.fill_quad(quad, color);
+        if self.offset > 0
+            && let Some(last) = self.recorder.filled.last_mut()
+        {
+            last.push_str(&format!(" at {}", self.offset));
+        }
+    }
+
+    fn start_translation(&mut self, offset: u32) {
+        self.offset += offset;
+    }
+
+    fn end_translation(&mut self) {
+        self.offset = 0;
     }
 }
 
