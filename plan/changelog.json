@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"rawr is secure by default. An `Engine` starts with no file, environment, process or network access, and `Engine::set_access(Access)` grants each, with file grants optionally limited to directories. Without a grant, `std::fs` returns `PermissionDenied`, `env!` is undefined, `env::args` is empty and `process::id` panics, as a sandboxed program sees them. `rawr run` and `rawr check` grant everything, as `cargo run` does. ?play and the playground grant nothing. A native crate's own code is not gated.","issues":[642]},
-      {"text":"`std::fs` gains `read`, `write`, `exists`, `create_dir`, `create_dir_all`, `remove_file`, `remove_dir`, `remove_dir_all`, `rename` and `copy` beside `read_to_string`. Each returns `io::Result` with the operating system's errors.","issues":[643]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.79",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"rawr is secure by default. An `Engine` starts with no file, environment, process or network access, and `Engine::set_access(Access)` grants each, with file grants optionally limited to directories. Without a grant, `std::fs` returns `PermissionDenied`, `env!` is undefined, `env::args` is empty and `process::id` panics, as a sandboxed program sees them. `rawr run` and `rawr check` grant everything, as `cargo run` does. ?play and the playground grant nothing. A native crate's own code is not gated.","issues":[642]},
+        {"text":"`std::fs` gains `read`, `write`, `exists`, `create_dir`, `create_dir_all`, `remove_file`, `remove_dir`, `remove_dir_all`, `rename` and `copy` beside `read_to_string`. Each returns `io::Result` with the operating system's errors.","issues":[643]}
+      ]
+    },
     {
       "version": "0.3.78",
       "date": "2026-11-01",
