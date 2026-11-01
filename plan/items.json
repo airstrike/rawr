@@ -547,11 +547,13 @@
     {"t":"T544","issue":544,"title":"T544: Arity errors for functions and closures read as rustc's E0061","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"e9e587f14","release":"0.3.57"},
     {"t":"T545","issue":545,"title":"T545: Refuse a closure whose output type Rust can't name before generation","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"e9e587f14","release":"0.3.57"},
     {"t":"T546","issue":546,"title":"T546: Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T547","issue":547,"title":"T547: RequestAllocation counts items and bytes that nothing reads","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
+    {"t":"T547","issue":547,"title":"T547: RequestAllocation counts items and bytes that nothing reads","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":"a259ea99b","release":null},
     {"t":"T548","issue":548,"title":"T548: Remove the limit figures that no longer bound anything","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T549","issue":549,"title":"T549: Generator panicked on every program whose closures cross as slots","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.57"},
     {"t":"T550","issue":550,"title":"T550: An unannotated closure input of an opaque program's P::State is typed _","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T551","issue":551,"title":"T551: A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T552","issue":552,"title":"T552: Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T552","issue":552,"title":"T552: Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T553","issue":553,"title":"T553: Request builder methods return a Result that can no longer fail","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T554","issue":554,"title":"T554: runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D670"],"commit":null,"release":null}
   ]
 }

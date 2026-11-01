@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The importer no longer counts request items and bytes that nothing read. About 1,600 lines of accounting are gone, with no change in behaviour.","issues":[547]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.57",
@@ -1211,12 +1216,14 @@
     {"issue":544,"title":"Arity errors for functions and closures read as rustc's E0061","state":"closed","category":"Divergences from rustc","release":"0.3.57"},
     {"issue":545,"title":"Refuse a closure whose output type Rust can't name before generation","state":"closed","category":"Importer","release":"0.3.57"},
     {"issue":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer"},
-    {"issue":547,"title":"RequestAllocation counts items and bytes that nothing reads","state":"open","category":"Importer"},
+    {"issue":547,"title":"RequestAllocation counts items and bytes that nothing reads","state":"closed","category":"Importer"},
     {"issue":548,"title":"Remove the limit figures that no longer bound anything","state":"open","category":"Importer"},
     {"issue":549,"title":"Generator panicked on every program whose closures cross as slots","state":"closed","category":"Importer","release":"0.3.57"},
     {"issue":550,"title":"An unannotated closure input of an opaque program's P::State is typed _","state":"open","category":"No glue (D593)"},
     {"issue":551,"title":"A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)"},
-    {"issue":552,"title":"Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc"}
+    {"issue":552,"title":"Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc"},
+    {"issue":553,"title":"Request builder methods return a Result that can no longer fail","state":"open","category":"Importer"},
+    {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health"}
   ],
   "groups": [
     {
