@@ -110,7 +110,7 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, name: &'static str }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
@@ -794,7 +794,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, name: "" });
                 slot
             }
         };
@@ -803,6 +803,8 @@ impl Arena {
         entry.value = Some(Box::new(value));
         entry.leased = false;
         entry.debug = None;
+        // A tool reading a value without `Debug` names its type (D675.3).
+        entry.name = std::any::type_name::<T>();
         entry.display = None;
         entry.clone = None;
         entry.relations = Relations::default();
@@ -861,6 +863,13 @@ impl Arena {
             entry.clone = clone;
         }
         Ok(handle)
+    }
+
+    /// The type of the value at `handle` when it has no `Debug`.
+    fn undebuggable(&self, handle: &NativeHandle) -> Option<&'static str> {
+        let entry = self.slots.get(handle.slot as usize)?;
+        (handle.epoch == self.epoch && handle.generation == entry.generation && entry.debug.is_none())
+            .then_some(entry.name)
     }
 
     fn debug(&self, handle: NativeHandle) -> Option<String> {
@@ -2554,6 +2563,39 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
+/// Under `rawr mcp`, the socket it named in `RAWR_MCP_INSPECT`, where a
+/// tool reads the running program's values (D675). Bound once; each engine
+/// this runner compiles a generation on answers on it. A plain `rawr run`
+/// names none, and no debugger is registered.
+fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
+    static INSPECTOR: std::sync::OnceLock<Option<__rawr_internal::inspect::Inspector>> =
+        std::sync::OnceLock::new();
+    INSPECTOR
+        .get_or_init(|| {
+            let socket = std::env::var_os("RAWR_MCP_INSPECT").filter(|path| !path.is_empty())?;
+            // A crate value lives in the arena behind a handle: its type
+            // names a value without `Debug`.
+            __rawr_internal::inspect::name_undebuggable_with(|value| {
+                let handle = value.read_lock::<NativeHandle>()?.clone();
+                arena_access(|arena| arena.undebuggable(&handle)).flatten()
+            });
+            __rawr_internal::inspect::Inspector::bind(std::path::Path::new(&socket))
+                .map_err(|error| eprintln!("rawr: values can't be read from this run: {error}"))
+                .ok()
+        })
+        .as_ref()
+}
+
+/// Under `rawr mcp`, place the steps of `program`, which runs next.
+fn locate(program: &Program) {
+    if let Some(inspector) = inspector()
+        && let Some(located) = program.candidate.as_ref().and_then(|candidate| candidate.located())
+    {
+        let located = std::sync::Arc::clone(located);
+        inspector.locate_with(move |position| located.line(position));
+    }
+}
+
 enum Compilation<'a> {
     Initial,
     Replacement(&'a Option<Program>),
@@ -2583,6 +2625,10 @@ fn compile_program(
     *observation = Some(observed);
     let mut native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
     let mut engine = __rawr_internal::Engine::new();
+    // Under `rawr mcp`, before the program compiles (#526).
+    if let Some(inspector) = inspector() {
+        inspector.attach(&mut engine);
+    }
     let (bindings, application_contract) = __rawr_profile::install_compiler_bindings(&mut engine, &mut native)?;
     progress(2)?;
     __rawr_internal::package::import::runner::admit_generated_structural_retained(

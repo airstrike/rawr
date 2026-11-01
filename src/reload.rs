@@ -29,21 +29,47 @@ pub struct Generation {
 pub struct Candidate {
     generation: Arc<Generation>,
     catalog: catalog::Catalog,
+    /// Where its steps are, for a debugger registered before it compiled.
+    #[cfg(feature = "debugging")]
+    located: Option<Arc<crate::inspect::Located>>,
 }
 
 impl Candidate {
-    /// A generation of any program, a plain one included.
+    /// A generation of any program, a plain one included, compiled by
+    /// `engine`. An engine a debugger reads keeps the program's positions.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_plain(
+        engine: &crate::Engine,
         executable: program::Executable,
         source: source::Graph,
     ) -> Self {
+        #[cfg(feature = "debugging")]
+        let located = engine
+            .is_debugger_registered()
+            .then(|| executable.located().map(Arc::new))
+            .flatten();
+        #[cfg(not(feature = "debugging"))]
+        let _ = engine;
         let schemas = executable.schemas().clone();
-        Self::from_catalog(
+        let candidate = Self::from_catalog(
             catalog::Catalog::from_executable(executable),
             schemas,
             source,
-        )
+        );
+        #[cfg(feature = "debugging")]
+        let candidate = Self {
+            located,
+            ..candidate
+        };
+        candidate
+    }
+
+    /// Where this generation's steps are in its files: kept only when a
+    /// debugger was registered on the engine that compiled it.
+    #[cfg(feature = "debugging")]
+    #[must_use]
+    pub const fn located(&self) -> Option<&Arc<crate::inspect::Located>> {
+        self.located.as_ref()
     }
 
     // Generation handles deliberately use Arc for stable cross-owner proof
@@ -64,6 +90,8 @@ impl Candidate {
                 schemas,
             }),
             catalog,
+            #[cfg(feature = "debugging")]
+            located: None,
         }
     }
 

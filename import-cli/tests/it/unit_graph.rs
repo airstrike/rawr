@@ -210,7 +210,7 @@ fn the_plain_runner_builds_the_projects_own_units() {
         "plain",
         "itoa = \"1\"",
         &[],
-        "\"rust-import\", \"std\", \"sync\"",
+        "\"debugging\", \"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
 }
@@ -223,7 +223,7 @@ fn a_project_with_featureless_smallvec_keeps_its_smallvec() {
         "smallvec",
         "smallvec = { version = \"1\", default-features = false }",
         &[],
-        "\"rust-import\", \"std\", \"sync\"",
+        "\"debugging\", \"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
 }
@@ -238,7 +238,7 @@ fn a_runner_that_instantiates_tokio_at_rawr_types_builds_the_projects_tokio() {
         "tokio",
         "tokio = { version = \"1\", features = [\"macros\", \"rt-multi-thread\", \"time\", \"sync\"] }",
         &[],
-        "\"rust-import\", \"std\", \"sync\"",
+        "\"debugging\", \"rust-import\", \"std\", \"sync\"",
         RUNNER_WITH_TOKIO,
     );
 }
@@ -259,7 +259,7 @@ fn a_project_s_path_dependency_is_the_runner_s() {
             ),
             ("events/src/lib.rs", "pub fn count() -> u32 {\n    1\n}\n"),
         ],
-        "\"rust-import\", \"std\", \"sync\"",
+        "\"debugging\", \"rust-import\", \"std\", \"sync\"",
         "fn main() {}\n",
     );
 }

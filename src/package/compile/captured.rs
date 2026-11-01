@@ -106,7 +106,7 @@ impl Output {
                 }
             }
         })?;
-        let candidate = reload::Candidate::from_package_plain(executable, source);
+        let candidate = reload::Candidate::from_package_plain(engine, executable, source);
         Ok(Self {
             candidate,
             imported,

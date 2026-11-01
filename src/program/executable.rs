@@ -432,6 +432,15 @@ impl Executable {
         (self.into_hosted_ast(), positions)
     }
 
+    /// This program's entry source and the [`Positions`] of every source,
+    /// for a debugger to place the program's steps.
+    #[cfg(all(feature = "debugging", feature = "rust-import"))]
+    pub(crate) fn located(&self) -> Option<crate::inspect::Located> {
+        let entry = self.sources.key(self.source.index());
+        let entry = self.sources.resolve(entry).ok()?.clone();
+        Some(crate::inspect::Located::new(entry, self.positions()))
+    }
+
     /// The [`Positions`] of this program's entry source, with each other
     /// source's own.
     pub(crate) fn positions(&self) -> Positions {

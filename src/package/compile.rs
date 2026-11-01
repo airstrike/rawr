@@ -97,7 +97,7 @@ pub(crate) fn snapshot_generation_plain(
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
     Ok(crate::reload::Candidate::from_package_plain(
-        executable, source,
+        engine, executable, source,
     ))
 }
 

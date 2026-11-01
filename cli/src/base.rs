@@ -141,13 +141,18 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let mut engine = Engine::new();
     // The debugger is registered before the program compiles, so only a
     // program a debugger reads carries what reading needs (#526).
-    let known = std::sync::Arc::new(std::sync::OnceLock::new());
-    inspect(&mut engine, target, &known);
+    let inspector = inspector(&mut engine);
     let (ast, main, positions) = engine
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
     let positions = std::sync::Arc::new(positions);
-    let _ = known.set(std::sync::Arc::clone(&positions));
+    if let (Some(inspector), Some(entry)) = (inspector, source(target)) {
+        let positions = std::sync::Arc::clone(&positions);
+        inspector.locate_with(move |position| {
+            let (file, span) = positions.locate_position(&entry, position)?;
+            Some((file.identity().to_owned(), span.start().line()?))
+        });
+    }
     // A runtime error's position is in the lowered program: the compiler's
     // positions map it back to its file, the entry or a module's, or to
     // none in code it wrote.
@@ -201,32 +206,27 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     })
 }
 
-/// Under `rawr mcp`, answer `inspect` on the socket it named: each step's
-/// file and line come from the compiler's positions, once `positions`
-/// holds them.
-fn inspect(
-    engine: &mut Engine,
-    target: &project::Target,
-    positions: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<rawr::program::Positions>>>,
-) {
-    let Some(socket) = std::env::var_os(crate::events::INSPECT).filter(|path| !path.is_empty())
-    else {
-        return;
-    };
-    let Some(entry) = source(target) else {
-        return;
-    };
-    let positions = std::sync::Arc::clone(positions);
-    let locate = move |position| {
-        let (file, span) = positions.get()?.locate_position(&entry, position)?;
-        Some((file.identity().to_owned(), span.start().line()?))
-    };
+/// Under `rawr mcp`, answer `inspect` on the socket it named, from the
+/// program `engine` runs. Each step's file and line come from the
+/// compiler's positions once the program compiled.
+fn inspector(engine: &mut Engine) -> Option<rawr::inspect::Inspector> {
+    let socket = std::env::var_os(crate::events::INSPECT).filter(|path| !path.is_empty())?;
     #[cfg(unix)]
-    if let Err(error) = rawr::inspect::serve(engine, Path::new(&socket), Box::new(locate)) {
-        eprintln!("rawr: values can't be read from this run: {error}");
+    match rawr::inspect::Inspector::bind(Path::new(&socket)) {
+        Ok(inspector) => {
+            inspector.attach(engine);
+            Some(inspector)
+        }
+        Err(error) => {
+            eprintln!("rawr: values can't be read from this run: {error}");
+            None
+        }
     }
     #[cfg(not(unix))]
-    let _ = (engine, locate, socket);
+    {
+        let _ = (engine, socket);
+        None
+    }
 }
 
 fn source(target: &project::Target) -> Option<diagnostic::Source> {

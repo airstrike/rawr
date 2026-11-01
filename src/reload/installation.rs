@@ -33,6 +33,7 @@ impl reload::Candidate {
         let reload::Candidate {
             generation,
             catalog,
+            ..
         } = self;
         let catalog = catalog.bind(engine, runtime)?;
         debug_assert_eq!(generation.id(), catalog.generation());

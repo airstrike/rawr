@@ -7,6 +7,7 @@
 mod crate_shapes;
 mod crossing;
 mod erasure;
+mod inspect;
 mod islands;
 mod panes;
 mod plain;
