@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.73 (2026-11-01)
+
 - A closure input that is a std trait's associated type, as `Task::sip`'s `impl FnOnce(<S as Future>::Output) -> T`, now works through the opaque type's supertraits, and a generic type's function whose callables are all filled by program functions is no longer missing at run time. download_progress passes `rawr check`. (#621)
 
 ## 0.3.72 (2026-11-01)
