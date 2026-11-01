@@ -508,7 +508,7 @@ impl crate::Engine {
                 rawr_import::surface::instance::Arguments::once(
                     used.types,
                     Box::default(),
-                    Box::default(),
+                    binders,
                     limits,
                 )
             } else {
