@@ -753,6 +753,60 @@ fn a_view_that_sends_no_message_names_infallible_in_its_revealed_type() {
     );
 }
 
+/// iced's geometry (#608, #616): `SolidVertex2D { position, color }` fills
+/// a field of an array type and one of a crate type whose own field is
+/// private, which only the crate's `pack` makes, and `Mesh::Solid { .. }`
+/// a variant's array field. The program is `run((), view)`: the update is
+/// the crate's impl for `()`, and the view of `&()` gives widgets that
+/// borrow string literals, which the slot's own pins hold. The output is
+/// `cargo run`'s.
+#[test]
+fn a_vertex_literal_and_a_view_of_unit_state_run() {
+    let (rawr, cargo) = both_printed("crossing-geometry", "geometry.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with(
+            "3 vertices, last Some(SolidVertex2D { position: [4.0, 0.0], color: \
+             Packed([0.5, 0.25, 0.0, 1.0]) }), 1 triangles at [4.0, 1.5]\n\
+             [1.0, 2.0] Packed([0.5, 0.25, 0.0, 1.0])\ntitle ()"
+        ) && rawr.ends_with(
+            "last view pad 0 pad 20 rainbow@16 'In this example we draw a custom widget \
+             Rainbow' 'Move your cursor over it'"
+        ),
+        "{rawr}"
+    );
+}
+
+/// A literal of a crate struct whose public field is a function pointer,
+/// which rawr can't hold yet, is reported at the literal, naming the field
+/// and its type as the crate writes them (#608, D664).
+#[test]
+fn a_literal_names_the_public_field_rawr_cannot_hold() {
+    let root = root("crossing-shaded");
+    fs::copy(
+        root.join("variants").join("shaded.rs"),
+        root.join("src/main.rs"),
+    )
+    .unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(stderr.contains("main.rs:13:18"), "{stderr}");
+    assert!(
+        stderr.contains("field `shade` has type `fn(f32) -> f32`, which rawr can't hold yet"),
+        "{stderr}"
+    );
+}
+
 /// iced's clock: a crate type compared with a number, `rotation < 180.0`,
 /// through `PartialOrd<f32>`, whose impl writes only `partial_cmp`, so `<`
 /// is std's provided `lt`. The type is also `PartialOrd` with itself, and

@@ -786,10 +786,19 @@ pub fn anchor() -> Option<Nonce> {
 /// the same way, by their [`Rc`](std::rc::Rc) ([`Pins::hold`]). They are
 /// let go when the owner is next reached `&mut`, when no borrow of them can
 /// remain.
+///
+/// A view whose state is no program value, as `view(_: &())` of iced's
+/// `run((), view)`, borrows only what outlives every call: the program's
+/// string literals and constants, as rustc allows. Its slot pins them in
+/// pins of its own that live as long as the runner ([`Pins::constant`]),
+/// which hold one string per text, so a view called again, or a reload
+/// that keeps a literal, pins nothing new.
 #[derive(Default)]
 pub struct Pins {
     strings: std::sync::Mutex<Vec<crate::ImmutableString>>,
     values: std::sync::Mutex<Vec<Kept>>,
+    /// Whether a string equal to one held is that one ([`Pins::constant`]).
+    by_text: bool,
 }
 
 /// A native value [`Pins::hold`] keeps, with the thread whose `Rc` it is.
@@ -817,8 +826,24 @@ impl Drop for Kept {
 impl Pins {
     /// Nothing pinned.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            strings: std::sync::Mutex::new(Vec::new()),
+            values: std::sync::Mutex::new(Vec::new()),
+            by_text: false,
+        }
+    }
+
+    /// Pins a slot keeps for as long as the runner lives, for a view lent
+    /// no program value: they hold one string per text, since what such a
+    /// view borrows is the program's literals and constants.
+    #[must_use]
+    pub const fn constant() -> Self {
+        Self {
+            strings: std::sync::Mutex::new(Vec::new()),
+            values: std::sync::Mutex::new(Vec::new()),
+            by_text: true,
+        }
     }
 
     /// `text`, borrowed for as long as these pins are.
@@ -827,7 +852,10 @@ impl Pins {
             .strings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let index = match pinned.iter().position(|held| held.ptr_eq(&text)) {
+        let index = match pinned
+            .iter()
+            .position(|held| held.ptr_eq(&text) || (self.by_text && held.as_str() == text.as_str()))
+        {
             Some(index) => index,
             None => {
                 pinned.push(text);

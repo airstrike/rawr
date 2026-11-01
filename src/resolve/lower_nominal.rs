@@ -17471,11 +17471,16 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Whether a form's bounds hold of the types its arguments fixed. A type
+    /// the arguments leave to inference doesn't rule the form out, as
+    /// `run((), view)`'s `Message` isn't known until the crate's `impl
+    /// UpdateFn<State, Never> for ()` fixes it, as it is in rustc.
     fn host_requirements_hold(&self, signature: &InstantiatedHostSignature) -> bool {
         signature.requirements.iter().all(|(_, ty, required)| {
-            required
-                .iter()
-                .all(|capability| self.type_provides(ty, capability))
+            matches!(self.inference.resolve(ty), Ty::Infer(_))
+                || required
+                    .iter()
+                    .all(|capability| self.type_provides(ty, capability))
         })
     }
 
@@ -42461,6 +42466,7 @@ impl<'a> Parser<'a> {
             form,
             fields,
             constructible,
+            unsupported,
             ..
         } = definition.shape()
         else {
@@ -42470,6 +42476,15 @@ impl<'a> Parser<'a> {
                 construction: name_span,
             });
         };
+        // A public field whose type rawr can't hold yet is named with its
+        // type, as the crate writes it: the literal is valid Rust (D664).
+        if let Some(unsupported) = unsupported {
+            return Err(Error::InvalidConstruction {
+                owner: path,
+                reason: unsupported_field(unsupported).into(),
+                construction: name_span,
+            });
+        }
         if !constructible {
             return Err(Error::InvalidConstruction {
                 owner: path,
@@ -44982,6 +44997,13 @@ impl<'a> Parser<'a> {
             };
             return Err(self.native_miss(definition.identity().imported().is_some(), error));
         };
+        if let Some(unsupported) = variant.unsupported() {
+            return Err(Error::InvalidConstruction {
+                owner: path,
+                reason: format!("variant `{member}`'s {}", unsupported_field(unsupported)).into(),
+                construction: member_span,
+            });
+        }
         if !variant.constructible() {
             return Err(Error::InvalidConstruction {
                 owner: path,
@@ -52494,6 +52516,16 @@ fn span(start: Position, end: Position) -> Span {
     Span::new(start, end)
 }
 
+/// Why a literal can't build an imported value whose public field rawr
+/// can't hold yet: the field and its type, as the crate writes them.
+#[cfg(feature = "rust-import")]
+fn unsupported_field(unsupported: &crate::host::type_def::Unsupported) -> String {
+    format!(
+        "field `{}` has type `{}`, which rawr can't hold yet",
+        unsupported.field, unsupported.ty
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -53682,6 +53714,7 @@ pub fn run() -> i64 {
                 ),
             ]),
             constructible: true,
+            unsupported: None,
         }
         .into();
         builder
@@ -53718,6 +53751,7 @@ pub fn run() -> i64 {
                         ),
                     ]),
                     constructible: false,
+                    unsupported: None,
                 }
                 .into(),
                 &mut allocation,
@@ -53751,6 +53785,7 @@ pub fn run() -> i64 {
                         rawr_import::surface::identity::Selector::Unavailable,
                     )]),
                     constructible: true,
+                    unsupported: None,
                 }
                 .into(),
                 &mut allocation,
@@ -53776,6 +53811,7 @@ pub fn run() -> i64 {
                         rawr_import::surface::identity::Selector::Unavailable,
                     )]),
                     constructible: true,
+                    unsupported: None,
                 }
                 .into(),
                 &mut allocation,
@@ -53896,6 +53932,7 @@ pub fn run() -> i64 {
                 rawr_import::surface::identity::Selector::Unavailable,
             )]),
             constructible: true,
+            unsupported: None,
         }
         .into();
         let aliases = if alias_first {

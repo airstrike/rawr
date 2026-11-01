@@ -6322,10 +6322,14 @@ fn copy_scalar(ty: &convert::Type) -> bool {
     }
 }
 
-/// Whether a struct's field of type `ty` is Copy: as `copy_scalar`, and a
-/// shared borrow, as iced's `LineDash::segments: &'a [f32]` is.
+/// Whether a struct's field of type `ty` is Copy: as `copy_scalar`, a
+/// shared borrow, as iced's `LineDash::segments: &'a [f32]` is, and an
+/// array of a length of Copy elements, as `SolidVertex2D::position: [f32;
+/// 2]` is.
 fn copy_field(ty: &convert::Type) -> bool {
-    copy_scalar(ty) || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+    copy_scalar(ty)
+        || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
+        || matches!(ty, convert::Type::Sequence { element, length: Some(_), .. } if copy_scalar(element))
 }
 
 /// A variant of a non-generic enum also has a matcher: the variant's
@@ -10205,6 +10209,17 @@ fn render_slot(
                 values.push(format!("{name}.0.lend()"));
                 pins.get_or_insert_with(|| format!("{name}.0.pins()"));
             }
+            // The unit a program of no state lends, as iced's `run((), view)`
+            // lends `view` `&()`: the script function takes the unit, which
+            // holds nothing to lend or give back.
+            convert::Type::Borrowed {
+                mutable: borrowed_mutably,
+                ty,
+            } if matches!(**ty, convert::Type::Unit) => {
+                let borrow = if *borrowed_mutably { "mut " } else { "" };
+                parameters.push(format!("{name}: &{lifetime}{borrow}()"));
+                values.push(format!("{{ let _ = {name}; Dynamic::from(()) }}"));
+            }
             // A shared borrow of a native value, as iced's `pick_list`
             // gives `font::Family::to_string` a `&Family`: a copy, as a
             // closure's borrowed native input crosses
@@ -10326,10 +10341,19 @@ fn render_slot(
         format!("[{}]", values.join(", "))
     };
     let mutable = mutable.join(", ");
+    // A view lent no program value, as `view(_: &())` of iced's `run((),
+    // view)`, borrows only literals and constants, which outlive every
+    // call, as rustc allows: the slot's own pins hold them for as long as
+    // the runner lives, one per text (`Pins::constant`).
+    let mut constant_pins = String::new();
     let (generics, rust, body) = match &family {
         Some(family) => {
-            let pins =
-                pins.ok_or_else(|| drift("a slot's borrowing output with no script value lent"))?;
+            let pins = pins.unwrap_or_else(|| {
+                constant_pins = format!(
+                    "\n    static PINS_{local}: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant();"
+                );
+                format!("&PINS_{local}")
+            });
             (
                 "<'x>",
                 format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
@@ -10435,7 +10459,7 @@ fn render_slot(
         "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
     SLOT_{local}
         .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())
-        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}
+        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}{constant_pins}
     #[allow(unused_mut, clippy::needless_lifetimes)]
     fn slot_{local}{generics}({}) -> {rust} {{
         {body}

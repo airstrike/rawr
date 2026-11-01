@@ -2035,6 +2035,12 @@ fn build(
                             fields.into_boxed_slice()
                         },
                         constructible: plan.constructible(),
+                        unsupported: plan.unsupported().map(|unsupported| {
+                            Box::new(host::type_def::Unsupported {
+                                field: unsupported.field().into(),
+                                ty: unsupported.ty().into(),
+                            })
+                        }),
                     },
                     Representability::Enum(plan) => {
                         let mut variants = Vec::new();
@@ -2053,12 +2059,22 @@ fn build(
                                     field.selector().try_clone()?,
                                 ));
                             }
-                            variants.push(host::type_def::Variant::new(
-                                variant.name().into(),
-                                fields.into_boxed_slice(),
-                                variant.constructible(),
-                                variant.selector().try_clone()?,
-                            ));
+                            variants.push(
+                                host::type_def::Variant::new(
+                                    variant.name().into(),
+                                    fields.into_boxed_slice(),
+                                    variant.constructible(),
+                                    variant.selector().try_clone()?,
+                                )
+                                .with_unsupported(
+                                    variant.unsupported().map(|unsupported| {
+                                        host::type_def::Unsupported {
+                                            field: unsupported.field().into(),
+                                            ty: unsupported.ty().into(),
+                                        }
+                                    }),
+                                ),
+                            );
                         }
                         host::type_def::Shape::Enum(variants.into_boxed_slice())
                     }

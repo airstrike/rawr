@@ -11,6 +11,33 @@ pub struct Field {
     span: crate::api::model::Span,
 }
 
+/// The first public field of a struct or variant whose type rawr can't
+/// hold, as Rust writes it: the reason a literal can't build the type,
+/// which a message names at the literal (D664).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Unsupported {
+    field: Box<str>,
+    ty: Box<str>,
+}
+
+impl Unsupported {
+    pub(crate) const fn new(field: Box<str>, ty: Box<str>) -> Self {
+        Self { field, ty }
+    }
+
+    /// The field's name, or its index in a tuple struct.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// The field's type, as the crate writes it.
+    #[must_use]
+    pub fn ty(&self) -> &str {
+        &self.ty
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Plan {
     constructor: Option<crate::surface::identity::Selector>,
@@ -40,6 +67,9 @@ pub struct Plan {
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// The first public field rawr can't hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unsupported: Option<Unsupported>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -124,7 +154,21 @@ impl Plan {
             lifetimes: 0,
             covariant: false,
             iterator: false,
+            unsupported: None,
         }
+    }
+
+    /// The plan, with `unsupported` as the first public field rawr can't
+    /// hold.
+    pub(crate) fn with_unsupported(mut self, unsupported: Option<Unsupported>) -> Self {
+        self.unsupported = unsupported;
+        self
+    }
+
+    /// The first public field rawr can't hold.
+    #[must_use]
+    pub const fn unsupported(&self) -> Option<&Unsupported> {
+        self.unsupported.as_ref()
     }
 
     #[must_use]
@@ -229,11 +273,24 @@ impl Plan {
     }
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no
-    /// constructor, as with a private field.
-    pub(crate) fn retain_fields(&mut self, mut keep: impl FnMut(&Field) -> bool) {
+    /// constructor, as with a private field, and `written` names the first
+    /// one it lost.
+    pub(crate) fn retain_fields(
+        &mut self,
+        mut keep: impl FnMut(&Field) -> bool,
+        mut written: impl FnMut(&Field) -> Unsupported,
+    ) {
         let before = self.fields.len();
         let mut fields = std::mem::take(&mut self.fields).into_vec();
-        fields.retain(|field| keep(field));
+        let mut unsupported = self.unsupported.take();
+        fields.retain(|field| {
+            let kept = keep(field);
+            if !kept && unsupported.is_none() {
+                unsupported = Some(written(field));
+            }
+            kept
+        });
+        self.unsupported = unsupported;
         if fields.len() != before {
             self.constructible = false;
             self.constructor = None;

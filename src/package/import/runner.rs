@@ -477,6 +477,14 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
         }
         // A shared borrow, as iced's `LineDash::segments: &'a [f32]`.
         host::type_ref::Shape::Reference { mutable: false, .. } => true,
+        // An array of a length of Copy values, as `position: [f32; 2]`.
+        host::type_ref::Shape::Array {
+            element,
+            length: Some(_),
+        } => {
+            !matches!(element.shape(), host::type_ref::Shape::Reference { .. })
+                && copy_scalar(element, facade)
+        }
         _ => false,
     }
 }
@@ -892,6 +900,12 @@ fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Error> {
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice(),
             constructible,
+            unsupported: shape.unsupported().map(|unsupported| {
+                Box::new(host::type_def::Unsupported {
+                    field: unsupported.field().into(),
+                    ty: unsupported.ty().into(),
+                })
+            }),
         });
     }
     let variants = shape
@@ -911,7 +925,13 @@ fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Error> {
                         .into_boxed_slice(),
                     variant.constructible(),
                     variant.selector().try_clone()?,
-                ))
+                )
+                .with_unsupported(variant.unsupported().map(|unsupported| {
+                    host::type_def::Unsupported {
+                        field: unsupported.field().into(),
+                        ty: unsupported.ty().into(),
+                    }
+                })))
             })
             .collect::<Result<Vec<_>, Error>>()?
             .into_boxed_slice(),

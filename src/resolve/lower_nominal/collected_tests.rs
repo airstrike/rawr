@@ -389,6 +389,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
                     field.clone(),
                 )]),
                 constructible: true,
+                unsupported: None,
             }),
             &mut host::TestImportAllocation::default(),
         )
