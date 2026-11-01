@@ -479,6 +479,14 @@
     {"t":"T476","issue":476,"title":"T476: The runner names iced_core's Map by an internal path it can't reach","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T477","issue":477,"title":"T477: bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T478","issue":478,"title":"T478: pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T479","issue":479,"title":"T479: Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T479","issue":479,"title":"T479: Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T480","issue":480,"title":"T480: Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T481","issue":481,"title":"T481: Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T482","issue":482,"title":"T482: A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T483","issue":483,"title":"T483: The remaining importer error variants use rawr's internal names","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T484","issue":484,"title":"T484: An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T485","issue":485,"title":"T485: rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T486","issue":486,"title":"T486: Cold-harness importer tests read the deleted rawr-iced crate","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D662"],"commit":null,"release":null},
+    {"t":"T487","issue":487,"title":"T487: Delete the dead host-profile request path","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

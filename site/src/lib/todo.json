@@ -8,7 +8,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"Checking a program that uses iced's whole dependency set, like pick_list or custom_widget, no longer stops at a byte limit. The dependency inventory keeps each crate's facts and export targets, and builds no API of the whole set.","issues":[472]}
+        {"text":"Checking a program that uses iced's whole dependency set, like pick_list or custom_widget, no longer stops at a byte limit. The dependency inventory keeps each crate's facts and export targets, and builds no API of the whole set.","issues":[472]},
+        {"text":"Errors about your Cargo setup or environment now read the way Cargo writes them. They name the dependency, the config file or the environment variable involved, never rawr's internals. Examples are a short git `rev`, a `rustc` wrapper in `.cargo/config.toml`, a dependency named like the package's own library, and an unset `PATH`. A condition that only a rawr bug could cause panics and names the broken invariant instead.","issues":[480]}
       ]
     },
     "releases": [
@@ -1002,7 +1003,15 @@
     {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"open","category":"No glue (D593)"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)"},
     {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"open","category":"No glue (D593)"},
-    {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":480,"title":"Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"open","category":"Importer"},
+    {"issue":481,"title":"Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"open","category":"Importer"},
+    {"issue":482,"title":"A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer"},
+    {"issue":483,"title":"The remaining importer error variants use rawr's internal names","state":"open","category":"Importer"},
+    {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc"},
+    {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"open","category":"Health"},
+    {"issue":487,"title":"Delete the dead host-profile request path","state":"open","category":"Importer"}
   ],
   "groups": [
     {
