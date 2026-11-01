@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"The ?play image builds its universe runner, and a tokio snippet runs in the deployed image within the bot's time and memory limits.","issues":[465]},
-      {"text":"A runner starts much faster. Rawr's runtime dependencies compile optimized, a runner embeds only the bindings it installs, and installing them no longer scans every type for each type. ?play snippets now run within their time budget.","issues":[507]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.48",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"The ?play image builds its universe runner, and a tokio snippet runs in the deployed image within the bot's time and memory limits.","issues":[465]},
+        {"text":"A runner starts much faster. Rawr's runtime dependencies compile optimized, a runner embeds only the bindings it installs, and installing them no longer scans every type for each type. ?play snippets now run within their time budget.","issues":[507]}
+      ]
+    },
     {
       "version": "0.3.47",
       "date": "2026-11-01",
