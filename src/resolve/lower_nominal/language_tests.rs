@@ -170,6 +170,72 @@ pub fn publish(shell: &mut Shell<'_, Message>) {}
         .unwrap_or_else(|error| panic!("{error}"));
 }
 
+struct UiPath;
+struct UiPathBuilder;
+
+/// iced's `canvas::Path::new(f: impl FnOnce(&mut Builder))` lends its
+/// closure a `&mut Builder`, which the closure's parameter takes as the
+/// facade declares it: once, not `&mut &mut Builder` (#583).
+#[test]
+fn language_a_closure_takes_the_mut_borrow_iced_path_new_lends() {
+    use crate::host::{facade, item, signature, type_ref};
+    let mut builder = facade::Builder::new("iced", facade::Abi::new(1).unwrap()).unwrap();
+    builder.module("widget").unwrap();
+    builder.module("widget::canvas").unwrap();
+    builder.module("widget::canvas::path").unwrap();
+    builder
+        .type_::<UiPath>("widget::canvas::Path", &[], &[])
+        .unwrap();
+    builder
+        .type_::<UiPathBuilder>("widget::canvas::path::Builder", &[], &[])
+        .unwrap();
+    let path_builder = || type_ref::Type::registered("widget::canvas::path::Builder").unwrap();
+    let mut new = signature::Builder::new();
+    new.crossing();
+    new.parameter(type_ref::Type::callable(
+        type_ref::Type::reference(true, path_builder()),
+        type_ref::Type::unit(),
+    ))
+    .output(type_ref::Type::registered("widget::canvas::Path").unwrap());
+    builder
+        .item(
+            item::Definition::associated_function("widget::canvas::Path::new", new.finish())
+                .unwrap(),
+        )
+        .unwrap();
+    let mut line_to = signature::Builder::new();
+    line_to
+        .parameter(type_ref::Type::builtin(type_ref::Builtin::I64))
+        .output(type_ref::Type::unit());
+    builder
+        .item(
+            item::Definition::method(
+                "widget::canvas::path::Builder::line_to",
+                crate::receiver::Mode::Mutable,
+                line_to.finish(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut engine = Engine::new();
+    engine
+        .register_host_facade(builder.finish().unwrap())
+        .unwrap();
+    engine
+        .compile_executable(
+            r#"
+use iced::widget::canvas::Path;
+pub fn traced() -> Path {
+    Path::new(|p| {
+        p.line_to(1);
+        p.line_to(2);
+    })
+}
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
 #[test]
 fn language_loops() {
     let value = run(r#"
