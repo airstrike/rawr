@@ -579,8 +579,8 @@
     {"t":"T576","issue":576,"title":"T576: imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":null,"release":null},
     {"t":"T578","issue":578,"title":"T578: Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T579","issue":579,"title":"T579: palette's inherent new_srgb functions land on the wrong owner type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T579","issue":579,"title":"T579: palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0ba98b676","release":null},
+    {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0ba98b676","release":null},
     {"t":"T581","issue":581,"title":"T581: Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T582","issue":582,"title":"T582: An associated function's one-shot closure that takes a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b30eef56b","release":null},
     {"t":"T583","issue":583,"title":"T583: bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"8d3c12c8d","release":"0.3.61"},
@@ -591,6 +591,8 @@
     {"t":"T588","issue":588,"title":"T588: Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"17fb887dc","release":null},
     {"t":"T589","issue":589,"title":"T589: Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.61"},
     {"t":"T590","issue":590,"title":"T590: qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T591","issue":591,"title":"T591: solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T591","issue":591,"title":"T591: solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T592","issue":592,"title":"T592: color_palette: an impl header names a crate type without its declared parameter","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664","D680"],"commit":null,"release":null},
+    {"t":"T593","issue":593,"title":"T593: serde's derives on program types","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
