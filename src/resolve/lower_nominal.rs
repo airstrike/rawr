@@ -140,6 +140,11 @@ fn facade_trait_host(ty: &Ty, trait_name: &str) -> Option<&'static str> {
 /// iced's `tree::Tag::of::<T>()`, and the logical tag Rawr makes it.
 const TAG_OF: &str = "iced::advanced::widget::tree::Tag::of";
 const TAG_OF_LOGICAL: &str = "iced::advanced::widget::tree::Tag::__rawr_of";
+/// Why a crate call can't take the program's function that builds its
+/// message, as `Message::Changed` given to iced's `on_input`, here.
+#[cfg(feature = "rust-import")]
+const UNSUPPORTED_MESSAGE_FUNCTION: &str =
+    "passing the program's function that builds its message is not supported here in Rawr yet";
 /// The handle `tree.state` reads as, whose `downcast_ref::<T>()` and
 /// `downcast_mut::<T>()` reach a script widget's own State.
 const TREE_STATE: &str = "iced::advanced::widget::tree::Lent";
@@ -1861,11 +1866,15 @@ fn imported_surface_type(
             Int::U64 => Builtin::U64,
             Int::Usize => Builtin::Usize,
             Int::I128 | Int::U128 => {
-                return Err(Error::InvalidHostOperation {
-                    item: "<imported generic instance>".into(),
-                    reason: "an `i128` or a `u128` does not cross to Rust code in Rawr yet".into(),
+                return Err(unsupported_type_argument(
+                    if matches!(kind, Int::I128) {
+                        "i128"
+                    } else {
+                        "u128"
+                    }
+                    .into(),
                     operation,
-                });
+                ));
             }
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
@@ -1927,13 +1936,11 @@ fn imported_surface_type(
             }
         }
         Ty::Host { proof, arguments } => {
-            let identity = proof.definition.identity().imported().ok_or_else(|| {
-                Error::InvalidHostOperation {
-                    item: proof.definition.path().into(),
-                    reason: "generic imported instance resolved to a non-imported host type".into(),
-                    operation,
-                }
-            })?;
+            let identity = proof
+                .definition
+                .identity()
+                .imported()
+                .ok_or_else(|| unsupported_type_argument(ty.name(models), operation))?;
             let mut converted = imported.entries(arguments.len())?;
             for argument in arguments.iter() {
                 converted.push(imported_surface_type(
@@ -2051,18 +2058,72 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::value(),
             arguments: Box::default(),
         },
-        other => {
+        // A type still unknown here is one rustc can't infer either.
+        Ty::Unknown => {
             return Err(Error::InvalidHostOperation {
-                item: "<imported generic instance>".into(),
-                reason: format!(
-                    "imported generic argument `{}` is not one exact concrete surface type",
-                    other.name(models)
-                )
-                .into(),
+                item: "_".into(),
+                reason: "type annotations needed: a crate's type argument is unknown (E0282)"
+                    .into(),
                 operation,
             });
         }
+        other => return Err(unsupported_type_argument(other.name(models), operation)),
     })
+}
+
+/// A type the program gives a crate's generic item that Rawr can't pass
+/// to Rust yet, named as the program wrote it.
+#[cfg(feature = "rust-import")]
+fn unsupported_type_argument(ty: ImmutableString, operation: Span) -> Error {
+    Error::InvalidHostOperation {
+        reason: format!("`{ty}` is not supported in Rawr yet as a crate's type argument").into(),
+        item: ty,
+        operation,
+    }
+}
+
+/// A value of type `ty` that the crate item `item` takes or gives, which
+/// Rawr can't pass to Rust yet.
+fn unpassable(ty: ImmutableString, item: &str, operation: Span) -> Error {
+    Error::InvalidHostOperation {
+        item: item.into(),
+        reason: format!("a `{ty}` passed to or from it is not supported in Rawr yet").into(),
+        operation,
+    }
+}
+
+/// A method named without its call, as rustc says it (E0615).
+fn method_without_call(member: &str) -> ImmutableString {
+    format!("attempted to take value of method `{member}`; call it with `{member}(..)` (E0615)")
+        .into()
+}
+
+/// A crate item whose signature names a type, `ty` when it has a path, that
+/// the program's build doesn't reach. Overload selection tries each form
+/// and passes over one that fails this way.
+fn unnamed_signature_type(item: &str, ty: Option<&str>) -> Error {
+    Error::InvalidHostOperation {
+        item: item.into(),
+        reason: match ty {
+            Some(ty) => format!("its signature names `{ty}`, which is not supported in Rawr yet"),
+            None => "its signature names a type that is not supported in Rawr yet".into(),
+        }
+        .into(),
+        operation: Span::NONE,
+    }
+}
+
+/// What the program does with a crate's struct or enum, in Rust's words.
+#[cfg(feature = "rust-import")]
+const fn structural_use(kind: crate::host::structural::Kind) -> &'static str {
+    use crate::host::structural::Kind;
+    match kind {
+        Kind::Constructor => "constructing it",
+        Kind::Field { .. } => "reading this field",
+        Kind::Variant => "constructing this variant",
+        Kind::Match => "matching on this variant",
+        Kind::Store => "assigning to this field",
+    }
 }
 
 /// The surface type an imported view type's argument names for one of the
@@ -16363,7 +16424,8 @@ impl<'a> Parser<'a> {
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| Error::InvalidHostOperation {
                         item: path.clone(),
-                        reason: "structural instance has an unresolved type argument".into(),
+                        reason: "type annotations needed: a type argument of it is unknown (E0282)"
+                            .into(),
                         operation: span,
                     })?;
                 let instance =
@@ -16377,8 +16439,10 @@ impl<'a> Parser<'a> {
                         let error = Error::InvalidHostOperation {
                             item: path.clone(),
                             reason: format!(
-                                "imported selector {selector:?} has no authenticated generated structural adapter"
-                            ).into(),
+                                "{} is not supported in Rawr yet",
+                                structural_use(operation.kind)
+                            )
+                            .into(),
                             operation: span,
                         };
                         if let Some(site) = self.native_site() {
@@ -16386,14 +16450,11 @@ impl<'a> Parser<'a> {
                         }
                         error
                     })?;
-                if definition.kind() != operation.kind {
-                    return Err(Error::InvalidHostOperation {
-                        item: path,
-                        reason: "generated structural adapter kind differs from compiler demand"
-                            .into(),
-                        operation: span,
-                    });
-                }
+                assert_eq!(
+                    definition.kind(),
+                    operation.kind,
+                    "the structural adapter found for an operation is of its kind"
+                );
                 let operands = operation
                     .operands
                     .iter()
@@ -16412,12 +16473,7 @@ impl<'a> Parser<'a> {
                     operation.receiver,
                     span,
                 )
-                .ok_or_else(|| Error::InvalidHostOperation {
-                    item: path,
-                    reason: "generated structural adapter operand cardinality differs from compiler demand"
-                        .into(),
-                    operation: span,
-                })?;
+                .expect("a structural adapter takes the operands its operation was generated for");
                 ExecutableOp::Imported { proof }
             }
             Op::Symbolic { value, captures } => ExecutableOp::Symbolic { value, captures },
@@ -16517,8 +16573,8 @@ impl<'a> Parser<'a> {
             } => ExecutableOp::Event {
                 proof: Box::new(crate::host::runtime::event::Site::selected(
                     key,
-                    self.proven_type(&source, "private event source", span)?,
-                    self.proven_type(&target, "private event target", span)?,
+                    self.proven_type(&source, "iced::Element", span)?,
+                    self.proven_type(&target, "iced::Element", span)?,
                     span,
                 )),
             },
@@ -16560,7 +16616,7 @@ impl<'a> Parser<'a> {
                     self.proven_type(&target, "native sequence constructor", span)
                         .ok()
                 });
-                ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof)?)
+                ExecutableOp::Sequence(sequence::Constructor::checked(concrete.as_ref(), proof))
             }
             Op::Prelude(op) => ExecutableOp::Prelude(op),
             Op::Collect { target } => {
@@ -16804,42 +16860,25 @@ impl<'a> Parser<'a> {
                     .collect::<Result<_, _>>()?,
             ),
             Ty::Keyed(..) | Ty::Reverse(_) => {
-                return Err(Error::InvalidHostOperation {
-                    item: operation.into(),
-                    reason: "maps and sets do not cross into the host".into(),
-                    operation: span,
-                });
+                return Err(unpassable(ty.name(&self.models), operation, span));
             }
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
-            Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } => {
+            Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: "a closure or `fn` pointer here needs an exact host callable".into(),
-                    operation: span,
-                });
-            }
-            Ty::Callable { item: None, .. } => {
-                return Err(Error::InvalidHostOperation {
-                    item: operation.into(),
-                    reason: "symbolic callable has no exact resolved item proof".into(),
+                    reason: "passing a closure or `fn` pointer to it here is not supported in \
+                             Rawr yet"
+                        .into(),
                     operation: span,
                 });
             }
             #[cfg(feature = "rust-import")]
-            Ty::ImportedFunctionItem { .. } => {
+            Ty::ImportedFunctionItem { .. } | Ty::ProfileMapper { .. } => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: "compile-time imported function item entered runtime type proof".into(),
-                    operation: span,
-                });
-            }
-            #[cfg(feature = "rust-import")]
-            Ty::ProfileMapper { .. } => {
-                return Err(Error::InvalidHostOperation {
-                    item: operation.into(),
-                    reason: "profile mapper entered runtime type proof".into(),
+                    reason: "passing a function to it here is not supported in Rawr yet".into(),
                     operation: span,
                 });
             }
@@ -16932,44 +16971,20 @@ impl<'a> Parser<'a> {
                 } else {
                     #[cfg(feature = "rust-import")]
                     {
-                        let identity = definition.identity().imported().ok_or_else(|| {
-                            Error::InvalidHostOperation {
-                                item: operation.into(),
-                                reason: format!(
-                                    "symbolic host type `{}` has neither native nor imported identity",
-                                    definition.path()
-                                )
-                                .into(),
-                                operation: span,
-                            }
-                        })?;
-                        let owner =
-                            proof
-                                .owner
-                                .clone()
-                                .ok_or_else(|| Error::InvalidHostOperation {
-                                    item: operation.into(),
-                                    reason: format!(
-                                        "symbolic imported type `{}` has no originating proof",
-                                        definition.path()
-                                    )
-                                    .into(),
-                                    operation: span,
-                                })?;
+                        let unpassable =
+                            || unpassable(host_type_name(&proof, &self.models), operation, span);
+                        let identity = definition.identity().imported().ok_or_else(unpassable)?;
+                        let owner = proof.owner.clone().ok_or_else(unpassable)?;
                         let path = proof.alias.as_ref().unwrap_or(definition).path().into();
                         intrinsic::Type::imported(path, *identity, arguments, owner)
                     }
                     #[cfg(not(feature = "rust-import"))]
                     {
-                        return Err(Error::InvalidHostOperation {
-                            item: operation.into(),
-                            reason: format!(
-                                "symbolic host type `{}` has no native runtime identity",
-                                definition.path()
-                            )
-                            .into(),
-                            operation: span,
-                        });
+                        return Err(unpassable(
+                            host_type_name(&proof, &self.models),
+                            operation,
+                            span,
+                        ));
                     }
                 }
             }
@@ -16982,22 +16997,17 @@ impl<'a> Parser<'a> {
             {
                 intrinsic::Type::witness_parameter(index)
             }
-            Ty::Never
-            | Ty::Param(_)
-            | Ty::Projection(..)
-            | Ty::Boxed(..)
-            | Ty::Dyn(..)
-            | Ty::Infer(_)
-            | Ty::Unknown => {
+            Ty::Infer(_) | Ty::Unknown => {
                 return Err(Error::InvalidHostOperation {
                     item: operation.into(),
-                    reason: format!(
-                        "cannot infer a concrete intrinsic type from {}",
-                        ty.name(&self.models)
-                    )
-                    .into(),
+                    reason: "type annotations needed: the type of a value it takes or gives is \
+                             unknown (E0282)"
+                        .into(),
                     operation: span,
                 });
+            }
+            Ty::Never | Ty::Param(_) | Ty::Projection(..) | Ty::Boxed(..) | Ty::Dyn(..) => {
+                return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })
     }
@@ -17285,13 +17295,9 @@ impl<'a> Parser<'a> {
             }
         }
         let arguments = &*arguments;
-        let Some(first) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: "<host item>".into(),
-                reason: "registered host item has no declarations".into(),
-                operation: call,
-            });
-        };
+        let first = items
+            .first()
+            .expect("a host item has at least one declaration");
         // A script function or closure fills an imported item's callable
         // parameter, not a type parameter another form of it takes a value
         // at: `.theme(App::theme)` takes the form of iced's `impl
@@ -17447,13 +17453,8 @@ impl<'a> Parser<'a> {
                 })
             }
             1 => {
-                let Some((item, signature, patch)) = matched else {
-                    return Err(Error::InvalidHostOperation {
-                        item: first.path().into(),
-                        reason: "matching overload did not retain its exact declaration".into(),
-                        operation: call,
-                    });
-                };
+                let (item, signature, patch) =
+                    matched.expect("the one form that matched is kept as the match");
                 self.inference.apply(patch);
                 Ok((item, signature))
             }
@@ -18473,13 +18474,12 @@ impl<'a> Parser<'a> {
                 .clone(),
             Shape::Registered { path, arguments } => {
                 let path = path.to_string();
-                let definition = self.models.host.type_(&path).cloned().ok_or_else(|| {
-                    Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!("registered type `{path}` is no longer installed").into(),
-                        operation: Span::NONE,
-                    }
-                })?;
+                let definition = self
+                    .models
+                    .host
+                    .type_(&path)
+                    .cloned()
+                    .ok_or_else(|| unnamed_signature_type(operation, Some(&*path)))?;
                 let alias = definition.identity().imported().map(|_| definition.clone());
                 Ty::Host {
                     proof: HostTyProof::new(
@@ -18512,23 +18512,12 @@ impl<'a> Parser<'a> {
                 identity,
                 arguments,
             } => {
-                let selected_owner = owner.ok_or_else(|| Error::InvalidHostOperation {
-                    item: operation.into(),
-                    reason: "imported type has no originating proof".into(),
-                    operation: Span::NONE,
-                })?;
-                let imported = self
-                    .models
-                    .host
-                    .imported_type(identity, selected_owner, originating)
-                    .ok_or_else(|| Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!(
-                            "imported type identity `{identity:?}` is no longer installed"
-                        )
-                        .into(),
-                        operation: Span::NONE,
-                    })?;
+                // Only a crate's own items name its types by identity, and
+                // overload selection tries every form, so a form naming a
+                // type this program doesn't reach is one that doesn't fit.
+                let imported = owner
+                    .and_then(|owner| self.models.host.imported_type(identity, owner, originating))
+                    .ok_or_else(|| unnamed_signature_type(operation, None))?;
                 let definition = imported.definition.clone();
                 let alias = imported.alias.cloned();
                 let owner = imported.owner.cloned();
@@ -18552,23 +18541,17 @@ impl<'a> Parser<'a> {
             Shape::External { export, arguments } => {
                 let writer = owner;
                 let path = export.path();
-                let definition = self.models.host.type_(&path).cloned().ok_or_else(|| {
-                    Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!("exported type `{path}` is no longer installed").into(),
-                        operation: Span::NONE,
-                    }
-                })?;
+                let definition = self
+                    .models
+                    .host
+                    .type_(&path)
+                    .cloned()
+                    .ok_or_else(|| unnamed_signature_type(operation, Some(&*path)))?;
                 let owner = self.models.host.type_owner(&path).cloned();
                 if definition.contract() != *export.contract()
                     || owner.as_ref() != Some(&export.dependency())
                 {
-                    return Err(Error::InvalidHostOperation {
-                        item: operation.into(),
-                        reason: format!("exported type `{path}` no longer has its exact proof")
-                            .into(),
-                        operation: Span::NONE,
-                    });
+                    return Err(unnamed_signature_type(operation, Some(&*path)));
                 }
                 Ty::Host {
                     proof: HostTyProof::new(
@@ -18723,7 +18706,7 @@ impl<'a> Parser<'a> {
     ) -> Result<String, Error> {
         let owner = owner.ok_or_else(|| Error::InvalidHostOperation {
             item: item.path().into(),
-            reason: "item is not owned by installed validated bindings".into(),
+            reason: "calling it by this path is not supported in Rawr yet".into(),
             operation: call,
         })?;
         let facade = owner.fingerprint().clone();
@@ -18964,13 +18947,9 @@ impl<'a> Parser<'a> {
         } else {
             items
         };
-        let Some(item) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: "<host item>".into(),
-                reason: "registered host function has no declarations".into(),
-                operation: name_span,
-            });
-        };
+        let item = items
+            .first()
+            .expect("a host function has at least one declaration");
         if !matches!(
             item.kind(),
             crate::host::item::Kind::Function
@@ -19058,7 +19037,7 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: path.into(),
-                    reason: "the bindings lack this item".into(),
+                    reason: "this call needs it, which is not supported in Rawr yet".into(),
                     operation: call,
                 })?;
             let owner = this.models.item_owner(path).cloned();
@@ -19283,7 +19262,7 @@ impl<'a> Parser<'a> {
                 .map(<[_]>::to_vec)
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: TAG_OF.into(),
-                    reason: "the bindings lack the logical tag".into(),
+                    reason: "it is not supported in Rawr yet with this version of iced".into(),
                     operation: call,
                 })?;
             let owner = self.models.item_owner(TAG_OF_LOGICAL).cloned();
@@ -19358,7 +19337,7 @@ impl<'a> Parser<'a> {
             }
         }
         let output = self.inference.resolve(&signature.output);
-        self.reject_invocation(&output, call, "constructed or returned by a host function")?;
+        self.reject_invocation(&output, call, "returned by a function")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
@@ -19450,7 +19429,7 @@ impl<'a> Parser<'a> {
         let seal =
             crate::digest::event_mapper(&mapper).map_err(|_| Error::InvalidHostOperation {
                 item: invocation.path().into(),
-                reason: "profile event mapper has no stable symbolic identity".into(),
+                reason: UNSUPPORTED_MESSAGE_FUNCTION.into(),
                 operation: argument.span,
             })?;
         let message = Ty::ProfileMessage {
@@ -19480,25 +19459,22 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         expression: Span,
     ) -> Result<ParsedExpr, Error> {
+        // Both callers name one crate function, as Rust has no overloads.
         let [item] = items.as_ref() else {
-            return Err(Error::InvalidHostOperation {
-                item: "<imported function item>".into(),
-                reason: "compile-time imported function item must select exactly one declaration"
-                    .into(),
-                operation: expression,
-            });
+            unreachable!("a crate function named as a value has one declaration")
         };
-        if owner.is_none()
-            || item.imported_identity().is_none()
-            || !matches!(
-                item.kind(),
-                crate::host::item::Kind::Function | crate::host::item::Kind::AssociatedFunction
-            )
-        {
+        assert!(
+            item.imported_identity().is_some()
+                && matches!(
+                    item.kind(),
+                    crate::host::item::Kind::Function | crate::host::item::Kind::AssociatedFunction
+                ),
+            "only a crate function is named as a function item"
+        );
+        if owner.is_none() {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "only one installed public imported function may occupy a static function-item formal"
-                    .into(),
+                reason: "naming it as a value by this path is not supported in Rawr yet".into(),
                 operation: expression,
             });
         }
@@ -19785,23 +19761,20 @@ impl<'a> Parser<'a> {
         ) {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "item requires call syntax".into(),
+                reason: format!(
+                    "`{name}` is not a value; call it with `{name}(..)`",
+                    name = item.path_ref().name()
+                )
+                .into(),
                 operation: name_span,
             });
         }
         let signature = self.instantiate_host_signature(&item, None, None)?;
-        if !signature.inputs.is_empty() {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "registered value unexpectedly declares input parameters".into(),
-                operation: name_span,
-            });
-        }
-        self.reject_invocation(
-            &signature.output,
-            name_span,
-            "constructed or loaded as a host value",
-        )?;
+        assert!(
+            signature.inputs.is_empty(),
+            "a host value or constant takes no inputs"
+        );
+        self.reject_invocation(&signature.output, name_span, "read as a constant")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let helper = self.push_intrinsic(
@@ -19831,13 +19804,9 @@ impl<'a> Parser<'a> {
         owner: Option<crate::host::facade::Dependency>,
         name_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let Some(item) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: "<host item>".into(),
-                reason: "registered host macro has no declarations".into(),
-                operation: name_span,
-            });
-        };
+        let item = items
+            .first()
+            .expect("a host macro has at least one declaration");
         // A dependency's `macro_rules!` macro expands from its source. A
         // facade's own macro of the name wins on the facade path (D594.3).
         if !items
@@ -19966,18 +19935,15 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let (item, signature) =
             self.select_host_signature(items, None, &mut arguments, true, call)?;
+        // Registration refuses any other (`InvalidIntrinsicMacroSignature`).
         let [expected] = signature.inputs.as_slice() else {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: "intrinsic list macro must have one repeated input type".into(),
-                operation: call,
-            });
+            unreachable!("an intrinsic list macro declares one repeated input")
         };
         for argument in &mut arguments {
             self.coerce_expr(expected, argument)?;
         }
         let output = self.inference.resolve(&signature.output);
-        self.reject_invocation(&output, call, "returned by an intrinsic macro")?;
+        self.reject_invocation(&output, call, "returned by a macro")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let helper = self.push_intrinsic(
@@ -20079,9 +20045,11 @@ impl<'a> Parser<'a> {
             return Err(Error::InvalidHostOperation {
                 item: path.into(),
                 reason: format!(
-                    "imported method applicability is unsupported here: {} distinct candidates require call-specific proof; Rust ambiguity has not been established",
+                    "calling `{member}` here, where {} impls of the crate provide it, is not \
+                     supported in Rawr yet",
                     family.len(),
-                ).into(),
+                )
+                .into(),
                 operation: member_span,
             });
         }
@@ -20177,13 +20145,9 @@ impl<'a> Parser<'a> {
             return Err(error);
         };
         let owner = self.models.item_owner(&path).cloned();
-        let Some(item) = items.first() else {
-            return Err(Error::InvalidHostOperation {
-                item: path.into(),
-                reason: "registered host method has no declarations".into(),
-                operation: member_span,
-            });
-        };
+        let item = items
+            .first()
+            .expect("a host method has at least one declaration");
         if items.iter().any(|item| {
             item.kind() != crate::host::item::Kind::Method
                 && item.kind() != crate::host::item::Kind::IntrinsicMethod
@@ -20202,7 +20166,12 @@ impl<'a> Parser<'a> {
         {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "invocation-scoped operations require an exact mutable receiver".into(),
+                reason: format!(
+                    "calling `{member}` on the `{}` a callback receives is not supported in \
+                     Rawr yet",
+                    definition.path()
+                )
+                .into(),
                 operation: member_span,
             });
         }
@@ -20258,7 +20227,7 @@ impl<'a> Parser<'a> {
         {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "method requires an argument list".into(),
+                reason: method_without_call(&member),
                 operation: member_span,
             });
         }
@@ -20692,19 +20661,22 @@ impl<'a> Parser<'a> {
                 operation: member_span,
             })
         };
-        let identity = definition
-            .identity()
-            .imported()
-            .ok_or_else(|| unsupported("the receiver is not an imported type"))?;
+        let identity = definition.identity().imported().ok_or_else(|| {
+            unsupported(&format!(
+                "no method named `{member}` found for `{}` (E0599)",
+                definition.path()
+            ))
+        })?;
         if !definition.parameters().is_empty() {
-            return Err(unsupported(
-                "a proved imported call on a generic receiver type is not supported yet",
-            ));
+            return Err(unsupported(&format!(
+                "calling `{member}`, which a trait impl provides, on a generic type is not \
+                 supported in Rawr yet"
+            )));
         }
         if self.pending_arguments.is_none()
             && !matches!(self.peek(), Token::LeftParen | Token::Unit)
         {
-            return Err(unsupported("method requires an argument list"));
+            return Err(unsupported(&method_without_call(&member)));
         }
         let (arguments, end) = self.parse_call_arguments("host method arguments")?;
         let call_span = span(receiver.span.start(), end);
@@ -20712,7 +20684,13 @@ impl<'a> Parser<'a> {
         for argument in &arguments {
             types.push(
                 instance_surface_type(&self.inference, &self.models, &argument.ty).ok_or_else(
-                    || unsupported("an argument's type does not cross to Rust code as written"),
+                    || {
+                        unsupported(&format!(
+                            "a `{}` passed to `{member}`, which a trait impl provides, is not \
+                             supported in Rawr yet",
+                            argument.ty.name(&self.models)
+                        ))
+                    },
                 )?,
             );
         }
@@ -20744,7 +20722,7 @@ impl<'a> Parser<'a> {
             return Err(Error::ImportedApplicationRequired {
                 item: path.into(),
                 call: serde_json::to_vec(&call)
-                    .map_err(|_| unsupported("the call could not be encoded"))?
+                    .expect("an application call encodes as JSON")
                     .into_boxed_slice(),
                 miss: miss.map(Box::new),
                 operation: member_span,
@@ -20861,7 +20839,13 @@ impl<'a> Parser<'a> {
                 None => {
                     return Err(Error::InvalidHostOperation {
                         item: item.path().into(),
-                        reason: "associated functions require `Type::function(...)` syntax".into(),
+                        reason: format!(
+                            "`{name}` is an associated function, not a method; call it as \
+                             `{path}(..)` (E0599)",
+                            name = item.path_ref().name(),
+                            path = item.path()
+                        )
+                        .into(),
                         operation: member_span,
                     });
                 }
@@ -20905,7 +20889,7 @@ impl<'a> Parser<'a> {
             self.move_local(argument)?;
         }
         let output = self.inference.resolve(&signature.output);
-        self.reject_invocation(&output, call, "returned from its scoped receiver operation")?;
+        self.reject_invocation(&output, call, "returned by a method")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
         let ty = facade_output(&item, &output);
@@ -21324,7 +21308,8 @@ impl<'a> Parser<'a> {
         Some(Error::InvalidHostOperation {
             item: item.into(),
             reason: format!(
-                "semantic imported value has no originating alias for `{member}`; choose one of: {}",
+                "`{member}` is reachable from this value's type by several paths; name it by \
+                 one of: {}",
                 paths.join(", ")
             )
             .into(),
@@ -21697,7 +21682,7 @@ impl<'a> Parser<'a> {
                 }),
                 None => Err(Error::InvalidHostOperation {
                     item: item.path().into(),
-                    reason: "mutable receiver binding could not be proven".into(),
+                    reason: format!("cannot borrow `{root}` as mutable (E0596)").into(),
                     operation,
                 }),
             };
@@ -21705,20 +21690,24 @@ impl<'a> Parser<'a> {
         let Some(name) = variable_name(receiver.source.as_str()) else {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "mutable imported methods require a direct mutable binding".into(),
+                reason: "calling a `&mut self` method on a value that isn't a `let mut` binding \
+                         is not supported in Rawr yet"
+                    .into(),
                 operation,
             });
         };
-        if self
-            .bindings
-            .get(name.as_str())
-            .is_some_and(|binding| binding.mutable && binding.available)
-        {
-            return Ok(());
-        }
+        let reason = match self.bindings.get(name.as_str()) {
+            Some(binding) if binding.mutable && binding.available => return Ok(()),
+            Some(binding) if !binding.available => {
+                format!("borrow of moved value: `{name}` (E0382)")
+            }
+            _ => format!(
+                "cannot borrow `{name}` as mutable, as it is not declared as mutable (E0596)"
+            ),
+        };
         Err(Error::InvalidHostOperation {
             item: item.path().into(),
-            reason: format!("mutable imported method requires mutable binding `{name}`").into(),
+            reason: reason.into(),
             operation,
         })
     }
@@ -21741,7 +21730,7 @@ impl<'a> Parser<'a> {
         if !binding.available {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: format!("owned imported receiver `{name}` was already moved").into(),
+                reason: format!("use of moved value: `{name}` (E0382)").into(),
                 operation,
             });
         }
@@ -22281,7 +22270,7 @@ impl<'a> Parser<'a> {
         if !binding.available {
             return Err(Error::InvalidHostOperation {
                 item: operation.into(),
-                reason: format!("owned imported value `{name}` was already moved").into(),
+                reason: format!("use of moved value: `{name}` (E0382)").into(),
                 operation: span,
             });
         }
@@ -22984,7 +22973,7 @@ impl<'a> Parser<'a> {
             return self.consume_terminator(start).map(|_| ());
         }
 
-        self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
+        self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
 
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
@@ -23725,7 +23714,7 @@ impl<'a> Parser<'a> {
             self.consume_terminator(start)?;
             return self.bind_let_pattern(start, &syntax, value, Some(matched), None, end, pending);
         }
-        self.reject_invocation(&value.ty, value.span, "retained in a local binding")?;
+        self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
@@ -24347,7 +24336,7 @@ impl<'a> Parser<'a> {
             self.flow().diverge();
         }
 
-        self.reject_invocation(&value.ty, value.span, "used outside a direct receiver call")?;
+        self.reject_invocation(&value.ty, value.span, "used except to call its methods")?;
 
         if assignment_token(&self.peek()) {
             let (rendered, end) = self.parse_assignment(value)?;
@@ -24477,7 +24466,9 @@ impl<'a> Parser<'a> {
                 },
                 BindingKind::Invocation => Error::InvalidHostOperation {
                     item: lvalue.ty().name(&self.models),
-                    reason: "invocation-scoped authority cannot be assigned".into(),
+                    reason:
+                        "assigning to the parameter that receives it is not supported in Rawr yet"
+                            .into(),
                     operation: value.span,
                 },
             });
@@ -28920,11 +28911,7 @@ impl<'a> Parser<'a> {
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } =
             variant.imported_identity()
         else {
-            return Err(Error::InvalidHostOperation {
-                item: path,
-                reason: "imported enum variant lost its exact form".into(),
-                operation: at,
-            });
+            unreachable!("an enum variant's selector names an enum variant")
         };
         let field_at = |index: usize| {
             let mut field = inner.clone().surrounded("(", ")");
@@ -37256,8 +37243,12 @@ impl<'a> Parser<'a> {
                     return self.parse_closure(Token::Pipe, name_span, false);
                 }
                 return Err(Error::InvalidHostOperation {
+                    reason: format!(
+                        "`{}` has several forms here; call it with `(..)` to pick one",
+                        binding.qualified
+                    )
+                    .into(),
                     item: binding.qualified,
-                    reason: "overloaded host items require call syntax".into(),
                     operation: name_span,
                 });
             };
@@ -42182,11 +42173,7 @@ impl<'a> Parser<'a> {
         self.mutable_borrow = borrow;
         let (mut arguments, end) = arguments?;
         for argument in &arguments {
-            self.reject_invocation(
-                &argument.ty,
-                argument.span,
-                "passed to an ordinary or unresolved function",
-            )?;
+            self.reject_invocation(&argument.ty, argument.span, "passed to a function")?;
         }
         let mut witnesses = Vec::new();
         let output = if let Some(function) = function {
@@ -43239,7 +43226,8 @@ impl<'a> Parser<'a> {
                 .imported_constructor()
                 .ok_or_else(|| Error::InvalidHostOperation {
                     item: path.clone(),
-                    reason: "imported struct has no exact constructor selector".into(),
+                    reason: "constructing it with a struct literal is not supported in Rawr yet"
+                        .into(),
                     operation: construction,
                 })?;
         let output = Ty::Host {
@@ -43449,7 +43437,10 @@ impl<'a> Parser<'a> {
                 return Err(Error::InvalidMethodCall {
                     owner: definition.owner_name().into(),
                     method: definition.name().into(),
-                    reason: "mutable methods require a direct mutable binding in this phase".into(),
+                    reason:
+                        "calling a `&mut self` method on a value that isn't a `let mut` binding \
+                             is not supported in Rawr yet"
+                            .into(),
                     call: operation,
                 });
             };
@@ -43459,7 +43450,7 @@ impl<'a> Parser<'a> {
             return Err(Error::InvalidMethodCall {
                 owner: definition.owner_name().into(),
                 method: definition.name().into(),
-                reason: "mutable receiver binding could not be proven".into(),
+                reason: format!("cannot borrow `{name}` as mutable (E0596)").into(),
                 call: operation,
             });
         };
@@ -43485,50 +43476,37 @@ impl<'a> Parser<'a> {
         value: &ParsedExpr,
         operation: Span,
     ) -> Result<(), Error> {
+        // A value a callback is lent, as the `&mut Frame` of a canvas's
+        // `draw`, is used only through the parameter that receives it.
+        let lent_only = |ty: &Ty| Error::InvalidHostOperation {
+            item: ty.name(&self.models),
+            reason: "it is lent only to the callback that receives it; calling its methods \
+                     except through that `&mut` parameter is not supported in Rawr yet"
+                .into(),
+            operation,
+        };
         let Ty::Reference {
             mutable: true,
             target,
         } = self.inference.resolve(&value.ty)
         else {
-            return Err(Error::InvalidHostOperation {
-                item: value.ty.name(&self.models),
-                reason: "scoped authority requires its exact mutable formal".into(),
-                operation,
-            });
+            return Err(lent_only(&value.ty));
         };
-        let Some(definition) = target.invocation() else {
-            return Err(Error::InvalidHostOperation {
-                item: target.name(&self.models),
-                reason: "mutable receiver is not authenticated invocation authority".into(),
-                operation,
-            });
-        };
-        let Some(name) = variable_name(value.source.as_str()) else {
-            return Err(Error::InvalidHostOperation {
-                item: definition.path().into(),
-                reason: "invocation-scoped authority may be used only as its direct current formal"
-                    .into(),
-                operation,
-            });
-        };
-        let Some(binding) = self.bindings.get(name.as_str()) else {
-            return Err(Error::InvalidHostOperation {
-                item: definition.path().into(),
-                reason: "invocation-scoped receiver has no exact checked formal".into(),
-                operation,
-            });
-        };
-        if matches!(binding.kind, BindingKind::Invocation)
-            && binding.mutable
-            && binding.ty == value.ty
-        {
-            return Ok(());
+        if target.invocation().is_none() {
+            return Err(lent_only(&target));
         }
-        Err(Error::InvalidHostOperation {
-            item: definition.path().into(),
-            reason: "invocation-scoped authority may not be aliased or retargeted".into(),
-            operation,
-        })
+        let lent = variable_name(value.source.as_str())
+            .and_then(|name| self.bindings.get(name.as_str()))
+            .is_some_and(|binding| {
+                matches!(binding.kind, BindingKind::Invocation)
+                    && binding.mutable
+                    && binding.ty == value.ty
+            });
+        if lent {
+            Ok(())
+        } else {
+            Err(lent_only(&target))
+        }
     }
 
     fn reject_invocation(&self, ty: &Ty, operation: Span, action: &str) -> Result<(), Error> {
@@ -43538,7 +43516,12 @@ impl<'a> Parser<'a> {
         };
         Err(Error::InvalidHostOperation {
             item: definition.path().into(),
-            reason: format!("invocation-scoped authority cannot be {action}").into(),
+            reason: format!(
+                "a `{}` {action} is not supported in Rawr yet; it is lent only to the callback \
+                 that receives it",
+                definition.path()
+            )
+            .into(),
             operation,
         })
     }
@@ -44877,14 +44860,9 @@ impl<'a> Parser<'a> {
         if let Some((definition, _)) = &imported_nominal_owner
             && definition.parameters().is_empty()
         {
-            let selector =
-                definition
-                    .imported_declaration()
-                    .ok_or_else(|| Error::InvalidHostOperation {
-                        item: owner.clone(),
-                        reason: "imported type has no exact declaration selector".into(),
-                        operation: owner_span,
-                    })?;
+            let selector = definition
+                .imported_declaration()
+                .expect("the owner was kept only as a crate's type");
             self.push_imported_op(&owner, &selector, None, owner_span)?;
         }
 
@@ -45500,11 +45478,7 @@ impl<'a> Parser<'a> {
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } =
             variant.imported_identity()
         else {
-            return Err(Error::InvalidHostOperation {
-                item: path,
-                reason: "imported enum variant lost its exact constructor form".into(),
-                operation: member_span,
-            });
+            unreachable!("an enum variant's selector names an enum variant")
         };
         let selected_owner = self.models.host.type_owner(&path).cloned();
         let (mut arguments, end) = match form {
@@ -46577,14 +46551,8 @@ impl<'a> Parser<'a> {
                 if let Some(binding) = self.models.import(name).cloned()
                     && let item::Import::Type { definition, owner } = binding.target
                     && definition.parameters().is_empty()
+                    && let Some(selector) = definition.imported_declaration()
                 {
-                    let selector = definition.imported_declaration().ok_or_else(|| {
-                        Error::InvalidHostOperation {
-                            item: binding.qualified.clone(),
-                            reason: "imported type has no exact declaration selector".into(),
-                            operation: span,
-                        }
-                    })?;
                     self.push_imported_op(&binding.qualified, &selector, None, span)?;
                     return Ok(Ty::Host {
                         proof: HostTyProof::new(definition.clone(), Some(definition), owner),
@@ -46648,11 +46616,7 @@ impl<'a> Parser<'a> {
         expected: &Ty,
         value: &mut ParsedExpr,
     ) -> Result<Option<String>, Error> {
-        self.reject_invocation(
-            &value.ty,
-            value.span,
-            "coerced, passed, returned, or stored outside its direct receiver operation",
-        )?;
+        self.reject_invocation(&value.ty, value.span, "used except to call its methods")?;
         let mut source = self.inference.resolve(&value.ty);
         let target = self.inference.resolve(expected);
         // A named function passed where a host callable is expected.
@@ -47265,9 +47229,11 @@ impl<'a> Parser<'a> {
         let Some(element) = self.models.host.type_("iced::Element") else {
             return Ok(None);
         };
-        let element_owner = self.models.host.type_owner("iced::Element").cloned();
+        let Some(element_owner) = self.models.host.type_owner("iced::Element").cloned() else {
+            return Ok(None);
+        };
         if target_proof.definition.contract() != element.contract()
-            || target_proof.owner.as_ref() != element_owner.as_ref()
+            || target_proof.owner.as_ref() != Some(&element_owner)
             || element.parameters().len() != 1
         {
             return Ok(None);
@@ -47279,17 +47245,9 @@ impl<'a> Parser<'a> {
                 source_proof
                     .owner
                     .clone()
-                    .ok_or_else(|| Error::InvalidHostOperation {
-                        item: "event conversion".into(),
-                        reason: "source owner missing".into(),
-                        operation: Span::NONE,
-                    })?,
+                    .expect("the guard above keeps only a source with its crate"),
                 source_proof.definition.contract(),
-                element_owner.ok_or_else(|| Error::InvalidHostOperation {
-                    item: "event conversion".into(),
-                    reason: "target owner missing".into(),
-                    operation: Span::NONE,
-                })?,
+                element_owner,
                 target_proof.definition.contract(),
                 *seal,
             )))
@@ -48554,11 +48512,7 @@ impl<'a> Parser<'a> {
         let result = self
             .imported
             .as_mut()
-            .ok_or_else(|| Error::InvalidHostOperation {
-                item: "<imported allocation>".into(),
-                reason: "imported lowering has no cumulative allocation proof".into(),
-                operation: Span::NONE,
-            })?
+            .expect("only an imported compilation reserves imported uses")
             .allocation
             .retain_checked(Some(1), retained);
         if let Err(error) = result {
@@ -48700,48 +48654,29 @@ impl<'a> Parser<'a> {
         output: &Ty,
         span: Span,
     ) -> Result<(), Error> {
-        let resolved = self.inference.resolve(output);
-        let Ty::Script(..) = mapper_output else {
-            return Err(Error::InvalidHostOperation {
+        // The call gives a crate type of the message the program's function
+        // builds, as iced's `TextInput<Message>` from `on_input`; any other
+        // shape is a use Rawr can't carry yet.
+        let carried = matches!(mapper_output, Ty::Script(..))
+            && matches!(
+                self.inference.resolve(output),
+                Ty::Host { proof, arguments }
+                    if proof.owner.as_ref() == Some(owner)
+                        && matches!(
+                            arguments.as_ref(),
+                            [Ty::ProfileMessage { script, seal, .. }]
+                                if script.as_ref() == mapper_output && *seal != [0; 16]
+                        )
+            );
+        if carried {
+            Ok(())
+        } else {
+            Err(Error::InvalidHostOperation {
                 item: invocation.path().into(),
-                reason: "profile event mapper must return one exact script message type".into(),
+                reason: UNSUPPORTED_MESSAGE_FUNCTION.into(),
                 operation: span,
-            });
-        };
-        let Ty::Host { proof, arguments } = resolved else {
-            return Err(Error::InvalidHostOperation {
-                item: invocation.path().into(),
-                reason: "profile event mapper invocation must return one imported nominal type"
-                    .into(),
-                operation: span,
-            });
-        };
-        let [message] = arguments.as_ref() else {
-            return Err(Error::InvalidHostOperation {
-                item: invocation.path().into(),
-                reason: "profile event mapper invocation result has no exact Message argument"
-                    .into(),
-                operation: span,
-            });
-        };
-        let Ty::ProfileMessage { script, seal, .. } = message else {
-            return Err(Error::InvalidHostOperation {
-                item: invocation.path().into(),
-                reason: "profile event mapper did not seal the invocation Message argument".into(),
-                operation: span,
-            });
-        };
-        if proof.owner.as_ref() != Some(owner)
-            || script.as_ref() != mapper_output
-            || *seal == [0; 16]
-        {
-            return Err(Error::InvalidHostOperation {
-                item: invocation.path().into(),
-                reason: "profile event mapper does not close the invocation result Message".into(),
-                operation: span,
-            });
+            })
         }
-        Ok(())
     }
 
     #[cfg(feature = "rust-import")]
@@ -48847,11 +48782,7 @@ impl<'a> Parser<'a> {
                 *argument_span,
             )?;
             mappers.push(ImportedMapperUse {
-                position: u32::try_from(position).map_err(|_| Error::InvalidHostOperation {
-                    item: item.path().into(),
-                    reason: "profile mapper position exceeds the bounded index".into(),
-                    operation: span,
-                })?,
+                position: u32::try_from(position).expect("a call's argument count fits in u32"),
                 seal,
                 span: *argument_span,
             });
@@ -48859,7 +48790,8 @@ impl<'a> Parser<'a> {
         if mappers.len() > 1 {
             return Err(Error::InvalidHostOperation {
                 item: item.path().into(),
-                reason: "one imported invocation may consume at most one profile event mapper"
+                reason: "passing more than one of the program's functions that build its \
+                         message to one call is not supported in Rawr yet"
                     .into(),
                 operation: span,
             });
@@ -48943,13 +48875,16 @@ impl<'a> Parser<'a> {
                 .expect("imported lowering retains allocation authority")
                 .retain_checked(Some(0), bytes)?;
             let mut instance = Vec::new();
-            instance
+            if instance
                 .try_reserve_exact(function.parameters.len())
-                .map_err(|_| Error::InvalidHostOperation {
-                    item: item.path().into(),
-                    reason: "imported function-item instance allocation failed".into(),
-                    operation: span,
-                })?;
+                .is_err()
+            {
+                return Err(self
+                    .imported
+                    .as_mut()
+                    .expect("imported lowering retains allocation authority")
+                    .allocation_failure(rawr_import::surface::Error::Allocation));
+            }
             for (name, ty) in &function.parameters {
                 instance.push(
                     imported_surface_type(
@@ -48975,11 +48910,7 @@ impl<'a> Parser<'a> {
             }
             functions.push(ImportedFunctionUse {
                 types: instance.into_boxed_slice(),
-                position: u32::try_from(position).map_err(|_| Error::InvalidHostOperation {
-                    item: item.path().into(),
-                    reason: "imported function-item position exceeds the bounded index".into(),
-                    operation: span,
-                })?,
+                position: u32::try_from(position).expect("a call's argument count fits in u32"),
                 path: function.item.path().into(),
                 selector: function
                     .item
@@ -53712,11 +53643,11 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             ),
             (
                 "use imported::Pair; let pair = Pair { left: 1, flag: true }; pair.mutable()",
-                "mutable binding",
+                "as mutable",
             ),
             (
                 "use imported::Pair; let pair = Pair { left: 1, flag: true }; pair.owned(); pair.shared()",
-                "already moved",
+                "moved value",
             ),
         ] {
             let mut engine = Engine::new();
@@ -53754,7 +53685,7 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
                 .expect_err("a non-Copy imported value cannot be consumed twice");
             let error = failure.into_error();
             assert!(!error.position().is_none(), "{source}");
-            assert!(error.to_string().contains("already moved"), "{error}");
+            assert!(error.to_string().contains("moved value"), "{error}");
         }
 
         for source in [

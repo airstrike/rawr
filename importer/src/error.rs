@@ -177,11 +177,44 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// The invariant this failure breaks, when only a rawr bug can cause it.
+    /// The cache check reads these errors as an entry to rebuild; a fresh
+    /// build panics with this (`node::Error::fresh`, #522).
+    #[must_use]
+    pub fn invariant(&self) -> Option<String> {
+        match self {
+            Self::Node { source, .. } => source.invariant(),
+            Self::Schema { document, reason } => {
+                Some(format!("rawr reads {document} as it was written: {reason}"))
+            }
+            Self::Input { code, reason } if input_condition(code, reason).is_none() => Some(
+                format!("rawr keeps track of each build input (`{code}`): {reason}"),
+            ),
+            Self::Extraction { code, reason } => Some(format!(
+                "rawr reads what its rustc driver writes (`{code}`): {reason}"
+            )),
+            _ => None,
+        }
+    }
+}
+
 /// An input failure in Cargo's words: a file that changed during the build,
 /// a path or registry entry that can't be read, or else a rawr bug, said as
 /// rustc's ICEs say one.
 fn input_message(code: &str, reason: &str) -> String {
-    match code {
+    input_condition(code, reason).unwrap_or_else(|| {
+        format!(
+            "internal error: rawr lost track of a build input (`{code}`): {reason}. \
+             This is a rawr bug"
+        )
+    })
+}
+
+/// An input failure the program's files or setup can cause, in Cargo's
+/// words. Any other code is a rawr bug.
+fn input_condition(code: &str, reason: &str) -> Option<String> {
+    Some(match code {
         "input-changed" => "a file the build read changed during the build; run it again".into(),
         "input-changed-during-read" | "package-file-set-changed" | "registry-marker-changed" => {
             format!("`{reason}` changed during the build; run it again")
@@ -217,11 +250,8 @@ fn input_message(code: &str, reason: &str) -> String {
         "cargo-env-config-unproved" => "a build script's `cargo::rerun-if-env-changed` names a \
              variable that `[env]` in .cargo/config.toml sets, which rawr can't build with yet"
             .into(),
-        code => format!(
-            "internal error: rawr lost track of a build input (`{code}`): {reason}. \
-             This is a rawr bug"
-        ),
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

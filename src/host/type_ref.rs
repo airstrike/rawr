@@ -562,14 +562,13 @@ impl Type {
                         identity: *identity.as_bytes(),
                     });
                 };
-                if expected != arguments.len() {
-                    return Err(host::Error::InvalidFacadeTypeArguments {
-                        item: item.to_string().into(),
-                        ty: "<imported>".into(),
-                        expected,
-                        actual: arguments.len(),
-                    });
-                }
+                // The importer writes each of a crate type's uses with its
+                // declared parameters.
+                assert_eq!(
+                    expected,
+                    arguments.len(),
+                    "a crate type's use in `{item}` gives it its declared parameters"
+                );
                 Ok(Self(Shape::Imported {
                     identity: *identity,
                     arguments: resolve_types(arguments, root, types, parameters, _imported, item)?,
@@ -682,14 +681,13 @@ impl Type {
                         identity: *identity.as_bytes(),
                     });
                 };
-                if expected != arguments.len() {
-                    return Err(host::Error::InvalidFacadeTypeArguments {
-                        item: item.to_string().into(),
-                        ty: "<imported>".into(),
-                        expected,
-                        actual: arguments.len(),
-                    });
-                }
+                // The importer writes each of a crate type's uses with its
+                // declared parameters.
+                assert_eq!(
+                    expected,
+                    arguments.len(),
+                    "a crate type's use in `{item}` gives it its declared parameters"
+                );
                 for argument in arguments {
                     argument
                         .resolve_imported(root, types, parameters, imported, item, allocation)?;

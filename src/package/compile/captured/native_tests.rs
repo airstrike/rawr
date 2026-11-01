@@ -143,8 +143,11 @@ fn terminal_member_absence_requires_a_resolved_imported_type() {
     assert!(matches!(failure(&engine, source), Error::Source(_)));
 }
 
+/// A missing adapter is generated on demand. One of the wrong kind can
+/// only come from a rawr bug, so it panics naming the invariant (D664).
 #[test]
-fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_is_not() {
+#[should_panic(expected = "the structural adapter found for an operation is of its kind")]
+fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_panics() {
     let mut engine = compiler();
     let constructor = structure(&mut engine);
     let source = "use structure::Cell; pub fn sample() -> i64 { let value = Cell(1); value.0 }";
@@ -168,9 +171,7 @@ fn absent_structural_adapter_is_a_miss_but_wrong_adapter_kind_is_not() {
         .host_registry
         .admit_structural(definition, &mut host::TestImportAllocation::default())
         .unwrap();
-    let error = failure(&engine, source);
-    assert!(matches!(error, Error::Source(_)), "{error}");
-    assert!(error.to_string().contains("adapter kind differs"));
+    failure(&engine, source);
 }
 
 #[test]

@@ -80,33 +80,23 @@ pub enum Error {
     /// Semantic selector derivation could not preserve the classified contract.
     #[error(transparent)]
     Classification(#[from] rawr_import::classify::Error),
-    /// Rediscovery produced bytes other than the caller's exact snapshot.
-    #[error("Rawr package inputs no longer match the supplied snapshot")]
+    /// A file of the program changed while it was built.
+    #[error("a source file changed during the build; run it again")]
     SnapshotMismatch,
-    /// A compiler use site could not be projected into exact source bytes.
-    #[error("cannot position imported use `{path}` in `{source_identity}`")]
-    SourceEvidence {
-        /// Fully qualified imported path.
-        path: Box<str>,
-        /// Canonical Rawr source identity.
-        source_identity: Box<str>,
-    },
-    /// Checked lowering produced an imported operation absent from the exact contract.
-    #[error("unmapped imported use `{path}` with selector {selector:?}")]
+    /// The program uses a crate item that the build of its dependencies
+    /// couldn't bind. `selector` is for tests and never shown.
+    #[error("`{path}` is not supported in Rawr yet")]
     UnmappedImportedUse {
         /// Fully qualified imported path.
         path: Box<str>,
         /// Closed semantic operation selector.
         selector: rawr_import::surface::identity::Selector,
     },
-    /// The contract ledgers no longer have exact one-to-one cardinality.
-    #[error("imported contract ledger cardinality changed")]
-    Cardinality,
     /// Imported contract lookup evidence could not reserve its exact capacity.
-    #[error("cannot allocate imported contract lookup evidence")]
+    #[error("out of memory while reading the program's dependencies")]
     Allocation,
-    /// The classified contract contains a path shape the facade cannot name.
-    #[error("invalid imported path `{path}`")]
+    /// A crate's own root named as an item.
+    #[error("`{path}` is not supported in Rawr yet")]
     InvalidPath {
         /// Rejected unchanged Rust path.
         path: Box<str>,
@@ -321,28 +311,18 @@ impl crate::Engine {
                 .source()
                 .table()
                 .resolve(program.source().key(used.source))
-                .map_err(|_| Error::SourceEvidence {
-                    path: used.path.as_str().into(),
-                    source_identity: "<foreign source table>".into(),
-                })
-                .map_err(super::Error::import)?;
+                .expect("a use's source is in its program's source table");
+            // The compiler records each use at the span it read in this text.
+            let range = |span| {
+                crate::resolve::lower_nominal::imported_range(source.text(), span)
+                    .expect("a use's span lies in its source's text")
+            };
             if let Some(identity) = used.application {
                 let application = applications
                     .iter()
                     .find(|application| *application.identity() == identity)
-                    .ok_or_else(|| {
-                        super::Error::import(Error::UnmappedImportedUse {
-                            path: used.path.as_str().into(),
-                            selector: used.selector.clone(),
-                        })
-                    })?;
-                let (start, end) =
-                    crate::resolve::lower_nominal::imported_range(source.text(), used.span)
-                        .ok_or_else(|| Error::SourceEvidence {
-                            path: used.path.as_str().into(),
-                            source_identity: source.identity().into(),
-                        })
-                        .map_err(super::Error::import)?;
+                    .expect("a use names an application the compilation was given");
+                let (start, end) = range(used.span);
                 compiler
                     .require_application(application, source.identity(), start, end)
                     .map_err(Error::from)
@@ -354,9 +334,10 @@ impl crate::Engine {
                 if !contract.accepts(outcome.identity(), &used.selector) {
                     continue;
                 }
-                if identity.replace(outcome.identity()).is_some() {
-                    return Err(super::Error::import(Error::Cardinality));
-                }
+                assert!(
+                    identity.replace(outcome.identity()).is_none(),
+                    "one crate item at a path accepts a use's selector"
+                );
             }
             let identity = match identity {
                 Some(identity) => identity,
@@ -373,7 +354,7 @@ impl crate::Engine {
                         diagnostic::Source::new(source.identity(), source.text())
                             .map_err(super::Error::diagnostic)?,
                         used.span,
-                        Some("this symbolic imported use has no exact classified selector".into()),
+                        Some("not supported in Rawr yet".into()),
                     )
                     .map_err(super::Error::diagnostic)?
                     .finish();
@@ -389,13 +370,7 @@ impl crate::Engine {
                     return Err(super::Error::import_diagnostic(report));
                 }
             };
-            let (start, end) =
-                crate::resolve::lower_nominal::imported_range(source.text(), used.span)
-                    .ok_or_else(|| Error::SourceEvidence {
-                        path: used.path.as_str().into(),
-                        source_identity: source.identity().into(),
-                    })
-                    .map_err(super::Error::import)?;
+            let (start, end) = range(used.span);
             if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
                 compiler
                     .require_selected(identity, used.selector, source.identity(), start, end)
@@ -413,9 +388,10 @@ impl crate::Engine {
                     if !contract.accepts(outcome.identity(), &function.selector) {
                         continue;
                     }
-                    if selected.replace(outcome.identity()).is_some() {
-                        return Err(super::Error::import(Error::Cardinality));
-                    }
+                    assert!(
+                        selected.replace(outcome.identity()).is_none(),
+                        "one crate item at a path accepts a use's selector"
+                    );
                 }
                 let selected = selected.ok_or_else(|| {
                     super::Error::import(Error::UnmappedImportedUse {
@@ -423,13 +399,7 @@ impl crate::Engine {
                         selector: function.selector.clone(),
                     })
                 })?;
-                let (function_start, function_end) =
-                    crate::resolve::lower_nominal::imported_range(source.text(), function.span)
-                        .ok_or_else(|| Error::SourceEvidence {
-                            path: function.path.as_str().into(),
-                            source_identity: source.identity().into(),
-                        })
-                        .map_err(super::Error::import)?;
+                let (function_start, function_end) = range(function.span);
                 // A generic function, at the types its use infers.
                 let item = if function.types.is_empty() {
                     rawr_import::surface::instance::FunctionItem::selected(
@@ -465,13 +435,7 @@ impl crate::Engine {
                 .try_reserve_exact(used.mappers.len())
                 .map_err(|_| super::Error::import(Error::Allocation))?;
             for mapper in used.mappers {
-                let (mapper_start, mapper_end) =
-                    crate::resolve::lower_nominal::imported_range(source.text(), mapper.span)
-                        .ok_or_else(|| Error::SourceEvidence {
-                            path: used.path.as_str().into(),
-                            source_identity: source.identity().into(),
-                        })
-                        .map_err(super::Error::import)?;
+                let (mapper_start, mapper_end) = range(mapper.span);
                 mappers.push(
                     rawr_import::surface::instance::EventMapper::selected(
                         mapper.position,
@@ -1277,9 +1241,11 @@ fn imported_paths<'contract>(
             outcome,
         });
     }
-    if entries.len() != capacity {
-        return Err(Error::Cardinality);
-    }
+    assert_eq!(
+        entries.len(),
+        capacity,
+        "the path index holds each item and each associated item once"
+    );
     entries.sort_unstable_by(|left, right| {
         left.path
             .cmp(&right.path)
@@ -1353,7 +1319,6 @@ fn relative_path(
     allocation: &mut rawr_import::contract::Allocation,
 ) -> Result<String, Error> {
     let mut segments = key.path();
-    let count = segments.len();
     let bytes = segments.try_fold(0_usize, |bytes, segment| {
         bytes
             .checked_add(segment.len())?
@@ -1370,9 +1335,6 @@ fn relative_path(
             relative.push_str("::");
         }
         relative.push_str(segment);
-    }
-    if count == 0 && !relative.is_empty() {
-        return Err(Error::Cardinality);
     }
     Ok(relative)
 }
@@ -1596,7 +1558,10 @@ fn install(
         ) {
             continue;
         }
-        let definition = outcome.identity().definition().ok_or(Error::Cardinality)?;
+        let definition = outcome
+            .identity()
+            .definition()
+            .expect("a type parameter's index names a declared parameter");
         let key = outcome.export();
         let root = key.root_alias();
         let relative = relative_path(key, allocation)?;
@@ -2005,7 +1970,9 @@ fn build(
                     | Representability::FunctionItem(_)
                     | Representability::Invocation(_)
                     | Representability::Excluded(_)
-                    | Representability::Rejected(_) => return Err(Error::Cardinality),
+                    | Representability::Rejected(_) => {
+                        unreachable!("a type's entry is a struct or an enum")
+                    }
                 };
                 let shape = crate::Shared::new(new_shape);
                 shapes.insert(index, (entry.definition, shape.clone()));
@@ -2301,7 +2268,7 @@ fn imported_item(
                     path,
                     signature(types, plan.signature(), allocation)?,
                 )?,
-                _ => return Err(Error::Cardinality),
+                _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?),
         ),
@@ -2324,7 +2291,7 @@ fn imported_item(
                 Selector::Constant { .. } => {
                     host::item::Definition::value(path, types.convert(plan.ty(), &[], allocation)?)?
                 }
-                _ => return Err(Error::Cardinality),
+                _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?),
         ),
@@ -2344,7 +2311,7 @@ fn imported_item(
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
-                    receiver(plan.receiver().ok_or(Error::Cardinality)?),
+                    receiver(plan.receiver().expect("a method's plan has its receiver")),
                     callable_signature(
                         types,
                         plan.signature(),
@@ -2353,7 +2320,7 @@ fn imported_item(
                         allocation,
                     )?,
                 )?,
-                _ => return Err(Error::Cardinality),
+                _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
@@ -2386,7 +2353,7 @@ fn imported_item(
                 )?,
                 Selector::Method { .. } => host::item::Definition::method(
                     path,
-                    receiver(plan.receiver().ok_or(Error::Cardinality)?),
+                    receiver(plan.receiver().expect("a method's plan has its receiver")),
                     callable_signature(
                         types,
                         plan.signature(),
@@ -2395,7 +2362,7 @@ fn imported_item(
                         allocation,
                     )?,
                 )?,
-                _ => return Err(Error::Cardinality),
+                _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
@@ -2462,10 +2429,10 @@ fn imported_values(
         Selector::Function { .. } => host::item::Definition::function(path, signature)?,
         Selector::Method { .. } => host::item::Definition::method(
             path,
-            receiver(values.receiver().ok_or(Error::Cardinality)?),
+            receiver(values.receiver().expect("a method's plan has its receiver")),
             signature,
         )?,
-        _ => return Err(Error::Cardinality),
+        _ => unreachable!("an item's plan is of its selector's kind"),
     };
     Ok(Some(
         definition
@@ -2791,7 +2758,7 @@ impl Types {
     ) -> Result<host::type_ref::Type, Error> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
-            Type::Inferred => return Err(Error::Cardinality),
+            Type::Inferred => unreachable!("a crate item's signature names no inferred type"),
             Type::Unit => host::type_ref::Type::unit(),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
                 Builtin::Bool => host::type_ref::Builtin::Bool,
@@ -2817,7 +2784,7 @@ impl Types {
                 let parameter = parameters
                     .iter()
                     .find(|parameter| parameter.index() == *index)
-                    .ok_or(Error::Cardinality)?;
+                    .expect("a type parameter's index names a declared parameter");
                 host::type_ref::Type::parameter(parameter.name())?
             }
             Type::Nominal {
@@ -2843,7 +2810,9 @@ impl Types {
                 // iced's `Widget::map` gives `Map<Self, F, Message>`: the
                 // closure's type, as the input that takes it is (T417).
                 if *definition == rawr_import::surface::identity::Definition::callable() {
-                    let (output, inputs) = arguments.split_last().ok_or(Error::Cardinality)?;
+                    let (output, inputs) = arguments
+                        .split_last()
+                        .expect("a type parameter's index names a declared parameter");
                     let input = match inputs {
                         [] => host::type_ref::Type::unit(),
                         [single] => Self::convert_charged(single, parameters)?,
@@ -2909,7 +2878,7 @@ impl Types {
                 ..
             } => host::type_ref::Type::array(
                 Self::convert_charged(element, parameters)?,
-                usize::try_from(*length).map_err(|_| Error::Cardinality)?,
+                usize::try_from(*length).expect("an array length fits in usize"),
             ),
             Type::Sequence { element, .. } => {
                 host::type_ref::Type::slice(Self::convert_charged(element, parameters)?)
@@ -2922,7 +2891,7 @@ impl Types {
             )?,
             // A script type's proxy fills a call's instance; no Rust
             // declaration names one (D594).
-            Type::Script { .. } => return Err(Error::Cardinality),
+            Type::Script { .. } => unreachable!("no crate declaration names a program's type"),
         })
     }
 }
@@ -3228,7 +3197,7 @@ fn type_usage(
             let parameter = parameters
                 .iter()
                 .find(|parameter| parameter.index() == *index)
-                .ok_or(Error::Cardinality)?;
+                .expect("a type parameter's index names a declared parameter");
             (0, parameter.name().len())
         }
         Type::Nominal { arguments, .. } => {
@@ -3406,4 +3375,35 @@ fn collect_modules(
         modules.remove(index);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    /// What a program meets here speaks about its files and the crate items
+    /// it names, never about rawr's snapshots, selectors or ledgers (#523).
+    #[test]
+    fn messages_name_the_program() {
+        let cases = [
+            (
+                Error::SnapshotMismatch,
+                "a source file changed during the build; run it again",
+            ),
+            (
+                Error::UnmappedImportedUse {
+                    path: "iced::widget::text".into(),
+                    selector: rawr_import::surface::identity::Selector::Unavailable,
+                },
+                "`iced::widget::text` is not supported in Rawr yet",
+            ),
+            (
+                Error::Allocation,
+                "out of memory while reading the program's dependencies",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 }

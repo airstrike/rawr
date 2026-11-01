@@ -5911,3 +5911,76 @@ fn store_growth_clean_frees_unpinned_and_keeps_running_pins() {
     store.retire_fixture().expect("the store retires");
     fs::remove_dir_all(root).expect("the fixture retires");
 }
+
+/// The cache check rebuilds a stale or damaged entry, and only a failure
+/// that stops the build leaves it as an error (#522).
+#[test]
+fn cache_check_separates_entries_to_rebuild_from_failures() {
+    use super::Check;
+    let check = |error: Error| Check::<()>::of(Err(error));
+    assert!(matches!(Check::of(Ok(Some(7))), Ok(Check::Hit(7))));
+    assert!(matches!(Check::<()>::of(Ok(None)), Ok(Check::Stale)));
+    for stale in [
+        crate::Error::Input {
+            code: "input-changed",
+            reason: "/project/src/main.rs".into(),
+        },
+        crate::Error::Input {
+            code: "protected-build-package-owner-missing",
+            reason: "crunchy 0.2.4".into(),
+        },
+        crate::Error::Schema {
+            document: "resolution universe receipt",
+            reason: "missing field `lock`".into(),
+        },
+    ] {
+        assert!(matches!(check(stale.into()), Ok(Check::Stale)));
+    }
+    assert!(matches!(
+        check(Error::Corrupt {
+            path: "entry".into(),
+            reason: "envelope decoding failed",
+        }),
+        Ok(Check::Damaged(None))
+    ));
+    assert!(matches!(check(Error::Allocation), Err(Error::Allocation)));
+}
+
+/// What a stored entry may legitimately fail with is a rawr bug in a fresh
+/// build, which panics naming the invariant (#522, D664).
+#[test]
+#[should_panic(expected = "rawr reads Cargo unit graph as it was written: missing field `units`")]
+fn fresh_build_panics_when_rawr_misreads_cargo() {
+    let _ = Error::from(crate::Error::Schema {
+        document: "Cargo unit graph",
+        reason: "missing field `units`".into(),
+    })
+    .fresh();
+}
+
+#[test]
+#[should_panic(
+    expected = "rawr keeps track of each build input (`protected-build-package-owner-missing`)"
+)]
+fn fresh_build_panics_when_rawr_loses_a_build_input() {
+    let _ = Error::from(crate::Error::Input {
+        code: "protected-build-package-owner-missing",
+        reason: "crunchy 0.2.4".into(),
+    })
+    .fresh();
+}
+
+/// A fresh build's failure that the program's files can cause stays an
+/// error in Cargo's words.
+#[test]
+fn fresh_build_keeps_failures_the_program_causes() {
+    let error = Error::from(crate::Error::Input {
+        code: "input-changed-during-read",
+        reason: "/project/src/main.rs".into(),
+    })
+    .fresh();
+    assert_eq!(
+        error.to_string(),
+        "`/project/src/main.rs` changed during the build; run it again"
+    );
+}
