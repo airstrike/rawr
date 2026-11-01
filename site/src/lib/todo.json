@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.49",
+  "version": "0.3.50",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`?play` and the playground's Run on server answer an iced program with a PNG of its first frame, drawn once the program has booted and the tasks it started have finished. The snippet's `iced::run` is unchanged Rust: ?play's iced runs it in iced_test's emulator, with no window.","issues":[434]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.50",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`?play` and the playground's Run on server answer an iced program with a PNG of its first frame, drawn once the program has booted and the tasks it started have finished. The snippet's `iced::run` is unchanged Rust: ?play's iced runs it in iced_test's emulator, with no window.","issues":[434]}
+        ]
+      },
       {
         "version": "0.3.49",
         "date": "2026-11-01",
@@ -1032,7 +1034,7 @@
     {"issue":431,"title":"On Linux, `rawr run` compiles rawr's runtime again","state":"closed","category":"Platforms","release":"0.3.31"},
     {"issue":432,"title":"`?play` and the browser playground run plain Rust programs","state":"closed","category":"No glue (D593)","release":"0.3.32"},
     {"issue":433,"title":"rawr preview on the plain runner","state":"open","category":"No glue (D593)"},
-    {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"closed","category":"No glue (D593)"},
+    {"issue":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.50"},
     {"issue":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open","category":"No glue (D593)"},
     {"issue":436,"title":"?play and the playground run async programs on generated bindings","state":"closed","category":"No glue (D593)","release":"0.3.36"},
     {"issue":437,"title":"Classify each crate's whole table once and reuse it across programs","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.34"},
