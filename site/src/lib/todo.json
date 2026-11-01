@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"std's `PathBuf`, `Path` and `io::Error` are the same types in a program and in its crates: a crate struct's `PathBuf` field, a crate function taking `&Path` or returning `io::Error`, and `?` from an `io::Result` into a crate error through its `From<io::Error>` (thiserror's `#[from]`) work as with rustc.","issues":[653]},
+        {"text":"`std::io::Result<T>` works, as `Result<T, std::io::Error>`, and `Path::new(\"x\")` borrows text as a path.","issues":[644]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.87",
@@ -1553,7 +1559,7 @@
     {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
     {"issue":642,"title":"An engine starts with no file, environment or process access","state":"closed","category":"Platforms","release":"0.3.79"},
     {"issue":643,"title":"std::fs::read, write and the usual whole-file functions","state":"closed","category":"Divergences from rustc","release":"0.3.79"},
-    {"issue":644,"title":"std::io::Result<T> alias in rawr's std","state":"open","category":"Divergences from rustc"},
+    {"issue":644,"title":"std::io::Result<T> alias in rawr's std","state":"closed","category":"Divergences from rustc"},
     {"issue":645,"title":"std::env::var and VarError","state":"open","category":"Divergences from rustc"},
     {"issue":646,"title":"std::fs::read_dir, metadata, File and OpenOptions","state":"open","category":"Divergences from rustc"},
     {"issue":647,"title":"Decide whether stdin and stdout are granted like files","state":"open","category":"Platforms"},
@@ -1562,7 +1568,7 @@
     {"issue":650,"title":"Lend a crate struct's field in place with no copy (D683.1)","state":"open","category":"No glue (D593)"},
     {"issue":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc"},
     {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"closed","category":"No glue (D593)","release":"0.3.83"},
-    {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc"},
+    {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"closed","category":"Divergences from rustc"},
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
     {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)"},
@@ -1586,7 +1592,11 @@
     {"issue":674,"title":"A literal lent to `impl Into<Cow<'static, str>>` or a std trait's 'static impl lives for the program","state":"open","category":"No glue (D593)"},
     {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
     {"issue":676,"title":"Type::from(value) of a crate type's own value is core's reflexive From","state":"closed","category":"No glue (D593)","release":"0.3.87"},
-    {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"open","category":"No glue (D593)"}
+    {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"open","category":"No glue (D593)"},
+    {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"open","category":"Divergences from rustc"},
+    {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
+    {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
+    {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"open","category":"Health"}
   ],
   "groups": [
     {
