@@ -8542,15 +8542,15 @@ impl Ty {
                 output,
                 item,
             } => {
-                let mut name = fn_type_name(std::slice::from_ref(&**input), output, models);
+                let mut name = fn_type_name(parameters(input), output, models);
                 if let Some(item) = item {
-                    name += &format!(" {{{}}}", item.item.path());
+                    name += &format!(" {{{}}}", crate::host::path::public(&item.item.path()));
                 }
                 name.into()
             }
             #[cfg(feature = "rust-import")]
             Self::ProfileMapper { input, output, .. } => {
-                fn_type_name(std::slice::from_ref(&**input), output, models).into()
+                fn_type_name(parameters(input), output, models).into()
             }
             #[cfg(feature = "rust-import")]
             Self::ProfileMessage { script, .. } => script.name(models),
@@ -8883,14 +8883,66 @@ fn fn_type_name(inputs: &[Ty], output: &Ty, models: &Models) -> String {
     }
 }
 
+/// Why a call of a generic function compiled per instantiation (D629) has
+/// no instance: a type parameter its arguments leave open, which rustc
+/// infers from a later use of the value, or types no instance takes.
+#[cfg(feature = "rust-import")]
+fn uninstantiated_call(name: &str, generics: &[&str], types: &[Ty], models: &Models) -> String {
+    let open = generics
+        .iter()
+        .zip(types)
+        .filter(|(_, ty)| contains_inference(ty))
+        .map(|(generic, _)| format!("`{generic}`"))
+        .collect::<Vec<_>>();
+    match open.as_slice() {
+        [] => format!(
+            "calling `{name}` with the type arguments `<{}>` isn't supported yet",
+            types
+                .iter()
+                .map(|ty| ty.name(models).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        [one] => format!(
+            "the type parameter {one} of `{name}` must be known from this call's arguments; \
+             inferring it from a later use of the value isn't supported yet; write it at the \
+             call, as in `{name}::<{}>(..)`",
+            generics.join(", ")
+        ),
+        several => format!(
+            "the type parameters {} of `{name}` must be known from this call's arguments; \
+             inferring them from a later use of the value isn't supported yet; write them at \
+             the call, as in `{name}::<{}>(..)`",
+            several.join(", "),
+            generics.join(", ")
+        ),
+    }
+}
+
+/// The parameters of a crate callable whose one input is them all: a
+/// tuple is several (`fn(&Theme, Status)`), `()` is none.
+#[cfg(feature = "rust-import")]
+fn parameters(input: &Ty) -> &[Ty] {
+    match input {
+        Ty::Tuple(members) => members,
+        Ty::Unit => &[],
+        input => std::slice::from_ref(input),
+    }
+}
+
 /// A host type's path as a message names it: the path the program wrote,
 /// else the one a `use` in this source imports it by, else its shortest
 /// public path (`iced::Vector`, not `iced::advanced::graphics::Vector`),
-/// as rustc names a type by a visible path. Every type a message names
-/// goes through here, by way of [`Ty::name`].
+/// as rustc names a type by a visible path. A path a macro's `$crate`
+/// wrote through a crate's hidden segment comes last, and reads from that
+/// crate's root (`iced_core::text::Span`, `host::path::public`). Every type
+/// a message names goes through here, by way of [`Ty::name`].
 fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableString {
-    if let Some(alias) = &proof.alias {
-        return alias.path().into();
+    use crate::host::path::{is_hidden, public};
+    if let Some(alias) = proof.alias.as_ref().map(|alias| alias.path())
+        && !is_hidden(&alias)
+    {
+        return alias.into();
     }
     #[cfg(feature = "rust-import")]
     if let Some(identity) = proof.definition.identity().imported() {
@@ -8902,7 +8954,7 @@ fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableString {
                 crate::resolve::item::Import::Type { definition, .. }
                     if definition.identity().imported() == Some(identity) =>
                 {
-                    Some(definition.path())
+                    Some(definition.path()).filter(|path| !is_hidden(path))
                 }
                 _ => None,
             });
@@ -8910,15 +8962,15 @@ fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableString {
             models
                 .host
                 .imported_type_paths(identity, proof.owner.as_ref()?)?
-                .min_by_key(|path| path.matches("::").count())
+                .min_by_key(|path| (is_hidden(path), path.matches("::").count()))
         };
         if let Some(path) = imported.or_else(shortest) {
-            return path.into();
+            return public(&path).as_ref().into();
         }
     }
     #[cfg(not(feature = "rust-import"))]
     let _ = models;
-    proof.definition.path().into()
+    public(&proof.definition.path()).as_ref().into()
 }
 
 fn same_head(left: &Ty, right: &Ty) -> bool {
@@ -42595,20 +42647,20 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(function);
         }
-        instance.ok_or_else(|| Error::InvalidMethodCall {
-            owner: ImmutableString::new(),
-            method: function.definition.name.text.clone(),
-            reason: format!(
-                "rawr compiles this generic function once per instantiation its callers \
-                 use, and the types this call gives it ({}) aren't all known here",
-                resolved
-                    .iter()
-                    .map(|ty| ty.name(&self.models).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-            .into(),
-            call,
+        instance.ok_or_else(|| {
+            let generics = function
+                .definition
+                .generics
+                .iter()
+                .map(|generic| generic.name.text.as_str())
+                .collect::<Vec<_>>();
+            let name = &function.definition.name.text;
+            Error::InvalidMethodCall {
+                owner: ImmutableString::new(),
+                method: name.clone(),
+                reason: uninstantiated_call(name, &generics, &resolved, &self.models).into(),
+                call,
+            }
         })
     }
 
@@ -42663,20 +42715,19 @@ impl<'a> Parser<'a> {
         if instance.is_none() && self.collecting_instances {
             return Ok(definition);
         }
-        instance.ok_or_else(|| Error::InvalidMethodCall {
-            owner: definition.owner_name().into(),
-            method: definition.name().into(),
-            reason: format!(
-                "rawr compiles this generic method once per instantiation its callers use, \
-                 and the types this call gives it ({}) aren't all known here",
-                resolved
-                    .iter()
-                    .map(|ty| ty.name(&self.models).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-            .into(),
-            call,
+        instance.ok_or_else(|| {
+            let generics = definition
+                .generics()
+                .iter()
+                .map(|generic| generic.name.text.as_str())
+                .collect::<Vec<_>>();
+            Error::InvalidMethodCall {
+                owner: definition.owner_name().into(),
+                method: definition.name().into(),
+                reason: uninstantiated_call(definition.name(), &generics, &resolved, &self.models)
+                    .into(),
+                call,
+            }
         })
     }
 
@@ -53813,6 +53864,80 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             mismatch("use vectors::Deep::Vector; use vectors::make; let value: i64 = make();"),
             ("i64".into(), "vectors::Deep::Vector<f32>".into())
         );
+    }
+
+    /// A crate type a macro's `$crate` reaches through its crate's hidden
+    /// segment prints by a public path when the dependency has one, else
+    /// from its own crate's root, as rustc does: no message names the
+    /// segment (#563).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_type_behind_a_hidden_crate_segment_prints_by_a_public_path() {
+        fn mismatch(paths: &[&str]) -> (String, String) {
+            let mut builder =
+                facade::Builder::new("vectors", facade::Abi::new(1).unwrap()).unwrap();
+            let mut allocation = host::TestImportAllocation::default();
+            let identity = host::type_def::import::Identity::new([0x57; 32]);
+            for module in [HIDDEN, "deep", "deep::er"] {
+                builder.imported_module(module, &mut allocation).unwrap();
+            }
+            for path in paths {
+                builder
+                    .imported_type(
+                        path,
+                        identity,
+                        &[],
+                        Box::from(["T".into()]),
+                        Box::from([None]),
+                        host::type_def::Shape::Opaque.into(),
+                        &mut allocation,
+                    )
+                    .unwrap();
+            }
+            let mut make = signature::Builder::new();
+            make.output(type_ref::Type::imported(
+                identity,
+                [type_ref::Type::builtin(type_ref::Builtin::F32)],
+            ));
+            builder
+                .item(
+                    item::Definition::function("make", make.finish())
+                        .unwrap()
+                        .imported(rawr_import::surface::identity::Selector::Unavailable),
+                )
+                .unwrap();
+            let mut engine = Engine::new();
+            engine
+                .register_host_facade(builder.finish().unwrap())
+                .expect("the facade installs");
+            let source = "use vectors::make; let value: i64 = make();";
+            let program = imported_program(&engine, source);
+            let error = symbolic_imported(&engine, &program)
+                .expect_err("an i64 can't hold a Vector")
+                .into_error();
+            assert!(!error.to_string().contains("__rawr"), "{error}");
+            let ParseErrorType::Resolution(crate::resolve::Error::TypeMismatch { actual, .. }) =
+                error.err_type()
+            else {
+                panic!("a type mismatch: {error}");
+            };
+            let report = crate::diagnostic::Report::from_parse(
+                crate::diagnostic::Source::new("main.rs", source).unwrap(),
+                &error,
+            )
+            .expect("the error reports at its span");
+            assert!(!report.message().contains("__rawr"), "{}", report.message());
+            (error.to_string(), actual.to_string())
+        }
+        const HIDDEN: &str = "__rawr_crate_linear_00000000000000ab";
+
+        // A public path, though the hidden one is shorter.
+        let (_, actual) = mismatch(&[&format!("{HIDDEN}::Vector"), "deep::er::Vector"]);
+        assert_eq!(actual, "vectors::deep::er::Vector<f32>");
+        // Only the hidden path: the defining crate's own.
+        let (message, actual) = mismatch(&[&format!("{HIDDEN}::Vector")]);
+        assert_eq!(actual, "linear::Vector<f32>");
+        assert!(message.contains("`linear::Vector<f32>`"), "{message}");
     }
 
     /// `Vector<T>` at `vectors::Deep::Vector` and `vectors::Vector`, and
