@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.42",
+  "version": "0.3.43",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A value of a type that implements a crate's trait over `Fn` fills a parameter of that trait, so iced's `.theme(Theme::Dark)` checks. A function of the state still fills it as before.","issues":[337]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.43",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A value of a type that implements a crate's trait over `Fn` fills a parameter of that trait, so iced's `.theme(Theme::Dark)` checks. A function of the state still fills it as before.","issues":[337]}
+        ]
+      },
       {
         "version": "0.3.42",
         "date": "2026-10-31",
@@ -876,7 +878,7 @@
     {"issue":334,"title":"No-glue stops after #313","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.15"},
     {"issue":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
-    {"issue":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.43"},
     {"issue":338,"title":"clock, the_matrix: `time::every` has no binding, likely with #312","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.12"},
     {"issue":339,"title":"A widget whose only name is an alias (the fixture's `Caption`) fails at run time with \"lent…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
