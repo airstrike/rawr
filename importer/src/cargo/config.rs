@@ -70,8 +70,6 @@ pub enum Role {
     Runtime,
     /// Rawr compiler support linked into the eventual runner.
     Compiler,
-    /// A selected framework profile package.
-    Profile,
 }
 
 /// A nonempty canonical role proof for one dependency identity.
@@ -201,7 +199,7 @@ impl Roles {
 
     /// Iterate the canonical role order.
     pub fn iter(self) -> impl Iterator<Item = Role> {
-        [Role::Library, Role::Runtime, Role::Compiler, Role::Profile]
+        [Role::Library, Role::Runtime, Role::Compiler]
             .into_iter()
             .filter(move |role| self.contains(*role))
     }
@@ -220,7 +218,6 @@ impl Role {
             Self::Library => "library",
             Self::Runtime => "runtime",
             Self::Compiler => "compiler",
-            Self::Profile => "profile",
         }
     }
 
@@ -229,7 +226,6 @@ impl Role {
             Self::Library => 1,
             Self::Runtime => 2,
             Self::Compiler => 4,
-            Self::Profile => 8,
         }
     }
 }
@@ -306,29 +302,6 @@ impl Dependency {
             features: Box::default(),
             default_features: true,
             roles: Roles::library(),
-            allocation,
-        })
-    }
-
-    /// Begin an exact local framework-profile package selected by its host.
-    #[doc(hidden)]
-    pub fn profile_path(alias: &str, package: &str, path: &Path, limits: &Limits) -> Result<Self> {
-        assert!(
-            valid_package_name(package),
-            "a host profile names a Cargo package, never `{package}`"
-        );
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(1)?;
-        allocation.string(alias)?;
-        allocation.string(package)?;
-        allocation.path(path)?;
-        Ok(Self {
-            alias: validated_alias(alias)?,
-            package: Some(package.into()),
-            source: Source::Path(path.to_path_buf()),
-            features: Box::default(),
-            default_features: true,
-            roles: Roles::new(Role::Profile),
             allocation,
         })
     }

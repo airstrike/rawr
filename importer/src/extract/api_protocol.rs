@@ -232,7 +232,6 @@ fn extraction_context_carries_build_unit_and_stable_role_and_namespace_text() {
     assert_eq!(cargo::config::Role::Library.as_str(), "library");
     assert_eq!(cargo::config::Role::Runtime.as_str(), "runtime");
     assert_eq!(cargo::config::Role::Compiler.as_str(), "compiler");
-    assert_eq!(cargo::config::Role::Profile.as_str(), "profile");
     assert_eq!(identity::Namespace::Type.as_str(), "type");
     assert_eq!(identity::Namespace::Value.as_str(), "value");
     assert_eq!(identity::Namespace::Macro.as_str(), "macro");
