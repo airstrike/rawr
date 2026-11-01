@@ -343,7 +343,7 @@ pub(super) fn capture(
             .join(format!("applicability-{name}"));
         builder = builder
             .dependency(
-                Dependency::path(&format!("facts_{name}"), &path, limits)
+                Dependency::path(&format!("facts_{name}"), &path)
                     .unwrap()
                     .package(&format!("facts-{name}"))
                     .unwrap(),

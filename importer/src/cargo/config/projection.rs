@@ -123,44 +123,22 @@ impl Projection {
         parallelism: parallelism::Proof,
         limits: &cargo::Limits,
     ) -> Result<Self> {
-        let mut allocation = cargo::RequestAllocation::new(limits);
-        Self::derive_governed_budgeted(
-            environment,
-            target,
-            profile,
-            parallelism,
-            limits,
-            &mut allocation,
-        )
-    }
-
-    pub(super) fn derive_governed_budgeted(
-        environment: &Environment,
-        target: &str,
-        profile: &str,
-        parallelism: parallelism::Proof,
-        limits: &cargo::Limits,
-        allocation: &mut cargo::RequestAllocation,
-    ) -> Result<Self> {
-        allocation.string(target)?;
-        allocation.string(profile)?;
         let mut values = BTreeMap::<String, Option<Box<str>>>::new();
         for key in STATIC_KEYS {
-            insert_environment(&mut values, environment, key, allocation)?;
+            insert_environment(&mut values, environment, key)?;
         }
         let mut platforms = [toolchain::HOST, target];
         platforms.sort_unstable();
         let platform_count = if platforms[0] == platforms[1] { 1 } else { 2 };
         for platform in platforms.into_iter().take(platform_count) {
-            let platform = component(platform, allocation)?;
+            let platform = component(platform);
             for suffix in TARGET_SUFFIXES {
-                let key = derived_key("CARGO_TARGET_", &platform, "_", suffix, allocation)?;
-                insert_environment(&mut values, environment, &key, allocation)?;
+                let key = derived_key("CARGO_TARGET_", &platform, "_", suffix);
+                insert_environment(&mut values, environment, &key)?;
             }
         }
-        let profile_component = component(profile, allocation)?;
-        let profile_prefix =
-            derived_key("CARGO_PROFILE_", &profile_component, "_", "", allocation)?;
+        let profile_component = component(profile);
+        let profile_prefix = derived_key("CARGO_PROFILE_", &profile_component, "_", "");
         // Cargo reads only the profile it builds, so a variable for another
         // profile changes nothing. Of the built profile's own keys, those
         // Cargo reads but the projection does not key reject.
@@ -184,14 +162,8 @@ impl Projection {
             }
         }
         for suffix in PROFILE_SUFFIXES {
-            let key = derived_key(
-                "CARGO_PROFILE_",
-                &profile_component,
-                "_",
-                suffix,
-                allocation,
-            )?;
-            insert_environment(&mut values, environment, &key, allocation)?;
+            let key = derived_key("CARGO_PROFILE_", &profile_component, "_", suffix);
+            insert_environment(&mut values, environment, &key)?;
         }
         for suffix in BUILD_OVERRIDE_SUFFIXES {
             let key = derived_key(
@@ -199,78 +171,69 @@ impl Projection {
                 &profile_component,
                 "_BUILD_OVERRIDE_",
                 suffix,
-                allocation,
-            )?;
-            insert_environment(&mut values, environment, &key, allocation)?;
+            );
+            insert_environment(&mut values, environment, &key)?;
         }
 
-        insert_derived(&mut values, "CARGO_INCREMENTAL", "0", allocation)?;
+        insert_derived(&mut values, "CARGO_INCREMENTAL", "0")?;
         insert_derived(
             &mut values,
             "rawr.context.cargo_commit",
             toolchain::supported_cargo_commit(),
-            allocation,
         )?;
         insert_derived(
             &mut values,
             "rawr.context.rustc_commit",
             toolchain::supported_rustc_commit(),
-            allocation,
         )?;
-        insert_derived(
-            &mut values,
-            "rawr.context.host",
-            toolchain::HOST,
-            allocation,
-        )?;
-        insert_derived(&mut values, "rawr.context.target", target, allocation)?;
-        insert_derived(&mut values, "rawr.context.profile", profile, allocation)?;
+        insert_derived(&mut values, "rawr.context.host", toolchain::HOST)?;
+        insert_derived(&mut values, "rawr.context.target", target)?;
+        insert_derived(&mut values, "rawr.context.profile", profile)?;
         for (key, value) in [
             (
                 "rawr.context.parallelism_schema",
-                allocation.formatted(format_args!("{}", parallelism.schema()))?,
+                cargo::formatted(format_args!("{}", parallelism.schema()))?,
             ),
             (
                 "rawr.context.jobs",
-                allocation.formatted(format_args!("{}", parallelism.jobs().get()))?,
+                cargo::formatted(format_args!("{}", parallelism.jobs().get()))?,
             ),
             (
                 "rawr.context.canonical_allocation_items",
-                allocation.formatted(format_args!("{}", limits.canonical_items))?,
+                cargo::formatted(format_args!("{}", limits.canonical_items))?,
             ),
             (
                 "rawr.context.canonical_allocation_bytes",
-                allocation.formatted(format_args!("{}", limits.canonical_bytes))?,
+                cargo::formatted(format_args!("{}", limits.canonical_bytes))?,
             ),
             (
                 "rawr.context.input_proof_bytes",
-                allocation.formatted(format_args!("{}", limits.input_proof_bytes))?,
+                cargo::formatted(format_args!("{}", limits.input_proof_bytes))?,
             ),
             (
                 "rawr.context.retained_graph_items",
-                allocation.formatted(format_args!("{}", limits.retained_graph_items))?,
+                cargo::formatted(format_args!("{}", limits.retained_graph_items))?,
             ),
             (
                 "rawr.context.retained_graph_bytes",
-                allocation.formatted(format_args!("{}", limits.retained_graph_bytes))?,
+                cargo::formatted(format_args!("{}", limits.retained_graph_bytes))?,
             ),
             (
                 "rawr.context.classified_contract_items",
-                allocation.formatted(format_args!("{}", limits.classified_contract_items))?,
+                cargo::formatted(format_args!("{}", limits.classified_contract_items))?,
             ),
             (
                 "rawr.context.classified_contract_bytes",
-                allocation.formatted(format_args!("{}", limits.classified_contract_bytes))?,
+                cargo::formatted(format_args!("{}", limits.classified_contract_bytes))?,
             ),
             (
                 "rawr.context.stage_schema",
-                allocation.formatted(format_args!("3"))?,
+                cargo::formatted(format_args!("3"))?,
             ),
         ] {
-            insert_derived(&mut values, key, &value, allocation)?;
+            insert_derived(&mut values, key, &value)?;
         }
 
-        allocation.items(values.len())?;
         let mut entries = Vec::with_capacity(values.len());
         for (key, value) in values {
             entries.push(Entry {
@@ -295,16 +258,7 @@ impl Projection {
             .map(|entry| (entry.key.as_ref(), entry.value.as_deref()))
     }
 
-    pub(super) fn clone_budgeted(&self, allocation: &mut cargo::RequestAllocation) -> Result<Self> {
-        allocation.string(&self.target)?;
-        allocation.string(&self.profile)?;
-        allocation.items(self.entries.len())?;
-        for entry in &self.entries {
-            allocation.string(&entry.key)?;
-            if let Some(value) = entry.value.as_deref() {
-                allocation.string(value)?;
-            }
-        }
+    pub(super) fn try_clone(&self) -> Result<Self> {
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(self.entries.len())
@@ -417,10 +371,9 @@ fn insert_environment(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     environment: &Environment,
     key: &str,
-    allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
     let value = environment.value(key).map(|value| keyed_value(key, value));
-    insert(values, key, value.as_deref(), allocation)
+    insert(values, key, value.as_deref())
 }
 
 /// The value one environment variable contributes to keys and projections.
@@ -496,16 +449,14 @@ fn insert_derived(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     key: &str,
     value: &str,
-    allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
-    insert(values, key, Some(value), allocation)
+    insert(values, key, Some(value))
 }
 
 fn insert(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     key: &str,
     value: Option<&str>,
-    allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
     if let Some(previous) = values.get(key) {
         return if previous.as_deref() == value {
@@ -517,18 +468,11 @@ fn insert(
             })
         };
     }
-    allocation.items(1)?;
-    allocation.string(key)?;
-    if let Some(value) = value {
-        allocation.string(value)?;
-    }
     values.insert(key.to_owned(), value.map(Box::from));
     Ok(())
 }
 
-fn component(value: &str, allocation: &mut cargo::RequestAllocation) -> Result<String> {
-    allocation.items(1)?;
-    allocation.bytes(value.len())?;
+fn component(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for byte in value.bytes() {
         output.push(if byte == b'-' {
@@ -537,33 +481,24 @@ fn component(value: &str, allocation: &mut cargo::RequestAllocation) -> Result<S
             char::from(byte.to_ascii_uppercase())
         });
     }
-    Ok(output)
+    output
 }
 
-fn derived_key(
-    prefix: &str,
-    component: &str,
-    separator: &str,
-    suffix: &str,
-    allocation: &mut cargo::RequestAllocation,
-) -> Result<String> {
+fn derived_key(prefix: &str, component: &str, separator: &str, suffix: &str) -> String {
     let length = prefix
         .len()
         .checked_add(component.len())
         .and_then(|length| length.checked_add(separator.len()))
         .and_then(|length| length.checked_add(suffix.len()))
         .expect("an environment key's length fits in memory");
-    allocation.items(1)?;
-    allocation.bytes(length)?;
     let mut key = String::with_capacity(length);
     key.push_str(prefix);
     key.push_str(component);
     key.push_str(separator);
     key.push_str(suffix);
-    Ok(key)
+    key
 }
 
-/// A projected string is retained and charged to the request account.
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -678,30 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_entries_target_profile_and_derived_facts_share_one_ledger() {
-        let measure = |limits: &Limits| {
-            let parallelism = parallelism::Proof::fixture(
-                NonZeroUsize::new(12).expect("fixture jobs are nonzero"),
-            )
-            .expect("fixture parallelism seals");
-            let mut allocation = crate::cargo::RequestAllocation::new(limits);
-            let projection = Projection::derive_governed_budgeted(
-                &Environment::empty(),
-                "aarch64-apple-darwin",
-                "dev",
-                parallelism,
-                limits,
-                &mut allocation,
-            )?;
-            Ok::<_, crate::Error>((allocation, projection))
-        };
-        let (usage, projection) = measure(&Limits::standard()).expect("the projection derives");
-        assert!(usage.items >= projection.entries.len());
-        assert!(usage.bytes > 0);
-    }
-
-    #[test]
-    fn projection_clone_charges_before_owning_every_retained_fact() {
+    fn projection_try_clone_owns_an_equal_projection() {
         let standard = Limits::standard();
         let projection = Projection::derive(
             &Environment::empty(),
@@ -710,14 +622,8 @@ mod tests {
             &standard,
         )
         .expect("fixture projection derives");
-        let measure = |limits: &Limits| {
-            let mut allocation = crate::cargo::RequestAllocation::new(limits);
-            let cloned = projection.clone_budgeted(&mut allocation)?;
-            Ok::<_, crate::Error>((allocation, cloned))
-        };
-        let (usage, cloned) = measure(&standard).expect("the projection clones");
+        let cloned = projection.try_clone().expect("the projection clones");
         assert_eq!(projection, cloned);
-        assert!(usage.items > 0 && usage.bytes > 0);
     }
 
     #[test]

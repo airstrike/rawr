@@ -25,12 +25,11 @@ fn authority_capture_retains_the_interpreted_manifest_and_absent_lock() {
     let old = b"[workspace]\nresolver='2'\n";
     fs::write(&manifest, old).unwrap();
     let limits = Limits::standard();
-    let mut allocation = RequestAllocation::new(&limits);
-    let authority = Authority::load(Some(&manifest), &mut allocation).unwrap();
+    let authority = Authority::load(Some(&manifest)).unwrap();
     fs::write(&manifest, b"[workspace]\nresolver='3'\n").unwrap();
     let lock = fixture.0.join("Cargo.lock");
     fs::write(&lock, b"version = 4\n").unwrap();
-    let inputs = authority_inputs(&authority, &[], &mut allocation).unwrap();
+    let inputs = authority_inputs(&authority, &[]).unwrap();
     assert_eq!(
         inputs
             .iter()
@@ -60,27 +59,23 @@ fn cached_consumption_authority_is_bound_to_the_original_workspace_image() {
     let manifest = fixture.0.join("Cargo.toml");
     fs::write(&manifest, b"[workspace]\nresolver='2'\n").unwrap();
     let limits = Limits::standard();
-    let mut allocation = RequestAllocation::new(&limits);
     let image = crate::input::workspace::capture(
         Box::from([manifest.clone()]),
-        &mut crate::input::workspace::Account::borrow(&mut allocation, &limits),
+        &mut crate::input::workspace::Account::bounded(&limits),
     )
     .unwrap();
-    let first = workspace_node_authority(b"same Build bytes", &image, &mut allocation).unwrap();
+    let first = workspace_node_authority(b"same Build bytes", &image).unwrap();
     assert_ne!(first.as_ref(), b"same Build bytes");
     fs::write(&manifest, b"[workspace]\nresolver='3'\n").unwrap();
     assert!(image
-        .require(&mut crate::input::workspace::Account::borrow(
-            &mut allocation,
-            &limits,
-        ))
+        .require(&mut crate::input::workspace::Account::bounded(&limits))
         .is_err());
     let changed = crate::input::workspace::capture(
         Box::from([manifest]),
-        &mut crate::input::workspace::Account::borrow(&mut allocation, &limits),
+        &mut crate::input::workspace::Account::bounded(&limits),
     )
     .unwrap();
-    let second = workspace_node_authority(b"same Build bytes", &changed, &mut allocation).unwrap();
+    let second = workspace_node_authority(b"same Build bytes", &changed).unwrap();
     assert_ne!(first, second);
 }
 
@@ -96,11 +91,10 @@ fn workspace_roots_use_input_roles_and_lock_bytes_keep_direct_freshness() {
     fs::create_dir(fixture.0.join("bogus")).unwrap();
     fs::write(fixture.0.join("bogus/Cargo.toml"), "[workspace]\n").unwrap();
     let limits = Limits::standard();
-    let mut allocation = RequestAllocation::new(&limits);
-    let canonical = canonical_authority(&manifest, &mut allocation).unwrap();
+    let canonical = canonical_authority(&manifest).unwrap();
     assert_eq!(canonical, manifest);
-    let authority = Authority::load(Some(&canonical), &mut allocation).unwrap();
-    let inputs = authority_inputs(&authority, &[], &mut allocation).unwrap();
+    let authority = Authority::load(Some(&canonical)).unwrap();
+    let inputs = authority_inputs(&authority, &[]).unwrap();
     let metadata = unit::Metadata::fixture_packages([unit::Package::fixture(
         "harness",
         "harness",
@@ -110,7 +104,7 @@ fn workspace_roots_use_input_roles_and_lock_bytes_keep_direct_freshness() {
             cargo_id: "path+harness".into(),
         },
     )]);
-    let mut account = crate::input::workspace::Account::borrow(&mut allocation, &limits);
+    let mut account = crate::input::workspace::Account::bounded(&limits);
     let roots = crate::input::workspace::roots(&inputs, &metadata, &mut account).unwrap();
     assert_eq!(roots.as_ref(), std::slice::from_ref(&manifest));
     let image = crate::input::workspace::capture(roots, &mut account).unwrap();
@@ -140,10 +134,8 @@ fn authority_inputs_preserve_manifest_and_lock_roles_at_the_same_path() {
     let fixture = Fixture::new();
     let manifest = fixture.0.join("Cargo.lock");
     fs::write(&manifest, b"[workspace]\nresolver='2'\n").unwrap();
-    let limits = Limits::standard();
-    let mut allocation = RequestAllocation::new(&limits);
-    let authority = Authority::load(Some(&manifest), &mut allocation).unwrap();
-    let inputs = authority_inputs(&authority, &[], &mut allocation).unwrap();
+    let authority = Authority::load(Some(&manifest)).unwrap();
+    let inputs = authority_inputs(&authority, &[]).unwrap();
     assert_eq!(inputs.len(), 2);
     assert!(inputs.iter().all(|input| input.path() == manifest));
     assert_eq!(inputs.iter().filter_map(Input::manifest).count(), 1);

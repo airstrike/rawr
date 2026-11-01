@@ -183,7 +183,6 @@ fn exercise(outcome: Outcome) {
             steps,
         )
         .expect("bounded script seals");
-        let mut allocation = request.allocation;
         script
             .run_result(|| -> Result<()> {
                 let harness = request.prepare_fresh_harness_in(
@@ -191,21 +190,13 @@ fn exercise(outcome: Outcome) {
                     &cached,
                     &limits,
                     &cargo_limits,
-                    &mut allocation,
                     unit::Allocation::begin(&cargo_limits),
                 )?;
-                let prepared_bytes = allocation.bytes;
                 if matches!(outcome, Outcome::BeforeBuildWorkspaceDrift) {
                     fs::write(&ancestor, b"[workspace.package]\nversion='2.0.0'\n").unwrap();
                 }
-                let result = request.build_harness_in(
-                    &cached,
-                    layout,
-                    harness,
-                    &mut allocation,
-                    &limits,
-                    &cargo_limits,
-                );
+                let result =
+                    request.build_harness_in(&cached, layout, harness, &limits, &cargo_limits);
                 match outcome {
                     Outcome::Success => {
                         let built = result?;
@@ -216,7 +207,6 @@ fn exercise(outcome: Outcome) {
                         );
                         assert!(built.harness.dag.is_none());
                         assert!(built.harness.universe.is_some());
-                        assert!(built.allocation.bytes > prepared_bytes);
                         built.harness.cargo_allocation.require(&cargo_limits);
                         let expected = Build::parse(
                             &build_bytes,
@@ -241,7 +231,6 @@ fn exercise(outcome: Outcome) {
                             ),
                             "original error: {error:?}"
                         );
-                        assert!(allocation.bytes > prepared_bytes);
                     }
                 }
                 assert!(fs::read(layout.extraction().source()).is_ok());
@@ -288,7 +277,6 @@ fn a_different_real_attestation_cannot_execute_the_prepared_harness() {
         let (metadata, units) = documents(request, layout.final_form());
         bind_universe(request, &cached);
         let steps = fresh_steps(request, native, layout, &metadata, &units);
-        let mut allocation = request.allocation;
         super::super::script(layout, steps)
             .run(|| -> Result<()> {
                 let harness = request.prepare_fresh_harness_in(
@@ -296,18 +284,10 @@ fn a_different_real_attestation_cannot_execute_the_prepared_harness() {
                     &cached,
                     &limits,
                     &limits,
-                    &mut allocation,
                     unit::Allocation::begin(&limits),
                 )?;
                 assert_ne!(&harness.toolchain, wrong.attestation.value().proof());
-                let result = request.build_harness_in(
-                    &wrong,
-                    layout,
-                    harness,
-                    &mut allocation,
-                    &limits,
-                    &limits,
-                );
+                let result = request.build_harness_in(&wrong, layout, harness, &limits, &limits);
                 assert!(matches!(
                     result
                         .err()

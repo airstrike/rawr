@@ -106,7 +106,7 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("catalog", fixture, limits)
+            Dependency::path("catalog", fixture)
                 .and_then(|dependency| dependency.package("catalog-api"))
                 .expect("the unchanged fixture specification is valid"),
         )
@@ -129,15 +129,10 @@ fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
         GitReference::Tag("v1.0.0".into()),
         GitReference::DefaultBranch,
     ] {
-        Dependency::git(
-            "catalog",
-            "https://example.invalid/catalog",
-            reference,
-            &limits,
-        )
-        .expect("each Git reference Cargo accepts seals");
+        Dependency::git("catalog", "https://example.invalid/catalog", reference)
+            .expect("each Git reference Cargo accepts seals");
     }
-    Dependency::registry("catalog", "1", &limits)
+    Dependency::registry("catalog", "1")
         .expect("Cargo's shorthand registry requirement seals semantically");
 
     let error = Request::builder(&project.root, &project.cache(), &limits)
@@ -148,7 +143,7 @@ fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
         .target("x86_64-unknown-linux-gnu")
         .expect("the triple is syntactically valid")
         .dependency(
-            Dependency::path("catalog", &fixture(), &limits)
+            Dependency::path("catalog", &fixture())
                 .and_then(|dependency| dependency.package("catalog-api"))
                 .expect("the fixture specification is valid"),
         )

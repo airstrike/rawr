@@ -251,7 +251,7 @@ fn request(project: &Project, limits: &Limits, dependencies: &[(&str, &str)]) ->
     for (alias, package) in dependencies {
         builder = builder
             .dependency(
-                Dependency::path(alias, &fixture(package), limits)
+                Dependency::path(alias, &fixture(package))
                     .and_then(|dependency| dependency.package(package))
                     .expect("the fixture selection is exact"),
             )

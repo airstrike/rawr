@@ -189,13 +189,13 @@ fn request(project: &Project, limits: &Limits) -> rawr_import::cargo::Request {
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("geometry", &fixture("geometry-api"), limits)
+            Dependency::path("geometry", &fixture("geometry-api"))
                 .and_then(|dependency| dependency.package("geometry-api"))
                 .expect("the geometry fixture selection is exact"),
         )
         .expect("the geometry dependency fits the request")
         .dependency(
-            Dependency::path("catalog", &fixture("catalog-api"), limits)
+            Dependency::path("catalog", &fixture("catalog-api"))
                 .and_then(|dependency| dependency.package("catalog-api"))
                 .expect("the catalog fixture selection is exact"),
         )

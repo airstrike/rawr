@@ -313,7 +313,7 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("fallback", &added_copy, &limits)
+            Dependency::path("fallback", &added_copy)
                 .and_then(|dependency| dependency.package("fallback-api"))
                 .expect("the fallback member-addition dependency seals"),
         )
@@ -376,13 +376,13 @@ fn request(project: &Project, environment: Environment, limits: &Limits) -> Requ
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("freshness", &fixture("freshness-api"), limits)
+            Dependency::path("freshness", &fixture("freshness-api"))
                 .and_then(|dependency| dependency.package("freshness-api"))
                 .expect("the freshness dependency seals"),
         )
         .expect("the freshness dependency fits the request")
         .dependency(
-            Dependency::path("fallback", &fixture("fallback-api"), limits)
+            Dependency::path("fallback", &fixture("fallback-api"))
                 .and_then(|dependency| dependency.package("fallback-api"))
                 .expect("the fallback dependency seals"),
         )
@@ -403,7 +403,7 @@ fn single_request(
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("freshness", dependency, limits)
+            Dependency::path("freshness", dependency)
                 .and_then(|dependency| dependency.package("freshness-api"))
                 .expect("the copied freshness dependency seals"),
         )
@@ -421,7 +421,7 @@ fn extract_fallback(
     Request::builder(&project.0, &project.cache(), limits)?
         .environment(Environment::capture()?.setting("CARGO_NET_OFFLINE", "true")?)
         .policy(Policy::manifest().seal())?
-        .dependency(Dependency::path("fallback", dependency, limits)?.package("fallback-api")?)?
+        .dependency(Dependency::path("fallback", dependency)?.package("fallback-api")?)?
         .build()?
         .resolve(native, limits)
         .and_then(|resolution| rawr_import::extract::from_resolution(resolution, native, limits))

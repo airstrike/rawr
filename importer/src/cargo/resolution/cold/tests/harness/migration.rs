@@ -56,7 +56,6 @@ fn exercise() {
                 move |_| test_launch::Reply::stdout(units),
             ),
         ];
-        let mut allocation = request.allocation;
         let harness = super::super::script(layout, steps)
             .run(|| {
                 request.prepare_harness_in(
@@ -64,7 +63,6 @@ fn exercise() {
                     &cached,
                     &limits,
                     &limits,
-                    &mut allocation,
                     unit::Allocation::begin(&limits),
                 )
             })
@@ -78,7 +76,7 @@ fn exercise() {
         fs::write(legacy.join("src/lib.rs"), &source).unwrap();
         fs::write(legacy.join("Cargo.lock"), &lock).unwrap();
         let definition = request.universe.as_ref().unwrap().current();
-        let provisional = cargo::render_manifest(request, None, &limits)?;
+        let provisional = cargo::render_manifest(request, None)?;
         // Only preflight identity is fixture-authenticated. Zero completion
         // fields deliberately cannot serve as a portable old completed receipt.
         let receipt = Preflight {
@@ -114,7 +112,6 @@ fn exercise() {
         .collect();
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
         let (metadata, units) = documents(request, layout.final_form());
-        let mut allocation = request.allocation;
         // The compatibility constructor still refuses Persisted before commands.
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = request.prepare_fresh_harness_in(
@@ -122,7 +119,6 @@ fn exercise() {
                 &cached,
                 &limits,
                 &limits,
-                &mut allocation,
                 unit::Allocation::begin(&limits),
             );
         }))
@@ -152,7 +148,6 @@ fn exercise() {
                     &cached,
                     &limits,
                     &limits,
-                    &mut allocation,
                     unit::Allocation::begin(&limits),
                 )
             })

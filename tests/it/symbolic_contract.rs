@@ -311,7 +311,7 @@ fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str
         .policy(extract::Policy::manifest(limits).seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("app", &rust_fixture("demand-api"), limits)
+            Dependency::path("app", &rust_fixture("demand-api"))
                 .and_then(|dependency| dependency.package("demand-api"))
                 .expect("the demand fixture selection is exact"),
         )
@@ -339,7 +339,7 @@ fn reexport_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&s
         .policy(extract::Policy::manifest(limits).seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("outer", &rust_fixture("outer-api"), limits)
+            Dependency::path("outer", &rust_fixture("outer-api"))
                 .and_then(|dependency| dependency.package("outer-api"))
                 .expect("the re-exporting fixture selection is exact"),
         )
@@ -376,13 +376,13 @@ fn request(root: &Path, limits: &Limits) -> Request {
         .policy(extract::Policy::manifest(limits).seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("fixture", &rust_fixture("symbolic-api"), limits)
+            Dependency::path("fixture", &rust_fixture("symbolic-api"))
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the real Rust fixture selection is exact"),
         )
         .expect("the fixture dependency fits the request")
         .dependency(
-            Dependency::path("fixture_b", &rust_fixture("symbolic-api"), limits)
+            Dependency::path("fixture_b", &rust_fixture("symbolic-api"))
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the second Rust fixture alias is exact"),
         )

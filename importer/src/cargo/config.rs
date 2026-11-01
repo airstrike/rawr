@@ -12,7 +12,7 @@ use semver::VersionReq;
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use super::{digest, normalized_absolute, Digest, Limits, RequestAllocation};
+use super::{digest, normalized_absolute, Digest, Limits};
 use crate::process::ToolPaths;
 use crate::{Error, Result};
 
@@ -82,7 +82,6 @@ pub struct Dependency {
     features: Box<[Box<str>]>,
     default_features: bool,
     roles: Roles,
-    allocation: RequestAllocation,
 }
 
 /// An exact environment replayed after ambient state is cleared.
@@ -283,11 +282,7 @@ impl Role {
 
 impl Dependency {
     /// Begin a local-path dependency specification.
-    pub fn path(alias: &str, path: &Path, limits: &Limits) -> Result<Self> {
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(1)?;
-        allocation.string(alias)?;
-        allocation.path(path)?;
+    pub fn path(alias: &str, path: &Path) -> Result<Self> {
         Ok(Self {
             alias: validated_library_alias(alias)?,
             package: None,
@@ -295,16 +290,11 @@ impl Dependency {
             features: Box::default(),
             default_features: true,
             roles: Roles::library(),
-            allocation,
         })
     }
 
     /// Begin a registry dependency with a semantic Cargo version requirement.
-    pub fn registry(alias: &str, version: &str, limits: &Limits) -> Result<Self> {
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(1)?;
-        allocation.string(alias)?;
-        allocation.string(version)?;
+    pub fn registry(alias: &str, version: &str) -> Result<Self> {
         let requirement = VersionReq::parse(version).map_err(|error| Error::Request {
             reason: format!(
                 "failed to parse the version requirement `{version}` for dependency \
@@ -322,20 +312,12 @@ impl Dependency {
             features: Box::default(),
             default_features: true,
             roles: Roles::library(),
-            allocation,
         })
     }
 
     /// Begin a Git dependency specification. Cargo locks the commit its
     /// reference resolves to, in the project's `Cargo.lock`.
-    pub fn git(alias: &str, url: &str, reference: GitReference, limits: &Limits) -> Result<Self> {
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(1)?;
-        allocation.string(alias)?;
-        allocation.string(url)?;
-        if let Some((_, name)) = reference.key_value() {
-            allocation.string(name)?;
-        }
+    pub fn git(alias: &str, url: &str, reference: GitReference) -> Result<Self> {
         Ok(Self {
             alias: validated_library_alias(alias)?,
             package: None,
@@ -347,7 +329,6 @@ impl Dependency {
             features: Box::default(),
             default_features: true,
             roles: Roles::library(),
-            allocation,
         })
     }
 
@@ -360,7 +341,6 @@ impl Dependency {
         else {
             panic!("a `version` beside `git` belongs to a Git dependency");
         };
-        self.allocation.string(version)?;
         *retained = Some(version.into());
         Ok(self)
     }
@@ -376,7 +356,6 @@ impl Dependency {
                 .into_boxed_str(),
             });
         }
-        self.allocation.string(package)?;
         self.package = Some(package.into());
         Ok(self)
     }
@@ -390,7 +369,6 @@ impl Dependency {
         let mut retained = Vec::new();
         for feature in features {
             let feature = feature.as_ref();
-            self.allocation.string(feature)?;
             if feature.is_empty() {
                 return Err(Error::Request {
                     reason: format!("dependency `{}` names an empty feature", self.alias)
@@ -406,16 +384,7 @@ impl Dependency {
         Ok(self)
     }
 
-    pub(crate) fn rawr(path: &Path, limits: &Limits) -> Result<Self> {
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(4)?;
-        allocation.string(INTERNAL_ALIAS)?;
-        allocation.string("rawr")?;
-        allocation.path(path)?;
-        allocation.string("debugging")?;
-        allocation.string("rust-import")?;
-        allocation.string("std")?;
-        allocation.string("sync")?;
+    pub(crate) fn rawr(path: &Path) -> Result<Self> {
         // `sync` makes script values `Send`, so a script future is a `Send`
         // std future any runtime polls (D513.3). It changes no unit the
         // project builds: only rawr's own proc macro sees it.
@@ -438,28 +407,17 @@ impl Dependency {
             features,
             default_features: false,
             roles: Roles::rawr(),
-            allocation,
         })
     }
 
-    pub(crate) const fn allocation(&self) -> RequestAllocation {
-        self.allocation
-    }
-
-    pub(crate) fn seal(
-        self,
-        project_root: &Path,
-        allocation: &mut RequestAllocation,
-    ) -> Result<Selected> {
+    pub(crate) fn seal(self, project_root: &Path) -> Result<Selected> {
         let source = match self.source {
             Source::Path(path) => {
                 let path = if path.is_absolute() {
                     path
                 } else {
-                    allocation.path(project_root)?;
                     project_root.join(path)
                 };
-                allocation.path(&path)?;
                 Source::Path(super::resolved_directory("dependency", &path)?)
             }
             source => source,
@@ -938,7 +896,6 @@ impl Provenance {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn discover(
         project_root: &Path,
         authority_manifest: Option<&Path>,
@@ -948,46 +905,18 @@ impl Provenance {
         parallelism: crate::process::parallelism::Proof,
         limits: &Limits,
     ) -> Result<Self> {
-        let mut allocation = super::RequestAllocation::new(limits);
-        Self::discover_budgeted(
-            project_root,
-            authority_manifest,
-            environment,
-            target,
-            profile,
-            parallelism,
-            limits,
-            &mut allocation,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "provenance is one proof bundle over all selected Cargo authorities and its allocation ledger"
-    )]
-    pub(crate) fn discover_budgeted(
-        project_root: &Path,
-        authority_manifest: Option<&Path>,
-        environment: Environment,
-        target: &str,
-        profile: &str,
-        parallelism: crate::process::parallelism::Proof,
-        limits: &Limits,
-        allocation: &mut super::RequestAllocation,
-    ) -> Result<Self> {
-        let projection = projection::Projection::derive_governed_budgeted(
+        let projection = projection::Projection::derive_governed(
             &environment,
             target,
             profile,
             parallelism,
             limits,
-            allocation,
         )?;
         let mut candidates = Vec::new();
-        let project_end = append_hierarchy_candidates(&mut candidates, project_root, allocation)?;
+        let project_end = append_hierarchy_candidates(&mut candidates, project_root)?;
         let authority_end = if let Some(authority_root) = authority_manifest.and_then(Path::parent)
         {
-            append_hierarchy_candidates(&mut candidates, authority_root, allocation)?
+            append_hierarchy_candidates(&mut candidates, authority_root)?
         } else {
             project_end
         };
@@ -1017,13 +946,11 @@ impl Provenance {
             });
         }
         let explicit = if !project_has_config {
-            allocation.items(authority_extra_count)?;
             let mut explicit = Vec::with_capacity(authority_extra_count);
             for candidate in authority.iter().filter(|candidate| {
                 matches!(candidate.state, State::Present(_))
                     && !project.iter().any(|project| project.path == candidate.path)
             }) {
-                allocation.path(&candidate.path)?;
                 explicit.push(candidate.path.clone());
             }
             explicit
@@ -1033,7 +960,7 @@ impl Provenance {
 
         if let Some(cargo_home) = environment.cargo_home()? {
             let home_start = candidates.len();
-            append_pair_candidates(&mut candidates, &cargo_home, allocation)?;
+            append_pair_candidates(&mut candidates, &cargo_home)?;
             prefer_extensionless(&mut candidates, home_start);
         }
         candidates.sort_unstable_by(|left, right| left.path.cmp(&right.path));
@@ -1043,11 +970,9 @@ impl Provenance {
         let cargo_home = environment.cargo_home()?;
         for candidate in &candidates {
             if matches!(candidate.state, State::Present(_)) {
-                let bytes =
-                    read_config_budgeted(&candidate.path, crate::process::TAIL_BYTES, allocation)?;
+                let bytes = read_config(&candidate.path, crate::process::TAIL_BYTES)?;
                 // A byte is a conservative upper bound for every retained TOML
                 // node and byte.  Prove the complete owned DOM before parsing.
-                allocation.retained(bytes.len(), bytes.len())?;
                 let document = parse_config(&candidate.path, &bytes)?;
                 validate_config_authority(&document, &candidate.path)?;
                 if let Some(value) = document
@@ -1083,7 +1008,6 @@ impl Provenance {
                         && compiler.as_ref().is_none_or(|(kept, _)| priority > *kept)
                     {
                         let path = compiler_path(base, value);
-                        allocation.path(&path)?;
                         compiler = Some((priority, path));
                     }
                 }
@@ -1105,7 +1029,6 @@ impl Provenance {
                     0
                 })
         });
-        allocation.retained(1, digest_bytes)?;
         let mut digest_input = Vec::with_capacity(digest_bytes);
         for candidate in &candidates {
             append_framed(
@@ -1201,33 +1124,16 @@ impl Provenance {
         Digest(digest.finalize().into())
     }
 
-    #[cfg(test)]
-    pub(crate) fn input_config(
-        &self,
-        mut retained: RequestAllocation,
-    ) -> Result<crate::input::config::Config> {
-        self.input_config_accounted(&mut retained)
-    }
-
-    /// Retain baseline configuration through the caller's original request account.
-    pub(crate) fn input_config_accounted(
-        &self,
-        allocation: &mut RequestAllocation,
-    ) -> Result<crate::input::config::Config> {
+    /// The baseline configuration a normal build retains.
+    pub(crate) fn input_config(&self) -> Result<crate::input::config::Config> {
         let mut cargo_env_overrides = false;
         for candidate in &self.candidates {
             if matches!(&candidate.state, State::Present(_)) {
-                let bytes =
-                    read_config_budgeted(&candidate.path, crate::process::TAIL_BYTES, allocation)?;
-                allocation.retained(bytes.len(), bytes.len())?;
+                let bytes = read_config(&candidate.path, crate::process::TAIL_BYTES)?;
                 let document = parse_config(&candidate.path, &bytes)?;
                 validate_config_authority(&document, &candidate.path)?;
                 cargo_env_overrides |= document.get("env").is_some();
             }
-        }
-        allocation.items(self.candidates.len())?;
-        for candidate in &self.candidates {
-            allocation.path(&candidate.path)?;
         }
         let mut candidates = Vec::new();
         candidates
@@ -1245,13 +1151,12 @@ impl Provenance {
             };
             candidates.push((candidate.path.clone(), digest));
         }
-        let projection = self.projection.clone_budgeted(allocation)?;
+        let projection = self.projection.try_clone()?;
         Ok(crate::input::config::Config {
             candidates: candidates.into_boxed_slice(),
             cargo_env_overrides,
             provenance: *self.digest.as_bytes(),
             projection,
-            _allocation: *allocation,
         })
     }
 }
@@ -1315,47 +1220,30 @@ fn validate_config_authority(document: &DocumentMut, path: &Path) -> Result<()> 
     Ok(())
 }
 
-fn append_hierarchy_candidates(
-    candidates: &mut Vec<Candidate>,
-    start: &Path,
-    allocation: &mut RequestAllocation,
-) -> Result<usize> {
+fn append_hierarchy_candidates(candidates: &mut Vec<Candidate>, start: &Path) -> Result<usize> {
     let count = start.ancestors().count().saturating_mul(2);
-    allocation.items(count)?;
     candidates.reserve_exact(count);
     for directory in start.ancestors() {
         let pair_start = candidates.len();
-        append_candidate(candidates, directory, ".cargo/config.toml", allocation)?;
-        append_candidate(candidates, directory, ".cargo/config", allocation)?;
+        append_candidate(candidates, directory, ".cargo/config.toml")?;
+        append_candidate(candidates, directory, ".cargo/config")?;
         prefer_extensionless(candidates, pair_start);
     }
     Ok(candidates.len())
 }
 
-fn append_pair_candidates(
-    candidates: &mut Vec<Candidate>,
-    directory: &Path,
-    allocation: &mut RequestAllocation,
-) -> Result<()> {
-    allocation.items(2)?;
-    append_candidate(candidates, directory, "config.toml", allocation)?;
-    append_candidate(candidates, directory, "config", allocation)
+fn append_pair_candidates(candidates: &mut Vec<Candidate>, directory: &Path) -> Result<()> {
+    append_candidate(candidates, directory, "config.toml")?;
+    append_candidate(candidates, directory, "config")
 }
 
 fn append_candidate(
     candidates: &mut Vec<Candidate>,
     directory: &Path,
     relative: &str,
-    allocation: &mut RequestAllocation,
 ) -> Result<()> {
-    let bytes = directory
-        .as_os_str()
-        .len()
-        .saturating_add(1)
-        .saturating_add(relative.len());
-    allocation.retained(1, bytes)?;
     let path = directory.join(relative);
-    let state = candidate_state_budgeted(&path, MAX_VALUE_BYTES, allocation)?;
+    let state = candidate_state(&path, MAX_VALUE_BYTES)?;
     candidates.push(Candidate { path, state });
     Ok(())
 }
@@ -1391,31 +1279,11 @@ fn prefer_extensionless(candidates: &mut Vec<Candidate>, start: usize) {
 }
 
 fn candidate_state(path: &Path, limit: usize) -> Result<State> {
-    candidate_state_inner(path, limit, None)
-}
-
-fn candidate_state_budgeted(
-    path: &Path,
-    limit: usize,
-    allocation: &mut RequestAllocation,
-) -> Result<State> {
-    candidate_state_inner(path, limit, Some(allocation))
-}
-
-fn candidate_state_inner(
-    path: &Path,
-    limit: usize,
-    allocation: Option<&mut RequestAllocation>,
-) -> Result<State> {
     // Cargo follows a symlinked `.cargo` directory or config file. Each check
     // reads through the link as it is now, so a changed link or target is seen.
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => {
-            let bytes = if let Some(allocation) = allocation {
-                read_config_budgeted(path, limit, allocation)?
-            } else {
-                read_config(path, limit)?
-            };
+            let bytes = read_config(path, limit)?;
             Ok(State::Present(digest(&bytes)))
         }
         Ok(_) => Err(Error::Path {
@@ -1433,22 +1301,6 @@ fn candidate_state_inner(
 }
 
 fn read_config(path: &Path, limit: usize) -> Result<Vec<u8>> {
-    read_config_inner(path, limit, None)
-}
-
-fn read_config_budgeted(
-    path: &Path,
-    limit: usize,
-    allocation: &mut RequestAllocation,
-) -> Result<Vec<u8>> {
-    read_config_inner(path, limit, Some(allocation))
-}
-
-fn read_config_inner(
-    path: &Path,
-    limit: usize,
-    allocation: Option<&mut RequestAllocation>,
-) -> Result<Vec<u8>> {
     let mut file = File::open(path).map_err(|source| Error::Io {
         operation: "open Cargo config",
         path: path.to_path_buf(),
@@ -1466,9 +1318,6 @@ fn read_config_inner(
             limit,
             actual: length,
         });
-    }
-    if let Some(allocation) = allocation {
-        allocation.retained(1, length)?;
     }
     let mut bytes = Vec::new();
     bytes
@@ -1557,7 +1406,7 @@ mod tests {
         validate_config_authority, Candidate, Dependency, Environment, NoBuildStd, Provenance,
         State, LOADER_PATH, OWNED_INPUT_CONFIG_CANDIDATES, OWNED_PROVENANCE,
     };
-    use crate::cargo::{digest, Limits, RequestAllocation};
+    use crate::cargo::{digest, Limits};
     use crate::Error;
     use toml_edit::DocumentMut;
 
@@ -1632,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    fn input_config_accounted_keeps_prior_usage() {
+    fn input_config_copies_candidates_and_reads_env_overrides() {
         let path = std::env::temp_dir().join(format!(
             "rawr-input-config-account-{}-{:?}.toml",
             std::process::id(),
@@ -1641,24 +1490,8 @@ mod tests {
         let source = b"[env]\nCONFIG_VALUE = 'present'\n";
         fs::write(&path, source).expect("present config publishes");
         let provenance = input_config_provenance(&path, State::Present(digest(source)));
-        let standard = Limits::standard();
-        let mut prior = RequestAllocation::new(&standard);
-        prior.retained(7, 31).expect("earlier request work");
-        let mut measured = prior;
-        let actual = provenance
-            .input_config_accounted(&mut measured)
-            .expect("the original request account retains config");
-        assert!(measured.items > prior.items);
-        assert!(measured.bytes > prior.bytes);
-        assert_eq!(actual._allocation, measured);
-        let legacy = provenance
-            .input_config(prior)
-            .expect("legacy wrapper delegates");
-        assert_eq!(actual.candidates, legacy.candidates);
-        assert_eq!(actual.projection, legacy.projection);
-        assert_eq!(actual.provenance, legacy.provenance);
-        assert_eq!(actual.cargo_env_overrides, legacy.cargo_env_overrides);
-        assert_eq!(actual._allocation, legacy._allocation);
+        let actual = provenance.input_config().expect("config is retained");
+        assert_eq!(actual.provenance, *provenance.digest.as_bytes());
         assert!(actual.cargo_env_overrides);
         assert_ne!(
             actual.candidates[0]
@@ -1676,7 +1509,7 @@ mod tests {
     }
 
     #[test]
-    fn input_config_accounted_keeps_read_and_parse_charges_on_schema_failure() {
+    fn input_config_refuses_unparsable_config_before_copying_candidates() {
         let path = std::env::temp_dir().join(format!(
             "rawr-input-config-failure-{}-{:?}.toml",
             std::process::id(),
@@ -1685,19 +1518,12 @@ mod tests {
         for source in [b"\xff".as_slice(), b"key = ".as_slice()] {
             fs::write(&path, source).expect("invalid config publishes");
             let provenance = input_config_provenance(&path, State::Present(digest(source)));
-            let limits = Limits::standard();
-            let mut allocation = RequestAllocation::new(&limits);
-            allocation.retained(7, 31).expect("earlier request work");
             OWNED_INPUT_CONFIG_CANDIDATES.with(|owned| owned.set(0));
             assert!(matches!(
-                provenance.input_config_accounted(&mut allocation),
+                provenance.input_config(),
                 Err(Error::Request { reason })
                     if reason.starts_with("could not parse TOML configuration in")
             ));
-            assert_eq!(
-                (allocation.items, allocation.bytes),
-                (8 + source.len(), 31 + 2 * source.len())
-            );
             assert_eq!(OWNED_INPUT_CONFIG_CANDIDATES.with(Cell::get), 0);
         }
         fs::remove_file(path).expect("invalid config retires");
@@ -2026,7 +1852,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_config_hierarchy_charges_one_request_ledger() {
+    fn deep_config_hierarchy_discovers_one_provenance() {
         let fixture = std::env::temp_dir().join(format!(
             "rawr-config-ledger-{}-{:?}",
             std::process::id(),
@@ -2045,9 +1871,8 @@ mod tests {
         let parallelism =
             crate::process::parallelism::Proof::discover().expect("parallelism discovers");
         let exercise = |limits: &Limits| {
-            let mut allocation = crate::cargo::RequestAllocation::new(limits);
             OWNED_PROVENANCE.with(|owned| owned.set(0));
-            let provenance = Provenance::discover_budgeted(
+            let provenance = Provenance::discover(
                 &root,
                 None,
                 Environment::empty(),
@@ -2055,12 +1880,10 @@ mod tests {
                 "dev",
                 parallelism,
                 limits,
-                &mut allocation,
             )?;
-            Ok::<_, crate::Error>((allocation, provenance))
+            Ok::<_, crate::Error>(provenance)
         };
-        let (usage, _) = exercise(&Limits::standard()).expect("the deep hierarchy discovers");
-        assert!(usage.items > 0 && usage.bytes > 0);
+        exercise(&Limits::standard()).expect("the deep hierarchy discovers");
         assert_eq!(OWNED_PROVENANCE.with(Cell::get), 1);
         fs::remove_dir_all(fixture).expect("deep config fixture is removed");
     }
@@ -2212,17 +2035,12 @@ mod tests {
     /// one unit.
     #[test]
     fn dependencies_share_a_unit_only_when_they_name_one_package() {
-        let limits = Limits::standard();
-        let seal = |dependency: Dependency| {
-            dependency
-                .seal(Path::new("/"), &mut RequestAllocation::new(&limits))
-                .unwrap()
-        };
-        let itoa = seal(Dependency::registry("itoa", "1", &limits).unwrap());
-        let semver = seal(Dependency::registry("semver", "1", &limits).unwrap());
+        let seal = |dependency: Dependency| dependency.seal(Path::new("/")).unwrap();
+        let itoa = seal(Dependency::registry("itoa", "1").unwrap());
+        let semver = seal(Dependency::registry("semver", "1").unwrap());
         assert!(!itoa.shares_cargo_unit(&semver));
         let renamed = seal(
-            Dependency::registry("numbers", "1", &limits)
+            Dependency::registry("numbers", "1")
                 .unwrap()
                 .package("itoa")
                 .unwrap(),

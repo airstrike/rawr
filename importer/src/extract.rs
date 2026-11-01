@@ -2556,10 +2556,6 @@ impl Policy {
         }
     }
 
-    pub(crate) const fn retained_usage(&self) -> (usize, usize) {
-        (self.usage.items, self.usage.bytes)
-    }
-
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
@@ -6789,7 +6785,7 @@ mod policy_bounds {
     fn exclusion_owns_each_string_once() {
         let before = ownerships();
         let reserves = owned_path_reserves();
-        let policy = Policy::manifest()
+        let _policy = Policy::manifest()
             .exclusion("dep", ["one", "two", "three"], "reason", span())
             .expect("the exclusion seals")
             .seal();
@@ -6799,7 +6795,6 @@ mod policy_bounds {
             "alias, three components, reason and span file"
         );
         assert_eq!(owned_path_reserves() - reserves, 1);
-        assert_eq!(policy.retained_usage().0, 8);
     }
 
     /// The builder drains a finite path, borrowing and retaining every
@@ -6816,7 +6811,7 @@ mod policy_bounds {
         let before = ownerships();
         let borrowed_before = borrowed_ownerships();
         let reserves = owned_path_reserves();
-        let policy = Policy::manifest()
+        let _policy = Policy::manifest()
             .exclusion("dep", iterator, "reason", span())
             .expect("the path is retained")
             .seal();
@@ -6828,7 +6823,6 @@ mod policy_bounds {
             "alias, reason, span file and five components"
         );
         assert_eq!(owned_path_reserves() - reserves, 1);
-        assert_eq!(policy.retained_usage().0, 10);
     }
 
     #[test]

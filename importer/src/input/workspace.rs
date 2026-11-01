@@ -22,25 +22,8 @@ pub(crate) struct Image {
     candidates: Box<[PathBuf]>,
 }
 
-pub(crate) trait Storage {
-    fn retain(&mut self, items: usize, bytes: usize) -> Result<()>;
-}
-
-impl Storage for cargo::RequestAllocation {
-    fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
-        self.retained(items, bytes)
-    }
-}
-
-impl Storage for Allocation {
-    fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
-        self.items(items)?;
-        self.bytes(bytes)
-    }
-}
-
 pub(crate) struct Account<'a> {
-    storage: &'a mut dyn Storage,
+    storage: Option<&'a mut Allocation>,
     limits: &'a cargo::Limits,
 }
 
@@ -59,14 +42,32 @@ impl<T> Slots<T> {
 }
 
 impl<'a> Account<'a> {
-    pub(crate) fn borrow(storage: &'a mut dyn Storage, limits: &'a cargo::Limits) -> Self {
-        Self { storage, limits }
+    pub(crate) fn borrow(storage: &'a mut Allocation, limits: &'a cargo::Limits) -> Self {
+        Self {
+            storage: Some(storage),
+            limits,
+        }
+    }
+
+    /// An account that retains into no input allocation: Cargo resolution's
+    /// own reads keep only the physical bounds below.
+    pub(crate) fn bounded(limits: &'a cargo::Limits) -> Self {
+        Self {
+            storage: None,
+            limits,
+        }
     }
 
     // Copies of admitted bytes are owned once by the original storage
     // account; probes and hashing keep their own graph axes below.
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
-        self.storage.retain(items, bytes)
+        match self.storage.as_mut() {
+            Some(storage) => {
+                storage.items(items)?;
+                storage.bytes(bytes)
+            }
+            None => Ok(()),
+        }
     }
 
     fn copy(&mut self, path: &Path) -> Result<PathBuf> {

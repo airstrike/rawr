@@ -181,7 +181,6 @@ fn exercise(outcome: Outcome) {
             steps,
         )
         .expect("bounded complete script seals");
-        let mut allocation = request.allocation;
         script
             .run_result(|| -> Result<()> {
                 let mut owned = Some(owned);
@@ -191,18 +190,10 @@ fn exercise(outcome: Outcome) {
                     &cached,
                     &limits,
                     &cargo_limits,
-                    &mut allocation,
                     unit::Allocation::begin(&cargo_limits),
                 )?;
-                let built = request.build_harness_in(
-                    &cached,
-                    layout,
-                    harness,
-                    &mut allocation,
-                    &limits,
-                    &cargo_limits,
-                )?;
-                let before = built.allocation.bytes;
+                let built =
+                    request.build_harness_in(&cached, layout, harness, &limits, &cargo_limits)?;
                 let documents = built
                     .harness
                     .documents
@@ -237,7 +228,6 @@ fn exercise(outcome: Outcome) {
                         assert!(resolution.dag.is_none());
                         assert!(resolution.universe.is_some());
                         resolution.cargo_allocation.require(&cargo_limits);
-                        assert!(allocation.bytes > before);
                         let receipt: Value = serde_json::from_slice(
                             &fs::read(layout.receipt())
                                 .expect("only complete observations publish the assigned receipt"),
@@ -344,13 +334,12 @@ fn exercise(outcome: Outcome) {
                         );
                         replay_request.universe =
                             Some(cargo::universe::Catalog::new(replay_definition));
-                        let mut current_request_allocation = replay_request.allocation;
                         let catalog = replay_request.universe.as_ref().expect("current catalog");
                         let definition = catalog.current();
                         let placement = cargo::select_placement(
                             &replay_request,
                             catalog,
-                            &cargo::render_manifest(&replay_request, None, &limits)?,
+                            &cargo::render_manifest(&replay_request, None)?,
                         )?;
                         let toolchain = cached.attestation.value().proof();
                         let current_context = definition.validate_context(
@@ -361,11 +350,7 @@ fn exercise(outcome: Outcome) {
                             replay_request.config.projection_schema(),
                             replay_request.toolchain.schemas().graph(),
                             replay_request.toolchain.schemas().unit(),
-                            cargo::resolution::cold::cohort(
-                                &replay_request,
-                                layout.paths(),
-                                &mut current_request_allocation,
-                            )?,
+                            cargo::resolution::cold::cohort(&replay_request, layout.paths())?,
                             replay_request.config.universe_context(),
                             replay_request.config.digest(),
                         )?;
@@ -390,7 +375,7 @@ fn exercise(outcome: Outcome) {
                         )
                         .expect("complete cold record and inventory seal together");
                         let cargo_home = replay_request.config.cargo_home()?;
-                        let mut compare = |budget: &mut crate::input::stored::Budget<'_>,
+                        let compare = |budget: &mut crate::input::stored::Budget<'_>,
                                            cargo_limits: &Limits,
                                            cargo_allocation: &mut cargo::unit::Allocation| {
                             let lock = definition.candidate(
@@ -411,7 +396,6 @@ fn exercise(outcome: Outcome) {
                                 None,
                                 &limits,
                                 cargo_limits,
-                                &mut current_request_allocation,
                                 cargo_allocation,
                             )
                         };
