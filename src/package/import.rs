@@ -374,8 +374,15 @@ impl crate::Engine {
             if used.types.is_empty() && used.functions.is_empty() && used.slots.is_empty() {
                 compiler
                     .require_selected(identity, used.selector, source.identity(), start, end)
-                    .map_err(Error::from)
-                    .map_err(super::Error::import)?;
+                    .map_err(|error| {
+                        unsupported_use(
+                            error,
+                            &used.path,
+                            source.identity(),
+                            source.text(),
+                            used.span,
+                        )
+                    })?;
                 continue;
             }
             let mut functions = Vec::new();
@@ -534,8 +541,15 @@ impl crate::Engine {
                     start,
                     end,
                 )
-                .map_err(Error::from)
-                .map_err(super::Error::import)?;
+                .map_err(|error| {
+                    unsupported_use(
+                        error,
+                        &used.path,
+                        source.identity(),
+                        source.text(),
+                        used.span,
+                    )
+                })?;
         }
 
         snapshot
@@ -547,6 +561,43 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         Ok(CompiledImported { demand })
+    }
+}
+
+/// A crate item's use the program wrote that the build of its dependencies
+/// can't take at the types or arguments it gives, reported at that use in
+/// Rust's terms (D664): the call and the item. Any other failure is the
+/// build's own.
+fn unsupported_use(
+    error: rawr_import::surface::Error,
+    path: &str,
+    identity: &str,
+    text: &str,
+    span: crate::Span,
+) -> super::Error {
+    use rawr_import::surface::Error as Surface;
+    let (message, label) = match error {
+        Surface::UnconstrainedGeneric => (
+            format!(
+                "this use of `{path}` leaves one of its type parameters unknown, which isn't \
+                 supported yet"
+            ),
+            "type parameter not known here",
+        ),
+        Surface::InstanceMismatch => (
+            format!("calling `{path}` with these arguments isn't supported yet"),
+            "not supported in Rawr yet",
+        ),
+        error => return super::Error::import(Error::from(error)),
+    };
+    let report = diagnostic::Source::new(identity, text).and_then(|source| {
+        diagnostic::Report::error(diagnostic::code::RESOLVE_HOST_OPERATION, message)
+            .primary(source, span, Some(label.into()))
+            .map(diagnostic::Builder::finish)
+    });
+    match report {
+        Ok(report) => super::Error::import_diagnostic(report),
+        Err(error) => super::Error::diagnostic(error),
     }
 }
 
@@ -3449,5 +3500,43 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(error.to_string(), expected);
         }
+    }
+
+    /// A crate item's use the build of the dependencies can't take is
+    /// reported at that use, naming the item, and never as a "surface
+    /// instance" (#565).
+    #[test]
+    fn an_unsupported_crate_use_reports_at_its_span() {
+        use rawr_import::surface::Error as Surface;
+        let text = "fn main() { modal(base, content, hide); }";
+        let start = text.find("modal").unwrap();
+        let span = crate::Span::new(
+            crate::Position::new(1, start as u16 + 1),
+            crate::Position::new(1, start as u16 + 6),
+        );
+        for (error, expected) in [
+            (
+                Surface::InstanceMismatch,
+                "calling `iced::widget::stack` with these arguments isn't supported yet",
+            ),
+            (
+                Surface::UnconstrainedGeneric,
+                "this use of `iced::widget::stack` leaves one of its type parameters \
+                 unknown, which isn't supported yet",
+            ),
+        ] {
+            let report =
+                super::unsupported_use(error, "iced::widget::stack", "main.rs", text, span)
+                    .report()
+                    .expect("the use's report");
+            assert_eq!(report.message(), expected);
+            assert_eq!(report.labels().len(), 1);
+            assert!(!report.message().contains("surface"));
+        }
+        // A failure that isn't the use's stays the build's own.
+        assert!(matches!(
+            super::unsupported_use(Surface::Allocation, "a::b", "main.rs", text, span).report(),
+            Ok(report) if !report.message().contains("calling")
+        ));
     }
 }

@@ -154,13 +154,13 @@ impl Report {
     /// Start one error report using the category fixed by its stable code.
     #[must_use]
     pub fn error(code: Code, message: impl Into<ImmutableString>) -> Builder {
-        Builder::new(code, Severity::Error, message.into())
+        Builder::new(code, Severity::Error, written(message.into()))
     }
 
     /// Start one warning report using the category fixed by its stable code.
     #[must_use]
     pub fn warning(code: Code, message: impl Into<ImmutableString>) -> Builder {
-        Builder::new(code, Severity::Warning, message.into())
+        Builder::new(code, Severity::Warning, written(message.into()))
     }
 
     /// Return this report's stable semantic code.
@@ -221,6 +221,16 @@ impl Report {
     }
 }
 
+/// A report's text as the program could write it: an item a macro's
+/// `$crate` reached through a crate's hidden segment reads from that
+/// crate's root (`host::path::public`), so no message names it (#563).
+fn written(text: ImmutableString) -> ImmutableString {
+    match crate::host::path::public(&text) {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(public) => public.into(),
+    }
+}
+
 impl Builder {
     fn new(code: Code, severity: Severity, message: ImmutableString) -> Self {
         Self {
@@ -275,7 +285,7 @@ impl Builder {
     ) -> Self {
         self.report.external_labels.push(ExternalLabel {
             position,
-            message: message.into(),
+            message: message.into().map(written),
         });
         self
     }
@@ -335,7 +345,7 @@ impl Builder {
             source,
             span,
             kind,
-            message,
+            message: message.map(written),
         });
         Ok(self)
     }
@@ -343,14 +353,14 @@ impl Builder {
     /// Attach actionable help.
     #[must_use]
     pub fn help(mut self, help: impl Into<ImmutableString>) -> Self {
-        self.report.help = Some(help.into());
+        self.report.help = Some(written(help.into()));
         self
     }
 
     /// Attach a supplementary canonical note.
     #[must_use]
     pub fn note(mut self, note: impl Into<ImmutableString>) -> Self {
-        self.report.notes.push(note.into());
+        self.report.notes.push(written(note.into()));
         self
     }
 

@@ -175,3 +175,78 @@ impl fmt::Display for Path {
         Ok(())
     }
 }
+
+/// The segment the importer gives a crate a macro's `$crate` names, after
+/// the root of the dependency the macro came through:
+/// `__rawr_crate_<name>_<16 hex digits>`.
+const HIDDEN_CRATE: &str = "__rawr_crate_";
+
+/// Whether `path` reaches its item through a crate's hidden segment
+/// (`iced::__rawr_crate_iced_core_83b4d3c3e0fc96fe::text::Span`).
+pub(crate) fn is_hidden(path: &str) -> bool {
+    path.contains(HIDDEN_CRATE)
+}
+
+/// `text` with each path through a crate's hidden segment written from
+/// that crate's own root, as rustc names an item of a crate the program
+/// does not name: `iced::__rawr_crate_iced_core_83b4d3c3e0fc96fe::text::Span`
+/// is `iced_core::text::Span`.
+pub(crate) fn public(text: &str) -> std::borrow::Cow<'_, str> {
+    if !is_hidden(text) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let identifier = |c: char| c.is_alphanumeric() || c == '_';
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(HIDDEN_CRATE) {
+        let after = &rest[at + HIDDEN_CRATE.len()..];
+        let end = after.find(|c: char| !identifier(c)).unwrap_or(after.len());
+        let crate_name = after[..end]
+            .rsplit_once('_')
+            .filter(|(name, id)| {
+                !name.is_empty() && id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+            .map(|(name, _)| name);
+        let Some(crate_name) = crate_name else {
+            output.push_str(&rest[..at + HIDDEN_CRATE.len()]);
+            rest = after;
+            continue;
+        };
+        // The dependency's root before the segment, `iced::`, goes too.
+        let before = &rest[..at];
+        let root = before
+            .strip_suffix("::")
+            .map(|head| head.trim_end_matches(identifier))
+            .filter(|head| head.len() + 2 < before.len())
+            .unwrap_or(before);
+        output.push_str(root);
+        output.push_str(crate_name);
+        rest = &after[end..];
+    }
+    output.push_str(rest);
+    std::borrow::Cow::Owned(output)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_hidden_crate_path_reads_from_its_crate() {
+        assert_eq!(
+            super::public("iced::__rawr_crate_iced_core_83b4d3c3e0fc96fe::text::Span<u64>"),
+            "iced_core::text::Span<u64>"
+        );
+        assert_eq!(
+            super::public(
+                "Option<iced::__rawr_crate_iced_widget_275a8d59b45cb72a::Slider<f32, Message>>"
+            ),
+            "Option<iced_widget::Slider<f32, Message>>"
+        );
+        assert_eq!(
+            super::public(
+                "fn(&a::__rawr_crate_b_0000000000000001::X) -> c::__rawr_crate_d_e_000000000000000f::Y"
+            ),
+            "fn(&b::X) -> d_e::Y"
+        );
+        assert_eq!(super::public("iced::widget::Text"), "iced::widget::Text");
+    }
+}
