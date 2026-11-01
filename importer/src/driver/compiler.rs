@@ -80,9 +80,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // blanket implementation through a type's own implementation of the trait
 // its where-clause names. Schema 34 keeps each implementation of a trait
 // whose associated type a selected signature projects from a parameter.
+// Schema 38 applies a blanket implementation of a generic trait through each
+// of the type's own implementations of its bound, not only through one.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 37;
+const PROTOCOL_SCHEMA: u32 = 38;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,

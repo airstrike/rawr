@@ -1946,6 +1946,25 @@ fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
     leaked
 }
 
+/// Scalars a struct's field borrows for its lifetime, as iced's
+/// `LineDash::segments: &'a [f32]`, kept as [`static_bytes`] keeps bytes.
+#[allow(dead_code)]
+fn static_slice<T: PartialEq + Send + Sync + 'static>(values: Vec<T>) -> &'static [T] {
+    static KEPT: std::sync::Mutex<Vec<&'static (dyn std::any::Any + Send + Sync)>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = kept
+        .iter()
+        .filter_map(|kept| kept.downcast_ref::<&'static [T]>())
+        .find(|kept| ***kept == *values)
+    {
+        return *found;
+    }
+    let leaked: &'static [T] = Box::leak(values.into_boxed_slice());
+    kept.push(Box::leak(Box::new(leaked)));
+    leaked
+}
+
 /// [`take_native`] at the type `witness` names, which Rust code can't write.
 #[allow(dead_code)]
 fn take_like<T: 'static>(
@@ -6332,7 +6351,7 @@ fn witness_mode(plan: &Plan) -> u8 {
         } if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) => {
             1
         }
-        Operation::StructField { field, .. } if !copy_scalar(field.ty()) => 2,
+        Operation::StructField { field, .. } if !copy_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
             ..
@@ -6361,6 +6380,12 @@ fn copy_scalar(ty: &convert::Type) -> bool {
         convert::Type::Result(ok, err) => copy_scalar(ok) && copy_scalar(err),
         _ => false,
     }
+}
+
+/// Whether a struct's field of type `ty` is Copy: as `copy_scalar`, and a
+/// shared borrow, as iced's `LineDash::segments: &'a [f32]` is.
+fn copy_field(ty: &convert::Type) -> bool {
+    copy_scalar(ty) || matches!(ty, convert::Type::Borrowed { mutable: false, .. })
 }
 
 /// A variant of a non-generic enum also has a matcher: the variant's
@@ -6618,7 +6643,7 @@ fn structural_kind(plan: &Plan) -> Option<String> {
         }
         Operation::StructField { field, .. } => format!(
             "__rawr_internal::package::import::runner::StructuralKind::Field {{ copy: {} }}",
-            copy_scalar(field.ty())
+            copy_field(field.ty())
         ),
         Operation::EnumVariant { .. } => {
             "__rawr_internal::package::import::runner::StructuralKind::Variant".to_string()
@@ -7143,7 +7168,25 @@ fn render_adapter_body(
                 )
                 .map_err(request::unwritable)?;
             }
-            if copy_scalar(field.ty()) {
+            if matches!(field.ty(), convert::Type::Borrowed { mutable: false, .. }) {
+                // A field that borrows for the struct's lifetime, as iced's
+                // `LineDash::segments`: Rawr's copy, made while the struct
+                // is lent.
+                let mut converted = String::new();
+                render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
+                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+        let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
+        let mut copied = None;
+        access(lent.nonce().bits(), &mut |receiver| {{ let output = receiver.{name}; copied = Some({converted}); }})
+            .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
+        return copied.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
+    }}
+    let handle = native_handle(arguments, 0, false)?;
+    arguments.arena.shared::<{path}, _>(handle, |input| {{ let output = input.{name}; {converted} }})?", name = field.name()).map_err(request::unwritable)?;
+                return Ok(());
+            }
+            if copy_field(field.ty()) {
                 let mut converted = String::new();
                 render_to_dynamic(field.ty(), "output", 0, &mut converted)?;
                 writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
@@ -9230,7 +9273,7 @@ fn render_builder(
             Operation::StructConstructor { form, fields, .. } if step.is_construct() => {
                 let types = fields.iter().map(crate::surface::adapter::Field::ty);
                 if !replay {
-                    render_builder_arguments_iter(types, step.arguments(), output)?;
+                    render_builder_field_arguments(types, step.arguments(), output)?;
                 }
                 write!(output, "    let {binding} = {}", rust_path(step.plan()))
                     .map_err(request::unwritable)?;
@@ -9317,7 +9360,7 @@ fn render_builder_inputs(
                 render_builder_arguments(signature.inputs(), step.arguments(), output)?;
             }
             Operation::StructConstructor { fields, .. } if step.is_construct() => {
-                render_builder_arguments_iter(
+                render_builder_field_arguments(
                     fields.iter().map(crate::surface::adapter::Field::ty),
                     step.arguments(),
                     output,
@@ -9432,6 +9475,23 @@ fn render_builder_arguments_iter<'a>(
     Ok(())
 }
 
+/// `render_builder_arguments_iter` for a struct constructor's fields
+/// (`render_take_field`).
+fn render_builder_field_arguments<'a>(
+    fields: impl ExactSizeIterator<Item = &'a convert::Type>,
+    arguments: &[u32],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    if fields.len() != arguments.len() {
+        return Err(request::drift("consuming builder argument cardinality"));
+    }
+    for (ty, position) in fields.zip(arguments) {
+        let position = *position as usize;
+        render_take_field(position, position, ty, output)?;
+    }
+    Ok(())
+}
+
 fn builder_argument_list(arguments: &[u32], output: &mut Vec<u8>) -> Result<(), request::Error> {
     for (index, position) in arguments.iter().enumerate() {
         if index != 0 {
@@ -9496,7 +9556,7 @@ fn render_builder_constructor(
                 if index != 0 {
                     output.write_all(b", ").map_err(request::unwritable)?;
                 }
-                if replay && !copy_scalar(field.ty()) {
+                if replay && !copy_field(field.ty()) {
                     write!(output, "{}: argument_{position}.clone()", field.name())
                         .map_err(request::unwritable)?;
                 } else {
@@ -11303,9 +11363,41 @@ fn render_fields(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     for (index, field) in fields.iter().enumerate() {
-        render_take(index, index + offset, field.ty(), output)?;
+        render_take_field(index, index + offset, field.ty(), output)?;
     }
     Ok(())
+}
+
+/// A constructor's argument for a field: as `render_take`, and a slice of
+/// scalars or a `&str` the field borrows for its struct's lifetime, as
+/// iced's `LineDash { segments: &[3.0, 6.0], .. }`, kept for as long as
+/// the runner lives once for each content (`render_from_dynamic`).
+fn render_take_field(
+    local: usize,
+    index: usize,
+    ty: &convert::Type,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+    else {
+        return render_take(local, index, ty, output);
+    };
+    let kept = matches!(lent.as_ref(), convert::Type::Sequence { element, length: None, .. }
+        if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some()))
+        || **lent == convert::Type::Builtin(convert::Builtin::Str);
+    if !kept {
+        return render_take(local, index, ty, output);
+    }
+    let mut converted = String::new();
+    render_from_dynamic(ty, "value", 0, &mut converted)?;
+    writeln!(
+        output,
+        "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
+    )
+    .map_err(request::unwritable)
 }
 
 fn render_take(
@@ -11686,6 +11778,27 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(ty, value, depth, &mut converted)?;
             write!(output, "({converted}).map(static_bytes)")
+        }
+        // A slice of other scalars a struct's field borrows, as iced's
+        // `LineDash { segments: &[3.0, 6.0], .. }`: kept the same way.
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(ty.as_ref(), convert::Type::Sequence { element, length: None, .. }
+                if matches!(**element, convert::Type::Builtin(builtin) if builtin.rust_name().is_some())) =>
+        {
+            let mut converted = String::new();
+            render_from_dynamic(ty, value, depth, &mut converted)?;
+            write!(output, "({converted}).map(static_slice)")
+        }
+        // A `&str` a struct's field borrows: pinned as a `&'static str` is.
+        convert::Type::Borrowed { mutable: false, ty }
+            if **ty == convert::Type::Builtin(convert::Builtin::Str) =>
+        {
+            return render_from_dynamic(
+                &convert::Type::Builtin(convert::Builtin::StaticStr),
+                value,
+                depth,
+                output,
+            );
         }
         // A slice of script values a type argument names, as an owned
         // `Vec` of their proxies (`script_slice`).
@@ -14296,7 +14409,7 @@ fn render_module_execution_tests(
     for index in indices {
         let plan = &plans[*index];
         let consumes = match plan.operation() {
-            Operation::StructField { field, .. } => !copy_scalar(field.ty()),
+            Operation::StructField { field, .. } => !copy_field(field.ty()),
             Operation::Method {
                 receiver,
                 signature,

@@ -925,37 +925,39 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         )
                     })
                 });
-                let [base] = own.as_slice() else {
-                    continue;
-                };
-                let base_reference = tcx
-                    .impl_opt_trait_ref(*base)
-                    .ok_or_else(|| "base implementation lost its trait".to_owned())?
-                    .instantiate_identity()
-                    .skip_norm_wip();
-                // Each parameter of the blanket implementation: its self
-                // type is the base's, and each other is the base's trait
-                // argument where the where-clause names it.
-                let mut fixed = vec![None; generics.count()];
-                fixed[blanket.index as usize] = Some(base_reference.self_ty().into());
-                for (written, argument) in predicate
-                    .trait_ref
-                    .args
-                    .iter()
-                    .zip(base_reference.args.iter())
-                    .skip(1)
-                {
-                    if let Some(written) = written.as_type()
-                        && let ty::Param(parameter) = written.kind()
-                        && let Some(slot) = fixed.get_mut(parameter.index as usize)
+                // Each of the type's own implementations of the base trait,
+                // as palette's `Hsl` is `FromColorUnclamped` of `Rgb`, of
+                // `Hsv` and of itself.
+                for base in own {
+                    let base_reference = tcx
+                        .impl_opt_trait_ref(base)
+                        .ok_or_else(|| "base implementation lost its trait".to_owned())?
+                        .instantiate_identity()
+                        .skip_norm_wip();
+                    // Each parameter of the blanket implementation: its
+                    // self type is the base's, and each other is the base's
+                    // trait argument where the where-clause names it.
+                    let mut fixed = vec![None; generics.count()];
+                    fixed[blanket.index as usize] = Some(base_reference.self_ty().into());
+                    for (written, argument) in predicate
+                        .trait_ref
+                        .args
+                        .iter()
+                        .zip(base_reference.args.iter())
+                        .skip(1)
                     {
-                        *slot = Some(argument);
+                        if let Some(written) = written.as_type()
+                            && let ty::Param(parameter) = written.kind()
+                            && let Some(slot) = fixed.get_mut(parameter.index as usize)
+                        {
+                            *slot = Some(argument);
+                        }
                     }
+                    let Some(arguments) = fixed.into_iter().collect::<Option<Vec<_>>>() else {
+                        continue;
+                    };
+                    found.push((implementation, base, tcx.mk_args(&arguments)));
                 }
-                let Some(arguments) = fixed.into_iter().collect::<Option<Vec<_>>>() else {
-                    continue;
-                };
-                found.push((implementation, *base, tcx.mk_args(&arguments)));
             }
         }
         found.sort_unstable_by_key(|(implementation, base, _)| {
@@ -965,10 +967,40 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             )
         });
         found.dedup_by_key(|(implementation, base, _)| (*implementation, *base));
-        let [(implementation, base, arguments)] = found.as_slice() else {
+        // A generic trait overloads by its arguments, as palette's blanket
+        // `impl<T, U> FromColor<T> for U where U: FromColorUnclamped<T> +
+        // Clamp` is `FromColor` of each `T` the type converts from: one
+        // application for each, and rustc picks one by the argument where
+        // the bridge calls the member. A trait without arguments applies
+        // through one implementation only.
+        let trait_generic = found.first().is_some_and(|(implementation, ..)| {
+            tcx.impl_opt_trait_ref(*implementation)
+                .is_some_and(|reference| {
+                    let trait_id = reference.instantiate_identity().skip_norm_wip().def_id;
+                    tcx.generics_of(trait_id).count() != 1
+                })
+        });
+        if found.is_empty() || (found.len() > 1 && !trait_generic) {
             return Ok(false);
-        };
-        let (implementation, base, arguments) = (*implementation, *base, *arguments);
+        }
+        for (implementation, base, arguments) in found {
+            self.apply_blanket_with(implementation, base, arguments, adt, obligation)?;
+        }
+        Ok(true)
+    }
+
+    /// The blanket implementation `implementation` applied to `adt`
+    /// through its own implementation `base`, at the blanket
+    /// implementation's `arguments` (`apply_blanket_through`).
+    fn apply_blanket_with(
+        &mut self,
+        implementation: DefId,
+        base: DefId,
+        arguments: ty::GenericArgsRef<'tcx>,
+        adt: DefId,
+        obligation: AssociatedObligation<'tcx>,
+    ) -> Result<(), String> {
+        let tcx = self.tcx;
         let mut digest = Sha256::new();
         digest.update(b"rawr.blanket-through-application/v1");
         digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
@@ -1036,7 +1068,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         self.emissions.push(Emission::Application {
             implementation: Box::new(record),
         });
-        Ok(true)
+        Ok(())
     }
 
     /// The blanket implementation `implementation` applied to the concrete

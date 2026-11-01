@@ -663,6 +663,33 @@ fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
     );
 }
 
+/// iced's solar_system (#595): `canvas::LineDash { segments: &[3.0, 6.0],
+/// offset: 0 }`, a struct of public fields re-exported from another crate,
+/// one of them a slice that borrows for the struct's lifetime, built inside
+/// a `Stroke { .., ..Stroke::default() }` and read back. The output is
+/// `cargo run`'s.
+#[test]
+fn a_struct_literal_fills_a_field_that_borrows_a_slice() {
+    let (rawr, cargo) = both_printed("crossing-dashed", "dashed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "stroke 2 dash [3.0, 6.0]+1\n[0.5] 0\nstroke 1 dash []+0"
+    );
+}
+
+/// iced's color_palette (#594): `Hsl::from_color(rgb)` and
+/// `Rgb::from_color(hsl)` are palette's blanket `impl<T, U> FromColor<T>
+/// for U where U: FromColorUnclamped<T> + Clamp`, applied to each type
+/// through each of its `FromColorUnclamped` impls, and the argument picks
+/// one, as rustc does. The output is `cargo run`'s.
+#[test]
+fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
+    let (rawr, cargo) = both_printed("crossing-palette", "palette.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
+}
+
 /// iced's clock: a crate type compared with a number, `rotation < 180.0`,
 /// through `PartialOrd<f32>`, whose impl writes only `partial_cmp`, so `<`
 /// is std's provided `lt`. The type is also `PartialOrd` with itself, and
