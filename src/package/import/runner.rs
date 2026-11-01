@@ -215,8 +215,37 @@ fn install_decoded(
     definitions
         .try_reserve_exact(plan.facades().len())
         .map_err(|_| Error::Allocation)?;
-    for facade in plan.facades() {
-        let (definition, families) = build(facade, &mut shapes, allocation)?;
+    // A facade resolves a type another facade declares through that
+    // facade, which is built first (`facade::Resolution`).
+    let facades = plan.facades().collect::<Vec<_>>();
+    let resolution = facade::Resolution::new(
+        &facades
+            .iter()
+            .map(|facade| facade.types().map(|ty| *ty.identity()).collect())
+            .collect::<Vec<_>>(),
+        &facades
+            .iter()
+            .map(|facade| facade.named())
+            .collect::<Vec<_>>(),
+    );
+    let mut built = vec![None; facades.len()];
+    for &index in resolution.order() {
+        let facade = facades[index];
+        let foreign = resolution
+            .through(index)
+            .iter()
+            .map(|(identity, provider)| {
+                let identity = host::type_def::import::Identity::new(*identity);
+                let export = built[*provider]
+                    .as_ref()
+                    .and_then(|provider: &host::facade::Definition| {
+                        provider.export_imported(&identity)
+                    })
+                    .expect("a facade is built after those it resolves through");
+                (identity, export)
+            })
+            .collect();
+        let (definition, families) = build(facade, foreign, &mut shapes, allocation)?;
         retain_registry_definition(&definition, allocation)?;
         engine
             .register_host_facade(definition.clone())
@@ -225,8 +254,9 @@ fn install_decoded(
             .host_registry
             .defer_imported(families)
             .map_err(|source| entry_error(facade.root(), "", source.into()))?;
-        definitions.push(definition);
+        built[index] = Some(definition);
     }
+    definitions.extend(built.into_iter().flatten());
     Ok(definitions.into_boxed_slice())
 }
 
@@ -579,6 +609,7 @@ fn structural_path<'facade>(
 
 fn build(
     facade: &facade::Facade,
+    foreign: Box<[(host::type_def::import::Identity, host::type_def::Export)]>,
     shapes: &mut Vec<([u8; 32], crate::Shared<host::type_def::Shape>)>,
     allocation: &mut account::Attempt,
 ) -> Result<(host::facade::Definition, Vec<host::family::Pending>), Error> {
@@ -812,7 +843,7 @@ fn build(
             .map_err(|source| entry_error(facade.root(), path, source.into()))?;
     }
     builder
-        .finish_imported(allocation)
+        .finish_imported(foreign, allocation)
         .map_err(|source| entry_error(facade.root(), "", source.into()))
 }
 

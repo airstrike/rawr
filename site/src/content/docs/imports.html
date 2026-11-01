@@ -73,6 +73,7 @@ fn main() {
 
 <h2 id="native">Native modules</h2>
 <p>A module of your crate whose first line isn&rsquo;t <code>// rawr</code> is native Rust. rawr-import compiles it with Cargo, and marked code calls it as it calls a dependency. Calls from native code into marked code need a native crate root, as <a href="/docs/run#native-main">Run</a> explains.</p>
+<p>A native function can take and give a dependency&rsquo;s types, by value or by reference. With <code>mod label;</code>, the call <code>label::describe(&amp;version)</code> works when <code>label.rs</code> has <code>pub fn describe(version: &amp;semver::Version) -&gt; String</code>. rawr reads <code>semver::Version</code> there as rustc does, as semver&rsquo;s own type, so the value your program got from semver is the one the function takes.</p>
 
 <h2 id="values">Imported values</h2>
 <p>A public imported struct can be constructed with its fields. A generic constructor infers its type arguments from those fields and from the type its use requires, then fills any remaining arguments from their defaults. For example, <code>Size { width: Length::Shrink, height: Length::Shrink }</code> makes a <code>Size&lt;Length&gt;</code>. Public fields can be assigned through a mutable value or a native <code>&amp;mut</code>, as a custom widget&rsquo;s <code>tree.size = Size::new(width, height)</code> changes the tree the crate lent it. Nested field assignments work when the intermediate fields are <code>Copy</code>.</p>

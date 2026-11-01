@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 35;
+const SCHEMA: u32 = 36;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -803,6 +803,19 @@ pub enum Type {
 }
 
 impl Signature {
+    /// Each crate type the signature names, other than those every facade
+    /// has (a future, std's types, a script closure).
+    fn named(&self, named: &mut std::collections::BTreeSet<[u8; 32]>) {
+        for ty in self
+            .inputs
+            .iter()
+            .chain([&self.output])
+            .chain(&self.instance)
+        {
+            ty.named(named);
+        }
+    }
+
     /// Whether every imported type the signature names is in `declared`.
     fn declared(&self, declared: &std::collections::BTreeSet<[u8; 32]>) -> bool {
         self.inputs.iter().all(|ty| ty.declared(declared))
@@ -855,6 +868,43 @@ impl Type {
             Self::Tuple(members) => {
                 for member in members.iter() {
                     member.opaque(opaque, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn named(&self, named: &mut std::collections::BTreeSet<[u8; 32]>) {
+        match self {
+            Self::Nominal {
+                identity,
+                arguments,
+            } => {
+                if !crate::surface::identity::Definition::is_projected(identity)
+                    && *identity != *crate::surface::identity::Definition::callable().as_bytes()
+                {
+                    named.insert(*identity);
+                }
+                for argument in arguments.iter() {
+                    argument.named(named);
+                }
+            }
+            Self::FunctionItem { input, output }
+            | Self::Callable { input, output }
+            | Self::Result(input, output) => {
+                input.named(named);
+                output.named(named);
+            }
+            Self::Option(element)
+            | Self::Array(element)
+            | Self::FixedArray { element, .. }
+            | Self::Range(element)
+            | Self::Reference {
+                target: element, ..
+            } => element.named(named),
+            Self::Tuple(members) => {
+                for member in members.iter() {
+                    member.named(named);
                 }
             }
             _ => {}
@@ -1314,21 +1364,40 @@ impl Plan {
                 facade.types = types.into_boxed_slice();
             }
         }
-        // An item whose signature names a type its own facade does not
-        // declare (one the importer could not model, or one only another
-        // crate exports) is unavailable by itself; the rest of its facade
-        // stays. A facade resolves only the types it declares.
-        for facade in &mut facades {
+        // A facade resolves a type it names and another facade declares
+        // through that facade, as a program module's `fn describe(version:
+        // &semver::Version)` names semver's (`Resolution`). An item whose
+        // signature names a type no facade declares (one the importer could
+        // not model) is unavailable by itself; the rest of its facade stays.
+        let resolution = {
+            let declared = facades
+                .iter()
+                .map(|facade| facade.types.iter().map(|ty| ty.identity).collect())
+                .collect::<Vec<_>>();
+            let named = facades.iter().map(Facade::named).collect::<Vec<_>>();
+            Resolution::new(&declared, &named)
+        };
+        for (index, facade) in facades.iter_mut().enumerate() {
             let declared = facade
                 .types
                 .iter()
                 .map(|ty| ty.identity)
                 .collect::<std::collections::BTreeSet<_>>();
+            let resolved = declared
+                .iter()
+                .copied()
+                .chain(
+                    resolution
+                        .through(index)
+                        .iter()
+                        .map(|(identity, _)| *identity),
+                )
+                .collect::<std::collections::BTreeSet<_>>();
             facade
                 .types
                 .sort_by(|left, right| left.path.cmp(&right.path));
             let mut items = std::mem::take(&mut facade.items).into_vec();
-            items.retain(|item| item.signature.declared(&declared));
+            items.retain(|item| item.signature.declared(&resolved));
             items.sort_by(|left, right| left.path.cmp(&right.path));
             facade.items = items.into_boxed_slice();
             // So is a type alias of such a type.
@@ -2140,7 +2209,96 @@ fn fixture_operation() -> OperationSite {
     site
 }
 
+/// Where each of a program's facades resolves a crate type its items name
+/// and another facade declares, as rustc resolves a path into a dependency
+/// through that crate: through the first facade, by root, that declares
+/// it. A facade is built after the facades it resolves through. Of facades
+/// that would resolve through each other, the first by root is built first
+/// and resolves only through those already built.
+pub struct Resolution {
+    order: Box<[usize]>,
+    through: Box<[Through]>,
+}
+
+/// The types one facade resolves through others: each identity, with the
+/// index of the facade that declares it.
+type Through = Box<[([u8; 32], usize)]>;
+
+impl Resolution {
+    /// The resolution of facades that declare `declared` and whose items
+    /// name `named`, each by its facade's index.
+    #[must_use]
+    pub fn new(
+        declared: &[std::collections::BTreeSet<[u8; 32]>],
+        named: &[std::collections::BTreeSet<[u8; 32]>],
+    ) -> Self {
+        let wanted = named
+            .iter()
+            .enumerate()
+            .map(|(index, named)| {
+                named
+                    .iter()
+                    .filter(|identity| !declared[index].contains(*identity))
+                    .filter_map(|identity| {
+                        declared
+                            .iter()
+                            .position(|types| types.contains(identity))
+                            .map(|provider| (*identity, provider))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut built = vec![false; declared.len()];
+        let mut order = Vec::with_capacity(declared.len());
+        let mut through = vec![Box::default(); declared.len()];
+        while order.len() < declared.len() {
+            let next = (0..declared.len())
+                .find(|index| {
+                    !built[*index] && wanted[*index].iter().all(|(_, provider)| built[*provider])
+                })
+                .or_else(|| (0..declared.len()).find(|index| !built[*index]))
+                .expect("a facade is left to build");
+            through[next] = wanted[next]
+                .iter()
+                .filter(|(_, provider)| built[*provider])
+                .copied()
+                .collect();
+            built[next] = true;
+            order.push(next);
+        }
+        Self {
+            order: order.into_boxed_slice(),
+            through: through.into_boxed_slice(),
+        }
+    }
+
+    /// The facades' indices in the order they are built.
+    #[must_use]
+    pub fn order(&self) -> &[usize] {
+        &self.order
+    }
+
+    /// The types the facade at `index` resolves through another facade,
+    /// each with that facade's index, in identity order.
+    #[must_use]
+    pub fn through(&self, index: usize) -> &[([u8; 32], usize)] {
+        &self.through[index]
+    }
+}
+
 impl Facade {
+    /// Each crate type its items name, other than those every facade has.
+    #[must_use]
+    pub fn named(&self) -> std::collections::BTreeSet<[u8; 32]> {
+        let mut named = std::collections::BTreeSet::new();
+        for item in self.items.iter() {
+            for signature in std::iter::once(&item.signature).chain(&item.values) {
+                signature.named(&mut named);
+            }
+        }
+        named
+    }
+
     /// Return the Rawr-visible facade root.
     pub fn root(&self) -> &str {
         &self.root
@@ -3789,6 +3947,36 @@ fn copy(source: &str) -> Result<Box<str>, super::Error> {
         .map_err(|_| super::Error::Allocation)?;
     output.push_str(source);
     Ok(output.into_boxed_str())
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::Resolution;
+
+    fn set(identities: &[u8]) -> std::collections::BTreeSet<[u8; 32]> {
+        identities.iter().map(|identity| [*identity; 32]).collect()
+    }
+
+    /// A program's facade that names a dependency's type is built after the
+    /// dependency's, and resolves the type through it.
+    #[test]
+    fn a_facade_resolves_another_facades_type_after_it_is_built() {
+        let resolution = Resolution::new(&[set(&[1]), set(&[2])], &[set(&[1, 2]), set(&[2])]);
+        assert_eq!(resolution.order(), [1, 0]);
+        assert_eq!(resolution.through(0), [([2; 32], 1)]);
+        assert!(resolution.through(1).is_empty());
+    }
+
+    /// Of facades that name each other's types, the first by root is built
+    /// first and resolves only through those already built; a type no
+    /// facade declares resolves through none.
+    #[test]
+    fn facades_naming_each_others_types_resolve_in_root_order() {
+        let resolution = Resolution::new(&[set(&[1]), set(&[2])], &[set(&[2, 3]), set(&[1])]);
+        assert_eq!(resolution.order(), [0, 1]);
+        assert!(resolution.through(0).is_empty());
+        assert_eq!(resolution.through(1), [([1; 32], 0)]);
+    }
 }
 
 #[cfg(test)]

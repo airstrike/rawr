@@ -1235,6 +1235,7 @@ impl Builder {
     #[cfg(feature = "rust-import")]
     pub(crate) fn finish_imported<A: host::ImportAllocation + ?Sized>(
         mut self,
+        foreign: Box<[(host::type_def::import::Identity, host::type_def::Export)]>,
         allocation: &mut A,
     ) -> Result<(Definition, Vec<host::family::Pending>), host::Error> {
         validate_module_parents(&self.root, &self.modules)?;
@@ -1242,7 +1243,7 @@ impl Builder {
         validate_type_identities(&self.types)?;
         resolve_projections(&mut self.types, self.projections)?;
         let imported =
-            host::type_ref::ImportedTypes::from_imported_facade(&self.types, allocation)?;
+            host::type_ref::ImportedTypes::from_imported_facade(&self.types, foreign, allocation)?;
 
         let item_count = self
             .items
@@ -1658,6 +1659,24 @@ impl Definition {
             .map(|index| &self.types[index])
             .unwrap_or_else(|| panic!("a facade exports only a type it declares, not `{path}`"));
         Ok(host::type_def::Export::new(
+            self.root.clone(),
+            self.fingerprint.clone(),
+            definition.contract(),
+        ))
+    }
+
+    /// Export the crate type of `identity` this finished facade declares,
+    /// at its first path, as another facade's items name it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn export_imported(
+        &self,
+        identity: &host::type_def::import::Identity,
+    ) -> Option<host::type_def::Export> {
+        let definition = self
+            .types
+            .iter()
+            .find(|definition| definition.identity().imported() == Some(identity))?;
+        Some(host::type_def::Export::new(
             self.root.clone(),
             self.fingerprint.clone(),
             definition.contract(),
