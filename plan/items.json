@@ -524,6 +524,8 @@
     {"t":"T521","issue":521,"title":"T521: A Git dependency with a version is refused","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T522","issue":522,"title":"T522: Separate the importer's cache-rebuild signals from its failures","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
     {"t":"T523","issue":523,"title":"T523: Errors about generated data still name rawr's internals","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T524","issue":524,"title":"T524: Three rawr lib tests fail on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T524","issue":524,"title":"T524: Three rawr lib tests fail on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"79698f0c1","release":null},
+    {"t":"T525","issue":525,"title":"T525: Resident support tests check what a program's support module holds","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T526","issue":526,"title":"T526: Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

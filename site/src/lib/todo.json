@@ -1117,7 +1117,9 @@
     {"issue":521,"title":"A Git dependency with a version is refused","state":"open","category":"Divergences from rustc"},
     {"issue":522,"title":"Separate the importer's cache-rebuild signals from its failures","state":"open","category":"Importer"},
     {"issue":523,"title":"Errors about generated data still name rawr's internals","state":"open","category":"Divergences from rustc"},
-    {"issue":524,"title":"Three rawr lib tests fail on main","state":"open","category":"Health"}
+    {"issue":524,"title":"Three rawr lib tests fail on main","state":"closed","category":"Health"},
+    {"issue":525,"title":"Resident support tests check what a program's support module holds","state":"open","category":"Health"},
+    {"issue":526,"title":"Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"open","category":"Health"}
   ],
   "groups": [
     {
