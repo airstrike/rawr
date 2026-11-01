@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A first `rawr check` or `rawr run` of a program with Rust dependencies reuses the facts it already extracted for each later round of demand, with no second nightly build or extraction process. Cold counter goes from 2 extraction processes to 1, and download_progress from 6 to 5.","issues":[660]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.81",
@@ -1521,7 +1526,13 @@
     {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc"},
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":659,"title":"std::fs inside an async block","state":"open","category":"Divergences from rustc"}
+    {"issue":659,"title":"std::fs inside an async block","state":"open","category":"Divergences from rustc"},
+    {"issue":660,"title":"A first check replays its own extracted tables for later demand rounds","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":661,"title":"rawr check publishes shared bindings, so a later project skips extraction","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":662,"title":"A demand round finds every missing owner type at once","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":663,"title":"The project's compiler is queried once per run","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
+    {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"}
   ],
   "groups": [
     {
