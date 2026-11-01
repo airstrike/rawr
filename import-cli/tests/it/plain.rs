@@ -780,6 +780,94 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
     assert!(!nightly(second), "the second project reads the home");
 }
 
+/// A program with a module of its own selects its own crate, whose table
+/// stays with its project. A second project extracts only that crate: the
+/// dependency's table, trait members included, replays from rawr's home
+/// as it is, though the program's own crate is selected beside it (#672).
+#[test]
+fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home() {
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("module-sharing-home");
+    let bindings = home.join("bindings");
+    let _ = fs::remove_dir_all(&bindings);
+    let projects = ["first", "second"]
+        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("module-{name}")));
+    for root in &projects {
+        let _ = fs::remove_dir_all(root);
+        copy(Path::new(FIXTURE), root);
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nmod label;\n\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let version = Version::parse(\"1.2.3\").unwrap();\n    println!(\"{}\", label::describe(\"1.2.3\"));\n    println!(\"{}\", VersionReq::default().matches(&version));\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/label.rs"),
+            "use semver::Version;\n\npub fn describe(text: &str) -> String {\n    let version = Version::parse(text).unwrap();\n    format!(\"{}.{}\", version.major, version.minor)\n}\n",
+        )
+        .unwrap();
+    }
+    let [first, second] = &projects;
+    let check = |root: &Path| {
+        let checked = rawr_import_with_home(root, &["check"], &home);
+        assert!(
+            checked.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            text(&checked.stdout),
+            text(&checked.stderr)
+        );
+        assert!(text(&checked.stdout).contains("cargo check passed"));
+    };
+    // The shared table of the crate named `crate_name`, and its key.
+    let shared = |crate_name: &str| {
+        fs::read_dir(&bindings)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                let meta = fs::read_to_string(path.join("meta.json")).ok()?;
+                let meta = serde_json::from_str::<serde_json::Value>(&meta).ok()?;
+                (meta["crate_name"] == crate_name).then(|| {
+                    (
+                        path.file_name().unwrap().to_owned(),
+                        fs::read(path.join("table.json")).unwrap(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    check(first);
+    let published = shared("semver");
+    assert_eq!(published.len(), 1, "the check published semver's bindings");
+    let (key, table) = &published[0];
+    let table = String::from_utf8(table.clone()).unwrap();
+    assert!(
+        table.contains("\"Member\""),
+        "the program names a trait member of semver's: {table}"
+    );
+    assert!(
+        shared("plain_dependency").is_empty(),
+        "the program's own crate stays with its project"
+    );
+
+    check(second);
+    // The second project probed its own crate, and replayed semver's table
+    // as the home had it. A table the probe extracted, even in part, is
+    // recorded again beside it with what it served.
+    let tables = second.join("target/rawr/extraction");
+    let replayed = fs::read(tables.join(key)).unwrap();
+    assert_eq!(
+        String::from_utf8(replayed).unwrap(),
+        table,
+        "semver's table replays unchanged"
+    );
+    let mut served = key.clone();
+    served.push(".served");
+    assert!(
+        !tables.join(served).exists(),
+        "the probe extracted none of semver"
+    );
+    assert_eq!(shared("semver").len(), 1);
+}
+
 /// The declared inputs of a shared immutable crate are checked before both
 /// `check` and a remembered warm run consume its API. The unchanged path still
 /// shares across projects without a nightly build.
