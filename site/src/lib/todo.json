@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.55",
+  "version": "0.3.56",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A condition only a rawr bug can cause in the importer's profile, checked-program and runner-generation steps panics and names what broke, instead of printing an \"internal error\" as if it were about the program.","issues":[538],"refs":[451]},
-        {"text":"Errors name free functions, closures and generic parameters as the program wrote them. A generic parameter named twice gets rustc's E0403, and a generic call that leaves a parameter's type unknown gets E0282. A crate signature's type the build doesn't reach is reported at the call that uses it.","issues":[539]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.56",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A condition only a rawr bug can cause in the importer's profile, checked-program and runner-generation steps panics and names what broke, instead of printing an \"internal error\" as if it were about the program.","issues":[538],"refs":[451]},
+          {"text":"Errors name free functions, closures and generic parameters as the program wrote them. A generic parameter named twice gets rustc's E0403, and a generic call that leaves a parameter's type unknown gets E0282. A crate signature's type the build doesn't reach is reported at the call that uses it.","issues":[539]}
+        ]
+      },
       {
         "version": "0.3.55",
         "date": "2026-11-01",
@@ -1189,8 +1191,8 @@
     {"issue":535,"title":"Show a paused program in wait and status","state":"closed","category":"Health","release":"0.3.54"},
     {"issue":536,"title":"The compiler's registry copies each facade definition it installs","state":"open","category":"Importer"},
     {"issue":537,"title":"Run ?play's memory-limit test on Linux","state":"open","category":"No glue (D593)"},
-    {"issue":538,"title":"Split stale from broken in the profile, checked and bridge invariants","state":"closed","category":"Importer"},
-    {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"closed","category":"Divergences from rustc"},
+    {"issue":538,"title":"Split stale from broken in the profile, checked and bridge invariants","state":"closed","category":"Importer","release":"0.3.56"},
+    {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"closed","category":"Divergences from rustc","release":"0.3.56"},
     {"issue":540,"title":"Check the debugger's caller-frame reads under Miri","state":"open","category":"Health"},
     {"issue":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health"},
     {"issue":542,"title":"A closure whose input is a borrowed program type fails to import","state":"open","category":"No glue (D593)"},
