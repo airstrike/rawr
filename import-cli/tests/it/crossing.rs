@@ -602,6 +602,21 @@ fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
     assert_eq!(rawr, "turn left\ntrue false false true false\ntrue false");
 }
 
+/// iced's game_of_life: `translation + (cursor - start) * (1.0 / scaling)`
+/// on a generic `Point` with two `Sub` impls, `Sub<Point>` whose `Output`
+/// is a `Vector` and `Sub<Vector>` whose `Output` is `Self`. Each operator
+/// takes the impl its right-hand side picks, and that impl's `Output`, as
+/// rustc does (T502). The output is `cargo run`'s.
+#[test]
+fn an_operator_takes_the_output_of_the_impl_its_operand_picks() {
+    let (rawr, cargo) = both_printed("crossing-plane", "plane.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Vector { x: 4.5, y: 10.0 }\nPoint { x: 5.5, y: 10.0 } Point { x: 10.0, y: 20.0 }"
+    );
+}
+
 /// iced's bezier_tool and game_of_life: `.map(Message::Curve)` on a canvas
 /// whose program sends its own messages. The crate's `map` gives `Map<Self,
 /// F, Message>`, naming the closure's type, and the runner writes the

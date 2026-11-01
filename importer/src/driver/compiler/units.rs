@@ -694,11 +694,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     /// One demanded `Type::member` that is no inherent member of the type:
     /// the member of every trait the type implements that declares it. A
     /// trait implemented for the type itself selects that member of its
-    /// implementation. A blanket implementation (`impl<R: RngCore> Rng for
-    /// R`) applies to the type as if the crate wrote `impl Rng for Type`.
-    /// rustc proves the type implements the trait, under the type's own
-    /// bounds for a generic type. Only a trait without generic parameters
-    /// of its own is looked up.
+    /// implementation, and a generic trait the member of each of the type's
+    /// own implementations of it. A blanket implementation (`impl<R:
+    /// RngCore> Rng for R`) applies to the type as if the crate wrote `impl
+    /// Rng for Type`. rustc proves the type implements the trait, under the
+    /// type's own bounds for a generic type.
     fn member(&mut self, adt: DefId, member: &str) -> Result<(), String> {
         let tcx = self.tcx;
         let generic = tcx.generics_of(adt).count() != 0;
@@ -793,43 +793,35 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         )
                     })
             };
-            // A comparison overloads by its right-hand type, as iced's
-            // `Degrees` is `PartialOrd` with itself and with `f32`: the
-            // member of each of the type's own impls, and rustc picks one
-            // by the argument where the bridge calls it (T412).
-            let lang = tcx.lang_items();
-            if trait_generic
-                && (Some(trait_id) == lang.partial_ord_trait() || Some(trait_id) == lang.eq_trait())
-            {
+            // A generic trait overloads by its arguments, as iced's `Point`
+            // is `Sub<Point>` giving a `Vector` and `Sub<Vector>` giving a
+            // `Point`, and `Degrees` is `PartialOrd` with itself and with
+            // `f32`: the member of each of the type's own impls, each with
+            // its own inputs and `Output`, and rustc picks one by the
+            // argument where the bridge calls it (T412, T502).
+            if trait_generic {
                 let own = candidates.iter().copied().filter(owned).collect::<Vec<_>>();
+                for implementation in &own {
+                    let Some(reference) = tcx.impl_opt_trait_ref(*implementation) else {
+                        continue;
+                    };
+                    let obligation = AssociatedObligation {
+                        kind: AssociatedDemandKind::SelectedMember,
+                        trait_item: Some(trait_item),
+                        arguments: Some(reference.instantiate_identity().skip_norm_wip().args),
+                        param_env,
+                    };
+                    self.request_implementation(*implementation, adt, Some(obligation))?;
+                }
                 if !own.is_empty() {
-                    for implementation in own {
-                        let Some(reference) = tcx.impl_opt_trait_ref(implementation) else {
-                            continue;
-                        };
-                        let obligation = AssociatedObligation {
-                            kind: AssociatedDemandKind::SelectedMember,
-                            trait_item: Some(trait_item),
-                            arguments: Some(reference.instantiate_identity().skip_norm_wip().args),
-                            param_env,
-                        };
-                        self.request_implementation(implementation, adt, Some(obligation))?;
-                    }
                     continue;
                 }
             }
             let own = candidates.iter().copied().find(owned);
-            let arguments = match own {
-                Some(implementation) if trait_generic => tcx
-                    .impl_opt_trait_ref(implementation)
-                    .map(|reference| reference.instantiate_identity().skip_norm_wip().args)
-                    .unwrap_or_else(|| tcx.mk_args(&[self_ty.into()])),
-                _ => tcx.mk_args(&[self_ty.into()]),
-            };
             let obligation = AssociatedObligation {
                 kind: AssociatedDemandKind::SelectedMember,
                 trait_item: Some(trait_item),
-                arguments: Some(arguments),
+                arguments: Some(tcx.mk_args(&[self_ty.into()])),
                 param_env,
             };
             if let Some(implementation) = own {
