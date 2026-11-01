@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.90",
+  "version": "0.3.91",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A pattern's binding of `o.as_mut()` on an `Option` or `Result` place writes through `*`, in `if let`, `match`, `while let` and `let .. else`, as `if let Some(n) = self.pending.as_mut() { *n -= 1; }` does in Rust.","issues":[686]},
-        {"text":"A tuple expression with an expected type coerces each field to it, so `pair((&name, &catalog))` passes a `&String` where `pair` takes `(&str, &Catalog)`; a tuple already held in a local isn't coerced, as in rustc.","issues":[688]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.91",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A pattern's binding of `o.as_mut()` on an `Option` or `Result` place writes through `*`, in `if let`, `match`, `while let` and `let .. else`, as `if let Some(n) = self.pending.as_mut() { *n -= 1; }` does in Rust.","issues":[686]},
+          {"text":"A tuple expression with an expected type coerces each field to it, so `pair((&name, &catalog))` passes a `&String` where `pair` takes `(&str, &Catalog)`; a tuple already held in a local isn't coerced, as in rustc.","issues":[688]}
+        ]
+      },
       {
         "version": "0.3.90",
         "date": "2026-11-01",
@@ -1623,9 +1625,9 @@
     {"issue":683,"title":"A module function taking a dependency's type checks","state":"open","category":"Divergences from rustc"},
     {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health"},
     {"issue":685,"title":"A program module's function whose signature names another crate's type has a binding","state":"open","category":"No glue (D593)"},
-    {"issue":686,"title":"Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc"},
+    {"issue":686,"title":"Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":687,"title":"A method returning `&[T]` borrowed from its receiver","state":"open","category":"No glue (D593)"},
-    {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc"},
+    {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
     {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"open","category":"Shared dependency cache (D607)"},
