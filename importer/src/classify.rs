@@ -6240,7 +6240,13 @@ impl<P: api::Phase> Context<'_, P> {
         let Representability::FunctionItem(item) = classified else {
             return Ok(classified);
         };
-        if self.blanket_callables(generics, false).1.is_empty() {
+        // Only an input the parameter is makes another form: a method of the
+        // opaque program `iced::application(..)` gives is bounded by its
+        // `UpdateFn` and takes no update.
+        let valued = self.blanket_callables(generics, false).1;
+        if !signature.inputs().any(
+            |input| matches!(input, model::Type::Parameter { index, .. } if valued.contains(index)),
+        ) {
             return Ok(Representability::FunctionItem(item));
         }
         Ok(Representability::FunctionItem(
