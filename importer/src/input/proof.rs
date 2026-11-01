@@ -763,7 +763,7 @@ impl Proof {
         }
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn fixture_runner_harness_manifest(root: &Path) -> Result<PathBuf> {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -823,7 +823,7 @@ impl Proof {
         Ok(manifest_path)
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn fixture_runner_harness(root: &Path) -> Result<Self> {
         let manifest_path = Self::fixture_runner_harness_manifest(root)?;
         let lock_path = manifest_path.with_file_name("Cargo.lock");

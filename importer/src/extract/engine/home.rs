@@ -157,28 +157,36 @@ pub(crate) fn prune(bindings: &Path, idle: Duration) {
         } else {
             name
         };
+        let limit = if temporary {
+            Duration::from_secs(60 * 60)
+        } else {
+            idle
+        };
+        // Only an expired entry is worth its guard. Locking a live one would
+        // make its readers miss and its next publication return WouldBlock.
+        if !expired(&path, limit) {
+            continue;
+        }
         let Ok(lock) = guard(bindings, &key) else {
             continue;
         };
         if lock.try_lock().is_err() {
             continue;
         }
-        // Inspect current metadata after taking the guard. A replacement
-        // or use since the directory scan must be considered anew.
-        let age = fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .unwrap_or_default();
-        let expired = if temporary {
-            age > Duration::from_secs(60 * 60)
-        } else {
-            age > idle
-        };
-        if expired {
+        // Inspect current metadata again under the guard. A replacement or
+        // use since the first look must be considered anew.
+        if expired(&path, limit) {
             let _ = fs::remove_dir_all(path);
         }
     }
+}
+
+fn expired(path: &Path, limit: Duration) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > limit)
 }
 
 fn temporary_key(name: &str) -> Option<&str> {

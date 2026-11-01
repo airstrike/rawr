@@ -52,16 +52,12 @@ fn real_extracted_contract_is_snapshot_bound_positioned_and_symbolic() {
         .expect("a free return stays semantic when its type has same-facade aliases");
     assert_eq!(pathless_demand.entries().len(), 1);
 
-    let ambiguous_member = Fixture::new("use fixture::make_record; make_record().left\n");
-    let error = match engine.compile_imported(&contract, snapshot(&engine, &ambiguous_member.source)) {
-        Ok(_) => panic!("a member use without an originating alias must be positioned ambiguity"),
-        Err(error) => error,
-    };
-    let report = error.report().expect("alias ambiguity keeps exact Rust evidence");
-    assert_eq!(error.category(), package::Category::Resolution);
-    assert_eq!(report.labels().len(), 1);
-    assert!(!report.external_labels().is_empty());
-    assert!(error.to_string().contains("name it by one of:"));
+    // `RecordA` and `RecordB` re-export the one `Record`, so rustc reads the
+    // returned value's field without naming any alias.
+    let aliased_member = Fixture::new("use fixture::make_record; make_record().left\n");
+    engine
+        .compile_imported(&contract, snapshot(&engine, &aliased_member.source))
+        .expect("a field of a type with same-facade aliases reads as rustc reads it");
 
     let grammar = Fixture::new(
         r#"

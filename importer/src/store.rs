@@ -2022,7 +2022,7 @@ fn payload_digests<K: Value>(
     (sha, current)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rustc-driver"))]
 mod payload_digest_tests {
     use sha2::Digest as _;
 

@@ -61,6 +61,9 @@ utf8_iter = "1.0.4"
 sha2 = "0.10"
 
 [dev-dependencies]
+# The crate's own tests read manifests as every command does, so a focused
+# `cargo test -p rawr-import` needs no flags.
+rawr-import = { path = ".", features = ["unicode-hosts", "unicode-names"] }
 nix = { version = "0.27.1", features = ["fs", "poll", "process", "signal", "socket", "time", "user"] }
 form_urlencoded = "=1.2.2"
 idna = { version = "=1.1.0", default-features = false, features = ["std", "compiled_data"] }

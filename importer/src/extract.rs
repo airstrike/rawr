@@ -52,7 +52,7 @@ pub struct CanonicalizationEvidence {
     bytes: usize,
     #[cfg(test)]
     counters: EvidenceCounters,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "rustc-driver"))]
     stages: crate::process::EvidenceStages,
 }
 
@@ -6338,7 +6338,7 @@ fn extraction(code: &'static str, reason: &str) -> Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rustc-driver"))]
 mod api_protocol;
 
 #[cfg(test)]

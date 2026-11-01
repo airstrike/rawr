@@ -30,6 +30,15 @@ pub use retained::Continuation;
 
 const CANONICALIZER_VERSION: u32 = 15;
 
+/// The stored API product's schema: its codec with the versions the action
+/// key carries, so an entry an older canonicalizer or extraction protocol
+/// wrote has another schema and the store evicts it (#630).
+#[cfg(any(test, feature = "rustc-driver"))]
+pub(crate) const SCHEMA: u32 = crate::node::reader_schema(
+    4,
+    &[CANONICALIZER_VERSION, crate::extract::protocol::SCHEMA],
+);
+
 /// Uninhabited marker proving compiler sidecars were captured and canonicalized.
 pub enum Captured {}
 

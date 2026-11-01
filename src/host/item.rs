@@ -152,7 +152,7 @@ pub struct Fingerprint {
     guard: Option<Guard>,
     opens: bool,
     lent_static: u64,
-    rules: Option<[u8; 32]>,
+    rules: Option<Box<[u8; 32]>>,
     application: Option<Box<[u8; 32]>>,
 }
 
@@ -557,7 +557,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             application: self.application.map(Box::new),
-            rules: self.rules.as_deref().map(MacroRules::digest),
+            rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         }
     }
 
@@ -575,7 +575,7 @@ impl Definition {
             opens: self.opens,
             lent_static: self.lent_static,
             application: self.application.map(Box::new),
-            rules: self.rules.as_deref().map(MacroRules::digest),
+            rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         })
     }
 
@@ -823,9 +823,9 @@ impl crate::digest::Write for Fingerprint {
         if self.opens {
             writer.tag(0x2563);
         }
-        if let Some(rules) = self.rules {
+        if let Some(rules) = &self.rules {
             writer.tag(0x250a);
-            writer.bytes(&rules);
+            writer.bytes(&**rules);
         }
         Ok(())
     }

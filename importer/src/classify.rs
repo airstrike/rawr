@@ -12185,8 +12185,11 @@ mod tests {
         let unchanged = super::Authority::production(&graph_only);
         assert_eq!(unchanged.items, authority.items);
         assert_eq!(unchanged.bytes, authority.bytes);
-        assert_eq!(super::Authority::evidence().items, 6_000_000);
-        assert_eq!(super::Authority::evidence().bytes, 3_221_225_472);
+        #[cfg(feature = "rustc-driver")]
+        {
+            assert_eq!(super::Authority::evidence().items, 6_000_000);
+            assert_eq!(super::Authority::evidence().bytes, 3_221_225_472);
+        }
     }
 
     #[cfg(feature = "rustc-driver")]

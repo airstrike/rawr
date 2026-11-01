@@ -345,13 +345,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Api;
-    // The codec with the versions the action key carries, so an entry an
-    // older canonicalizer or extraction protocol wrote has another schema and
-    // the store evicts it (#630).
-    const SCHEMA: u32 = node::reader_schema(
-        4,
-        &[CANONICALIZER_VERSION, crate::extract::protocol::SCHEMA],
-    );
+    const SCHEMA: u32 = super::SCHEMA;
 
     /// The manifest of the graph's parts; a captured graph keeps any part not
     /// already kept.

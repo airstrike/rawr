@@ -35,7 +35,7 @@ impl BuildRequestKey {
         &self.0
     }
 
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) const fn fixture(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }

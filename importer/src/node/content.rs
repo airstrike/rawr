@@ -273,7 +273,7 @@ impl Chain {
     }
 
     /// Mint one deterministic test-only parent without process or product authority.
-    #[cfg(feature = "test-fixtures")]
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub fn fixture(context: crate::context::Context) -> Result<Self, super::Error> {
         let recipe = context.direct::<FixtureParent>(
@@ -286,10 +286,10 @@ impl Chain {
     }
 }
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 struct FixtureParent;
 
-#[cfg(feature = "test-fixtures")]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl Value for FixtureParent {
     const KIND: Kind = Kind::ProfileProof;
     const SCHEMA: u32 = u32::MAX;
