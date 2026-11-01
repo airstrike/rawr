@@ -9,7 +9,10 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"Errors about calls into crates speak about the program's code. A type the program passes is named as it was written, and an unknown one gets rustc's E0282. Moved values, mutable borrows, methods named without a call and associated functions read as rustc's E0382, E0596, E0615 and E0599. Rawr's placeholders such as `<host item>` are gone, and a condition only a rawr bug can cause panics and names its invariant.","issues":[523]},
-        {"text":"A rawr bug during a fresh build panics and names the invariant it broke, instead of printing an internal error. Stale cache entries still rebuild silently, and damaged ones rebuild with a note.","issues":[522]}
+        {"text":"A rawr bug during a fresh build panics and names the invariant it broke, instead of printing an internal error. Stale cache entries still rebuild silently, and damaged ones rebuild with a note.","issues":[522]},
+        {"text":"`inspect` reads a `&mut` parameter and `self` under the names the program gave them.","issues":[534]},
+        {"text":"`inspect` lists the calls the program is in and reads a caller's bindings with `frame`.","issues":[511],"refs":[513]},
+        {"text":"`wait` and `status` show a program paused at a breakpoint or step as `paused`, with its file, line and function.","issues":[535]}
       ]
     },
     "releases": [
@@ -1142,7 +1145,7 @@
     {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"closed","category":"Divergences from rustc","release":"0.3.49"},
     {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
     {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"closed","category":"Health","release":"0.3.52"},
-    {"issue":511,"title":"inspect reads callers' frames","state":"open","category":"Health"},
+    {"issue":511,"title":"inspect reads callers' frames","state":"closed","category":"Health"},
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
     {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
@@ -1165,12 +1168,14 @@
     {"issue":531,"title":"A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc"},
     {"issue":532,"title":"inspect on a real iced app's state in update and view","state":"open","category":"Health"},
     {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health"},
-    {"issue":534,"title":"inspect reads a free function's &mut parameter","state":"open","category":"Health"},
-    {"issue":535,"title":"Show a paused program in wait and status","state":"open","category":"Health"},
+    {"issue":534,"title":"inspect reads a free function's &mut parameter","state":"closed","category":"Health"},
+    {"issue":535,"title":"Show a paused program in wait and status","state":"closed","category":"Health"},
     {"issue":536,"title":"The compiler's registry copies each facade definition it installs","state":"open","category":"Importer"},
     {"issue":537,"title":"Run ?play's memory-limit test on Linux","state":"open","category":"No glue (D593)"},
     {"issue":538,"title":"Split stale from broken in the profile, checked and bridge invariants","state":"open","category":"Importer"},
-    {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"open","category":"Divergences from rustc"}
+    {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"open","category":"Divergences from rustc"},
+    {"issue":540,"title":"Check the debugger's caller-frame reads under Miri","state":"open","category":"Health"},
+    {"issue":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1707,7 +1712,7 @@
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"closed"},
-            {"number":511,"title":"inspect reads callers' frames","state":"open"},
+            {"number":511,"title":"inspect reads callers' frames","state":"closed"},
             {"number":512,"title":"inspect prints bindings by their declared type","state":"open"},
             {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open"},
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"open"}
@@ -1719,12 +1724,12 @@
           "name": "Breakpoints and stepping",
           "start": 56,
           "size": 4,
-          "state": "now",
-          "note": "rawr mcp break, step, continue and clear; a paused state remains",
+          "state": "done",
+          "note": "break, step, continue, clear, and a paused state",
           "issues": [
             {"number":489,"title":"Breakpoints and stepping under rawr run","state":"closed"},
-            {"number":534,"title":"inspect reads a free function's &mut parameter","state":"open"},
-            {"number":535,"title":"Show a paused program in wait and status","state":"open"}
+            {"number":534,"title":"inspect reads a free function's &mut parameter","state":"closed"},
+            {"number":535,"title":"Show a paused program in wait and status","state":"closed"}
           ],
           "milestone": "0.5"
         },

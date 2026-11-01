@@ -7,6 +7,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - Errors about calls into crates speak about the program's code. A type the program passes is named as it was written, and an unknown one gets rustc's E0282. Moved values, mutable borrows, methods named without a call and associated functions read as rustc's E0382, E0596, E0615 and E0599. Rawr's placeholders such as `<host item>` are gone, and a condition only a rawr bug can cause panics and names its invariant. (#523)
 - A rawr bug during a fresh build panics and names the invariant it broke, instead of printing an internal error. Stale cache entries still rebuild silently, and damaged ones rebuild with a note. (#522)
+- `inspect` reads a `&mut` parameter and `self` under the names the program gave them. (#534)
+- `inspect` lists the calls the program is in and reads a caller's bindings with `frame`. (#511; part of #513)
+- `wait` and `status` show a program paused at a breakpoint or step as `paused`, with its file, line and function. (#535)
 
 ## 0.3.53 (2026-11-01)
 
