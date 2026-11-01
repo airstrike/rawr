@@ -63,6 +63,21 @@ pub struct Output {
     pub limit: bool,
     /// A remark on the run itself, such as options it ignored.
     pub note: Option<String>,
+    /// What an iced program drew (#434): the PNG of its settled frame, or a
+    /// GIF when it animated (#527).
+    pub frame: Option<Vec<u8>>,
+}
+
+/// The kind of image `bytes` are, as a file extension: `png` or `gif`.
+#[must_use]
+pub fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else {
+        None
+    }
 }
 
 impl Output {
@@ -100,11 +115,13 @@ impl Output {
     }
 
     /// `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],
-    /// "truncated":false,"limit":false}`: what `rawr-play` writes for a
-    /// plain program.
+    /// "truncated":false,"limit":false}`: what `rawr-play` writes. A
+    /// program that drew adds `"frame":{"type":"image/png","data":".."}`,
+    /// the image in base64.
     #[must_use]
     pub fn to_json(&self) -> String {
-        serde_json::json!({
+        use base64::Engine as _;
+        let mut json = serde_json::json!({
             "kind": "text",
             "status": self.status,
             "output": self
@@ -115,8 +132,14 @@ impl Output {
             "truncated": self.truncated,
             "limit": self.limit,
             "note": self.note,
-        })
-        .to_string()
+        });
+        if let Some(bytes) = &self.frame {
+            json["frame"] = serde_json::json!({
+                "type": format!("image/{}", image_kind(bytes).unwrap_or("png")),
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            });
+        }
+        json.to_string()
     }
 
     /// Read [`Output::to_json`] back.
@@ -148,6 +171,16 @@ impl Output {
             truncated: value["truncated"].as_bool().unwrap_or(false),
             limit: value["limit"].as_bool().unwrap_or(false),
             note: value["note"].as_str().map(str::to_owned),
+            frame: match value["frame"]["data"].as_str() {
+                Some(data) => {
+                    use base64::Engine as _;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .map_err(|_| bad())?;
+                    Some(bytes).filter(|bytes| image_kind(bytes).is_some())
+                }
+                None => None,
+            },
         })
     }
 }

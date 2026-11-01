@@ -1,6 +1,8 @@
 //! `rawr-play` on the universe runner (#434): an iced program answers with
-//! the PNG of its first settled frame, and a tokio program with its text.
-//! Several snippets run in turn on one server, prepared once (#515).
+//! the text it printed and what it drew: the PNG of its settled frame at
+//! its own scale (#528, #529), or a GIF when it animated (#527). A tokio
+//! program answers with its text. Several snippets run in turn on one
+//! server, prepared once (#515).
 //!
 //! They need the runner built first, so they are ignored by default:
 //!
@@ -44,9 +46,11 @@ fn run(source: &str) -> std::process::Output {
     output
 }
 
-/// iced's counter, as its example writes it.
-const COUNTER: &str = r#"use iced::widget::{button, column, text, Widget};
-use iced::Center;
+/// iced's counter, as its example writes it, with a subscription that
+/// counts to five a frame at a time; [`COUNTER`] and the others add a
+/// `main`.
+const COUNTER_TYPES: &str = r#"use iced::widget::{button, column, text, Widget};
+use iced::{window, Center, Subscription};
 
 #[derive(Default)]
 struct Counter {
@@ -80,25 +84,61 @@ impl Counter {
         .padding(20)
         .align_x(Center)
     }
-}
 
-pub fn main() -> iced::Result {
-    iced::run(Counter::update, Counter::view)
+    fn scale_factor(&self) -> f32 {
+        2.0
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.value < 5 {
+            window::frames().map(|_| Message::Increment)
+        } else {
+            Subscription::none()
+        }
+    }
 }
 "#;
 
+/// iced's counter.
+fn counter() -> String {
+    format!(
+        "{COUNTER_TYPES}
+pub fn main() -> iced::Result {{
+    iced::run(Counter::update, Counter::view)
+}}
+"
+    )
+}
+
+/// The width and height in a PNG's header.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    let size = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    (size(16), size(20))
+}
+
+/// What a snippet answered: its output, with the frame it drew.
+fn output(stdout: &[u8]) -> rawr_play::Output {
+    rawr_play::Output::from_json(stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(stdout)))
+}
+
 #[test]
 #[ignore = "needs the universe runner"]
-fn an_iced_counter_answers_with_its_first_frame_as_a_png() {
-    let png = run(COUNTER).stdout;
-    assert!(
-        rawr_play::message::is_png(&png),
-        "{}",
-        String::from_utf8_lossy(&png)
+fn an_iced_counter_answers_with_its_text_and_its_frame_as_a_png() {
+    let source = counter().replace(
+        "pub fn main() -> iced::Result {\n",
+        "pub fn main() -> iced::Result {\n    println!(\"counting from 0\");\n",
     );
-    // The header's width and height: iced's default window, 1024 by 768.
-    let size = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
-    assert_eq!((size(16), size(20)), (1024, 768));
+    let stdout = run(&source).stdout;
+    let output = output(&stdout);
+    assert_eq!(
+        (output.text().as_str(), output.status),
+        ("counting from 0\n", 0)
+    );
+    let png = output.frame.expect("the counter drew a frame");
+    assert_eq!(rawr_play::plain::image_kind(&png), Some("png"));
+    // iced's default window, 1024 by 768.
+    assert_eq!(png_size(&png), (1024, 768));
     // Two buttons and a number on a plain background: more than an empty
     // frame, far less than a raw one.
     assert!(
@@ -106,6 +146,64 @@ fn an_iced_counter_answers_with_its_first_frame_as_a_png() {
         "{} bytes",
         png.len()
     );
+    // The bot sends both.
+    let reply = rawr_play::message::reply(true, &stdout, "");
+    assert_eq!(reply.text, "```text\ncounting from 0\n```");
+    assert!(reply.frame.is_some());
+}
+
+/// A program at `scale_factor` 2 opens a window twice its size, as
+/// iced_winit opens it, and draws twice as large (#529).
+#[test]
+#[ignore = "needs the universe runner"]
+fn an_iced_program_is_drawn_at_its_own_scale_factor() {
+    let source = format!(
+        "{COUNTER_TYPES}
+pub fn main() -> iced::Result {{
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .scale_factor(Counter::scale_factor)
+        .run()
+}}
+"
+    );
+    let output = output(&run(&source).stdout);
+    let png = output.frame.expect("the counter drew a frame");
+    assert_eq!(png_size(&png), (2048, 1536));
+}
+
+/// A program that changes on its own frames answers with a GIF of each
+/// change, which plays once and ends on the frame it settled on (#527).
+#[test]
+#[ignore = "needs the universe runner"]
+fn an_animated_iced_program_answers_with_a_gif_that_ends_where_it_settled() {
+    let source = format!(
+        "{COUNTER_TYPES}
+pub fn main() -> iced::Result {{
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .subscription(Counter::subscription)
+        .run()
+}}
+"
+    );
+    let output = output(&run(&source).stdout);
+    assert_eq!(output.status, 0);
+    let image = output.frame.expect("the counter drew");
+    assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::Indexed);
+    let mut decoder = options.read_info(image.as_slice()).unwrap();
+    assert_eq!((decoder.width(), decoder.height()), (1024, 768));
+    // No loop extension: it plays once.
+    assert_eq!(decoder.repeat(), gif::Repeat::Finite(0));
+    let mut delays = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        delays.push(frame.delay);
+    }
+    // The count from 0 to 5, a change a frame, and nothing after it
+    // settled: at most one frame per value.
+    assert!((3..=6).contains(&delays.len()), "{delays:?}");
+    // The last frame, the settled one, is held.
+    assert_eq!(delays.last(), Some(&300), "{delays:?}");
 }
 
 #[test]
@@ -149,11 +247,9 @@ fn limits(millis: u64) -> rawr_play::Limits {
     }
 }
 
-fn text(outcome: rawr_play::Outcome) -> rawr_play::Output {
-    match outcome {
-        rawr_play::Outcome::Text(output) => output,
-        rawr_play::Outcome::Image(_) => panic!("a frame, not text"),
-    }
+fn text(output: rawr_play::Output) -> rawr_play::Output {
+    assert!(output.frame.is_none(), "a frame, not text");
+    output
 }
 
 /// One prepared runner answers snippets in turn (#515). Each is a program
@@ -189,10 +285,9 @@ fn main() {
     // The same snippet again starts from nothing.
     let output = text(server.run(first, &limits(30_000)).unwrap());
     assert_eq!((output.text().as_str(), output.status), ("first 2\n", 0));
-    let rawr_play::Outcome::Image(png) = server.run(COUNTER, &limits(30_000)).unwrap() else {
-        panic!("the counter drew no frame");
-    };
-    assert!(rawr_play::message::is_png(&png));
+    let output = server.run(&counter(), &limits(30_000)).unwrap();
+    let png = output.frame.expect("the counter drew no frame");
+    assert_eq!(rawr_play::plain::image_kind(&png), Some("png"));
     let output = text(server.run("1 + 2", &limits(30_000)).unwrap());
     assert_eq!((output.text().as_str(), output.status), ("3\n", 0));
 }

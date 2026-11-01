@@ -330,8 +330,11 @@ export class PlayBot extends Container<Env> {
       return this.failed(id, false);
     }
     if (response.ok && (response.headers.get("content-type") ?? "").startsWith("application/json")) {
-      const output = await response.text();
-      if (output.length > MAX_PREVIEW || !parseTextResult(output)) return this.failed(id, true);
+      // The preview keeps the text: an iced program's frame (#434) is
+      // dropped here, and its link shows what it printed.
+      const result = parseTextResult(await response.text());
+      const output = result ? JSON.stringify(result) : "";
+      if (!result || output.length > MAX_PREVIEW) return this.failed(id, true);
       this.previewTable().exec(
         "INSERT OR REPLACE INTO play_previews (id, output, permanent, retry_at) VALUES (?, ?, 1, 0)",
         id,
@@ -340,9 +343,8 @@ export class PlayBot extends Container<Env> {
       return { kind: "text", output };
     }
     await response.body?.cancel();
-    // A code error, a bad request or an iced program's frame (a PNG, which
-    // has no text line) never changes for the same snippet; busy or
-    // unreachable is retried after RETRY_MS.
+    // A code error or a bad request never changes for the same snippet;
+    // busy or unreachable is retried after RETRY_MS.
     return this.failed(id, response.ok || response.status === 422 || response.status === 400);
   }
 

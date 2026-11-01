@@ -244,6 +244,15 @@ export function setup({ document, window, fetch }: Env): void {
         if (response.ok && type.startsWith("application/json")) {
           const result = await response.json();
           const lines = document.createDocumentFragment();
+          // What an iced program drew, above what it printed.
+          if (result.frame) {
+            const image = document.createElement("img");
+            image.src = `data:${result.frame.type};base64,${result.frame.data}`;
+            image.alt = "What the program drew";
+            image.style.display = "block";
+            image.style.maxWidth = "100%";
+            lines.append(image);
+          }
           const add = (value: string, cls: string) => {
             const span = document.createElement("span");
             span.textContent = value;

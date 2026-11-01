@@ -88,29 +88,20 @@ impl fmt::Display for PlayError {
 
 impl std::error::Error for PlayError {}
 
-/// What a snippet gave.
-#[derive(Clone, Debug)]
-pub enum Outcome {
-    /// The text a program wrote, and how it ended.
-    Text(Output),
-    /// The PNG of an iced program's first settled frame.
-    Image(Vec<u8>),
-}
-
 /// Why a snippet reads no file: it runs on a server whose files are not
 /// its own. `include_str!`, `include_bytes!` and `std::fs` fail with this.
 const NO_FILES: &str = "?play has no files";
 
 /// Run one snippet: on the universe runner when the environment names one
 /// (`universe::ROOT`, as the image does), and else on the base language.
-pub fn run(source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+pub fn run(source: &str, limits: &Limits) -> Result<Output, PlayError> {
     if let Some(universe) = universe::Universe::from_env() {
         return universe.run(source, limits);
     }
     rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + limits.time;
     let parsed = plain::Parsed::new(source, limits, deadline)?;
-    parsed.run(source, limits).map(Outcome::Text)
+    parsed.run(source, limits)
 }
 
 /// A report as the user's own source shows it (see [`rawr_snippet::report`]).
@@ -155,13 +146,12 @@ fn limit(text: &str, limits: &Limits) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, Limits, Outcome, PlayError};
+    use super::{run, Limits, PlayError};
 
     fn text(source: &str) -> super::Output {
-        match run(source, &Limits::default()).unwrap() {
-            Outcome::Text(output) => output,
-            Outcome::Image(_) => panic!("{source} drew a frame"),
-        }
+        let output = run(source, &Limits::default()).unwrap();
+        assert!(output.frame.is_none(), "{source} drew a frame");
+        output
     }
 
     #[test]
@@ -314,9 +304,7 @@ mod tests {
         };
         let source =
             "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
-        let Outcome::Text(output) = run(source, &limits).unwrap() else {
-            panic!("no frame")
-        };
+        let output = run(source, &limits).unwrap();
         assert_eq!((output.status, output.limit), (1, true));
         assert_eq!(output.text(), "start\ntime limit exceeded\n");
     }
@@ -330,9 +318,7 @@ mod tests {
         };
         let source = "fn main() {\n    loop { println!(\"0123456789abcdef\"); }\n}\n";
         let started = std::time::Instant::now();
-        let Outcome::Text(output) = run(source, &limits).unwrap() else {
-            panic!("no frame")
-        };
+        let output = run(source, &limits).unwrap();
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "stopped once full"
@@ -367,8 +353,7 @@ mod tests {
             let source = format!("fn leak(x) {{ {body} }}\nfn main() {{ leak(1); }}\n");
             let refused = match run(&source, &Limits::default()) {
                 Err(_) => true,
-                Ok(Outcome::Text(output)) => output.status != 0,
-                Ok(Outcome::Image(_)) => false,
+                Ok(output) => output.status != 0,
             };
             assert!(refused, "{body}");
         }
