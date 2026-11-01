@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- An async function whose future borrows its arguments crosses whatever the arguments' types are, as fount's `google::load(family: &str, catalog: Option<&Catalog>)`: the future holds a crate value lent from its place, an `Option`'s `Some` payload, each member of a tuple of borrows, and the program's own string, with nothing copied. A path to a module's item rawr can't bind reads as rustc's E0425 ("cannot find function `load` in module `google`"). (#677)
 
 ## 0.3.89 (2026-11-01)
 
