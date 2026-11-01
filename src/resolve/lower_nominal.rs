@@ -53229,7 +53229,7 @@ mod tests {
             std::mem::size_of::<super::ExecutableOp>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 640);
+        assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 624);
     }
 
     #[cfg(feature = "rust-import")]
