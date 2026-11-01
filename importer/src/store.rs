@@ -30,6 +30,10 @@ pub(crate) use entry::{existing_directory_budgeted, read_file_budgeted};
 
 pub(crate) use pins::{transaction, Guard as PinGuard, Role as PinRole};
 
+/// How many unpinned runners a project keeps.
+#[cfg(test)]
+pub(crate) const KEPT_RUNNERS: usize = eviction::KEPT[1].1;
+
 #[derive(Clone, Copy)]
 enum InFlight<'a> {
     Current(&'a crate::node::ReadSetProof),
@@ -311,6 +315,11 @@ impl Store {
             Ok(())
         })?;
         lease::enroll_project(&root, Digest::from_bytes(project), &mut budget)?;
+        // Executions an older rawr wrote can't be looked up or run again
+        // (#577). Without any, this is one ledger read.
+        if !fresh {
+            while eviction::recover_unreadable(&root, &mut recovery::Budget::new())? {}
+        }
         Ok(Self {
             root,
             project: Digest::from_bytes(project),
@@ -412,11 +421,10 @@ impl Store {
     #[cfg(test)]
     pub(crate) fn fixture_retire_excess(&self, kind: Kind, keep: usize) -> Result<usize, Error> {
         let mut retired = 0;
-        while eviction::recover_resolution_excess(
+        while eviction::recover_excess(
             &self.root,
             self.project,
-            kind,
-            keep,
+            &[(kind, keep)],
             &mut recovery::Budget::new(),
         )? {
             retired += 1;
@@ -1107,12 +1115,14 @@ impl Store {
     /// something is evictable; each project's Live and LastGood runners stay.
     /// Each eviction is its own bounded recovery pass.
     fn make_room(&self, estimate: accounting::Charge) -> Result<(), Error> {
-        // A project keeps a few unrooted resolutions, whatever the caps.
-        while eviction::recover_resolution_excess(
+        // What an older rawr executed goes first: nothing reads it again.
+        while eviction::recover_unreadable(&self.root, &mut recovery::Budget::new())? {}
+        // A project keeps a few unrooted resolutions and executions of each
+        // kind, newest first, whatever the caps.
+        while eviction::recover_excess(
             &self.root,
             self.project,
-            Kind::Resolution,
-            eviction::RESOLUTIONS_KEPT,
+            &eviction::KEPT,
             &mut recovery::Budget::new(),
         )? {}
         loop {

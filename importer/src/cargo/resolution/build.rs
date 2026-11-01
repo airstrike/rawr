@@ -21,6 +21,22 @@ const ENTRY_HEADER_BYTES: usize = 49;
 const TARGET: u8 = 1;
 const PROTOCOL: u8 = 2;
 
+/// The build product's store schema: its codec with the versions its
+/// execution key carries through the attested toolchain (#577).
+pub(crate) const EXECUTION_SCHEMA: u32 = {
+    let toolchain = crate::cargo::toolchain::Schemas::execution_versions();
+    node::reader_schema(
+        SCHEMA,
+        &[
+            BUNDLE_SCHEMA,
+            toolchain[0],
+            toolchain[1],
+            toolchain[2],
+            toolchain[3],
+        ],
+    )
+};
+
 /// Small content node referring to one immutable authoritative Cargo bundle.
 pub(crate) struct Product {
     canonical: Box<[u8]>,
@@ -141,7 +157,7 @@ impl Product {
             store.root(),
             self.reference,
             node::Kind::NativeProduct,
-            SCHEMA,
+            EXECUTION_SCHEMA,
             key,
             self.seal_bytes,
             self.seal_digest,
@@ -279,7 +295,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::NativeProduct;
-    const SCHEMA: u32 = SCHEMA;
+    const SCHEMA: u32 = EXECUTION_SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if self.canonical.len() > limit {

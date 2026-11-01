@@ -15,6 +15,12 @@ pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
 const CLASSIFIER_VERSION: u32 = 79;
+
+/// The contract schema and classifier version every contract fingerprint
+/// carries.
+pub(crate) const fn contract_versions() -> [u32; 2] {
+    [CONTRACT_SCHEMA, CLASSIFIER_VERSION]
+}
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.

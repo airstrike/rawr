@@ -131,7 +131,9 @@ impl BundleValue {
 #[cfg(feature = "test-fixtures")]
 impl Value for BundleValue {
     const KIND: Kind = Kind::Runner;
-    const SCHEMA: u32 = 2;
+    // The current runner execution schema: a bundle with another is one an
+    // older rawr wrote, which the store evicts (#577).
+    const SCHEMA: u32 = crate::runner::EXECUTION_SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
         if Self::BYTES > limit {
@@ -211,7 +213,8 @@ impl NativeBundleValue {
 #[cfg(feature = "test-fixtures")]
 impl Value for NativeBundleValue {
     const KIND: Kind = Kind::NativeProduct;
-    const SCHEMA: u32 = 2;
+    // The current build execution schema, as for `BundleValue`.
+    const SCHEMA: u32 = <crate::cargo::resolution::BuildProduct as Value>::SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
         self.0.encode(limit)
@@ -272,6 +275,42 @@ pub(super) fn registered_retention_parent_in(
         product.seal_digest,
     );
     (value, commitment)
+}
+
+/// A runner an older rawr executed: its schema folds in other versions.
+#[cfg(feature = "test-fixtures")]
+struct OldBundleValue(BundleValue);
+
+#[cfg(feature = "test-fixtures")]
+impl Value for OldBundleValue {
+    const KIND: Kind = Kind::Runner;
+    const SCHEMA: u32 = BundleValue::SCHEMA.wrapping_add(1);
+
+    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+        self.0.encode(limit)
+    }
+
+    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+        BundleValue::decode(bytes, limit).map(Self)
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+fn old_bundled_fixture(
+    attempt: crate::store::bundle::Attempt,
+) -> Result<super::Bundled<OldBundleValue>, Error> {
+    fs::write(attempt.generated().join("input"), b"old-generated")
+        .map_err(|error| Error::Transform(error.to_string().into()))?;
+    let value = OldBundleValue(BundleValue::capture(attempt.reference()));
+    let pending = attempt.seal(Box::from(BundleValue::SEAL))?;
+    super::Bundled::validate(value, pending, |value, pending| {
+        pending.validate_unpublished(
+            value.0.reference,
+            value.0.seal_length,
+            value.0.seal_digest,
+        )?;
+        value.encode(4_096)
+    })
 }
 
 #[cfg(feature = "test-fixtures")]
@@ -592,11 +631,12 @@ fn a_project_keeps_only_its_newest_unrooted_units_of_a_kind() {
         evaluate(recipe);
     }
     assert_eq!(executions.load(Ordering::Relaxed), 6);
+    // Making room for the sixth already retired the first (#577).
     assert_eq!(
         store
             .fixture_retire_excess(Artifact::KIND, 4)
             .expect("the excess retires"),
-        2
+        1
     );
     assert_eq!(store.fixture_retire_excess(Artifact::KIND, 4).unwrap(), 0);
     for recipe in &recipes[2..] {
@@ -3519,11 +3559,11 @@ fn runner_eviction_uses_seal_order_and_removes_one_whole_unpinned_unit() {
         .join(second.receipt().action().directory());
     let first_content = store
         .root()
-        .join("content/runner/00000002")
+        .join(format!("content/runner/{:08x}", BundleValue::SCHEMA))
         .join(first.content().digest().directory());
     let second_content = store
         .root()
-        .join("content/runner/00000002")
+        .join(format!("content/runner/{:08x}", BundleValue::SCHEMA))
         .join(second.content().digest().directory());
     let first_index = store
         .root()
@@ -5045,6 +5085,206 @@ fn store_missing_one_execution_rebuilds_it() {
     store
         .fixture_physical_inventory()
         .expect("the rebuilt store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// Publish one runner an older rawr executed, as `discover_bundled` would
+/// have under that rawr, and return its action directory.
+#[cfg(feature = "test-fixtures")]
+fn old_runner(
+    context: &Context,
+    store: &crate::store::Store,
+    name: &'static [u8],
+) -> (PathBuf, super::Validated<OldBundleValue>) {
+    let counts = Counts::default();
+    let recipe = context
+        .discover::<OldBundleValue>(name, 4_096)
+        .expect("the old runner recipe seals");
+    let current = store.clone();
+    let runner = Evaluator::new(store, &counts)
+        .discover_bundled(
+            &recipe,
+            move |candidate| {
+                let canonical = candidate.encode(4_096)?;
+                crate::store::bundle::validate_complete(
+                    current.root(),
+                    candidate.0.reference,
+                    OldBundleValue::KIND,
+                    OldBundleValue::SCHEMA,
+                    super::content_digest::<OldBundleValue>(&canonical),
+                    candidate.0.seal_length,
+                    candidate.0.seal_digest,
+                    current.graph_budget(),
+                )?;
+                Ok(canonical)
+            },
+            old_bundled_fixture,
+        )
+        .expect("the old runner publishes");
+    let action = store
+        .root()
+        .join("actions/runner")
+        .join(super::STORAGE_DIRECTORY)
+        .join(runner.receipt().action().directory());
+    (action, runner)
+}
+
+/// Executions an older rawr wrote are evicted when the store opens, with
+/// the pins that name them. A running program keeps the one it holds until
+/// it ends, and current executions stay (#577).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn a_store_evicts_executions_an_older_rawr_wrote_when_it_opens() {
+    let (root, store, current) =
+        store_growth_runners("store-unreadable", &[b"store-unreadable-current"]);
+    let context = fixture_context(&root);
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    // This rawr evicts an old execution whenever it makes room, so each one
+    // is held while the next publishes, as the older rawr's run would have.
+    let hold = |runners: &[&super::Validated<OldBundleValue>]| {
+        let proof = evaluator
+            .seal_read_set(
+                runners
+                    .iter()
+                    .map(|runner| runner.receipt().read_set().clone()),
+            )
+            .expect("the old closure seals");
+        store
+            .acquire_pin(crate::store::PinRole::Prepared, &proof)
+            .expect("the old closure pins")
+    };
+    let (stale, stale_runner) = old_runner(&context, &store, b"store-unreadable-stale-pin");
+    let guard = hold(&[&stale_runner]);
+    let (unpinned, unpinned_runner) = old_runner(&context, &store, b"store-unreadable-unpinned");
+    drop(guard);
+    let guard = hold(&[&stale_runner, &unpinned_runner]);
+    let (running, running_runner) = old_runner(&context, &store, b"store-unreadable-running");
+    drop(guard);
+    let guard = hold(&[&stale_runner, &unpinned_runner, &running_runner]);
+    // The older rawr's last run left its Live root behind.
+    let proof = evaluator
+        .seal_read_set([stale_runner.receipt().read_set().clone()])
+        .expect("the stale closure seals");
+    store
+        .with_pin(crate::store::PinRole::Live, &proof, || Ok(()))
+        .expect("the old Live root binds and becomes stale");
+    // One of its programs is still running.
+    drop(guard);
+    let guard = hold(&[&running_runner]);
+    assert!(stale.is_dir() && unpinned.is_dir() && running.is_dir());
+    assert_eq!(
+        crate::store::bundle::count_bundles(store.root()).unwrap(),
+        4
+    );
+    drop((store, stale_runner, unpinned_runner, running_runner));
+
+    // The next run opens the store.
+    let store = context.open_store().expect("the store opens");
+    assert!(
+        !stale.exists() && !unpinned.exists(),
+        "old executions evict"
+    );
+    assert!(running.is_dir(), "a running program keeps its runner");
+    assert!(current[0].0.is_dir(), "a current execution stays");
+    assert_eq!(
+        crate::store::bundle::count_bundles(store.root()).unwrap(),
+        2
+    );
+    assert_eq!(
+        store.fixture_project_usage().unwrap().4,
+        1,
+        "the old Live root is forgotten; the running one stays"
+    );
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+
+    drop(guard);
+    drop(store);
+    let store = context.open_store().expect("the store opens again");
+    assert!(!running.exists(), "an ended program's old runner evicts");
+    assert!(current[0].0.is_dir());
+    assert_eq!(
+        crate::store::bundle::count_bundles(store.root()).unwrap(),
+        1
+    );
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+    drop(current);
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// A project keeps its newest few unpinned runners. Making room for another
+/// evicts the oldest unpinned one, and a pinned or running one is never
+/// evicted or counted, however old (#577).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn a_store_over_its_recency_bound_evicts_the_oldest_unpinned_execution() {
+    let root = temporary("store-recency");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the store opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let publish = |name: String| {
+        let recipe = context
+            .discover::<BundleValue>(name.as_bytes(), 4_096)
+            .expect("the runner recipe seals");
+        let current = store.clone();
+        let runner = evaluator
+            .discover_bundled(
+                &recipe,
+                move |candidate| candidate.validate_published(&current),
+                bundled_fixture,
+            )
+            .expect("the runner publishes");
+        let action = store
+            .root()
+            .join("actions/runner")
+            .join(super::STORAGE_DIRECTORY)
+            .join(runner.receipt().action().directory());
+        (action, runner)
+    };
+    let pinned = (0..3)
+        .map(|index| publish(format!("store-recency-pinned-{index}")))
+        .collect::<Vec<_>>();
+    store_growth_pin(&store, &pinned[0].1, crate::store::PinRole::LastGood);
+    store_growth_pin(&store, &pinned[1].1, crate::store::PinRole::Live);
+    let proof = evaluator
+        .seal_read_set([pinned[2].1.receipt().read_set().clone()])
+        .expect("the running closure seals");
+    let guard = store
+        .acquire_pin(crate::store::PinRole::Prepared, &proof)
+        .expect("a running program pins its runner");
+    let kept = crate::store::KEPT_RUNNERS;
+    let unpinned = (0..=kept)
+        .map(|index| publish(format!("store-recency-unpinned-{index}")))
+        .collect::<Vec<_>>();
+    for (action, _) in &unpinned {
+        assert!(action.is_dir(), "the bound is reached, not passed");
+    }
+    // Making room for one more evicts the oldest unpinned runner only.
+    let newest = publish("store-recency-newest".into());
+    assert!(!unpinned[0].0.exists(), "the oldest unpinned runner evicts");
+    for (action, _) in unpinned[1..].iter().chain([&newest]) {
+        assert!(action.is_dir(), "the newest unpinned runners stay");
+    }
+    for (action, _) in &pinned {
+        assert!(action.is_dir(), "pinned and running runners stay");
+    }
+    assert_eq!(
+        crate::store::bundle::count_bundles(store.root()).unwrap(),
+        pinned.len() + kept + 1
+    );
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+
+    drop(guard);
+    drop((pinned, unpinned, newest));
     store.retire_fixture().expect("the store retires");
     fs::remove_dir_all(root).expect("the fixture retires");
 }
