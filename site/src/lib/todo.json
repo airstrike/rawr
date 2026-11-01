@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.65",
+  "version": "0.3.66",
   "examples": {
     "running": 19,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A `#[derive(..)]` path resolves as rustc resolves it: std's derives by name or path, and a crate's derive macro through the file's `use` or its full path. A name that resolves to nothing gets rustc's \"cannot find derive macro `X` in this scope\" at its span, and deriving a crate's macro on a program type is reported at its span as not supported yet. Item, field and variant attributes keep their source text, so `#[serde(rename_all = \"camelCase\")]` now parses.","issues":[602],"refs":[593]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.66",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A `#[derive(..)]` path resolves as rustc resolves it: std's derives by name or path, and a crate's derive macro through the file's `use` or its full path. A name that resolves to nothing gets rustc's \"cannot find derive macro `X` in this scope\" at its span, and deriving a crate's macro on a program type is reported at its span as not supported yet. Item, field and variant attributes keep their source text, so `#[serde(rename_all = \"camelCase\")]` now parses.","issues":[602],"refs":[593]}
+        ]
+      },
       {
         "version": "0.3.65",
         "date": "2026-11-01",
@@ -1344,7 +1346,7 @@
     {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"open","category":"No glue (D593)"},
     {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},
     {"issue":601,"title":"Remove the runner's always-None event mapper","state":"open","category":"Importer"},
-    {"issue":602,"title":"Derive paths resolve to crate macros; helper attributes kept as source text","state":"open","category":"No glue (D593)"},
+    {"issue":602,"title":"Derive paths resolve to crate macros; helper attributes kept as source text","state":"closed","category":"No glue (D593)","release":"0.3.66"},
     {"issue":603,"title":"Evaluate #[cfg_attr(..)] on items, fields and variants","state":"open","category":"Divergences from rustc"},
     {"issue":604,"title":"Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc"},
     {"issue":605,"title":"Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc"},
