@@ -83,6 +83,28 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
     );
 }
 
+/// A crate's `async fn` that borrows its argument, as fount's `load(font:
+/// &Font)`, leases the value to its future for the future's life, shared
+/// or mutably (D683.2), and the value is whole again after the await.
+#[test]
+fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
+    let root = fixture("tokio-borrowed");
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("run")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert_eq!(stdout, "Inter 3 3\n");
+}
+
 #[test]
 fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
     let root = fixture("tokio-ticks");

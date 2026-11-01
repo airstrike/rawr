@@ -6749,8 +6749,12 @@ fn lent_inputs(plan: &Plan) -> Result<Vec<(usize, bool, String)>, request::Error
     let Some((signature, substitutions, offset)) = call_signature(plan) else {
         return Ok(Vec::new());
     };
-    // A scope frame's call takes what it borrows into the frame.
-    if signature.scope().is_some() {
+    // A scope frame's call takes what it borrows into the frame. A future
+    // holds what it borrows after the call, as fount's `async fn load(font:
+    // &Font)` does: its inputs are leased from their slots instead (D683.2).
+    if signature.scope().is_some()
+        || is_future(&substituted(signature.output(), signature, substitutions)?)
+    {
         return Ok(Vec::new());
     }
     let mut lent = Vec::new();
@@ -7376,7 +7380,20 @@ fn render_adapter_body(
                 }
                 // A native call lends the arena to the script closures it
                 // calls back, as Freya's `launch` calls `fn app()` (D551.6).
-                if lazy {
+                let rebound = if lazy {
+                    future_borrows(signature, substitutions)?
+                } else {
+                    String::new()
+                };
+                if lazy && !rebound.is_empty() {
+                    // A future that borrows its inputs holds what lends them
+                    // for its life: a leased value, or a value made for the
+                    // call (D683.2).
+                    writeln!(
+                        output,
+                        "    let output = __rawr_profile_host::task::lazy(move || async move {{\n{rebound}        {call}.await\n    }});"
+                    )
+                } else if lazy {
                     writeln!(
                         output,
                         "    let output = __rawr_profile_host::task::lazy(move || {call});"
@@ -11090,6 +11107,35 @@ fn render_take_input(
     output
         .write_all(taken.as_bytes())
         .map_err(request::unwritable)
+}
+
+/// The statements that move what lends each borrowed input into a future
+/// and borrow it there again, as `render_take_input` bound it: a leased
+/// value (`render_lease`) or a value made for the call. Empty when no input
+/// borrows.
+fn future_borrows(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
+    let mut rebound = String::new();
+    for (local, ty) in signature.inputs().iter().enumerate() {
+        let convert::Type::Borrowed { mutable, ty: lent } =
+            substituted(ty, signature, substitutions)?
+        else {
+            continue;
+        };
+        if !mutable && is_made_for_call(&lent) {
+            rebound.push_str(&format!(
+                "        let argument_{local}_made = argument_{local}_made;\n        let argument_{local} = &argument_{local}_made;\n"
+            ));
+        } else {
+            let borrow = if mutable { "" } else { "&*" };
+            rebound.push_str(&format!(
+                "        #[allow(unused_mut)]\n        let mut argument_{local}_held = argument_{local}_held;\n        let argument_{local} = {borrow}argument_{local}_held.get_mut();\n"
+            ));
+        }
+    }
+    Ok(rebound)
 }
 
 /// A `&T` or `&mut T` input of a value in the arena, as ratatui's
