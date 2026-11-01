@@ -98,12 +98,32 @@ fn generic_capabilities_filter_candidates_without_leaking_inference() {
 
     let mut capable = Engine::new();
     capable.register_host_facade(concrete_and_generic_facade(&[capability::Kind::Clone])).unwrap();
+    // A literal is a `&'static str`, as rustc types it. Only the generic form
+    // takes one, so its `bool` output is rustc's mismatch against the return.
+    let literal = capable
+        .compile_executable(
+            r#"
+                use constrained::Value;
+                enum Message { Tick }
+                pub fn key(value: Value<Message>) -> Value<Message> { value.key("generic only") }
+            "#,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            literal.err_type(),
+            ParseErrorType::Resolution(resolve::Error::TypeMismatch { expected, actual, .. })
+                if expected == "constrained::Value<Message>" && actual == "bool"
+        ),
+        "{literal:?}"
+    );
+    // A `String` is taken by both forms.
     let ambiguity = capable
         .compile_executable(
             r#"
                 use constrained::Value;
                 enum Message { Tick }
-                pub fn key(value: Value<Message>) -> Value<Message> { value.key("both match") }
+                pub fn key(value: Value<Message>) -> Value<Message> { value.key(String::from("both match")) }
             "#,
         )
         .unwrap_err();

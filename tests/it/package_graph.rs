@@ -516,7 +516,8 @@ fn manifest_cannot_claim_the_reserved_internal_alias() {
     let error = graph
         .rust_import(rawr_import::cargo::config::Environment::empty(), &rawr_import::cargo::Limits::standard())
         .expect_err("the crate-owned alias cannot be forged by Cargo.toml");
-    assert!(format!("{error}").contains("reserved for Rawr"));
+    let message = error.to_string();
+    assert!(message.contains("the dependency name `__rawr_internal` is reserved by rawr"), "{message}");
 }
 
 #[cfg(unix)]
