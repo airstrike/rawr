@@ -44,7 +44,8 @@ const PACKAGE: &str = "rawr-runtime";
 const RUNNER: &str = "rawr-generated-runner";
 /// The user setting that lowers the runtime's opt-level (T302).
 pub const OPT_LEVEL: &str = "RAWR_RUNTIME_OPT_LEVEL";
-/// The opt-level of the `rawr` crate when [`OPT_LEVEL`] is unset.
+/// The opt-level of the runtime (`rawr` and its dependencies) when
+/// [`OPT_LEVEL`] is unset.
 const DEFAULT_OPT_LEVEL: &str = "3";
 /// In `<target>/rawr`: the runner this project could not link to the
 /// shared runtime, and why.
@@ -670,7 +671,7 @@ impl Toolchain {
 }
 
 /// The runtime's manifest: `rawr` as the runner names it, at a fixed profile
-/// with the opt-level setting for the `rawr` crate.
+/// with the opt-level setting for `rawr` and its dependencies.
 fn wrapper_manifest(root: &Path, dependency: &dyn toml_edit::TableLike, level: &Item) -> String {
     let mut rawr = toml_edit::InlineTable::new();
     rawr.insert("path", root.to_string_lossy().as_ref().into());
@@ -699,10 +700,14 @@ fn wrapper_manifest(root: &Path, dependency: &dyn toml_edit::TableLike, level: &
     dev.insert("debug", toml_edit::value(0));
     dev.insert("incremental", toml_edit::value(false));
     dev.insert("strip", toml_edit::value(false));
+    // The setting covers rawr's dependencies too: the runner decodes its
+    // bindings plan (serde_json) and manifest carrier (rawr-import, sha2)
+    // through them at every start, and they are rawr's own code path, never
+    // a crate the project compiles.
     let mut own = Table::new();
     own.insert("opt-level", level.clone());
     let mut packages = Table::new();
-    packages.insert("rawr", Item::Table(own));
+    packages.insert("*", Item::Table(own));
     dev.insert("package", Item::Table(packages));
     let mut profile = Table::new();
     profile.insert("dev", Item::Table(dev));

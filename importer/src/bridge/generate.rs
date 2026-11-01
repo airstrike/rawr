@@ -2364,42 +2364,7 @@ fn imported_runtime(
         .map_err(__rawr_internal::host::runtime::Error::profile)?;
     bind_profile_projections(definitions, &mut builders)?;
     for (definition, mut builder) in definitions.iter().zip(builders) {
-        let imported_rows = definition
-            .types()
-            .filter(|ty| ty.identity().imported().is_some())
-            .count();
-        let imported_identities = definition
-            .types()
-            .filter_map(|ty| ty.identity().imported().map(|identity| *identity.as_bytes()))
-            .collect::<std::collections::BTreeSet<_>>();
-        let expected_imported_identities = imported_identities.len();
-        let mut installed_imported_identities = 0_usize;
-        let mut installed_imported_rows = 0_usize;
-        for selector in imported_identities {
-            let proof = builder.bind_imported_type_attestation(selector, native_attestation)?;
-            if proof.selector() != &selector {
-                return Err(__rawr_internal::host::runtime::Error::profile(
-                    "generated imported type attestation identity",
-                ));
-            }
-            installed_imported_identities = installed_imported_identities
-                .checked_add(1)
-                .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(
-                    "generated imported type attestation identity count",
-                ))?;
-            installed_imported_rows = installed_imported_rows
-                .checked_add(proof.rows())
-                .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(
-                    "generated imported type attestation row count",
-                ))?;
-        }
-        if installed_imported_identities != expected_imported_identities
-            || installed_imported_rows != imported_rows
-        {
-            return Err(__rawr_internal::host::runtime::Error::profile(
-                "generated imported type attestation totality",
-            ));
-        }
+        builder.bind_imported_type_attestations(native_attestation)?;
         for ty in definition.types().filter(|ty| {
             ty.identity().imported().is_none() && !ty.parameters().is_empty()
         }) {
@@ -5694,10 +5659,11 @@ fn render_source(
             b"static IMPORTED_BINDINGS: &[u8] = include_bytes!(\"imported_bindings.bin\");\n",
         )
         .map_err(|_| request::Error::Encoding)?;
-    sources.push((
-        BINDINGS_PATH.into(),
-        facade_plan.unwrap_or_default().to_vec(),
-    ));
+    let embedded = match &facade {
+        Some(plan) => plan.runner_bytes().map_err(|_| request::Error::Encoding)?,
+        None => Vec::new(),
+    };
+    sources.push((BINDINGS_PATH.into(), embedded));
     output
         .write_all(RUNTIME_SOURCE)
         .map_err(|_| request::Error::Encoding)?;
@@ -15732,16 +15698,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_runtime_binds_each_imported_identity_cohort_once_and_proves_totals() {
+    fn generated_runtime_binds_every_imported_type_in_one_pass() {
         let source = std::str::from_utf8(RUNTIME_SOURCE).expect("runtime source is UTF-8");
-        assert!(source.contains("collect::<std::collections::BTreeSet<_>>()"));
-        assert!(source.contains("for selector in imported_identities"));
-        assert!(source.contains(
-            "let proof = builder.bind_imported_type_attestation(selector, native_attestation)?"
-        ));
-        assert!(source.contains("installed_imported_identities != expected_imported_identities"));
-        assert!(source.contains("installed_imported_rows != imported_rows"));
-        assert!(source.contains("generated imported type attestation totality"));
+        assert!(source.contains("builder.bind_imported_type_attestations(native_attestation)?"));
+        assert!(!source.contains("for selector in imported_identities"));
         assert!(source.contains("builder.bind_type_attestation(path, native_attestation)?"));
         assert!(
             source.contains("ty.identity().imported().is_none() && !ty.parameters().is_empty()")

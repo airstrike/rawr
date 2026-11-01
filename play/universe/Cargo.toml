@@ -16,3 +16,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]
+
+# No debug info: on Linux it is linked into the runner, which then passes
+# the 256 MiB a runner's executable may have. The image has no debugger.
+[profile.dev]
+debug = false

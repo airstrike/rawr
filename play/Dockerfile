@@ -4,7 +4,7 @@
 # The build stages run on the build host's own architecture. They cross-compile
 # for the target platform (amd64 or arm64) when it differs, so no emulation is
 # needed, and build natively when it matches (GitHub Actions on x86-64).
-# A snippet runs in the bot's own process, which
+# A snippet runs on the universe runner (the `universe` stage below), which
 # needs no GPU. TLS (Discord's gateway and API) is OpenSSL through native-tls: the
 # build links the target's libssl-dev, and the distroless cc runtime already
 # ships libssl3 and the CA bundle.
@@ -62,9 +62,36 @@ RUN . /cross.env && target="$(cat /target)" \
     && cargo build --release --locked --target "$target" -p rawr-play --features bot --bins \
     && install -D -m 0755 -t /out "target/$target/release/rawr-play" "target/$target/release/rawr-play-bot"
 
+# The universe runner (#434, #436): rawr-import builds generated bindings
+# for play/universe (iced at the pinned rev, iced_test and tokio) and the
+# runner that links them, once, here. The bot runs each snippet on that
+# runner with no Cargo and no nightly. This stage runs on the target
+# platform, since the project's own Cargo builds the runner for the machine
+# it runs on. The universe keeps its build path, /universe, in the runtime
+# image: a snippet is compiled beside that Cargo.toml. The universe's own
+# toolchain is the extraction nightly, as it is on a machine whose default
+# is that nightly: a build script that reads the compiler's channel (libm's)
+# then gives the extraction and the runner one API.
+FROM rust:1.99.0-slim-bookworm AS universe
+ARG CARGO_BUILD_JOBS=2
+ENV RUSTUP_TOOLCHAIN=nightly-2026-07-11
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup toolchain install nightly-2026-07-11 --profile minimal --component rustc-dev,rust-src --no-self-update
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p rawr-import-cli --bin rawr-import \
+    && cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
+    && cp -r play/universe /universe \
+    && RAWR_UNIVERSE_RUNNER=1 /src/target/release/rawr-import run /universe \
+    && install -D -m 0755 /universe/target/rawr/runner/target/debug/play /out/universe/runner \
+    && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml
+
 FROM gcr.io/distroless/cc-debian12:nonroot
 # The commit the image was built from, reported on the dashboard.
 ARG PLAY_VERSION=dev
 COPY --from=build /out/ /usr/local/bin/
-ENV PLAY_WORKERS=1 PLAY_MEMORY_MB=1024 PLAY_VERSION=$PLAY_VERSION
+COPY --from=universe /out/universe/ /universe/
+ENV PLAY_WORKERS=1 PLAY_MEMORY_MB=1024 PLAY_VERSION=$PLAY_VERSION PLAY_UNIVERSE=/universe
 ENTRYPOINT ["/usr/local/bin/rawr-play-bot"]
