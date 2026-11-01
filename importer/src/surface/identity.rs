@@ -20,6 +20,29 @@ const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
 const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
+const STD_DOMAIN: &[u8] = b"rawr.identity.std/v1";
+
+/// std's types that Rawr's own std holds as their Rust values, by their
+/// path under `std`, and whether each is `Clone`: a crate's `PathBuf` or
+/// `io::Error` is the program's.
+pub const STD_TYPES: [(&str, bool); 4] = [
+    ("path::PathBuf", true),
+    ("ffi::OsString", true),
+    ("io::Error", false),
+    ("io::ErrorKind", true),
+];
+
+/// The std type each definition is, by the module its path names and its
+/// own name. An unsized `Path` or `OsStr` is the owned type, as Rawr's std
+/// names it, which a borrow of it lends.
+const STD_DEFINITIONS: [(&str, &str, &str); 6] = [
+    ("path", "PathBuf", "path::PathBuf"),
+    ("path", "Path", "path::PathBuf"),
+    ("ffi", "OsString", "ffi::OsString"),
+    ("ffi", "OsStr", "ffi::OsString"),
+    ("io", "Error", "io::Error"),
+    ("io", "ErrorKind", "io::ErrorKind"),
+];
 
 /// Canonical generic extension slot; Phase 2 has no constructor.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -306,12 +329,54 @@ impl Definition {
         Self(framed.finish())
     }
 
+    /// std's type at `path` under `std`, one of [`STD_TYPES`], which
+    /// crosses as the Rust value Rawr's own std holds.
+    #[must_use]
+    pub fn std(path: &str) -> Self {
+        let mut framed = Framed::new(STD_DOMAIN);
+        framed.strings([path].into_iter());
+        Self(framed.finish())
+    }
+
+    /// The std type a sysroot definition at `path` (its crate, modules and
+    /// name) is, when it is one of [`STD_TYPES`] or a borrowed form of one.
+    #[must_use]
+    pub fn std_definition(path: &[&str]) -> Option<Self> {
+        let (name, modules) = path.split_last()?;
+        STD_DEFINITIONS
+            .iter()
+            .find(|(module, own, _)| own == name && modules.contains(module))
+            .map(|(_, _, std)| Self::std(std))
+    }
+
+    /// The path under `std` of the std type these bytes name.
+    #[must_use]
+    pub fn std_path(bytes: &[u8; 32]) -> Option<&'static str> {
+        static IDENTITIES: std::sync::OnceLock<[[u8; 32]; STD_TYPES.len()]> =
+            std::sync::OnceLock::new();
+        let identities = IDENTITIES.get_or_init(|| STD_TYPES.map(|(path, _)| Self::std(path).0));
+        identities
+            .iter()
+            .position(|identity| identity == bytes)
+            .map(|index| STD_TYPES[index].0)
+    }
+
+    /// Whether these bytes name one of std's [`STD_TYPES`] that is `Clone`,
+    /// which Rawr holds as its own value as it holds a `String`.
+    #[must_use]
+    pub fn std_clone(bytes: &[u8; 32]) -> bool {
+        Self::std_path(bytes)
+            .is_some_and(|path| STD_TYPES.iter().any(|(std, clone)| *std == path && *clone))
+    }
+
     /// Whether these bytes name a type rawr declares for a Rust value no
     /// imported crate declares: a future, a duration, an instant, an
-    /// inclusive range, `Infallible` or a script value.
+    /// inclusive range, `Infallible`, one of std's [`STD_TYPES`] or a script
+    /// value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
-        *bytes == Self::future().0
+        Self::std_path(bytes).is_some()
+            || *bytes == Self::future().0
             || *bytes == Self::duration().0
             || *bytes == Self::instant().0
             || *bytes == Self::infallible().0

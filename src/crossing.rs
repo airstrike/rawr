@@ -238,6 +238,58 @@ impl std::fmt::Debug for Proxy {
     }
 }
 
+/// One of std's types that Rawr's own std holds as its Rust value
+/// (`rawr_import::surface::identity::STD_TYPES`): a crate's `PathBuf` or
+/// `io::Error` is the program's, so native code takes, gives and borrows
+/// the value itself.
+pub trait Std: Sized + 'static {
+    /// What a shared borrow of a script value of this type lends native
+    /// code: the Rust value it holds.
+    type Lent: std::ops::Deref<Target = Self>;
+
+    /// The script value holding `self`.
+    fn give(self) -> Dynamic;
+
+    /// The Rust value a script value holds, moved out of it.
+    fn take(value: Dynamic) -> Option<Self>;
+
+    /// The Rust value a script value holds, lent for a call.
+    fn lend(value: Dynamic) -> Option<Self::Lent>;
+}
+
+/// A std value a script value holds as itself, lent for a call.
+pub struct Lent<T>(T);
+
+impl<T> std::ops::Deref for Lent<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+macro_rules! std_held {
+    ($($ty:ty),*) => {$(
+        impl Std for $ty {
+            type Lent = Lent<Self>;
+
+            fn give(self) -> Dynamic {
+                Dynamic::from(self)
+            }
+
+            fn take(value: Dynamic) -> Option<Self> {
+                value.try_cast::<Self>()
+            }
+
+            fn lend(value: Dynamic) -> Option<Lent<Self>> {
+                value.try_cast::<Self>().map(Lent)
+            }
+        }
+    )*};
+}
+
+std_held!(std::path::PathBuf, std::ffi::OsString, std::io::ErrorKind);
+
 /// The `Default` of the script type at `path`, in the generation current
 /// on this thread.
 pub fn default_of(path: &str) -> RawrResultOf<Dynamic> {

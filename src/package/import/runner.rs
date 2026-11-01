@@ -160,6 +160,10 @@ fn semantic_type(
         let future = crate::future::facade::definition()?.export_type("future::Future")?;
         return host::type_ref::Type::external(future, arguments).map(Some);
     }
+    if let Some(path) = Definition::std_path(identity) {
+        let std = crate::std_facade::definition().export_type(path)?;
+        return host::type_ref::Type::external(std, arguments).map(Some);
+    }
     if identity == Definition::duration().as_bytes() && arguments.is_empty() {
         return Ok(Some(host::type_ref::Type::builtin(
             host::type_ref::Builtin::Duration,

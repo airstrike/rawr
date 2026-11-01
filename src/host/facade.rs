@@ -519,7 +519,6 @@ impl Builder {
     /// std::result::Result<(), Error>;`: `parameters` are its type
     /// parameters, each with its default in `defaults` (empty when none has
     /// one), and `target` is the type it names. `path` is relative.
-    #[cfg(feature = "rust-import")]
     pub(crate) fn type_alias(
         &mut self,
         path: &str,
