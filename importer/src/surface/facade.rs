@@ -1824,6 +1824,7 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
         identity,
         parameters: parameters.iter().map(|&name| name.into()).collect(),
         defaults: Box::default(),
+        associated: Box::default(),
         copy: false,
         default: false,
         debug: false,
@@ -1877,6 +1878,7 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
             scope: None,
             crossing: false,
             instance: None,
+            opaques: Box::default(),
         },
         values: None,
     };
