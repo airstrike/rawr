@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.39 (2026-10-31)
+
 - A method of a crate's generic impl whose type names the impl's parameters in another order now runs, as `Widget::_boxed` of iced's `widget::Map<W, F, A>` does, so `column![grid.view().map(..), controls]` checks. (#425)
 
 ## 0.3.38 (2026-10-31)

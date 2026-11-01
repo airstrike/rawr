@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A method of a crate's generic impl whose type names the impl's parameters in another order now runs, as `Widget::_boxed` of iced's `widget::Map<W, F, A>` does, so `column![grid.view().map(..), controls]` checks.","issues":[425]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.39",
+      "date": "2026-10-31",
+      "entries": [
+        {"text":"A method of a crate's generic impl whose type names the impl's parameters in another order now runs, as `Widget::_boxed` of iced's `widget::Map<W, F, A>` does, so `column![grid.view().map(..), controls]` checks.","issues":[425]}
+      ]
+    },
     {
       "version": "0.3.38",
       "date": "2026-10-31",
