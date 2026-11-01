@@ -4498,7 +4498,11 @@ fn render_manifest_accounted(
                 allocation.string(manifest)?;
                 specification.insert("version", Value::from(manifest.as_ref()));
             }
-            config::Source::Git { url, reference } => {
+            config::Source::Git {
+                url,
+                reference,
+                version,
+            } => {
                 allocation.items(1)?;
                 allocation.string("git")?;
                 allocation.string(url)?;
@@ -4508,6 +4512,12 @@ fn render_manifest_accounted(
                     allocation.string(key)?;
                     allocation.string(name)?;
                     specification.insert(key, Value::from(name));
+                }
+                if let Some(version) = version {
+                    allocation.items(1)?;
+                    allocation.string("version")?;
+                    allocation.string(version)?;
+                    specification.insert("version", Value::from(version.as_ref()));
                 }
             }
         }
@@ -6570,6 +6580,51 @@ mod universe_placement_tests {
             assert_eq!(filesystem_entries(&project.0), before, "{label}");
             assert_clean_miss(selected, &fixed, lock);
         }
+    }
+
+    /// #521: Cargo accepts `version` beside `git` and checks it against the
+    /// Git package, so the rendered manifest carries it as written.
+    #[test]
+    fn a_git_dependency_renders_its_version_for_cargo_to_check() {
+        let limits = Limits::standard();
+        let project = Project::new("git-version");
+        let dependency = config::Dependency::git(
+            "catalog",
+            "https://example.invalid/catalog",
+            config::GitReference::Tag("v1.2.0".into()),
+            &limits,
+        )
+        .and_then(|dependency| dependency.git_version("1.2"))
+        .and_then(|dependency| dependency.package("catalog-api"))
+        .expect("Cargo accepts `version` beside `git`");
+        let request = Request::builder(&project.0, &project.cache(), &limits)
+            .expect("request builder seals")
+            .environment(config::Environment::capture().expect("environment captures"))
+            .policy(crate::extract::Policy::manifest(&limits).seal())
+            .expect("policy fits")
+            .dependency(dependency)
+            .expect("dependency fits")
+            .build()
+            .expect("request seals");
+        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
+        let document = manifest
+            .parse::<toml_edit::DocumentMut>()
+            .expect("manifest parses");
+        let catalog = document["dependencies"]["catalog"]
+            .as_inline_table()
+            .expect("the dependency is an inline table");
+        assert_eq!(
+            catalog.get("git").and_then(|value| value.as_str()),
+            Some("https://example.invalid/catalog")
+        );
+        assert_eq!(
+            catalog.get("tag").and_then(|value| value.as_str()),
+            Some("v1.2.0")
+        );
+        assert_eq!(
+            catalog.get("version").and_then(|value| value.as_str()),
+            Some("1.2")
+        );
     }
 
     #[test]

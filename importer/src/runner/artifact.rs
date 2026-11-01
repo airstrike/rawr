@@ -14,7 +14,6 @@ pub struct BuiltArtifactProof {
     executable: File,
     out_dir: PathBuf,
     outputs: Box<[File]>,
-    byte_limit: usize,
 }
 
 struct File {
@@ -29,9 +28,8 @@ impl BuiltArtifactProof {
         executable: &Path,
         out_dir: &Path,
         outputs: &[PathBuf],
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        Self::seal_with_budget(manifest, executable, out_dir, outputs, limits, None)
+        Self::seal_with_budget(manifest, executable, out_dir, outputs, None)
     }
 
     pub(crate) fn seal_budgeted(
@@ -39,10 +37,9 @@ impl BuiltArtifactProof {
         executable: &Path,
         out_dir: &Path,
         outputs: &[PathBuf],
-        limits: &crate::cargo::Limits,
         budget: &crate::node::GraphBudget,
     ) -> Result<Self, Error> {
-        Self::seal_with_budget(manifest, executable, out_dir, outputs, limits, Some(budget))
+        Self::seal_with_budget(manifest, executable, out_dir, outputs, Some(budget))
     }
 
     fn seal_with_budget(
@@ -50,7 +47,6 @@ impl BuiltArtifactProof {
         executable: &Path,
         out_dir: &Path,
         outputs: &[PathBuf],
-        limits: &crate::cargo::Limits,
         budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Self, Error> {
         let out_dir = canonical_directory_budgeted(out_dir, budget)?;
@@ -58,12 +54,9 @@ impl BuiltArtifactProof {
         if !executable.starts_with(&out_dir) {
             return Err(Error::OutsideOutput(executable));
         }
-        // Each artifact file is an artifact-class read bound to the
-        // physical `process::CAPTURE_BYTES`. The cumulative size against the
-        // JSON target is accounting: it is recorded on a runner account and
-        // sealing continues.
-        let mut account = crate::surface::account::Account::new(crate::exceedance::Account::Runner);
-        let executable = hash(executable, crate::process::CAPTURE_BYTES, budget)?;
+        // Artifacts are hashed as streams: nothing is buffered, so an
+        // executable of any size Cargo links seals.
+        let executable = hash(executable, budget)?;
         if let Some(budget) = budget {
             budget.decode(
                 outputs
@@ -76,7 +69,6 @@ impl BuiltArtifactProof {
         retained
             .try_reserve_exact(outputs.len())
             .map_err(|_| Error::Allocation)?;
-        let mut total = usize::try_from(executable.bytes).map_err(|_| Error::Limit)?;
         let mut previous = None;
         for output in outputs {
             let output = canonical_file_budgeted(output, budget)?;
@@ -92,20 +84,15 @@ impl BuiltArtifactProof {
             if output == executable.path {
                 return Err(Error::DuplicateExecutable);
             }
-            let record = hash(output.clone(), crate::process::CAPTURE_BYTES, budget)?;
-            total = total
-                .checked_add(usize::try_from(record.bytes).map_err(|_| Error::Limit)?)
-                .ok_or(Error::Limit)?;
+            let record = hash(output.clone(), budget)?;
             previous = Some(output);
             retained.push(record);
         }
-        account.exceeded("runner artifact bytes", limits.json_bytes, total);
         Ok(Self {
             manifest: manifest.digest(),
             executable,
             out_dir,
             outputs: retained.into_boxed_slice(),
-            byte_limit: crate::process::CAPTURE_BYTES,
         })
     }
 
@@ -131,7 +118,6 @@ impl BuiltArtifactProof {
         }
         let executable = hash(
             canonical_file_budgeted(&self.executable.path, budget)?,
-            self.byte_limit,
             budget,
         )?;
         if executable.bytes != self.executable.bytes || executable.digest != self.executable.digest
@@ -139,11 +125,7 @@ impl BuiltArtifactProof {
             return Err(Error::Drift);
         }
         for expected in &self.outputs {
-            let actual = hash(
-                canonical_file_budgeted(&expected.path, budget)?,
-                self.byte_limit,
-                budget,
-            )?;
+            let actual = hash(canonical_file_budgeted(&expected.path, budget)?, budget)?;
             if actual.bytes != expected.bytes || actual.digest != expected.digest {
                 return Err(Error::Drift);
             }
@@ -237,11 +219,9 @@ fn canonical_file(path: &Path) -> Result<PathBuf, Error> {
     })
 }
 
-fn hash(
-    path: PathBuf,
-    limit: usize,
-    budget: Option<&crate::node::GraphBudget>,
-) -> Result<File, Error> {
+/// Hashes the artifact as a stream. The read is not bounded: Cargo links
+/// executables of any size, and nothing here is held in memory.
+fn hash(path: PathBuf, budget: Option<&crate::node::GraphBudget>) -> Result<File, Error> {
     if let Some(budget) = budget {
         budget.paths(1)?;
         crate::store::path::input(&path, budget)?;
@@ -256,10 +236,7 @@ fn hash(
         {
             return Err(Error::Shape(path));
         }
-        if metadata.len() > limit as u64 {
-            return Err(Error::Limit);
-        }
-        let digest = retained::hash(&path, &metadata, limit, budget)?;
+        let digest = retained::hash(&path, &metadata, budget)?;
         return Ok(File {
             path,
             bytes: metadata.len(),
@@ -279,12 +256,6 @@ fn hash(
             source,
         })?
         .len();
-    if length > u64::try_from(limit).unwrap_or(u64::MAX) {
-        return Err(Error::Limit);
-    }
-    if let Some(budget) = budget {
-        budget.hash(usize::try_from(length).map_err(|_| Error::Limit)?)?;
-    }
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     let mut bytes = 0_u64;
@@ -297,10 +268,7 @@ fn hash(
         if read == 0 {
             break;
         }
-        bytes = bytes.checked_add(read as u64).ok_or(Error::Limit)?;
-        if bytes > u64::try_from(limit).unwrap_or(u64::MAX) {
-            return Err(Error::Limit);
-        }
+        bytes += read as u64;
         digest.update(&buffer[..read]);
     }
     if bytes != length {
@@ -333,8 +301,6 @@ pub enum Error {
     OutputOrder,
     #[error("the executable was also supplied as a secondary output")]
     DuplicateExecutable,
-    #[error("artifact byte limit was exceeded")]
-    Limit,
     #[error("artifact changed after it was sealed")]
     Drift,
     #[error("cannot allocate artifact proof")]
@@ -429,6 +395,39 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// #518: a debug runner can pass 256 MiB. Cargo links it, so it seals:
+    /// the executable is hashed as a stream with no read limit.
+    #[test]
+    fn an_executable_past_the_child_capture_bound_seals() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-runner-artifact-large-{}-{}",
+            std::process::id(),
+            FIXTURE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let executable = root.join("runner");
+        let length = crate::process::CAPTURE_BYTES as u64 + 1;
+        // Sparse: the file reads as zeros and takes no disk space.
+        fs::File::create(&executable)
+            .unwrap()
+            .set_len(length)
+            .unwrap();
+        let manifest = crate::runner::manifest::GeneratedManifest::new(
+            crate::bridge::BuildRequestKey::fixture([1; 32]),
+            Box::default(),
+            Box::default(),
+            Box::default(),
+            [0; 32],
+        );
+        let budget = crate::node::GraphBudget::new();
+        let sealed = BuiltArtifactProof::seal_budgeted(&manifest, &executable, &root, &[], &budget)
+            .expect("an executable of any size seals");
+        assert_eq!(sealed.executable_bytes(), length);
+        sealed.revalidate_budgeted(&budget).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn artifact_hash_and_path_checks_spend_the_shared_graph_budget() {
         let root = std::env::temp_dir().join(format!(
@@ -474,7 +473,7 @@ mod tests {
         hashes
             .hash((crate::node::MAX_HASHED_BYTES_PER_GRAPH - 3) as usize)
             .expect("the three-below hash cap precharges");
-        let hashed = hash(executable, 4, Some(&hashes)).expect("the spent graph still hashes");
+        let hashed = hash(executable, Some(&hashes)).expect("the spent graph still hashes");
         assert_eq!(hashed.bytes, 4);
         let axis = hashes
             .exceedances()

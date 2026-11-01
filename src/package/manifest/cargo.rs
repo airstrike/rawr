@@ -232,6 +232,7 @@ by-default = { git = "https://example.invalid/d" }
         let git = |url: &str, reference| Source::Git {
             url: url.to_owned(),
             reference,
+            version: None,
         };
         assert_eq!(
             sources,
@@ -262,6 +263,49 @@ by-default = { git = "https://example.invalid/d" }
                     )
                 ),
             ]
+        );
+
+        // Cargo accepts `version` beside `git` and checks it against the
+        // Git package itself (#521).
+        let versioned = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+            dep = { git = \"https://example.invalid/a\", tag = \"v1.2.0\", version = \"1.2\" }\n";
+        let cargo = Cargo::parse(
+            PathBuf::from("/app/Cargo.toml"),
+            versioned.to_owned(),
+            Path::new("/app"),
+            false,
+        )
+        .expect("Cargo accepts `version` beside `git`")
+        .unwrap();
+        assert_eq!(
+            cargo.dependencies[0].source,
+            Source::Git {
+                url: "https://example.invalid/a".to_owned(),
+                reference: GitReference::Tag("v1.2.0".into()),
+                version: Some("1.2".to_owned()),
+            }
+        );
+        let rendered = crate::package::rust::app_manifest(&cargo, Path::new("lib.rs"));
+        assert!(
+            rendered.contains("dep = { git = \"https://example.invalid/a\", tag = \"v1.2.0\", version = \"1.2\" }"),
+            "{rendered}"
+        );
+
+        let both = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+            dep = { git = \"https://example.invalid/a\", path = \"dep\" }\n";
+        let error = Cargo::parse(
+            PathBuf::from("/app/Cargo.toml"),
+            both.to_owned(),
+            Path::new("/app"),
+            false,
+        )
+        .expect_err("Cargo allows one of git and path");
+        assert!(
+            error
+                .message
+                .contains("Only one of `git` or `path` is allowed."),
+            "{}",
+            error.message
         );
 
         let ambiguous = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\

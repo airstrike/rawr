@@ -63,9 +63,8 @@ impl Snapshot {
         explicit: &[PathBuf],
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<Self> {
-        let members = observe(roots, explicit, allocation, graph, Some(file_limit))?;
+        let members = observe(roots, explicit, allocation, graph, true)?;
         Ok(Self {
             retained: Retained {
                 roots: own_paths(roots, allocation, graph)?,
@@ -81,7 +80,6 @@ impl Snapshot {
         completion: &Completion<'_>,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<Retained> {
         if !self.graph.shares_with(graph) {
             return Err(invalid("namespace completion belongs to another graph"));
@@ -91,7 +89,7 @@ impl Snapshot {
             &self.retained.explicit,
             allocation,
             graph,
-            None,
+            false,
         )?;
         compare_members(&self.retained.members, &current, None)?;
         let count = current.iter().filter(|member| member.candidate).count();
@@ -126,7 +124,7 @@ impl Snapshot {
                 member.digest = None;
             }
         }
-        verify_content(&self.retained.members, allocation, graph, file_limit)?;
+        verify_content(&self.retained.members, allocation, graph)?;
         Ok(self.retained)
     }
 }
@@ -142,7 +140,6 @@ impl Retained {
         mode: retained::Mode,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<u64> {
         self.revalidate_inventory_from(
             inventory,
@@ -150,7 +147,6 @@ impl Retained {
             retained::Origin::Unpublished(mode),
             allocation,
             graph,
-            file_limit,
         )
     }
 
@@ -162,7 +158,6 @@ impl Retained {
         origin: retained::Origin<'_>,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<u64> {
         self.revalidate_inventory_scoped_from(
             inventory,
@@ -171,7 +166,6 @@ impl Retained {
             crate::node::read_set::Scope::Complete,
             allocation,
             graph,
-            file_limit,
         )
     }
 
@@ -185,10 +179,9 @@ impl Retained {
         scope: crate::node::read_set::Scope,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<u64> {
         self.revalidate_inventory_completing(
-            inventory, root, origin, scope, None, allocation, graph, file_limit,
+            inventory, root, origin, scope, None, allocation, graph,
         )
     }
 
@@ -203,13 +196,12 @@ impl Retained {
         completion: Option<bundle::Completion<'_>>,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<u64> {
         // A frozen bundle root is the one known local permission transition;
         // the shared historical expectation is converted per replay, never
         // rewritten, so one decoded namespace serves every mode.
         let frozen = matches!(origin.mode(), retained::Mode::Frozen).then_some(root);
-        let current = observe(&self.roots, &self.explicit, allocation, graph, None)?;
+        let current = observe(&self.roots, &self.explicit, allocation, graph, false)?;
         compare_members(&self.members, &current, frozen)?;
         slots::<u8>(self.members.len(), allocation, graph)?;
         let mut shared = Vec::new();
@@ -231,7 +223,7 @@ impl Retained {
                         .binary_search_by(|member| member.path.as_os_str().cmp(path.as_os_str()))
                         .ok()
                         .filter(|index| self.members[*index].selected);
-                    let limit = if let Some(index) = member {
+                    if let Some(index) = member {
                         let member = &self.members[index];
                         if member.digest != Some(expected)
                             || !expected_facts(member, frozen).holds(facts(metadata).map_err(
@@ -246,11 +238,8 @@ impl Retained {
                                 "joint inventory/namespace obligations disagree",
                             ));
                         }
-                        file_limit.min(bundle::MAX_BYTES as usize)
-                    } else {
-                        bundle::MAX_BYTES as usize
-                    };
-                    let actual = hashes.hash(path, metadata, limit)?;
+                    }
+                    let actual = hashes.hash(path, metadata)?;
                     if actual == expected
                         && let Some(index) = member
                     {
@@ -264,14 +253,9 @@ impl Retained {
             )
         })
         .map_err(node)?;
-        verify_content_with(
-            &self.members,
-            frozen,
-            allocation,
-            graph,
-            file_limit,
-            |index| shared[index] != 0,
-        )?;
+        verify_content_with(&self.members, frozen, allocation, graph, |index| {
+            shared[index] != 0
+        })?;
         Ok(bytes)
     }
 
@@ -328,11 +312,10 @@ impl Retained {
         &self,
         allocation: &mut Allocation,
         graph: &GraphBudget,
-        file_limit: usize,
     ) -> Result<()> {
-        let current = observe(&self.roots, &self.explicit, allocation, graph, None)?;
+        let current = observe(&self.roots, &self.explicit, allocation, graph, false)?;
         compare_members(&self.members, &current, None)?;
-        verify_content(&self.members, allocation, graph, file_limit)
+        verify_content(&self.members, allocation, graph)
     }
 }
 
@@ -373,9 +356,8 @@ fn verify_content(
     members: &[Member],
     allocation: &mut Allocation,
     graph: &GraphBudget,
-    limit: usize,
 ) -> Result<()> {
-    verify_content_with(members, None, allocation, graph, limit, |_| false)
+    verify_content_with(members, None, allocation, graph, |_| false)
 }
 
 fn verify_content_with(
@@ -383,7 +365,6 @@ fn verify_content_with(
     frozen: Option<&Path>,
     allocation: &mut Allocation,
     graph: &GraphBudget,
-    limit: usize,
     shared: impl Fn(usize) -> bool,
 ) -> Result<()> {
     // Keep namespace errors intact while completing every opened attachment
@@ -402,7 +383,7 @@ fn verify_content_with(
                 if shared(index) {
                     continue;
                 }
-                let digest = hashes.hash(&member.path, &metadata, limit).map_err(node)?;
+                let digest = hashes.hash(&member.path, &metadata).map_err(node)?;
                 if Some(digest) != member.digest {
                     return Err(invalid("selected namespace content changed"));
                 }
@@ -418,7 +399,7 @@ fn observe(
     explicit: &[PathBuf],
     allocation: &mut Allocation,
     graph: &GraphBudget,
-    hash_limit: Option<usize>,
+    hash: bool,
 ) -> Result<Vec<Member>> {
     bounded(
         roots
@@ -496,10 +477,10 @@ fn observe(
             .count();
         eprintln!(
             "rawr-namespace-overlap-v1\tinitial={}\troots={}\tunique_roots={}\texplicit={}\tobserved_rows={}\tunique_members={}",
-            hash_limit.is_some(), roots.len(), unique_roots, explicit.len(), observed_rows, members.len()
+            hash, roots.len(), unique_roots, explicit.len(), observed_rows, members.len()
         );
     }
-    if let Some(limit) = hash_limit {
+    if hash {
         // This batch ends before the compiler starts; completion opens its own
         // fresh batch and cannot reuse these directory observations.
         retained::observe_hashes(graph, |hashes| {
@@ -509,8 +490,7 @@ fn observe(
                     if !member.facts.holds(facts(&metadata)?) {
                         return Err(invalid("namespace physical facts changed before hashing"));
                     }
-                    member.digest =
-                        Some(hashes.hash(&member.path, &metadata, limit).map_err(node)?);
+                    member.digest = Some(hashes.hash(&member.path, &metadata).map_err(node)?);
                 }
                 Ok(())
             })())
@@ -774,8 +754,7 @@ mod tests {
         let fixture = Fixture::new();
         let graph = GraphBudget::new();
         let mut allocation = allocation();
-        let snapshot =
-            Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).unwrap();
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
         // Unattempted archive bytes may differ, but all physical facts must match.
         fs::write(fixture.0.join("liba.rlib"), b"changed").unwrap();
         let bytes = fixture.completion(false);
@@ -784,10 +763,9 @@ mod tests {
                 &Completion::decode(&bytes).unwrap(),
                 &mut allocation,
                 &graph,
-                1024,
             )
             .unwrap();
-        retained.revalidate(&mut allocation, &graph, 1024).unwrap();
+        retained.revalidate(&mut allocation, &graph).unwrap();
         fs::write(fixture.0.join("liba.rmeta"), b"META").unwrap();
         // A successful earlier read plus unchanged physical facts cannot serve
         // the later consumer: an in-place content edit preserves this identity.
@@ -796,14 +774,14 @@ mod tests {
             &retained.explicit,
             &mut allocation,
             &graph,
-            None,
+            false,
         )
         .unwrap();
         compare_members(&retained.members, &current, None).unwrap();
-        assert!(retained.revalidate(&mut allocation, &graph, 1024).is_err());
+        assert!(retained.revalidate(&mut allocation, &graph).is_err());
         fs::write(fixture.0.join("liba.rmeta"), b"meta").unwrap();
         fs::write(fixture.0.join("opaque"), b"growth!").unwrap();
-        assert!(retained.revalidate(&mut allocation, &graph, 1024).is_err());
+        assert!(retained.revalidate(&mut allocation, &graph).is_err());
     }
 
     #[test]
@@ -817,7 +795,6 @@ mod tests {
             &explicit,
             &mut allocation,
             &graph,
-            1024,
         )
         .unwrap();
         assert_eq!(snapshot.retained.roots.len(), 2);
@@ -828,7 +805,6 @@ mod tests {
                 &Completion::decode(&bytes).unwrap(),
                 &mut allocation,
                 &graph,
-                1024,
             )
             .unwrap();
         assert!(retained
@@ -837,7 +813,7 @@ mod tests {
             .filter(|member| member.explicit)
             .all(|member| member.selected));
         fs::write(&explicit[0], b"changed").unwrap();
-        assert!(retained.revalidate(&mut allocation, &graph, 1024).is_err());
+        assert!(retained.revalidate(&mut allocation, &graph).is_err());
     }
 
     #[test]
@@ -854,7 +830,6 @@ mod tests {
             &[fixture.0.join("liba.rmeta"), fixture.0.join("opaque")],
             &mut allocation,
             &graph,
-            1024,
         )
         .unwrap();
         assert_eq!(snapshot.retained.members.len(), 4);
@@ -882,16 +857,21 @@ mod tests {
         }
         let legacy = GraphBudget::new();
         let mut legacy_allocation = allocation();
-        let legacy_members =
-            observe(&fixture.roots(), &[], &mut legacy_allocation, &legacy, None).unwrap();
+        let legacy_members = observe(
+            &fixture.roots(),
+            &[],
+            &mut legacy_allocation,
+            &legacy,
+            false,
+        )
+        .unwrap();
         for member in legacy_members.iter().filter(|member| member.candidate) {
             let metadata = metadata(&member.path, &mut legacy_allocation, &legacy).unwrap();
-            retained::hash(&member.path, &metadata, 1024, &legacy).unwrap();
+            retained::hash(&member.path, &metadata, &legacy).unwrap();
         }
         let graph = GraphBudget::new();
         let mut allocation = allocation();
-        let mut members =
-            observe(&fixture.roots(), &[], &mut allocation, &graph, Some(1024)).unwrap();
+        let mut members = observe(&fixture.roots(), &[], &mut allocation, &graph, true).unwrap();
         let captured = graph.census_usage().unwrap();
         let legacy_usage = legacy.census_usage().unwrap();
         assert!(captured.1 < legacy_usage.1);
@@ -905,9 +885,9 @@ mod tests {
         let legacy_verify = GraphBudget::new();
         for member in members.iter().filter(|member| member.selected) {
             let metadata = metadata(&member.path, &mut legacy_allocation, &legacy_verify).unwrap();
-            retained::hash(&member.path, &metadata, 1024, &legacy_verify).unwrap();
+            retained::hash(&member.path, &metadata, &legacy_verify).unwrap();
         }
-        verify_content(&members, &mut allocation, &graph, 1024).unwrap();
+        verify_content(&members, &mut allocation, &graph).unwrap();
         let completed = graph.census_usage().unwrap();
         let legacy_verify = legacy_verify.census_usage().unwrap();
         // A fresh per-member observation whose identity hits does no path work
@@ -917,7 +897,7 @@ mod tests {
         assert_eq!(legacy_verify.2, 0);
         // A changed identity is read and hashed again in the later phase.
         touch_files(&fixture.0);
-        verify_content(&members, &mut allocation, &graph, 1024).unwrap();
+        verify_content(&members, &mut allocation, &graph).unwrap();
         assert_eq!(
             graph.census_usage().unwrap().2 - completed.2,
             legacy_usage.2
@@ -925,7 +905,7 @@ mod tests {
 
         fs::write(fixture.0.join("sibling0.rmeta"), b"later").unwrap();
         assert!(matches!(
-            verify_content(&members, &mut allocation, &graph, 1024),
+            verify_content(&members, &mut allocation, &graph),
             Err(Error::Extraction { code: "compiler-namespace", reason })
                 if reason.as_ref() == "selected namespace content changed"
         ));
@@ -980,27 +960,23 @@ mod tests {
         let fixture = Fixture::new();
         let graph = GraphBudget::new();
         let mut allocation = allocation();
-        let snapshot =
-            Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).unwrap();
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
         let bytes = fixture.completion(false);
         fs::write(fixture.0.join("liba.rmeta"), b"META").unwrap();
         assert!(snapshot
             .complete(
                 &Completion::decode(&bytes).unwrap(),
                 &mut allocation,
-                &graph,
-                1024
+                &graph
             )
             .is_err());
-        let snapshot =
-            Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).unwrap();
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
         fs::remove_file(fixture.0.join("opaque")).unwrap();
         assert!(snapshot
             .complete(
                 &Completion::decode(&bytes).unwrap(),
                 &mut allocation,
-                &graph,
-                1024
+                &graph
             )
             .is_err());
     }
@@ -1011,15 +987,15 @@ mod tests {
         let graph = GraphBudget::new();
         let mut allocation = allocation();
         std::os::unix::fs::symlink(fixture.0.join("opaque"), fixture.0.join("link")).unwrap();
-        assert!(Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).is_err());
+        assert!(Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).is_err());
         fs::remove_file(fixture.0.join("link")).unwrap();
         fs::hard_link(fixture.0.join("opaque"), fixture.0.join("link")).unwrap();
-        assert!(Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).is_err());
+        assert!(Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).is_err());
         fs::remove_file(fixture.0.join("link")).unwrap();
         // A graph whose hashed target is already spent still captures;
         // the hashed axis records exactly the capture's own hashed bytes.
         let measured = GraphBudget::new();
-        Snapshot::capture(&fixture.roots(), &[], &mut allocation, &measured, 1024).unwrap();
+        Snapshot::capture(&fixture.roots(), &[], &mut allocation, &measured).unwrap();
         let capture_hashed = measured.census_usage().unwrap().2;
         assert!(capture_hashed > 0);
         assert!(!measured.exceedances().is_exceeded());
@@ -1030,7 +1006,7 @@ mod tests {
         spent
             .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
             .unwrap();
-        Snapshot::capture(&fixture.roots(), &[], &mut allocation, &spent, 1024).unwrap();
+        Snapshot::capture(&fixture.roots(), &[], &mut allocation, &spent).unwrap();
         let axis = spent
             .exceedances()
             .axis(crate::node::HASHED_RESOURCE)
@@ -1045,14 +1021,8 @@ mod tests {
         // Its targets record: a zero-target account still captures and records
         // the item axis from its first owned path to its truthful high water.
         let mut recorded = Allocation::with_limits(0, 0);
-        Snapshot::capture(
-            &fixture.roots(),
-            &[],
-            &mut recorded,
-            &GraphBudget::new(),
-            1024,
-        )
-        .expect("a zero-target account records and still captures");
+        Snapshot::capture(&fixture.roots(), &[], &mut recorded, &GraphBudget::new())
+            .expect("a zero-target account records and still captures");
         assert!(!recorded.is_refused());
         let (items, bytes) = recorded.usage();
         let axis = *recorded
@@ -1075,21 +1045,18 @@ mod tests {
                 &fixture.roots(),
                 &[],
                 &mut Allocation::refused(),
-                &GraphBudget::new(),
-                1024
+                &GraphBudget::new()
             ),
             Err(Error::Node { operation, .. })
                 if operation == crate::extract::REFUSED_ACCOUNT_OPERATION
         ));
-        let snapshot =
-            Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph, 1024).unwrap();
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
         let bytes = fixture.completion(false);
         assert!(snapshot
             .complete(
                 &Completion::decode(&bytes).unwrap(),
                 &mut allocation,
-                &GraphBudget::new(),
-                1024
+                &GraphBudget::new()
             )
             .is_err());
     }

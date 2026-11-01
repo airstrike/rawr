@@ -49,20 +49,8 @@ pub(crate) fn observe<T>(
 }
 
 impl Pending<'_> {
-    pub(crate) fn hash(
-        &mut self,
-        path: &Path,
-        expected: &Metadata,
-        limit: usize,
-    ) -> Result<[u8; 32], Error> {
+    pub(crate) fn hash(&mut self, path: &Path, expected: &Metadata) -> Result<[u8; 32], Error> {
         let length = usize::try_from(expected.len()).map_err(|_| Error::Allocation)?;
-        if length > limit {
-            return Err(Error::Limit {
-                resource: "runner artifact file bytes",
-                limit,
-                actual: length,
-            });
-        }
         // The digest is a pure function of the file bytes: one computation per
         // physical identity serves every later check in this process.
         let identity = crate::file_digest::Identity::of(expected);

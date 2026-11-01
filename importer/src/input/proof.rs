@@ -428,6 +428,25 @@ impl Recipe {
     }
 }
 
+/// A config file reached through a symlink is also watched where the link
+/// points now: an edit there changes what Cargo reads. The link itself is the
+/// entry's own path, so retargeting it is seen there.
+fn followed(entry: &Entry) -> Option<Watch> {
+    let Entry::File {
+        role: Role::Config,
+        path,
+        ..
+    } = entry
+    else {
+        return None;
+    };
+    let path = Path::new(path.as_ref());
+    fs::canonicalize(path)
+        .ok()
+        .filter(|target| target != path)
+        .map(Watch::Exact)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Role {
@@ -922,6 +941,7 @@ impl Proof {
                     | Entry::BuildMessage { .. }
                     | Entry::Directive { .. } => None,
                 })
+                .chain(followed(entry))
         })
     }
 
@@ -1225,7 +1245,13 @@ fn file_entry(
     limits: &cargo::Limits,
 ) -> Result<Entry> {
     allocation.path(path)?;
-    let path = super::canonical_file("freshness file", path)?;
+    // A config candidate keeps the path Cargo reads; Cargo follows a symlinked
+    // `.cargo` directory or config file, and its content is read through it.
+    let path = if matches!(role, Role::Config) {
+        path.to_path_buf()
+    } else {
+        super::canonical_file("freshness file", path)?
+    };
     let metadata = fs::metadata(&path).map_err(|source| Error::Io {
         operation: "inspect freshness file",
         path: path.clone(),
@@ -1269,7 +1295,9 @@ fn path_entry(
 ) -> Result<Entry> {
     allocation.path(path)?;
     let normalized = super::normalized_absolute(path)?;
-    super::reject_symlinks(&normalized)?;
+    if !matches!(role, Role::Config) {
+        super::reject_symlinks(&normalized)?;
+    }
     match fs::metadata(&normalized) {
         Ok(metadata) if metadata.is_file() => {
             file_entry(role, package_id, &normalized, allocation, limits)
@@ -2581,5 +2609,44 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// #520: a config file reached through a symlinked `.cargo` keeps the
+    /// path Cargo reads, and the watcher also observes where the link points.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_keeps_its_path_and_watches_its_target() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-proof-config-link-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        std::fs::write(root.join("shared/config.toml"), b"[net]\n").unwrap();
+        std::os::unix::fs::symlink(root.join("shared"), root.join(".cargo")).unwrap();
+        let spelled = root.join(".cargo/config.toml");
+        let limits = Limits::standard();
+        let mut allocation = Allocation::new(&limits);
+        let recipe = Recipe::path(Role::Config, &spelled, &mut allocation).unwrap();
+        let proof = evaluate(&[recipe], false, &limits, &mut allocation)
+            .expect("Cargo follows a symlinked .cargo");
+        assert!(matches!(
+            &proof.entries[..],
+            [Entry::File { role: Role::Config, path, bytes: 6, .. }]
+                if path.as_ref() == spelled.to_str().unwrap()
+        ));
+        let watched = proof.watch().collect::<Vec<_>>();
+        assert!(
+            watched
+                == [
+                    super::Watch::Exact(spelled.clone()),
+                    super::Watch::Exact(root.join("shared/config.toml")),
+                ]
+        );
+        let recipe = Recipe::path(Role::DeclaredInput, &spelled, &mut allocation).unwrap();
+        assert!(evaluate(&[recipe], false, &limits, &mut allocation).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

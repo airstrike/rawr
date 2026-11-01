@@ -256,7 +256,6 @@ fn build_fixture(
         .unwrap();
     let validation_store = store.clone();
     let validation = inputs.clone();
-    let limits = context.limits();
     let product = node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
         move |value, budget| value.revalidate(&validation_store, &validation, budget),
@@ -277,16 +276,12 @@ fn build_fixture(
                 &path,
                 &attempt.target(),
                 &[],
-                &limits,
                 budget,
             )
             .unwrap();
-            // The executable read is a physical capture-class I/O bound; the
-            // node product bound stays MAX_CONTENT_BYTES.
-            let executable = Evidence::capture(&path, crate::process::CAPTURE_BYTES, budget)?;
+            let executable = Evidence::capture(&path, budget)?;
             let carrier = Evidence::capture(
                 &attempt.generated().join("rawr-generated-manifest.carrier"),
-                limits.node_output_bytes(),
                 budget,
             )?;
             let retained = retained::Stored::capture(
@@ -338,7 +333,7 @@ fn build_fixture(
     .unwrap();
     let native = product
         .value()
-        .native(&store, &inputs, &manifest.generated, &limits, pin)
+        .native(&store, &inputs, &manifest.generated, pin)
         .unwrap();
     let runner = retain_runner(&chain, &product)?;
     let prepared = prepare_union(&runner, manifest.overlay.as_ref()).unwrap();

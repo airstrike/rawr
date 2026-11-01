@@ -50,11 +50,6 @@ impl Identity {
         })
     }
 
-    /// The file's length in bytes.
-    pub(crate) fn length(self) -> u64 {
-        self.length
-    }
-
     #[cfg(not(unix))]
     pub(crate) fn of(_metadata: &std::fs::Metadata) -> Option<Self> {
         None

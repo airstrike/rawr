@@ -134,7 +134,7 @@ impl Inventory<'_> {
                 graph,
                 node::read_set::Scope::Complete,
                 self.completion,
-                |path, metadata, _| hashes.hash(path, metadata, bundle::MAX_BYTES as usize),
+                |path, metadata, _| hashes.hash(path, metadata),
             )
         })
     }
@@ -145,7 +145,6 @@ impl Inventory<'_> {
         namespace: Option<&crate::extract::plan::namespace::Retained>,
         allocation: &mut crate::extract::Allocation,
         graph: &node::GraphBudget,
-        limit: usize,
     ) -> crate::Result<()> {
         if !self.graph.shares_with(graph) {
             return Err(crate::Error::Node {
@@ -163,7 +162,6 @@ impl Inventory<'_> {
                     self.completion,
                     allocation,
                     graph,
-                    limit,
                 )
                 .map(|_| ()),
             None => self

@@ -133,6 +133,11 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
             Source::Git {
                 url: url.to_owned(),
                 reference,
+                // Cargo prints `*` for a Git dependency with no `version`.
+                version: dependency["req"]
+                    .as_str()
+                    .filter(|req| *req != "*")
+                    .map(str::to_owned),
             }
         } else {
             Source::Registry {

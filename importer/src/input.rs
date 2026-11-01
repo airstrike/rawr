@@ -1400,11 +1400,7 @@ impl Baseline {
             for retained in authority {
                 // Compiler artifact reads bind to the physical capture bound,
                 // never to the configurable JSON target.
-                let actual = optional_file_digest_accounted(
-                    retained.path(),
-                    crate::process::CAPTURE_BYTES,
-                    &mut allocation,
-                )?;
+                let actual = optional_file_digest_accounted(retained.path(), &mut allocation)?;
                 if actual.as_ref() != retained.digest() {
                     return Err(Error::ResolutionDrift {
                         command: "input publication",
@@ -1438,8 +1434,7 @@ impl Baseline {
                 graph: context.graph_budget().clone(),
             });
             for (path, expected) in probe_artifacts {
-                let actual =
-                    file_digest_accounted(path, crate::process::CAPTURE_BYTES, &mut allocation)?;
+                let actual = file_digest_accounted(path, &mut allocation)?;
                 if &actual != expected {
                     return Err(Error::ResolutionDrift {
                         command: "input publication",
@@ -1455,13 +1450,7 @@ impl Baseline {
                 recipe!(Recipe::file(role, path, &mut allocation)?);
             }
             for (path, expected) in config.candidates {
-                // A Cargo config file is a manifest-class read bound to the
-                // physical tail capture, never to the manifest target.
-                let current = optional_file_digest_accounted(
-                    &path,
-                    crate::process::TAIL_BYTES,
-                    &mut allocation,
-                )?;
+                let current = optional_file_digest_accounted(&path, &mut allocation)?;
                 if current != expected {
                     return Err(Error::ResolutionDrift {
                         command: "input publication",
@@ -1994,13 +1983,10 @@ fn environment_value<'a>(environment: &'a [(OsString, OsString)], key: &str) -> 
 
 fn optional_file_digest_accounted(
     path: &Path,
-    limit: usize,
     allocation: &mut Allocation,
 ) -> Result<Option<[u8; 32]>> {
     match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => {
-            Ok(Some(file_digest_accounted(path, limit, allocation)?))
-        }
+        Ok(metadata) if metadata.is_file() => Ok(Some(file_digest_accounted(path, allocation)?)),
         Ok(_) => Err(input("config-input-shape", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(Error::Io {
@@ -2011,32 +1997,17 @@ fn optional_file_digest_accounted(
     }
 }
 
-fn file_digest_accounted(
-    path: &Path,
-    limit: usize,
-    allocation: &mut Allocation,
-) -> Result<[u8; 32]> {
-    use crate::file_digest::{Domain, Identity};
-    // An unchanged physical identity has the digest it had when hashed.
-    let identity = fs::metadata(path).ok().as_ref().and_then(Identity::of);
-    if let Some(digest) = crate::file_digest::get(identity, Domain::Sha256) {
-        let length = usize::try_from(identity.map_or(0, Identity::length)).unwrap_or(usize::MAX);
-        limited("content input", limit, length)?;
-        allocation.items(1)?;
-        allocation.bytes(length)?;
-        return Ok(digest);
-    }
-    let digest = Sha256::digest(read_file_budgeted(
-        "content input",
-        path,
-        limit,
-        allocation,
-    )?)
-    .into();
-    if fs::metadata(path).ok().as_ref().and_then(Identity::of) == identity {
-        crate::file_digest::insert(identity, Domain::Sha256, digest);
-    }
-    Ok(digest)
+/// Hashes the file as a stream, with no read limit: nothing is buffered, and
+/// Cargo writes files of any size.
+fn file_digest_accounted(path: &Path, allocation: &mut Allocation) -> Result<[u8; 32]> {
+    let metadata = fs::metadata(path).map_err(|source| Error::Io {
+        operation: "inspect hashed input",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    allocation.items(1)?;
+    let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    freshness_digest("content input", path, length)
 }
 
 fn read_file_budgeted(
@@ -3204,7 +3175,7 @@ mod build_message_tests {
         let mut allocation =
             Allocation::for_proof(Usage { items: 0, bytes: 0 }, &Limits::standard());
         assert_eq!(
-            super::file_digest_accounted(&path, 64, &mut allocation).unwrap(),
+            super::file_digest_accounted(&path, &mut allocation).unwrap(),
             [7; 32]
         );
         fs::write(&path, b"replaced").expect("the memo fixture is rewritten");
