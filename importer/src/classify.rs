@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 75;
+const CLASSIFIER_VERSION: u32 = 76;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4237,6 +4237,22 @@ impl<P: api::Phase> Context<'_, P> {
                             receiver,
                         }
                     }
+                    // An associated function the trait declares, as the
+                    // member of a blanket impl's application is: no
+                    // receiver tells one type's from another's, as
+                    // `Hsl::from_color` and `Rgb::from_color` of palette's
+                    // `impl<T, U> FromColor<T> for U` are, so each impl's
+                    // is its own.
+                    crate::surface::identity::Selector::AssociatedFunction { .. }
+                        if trait_member(implementation, definition) =>
+                    {
+                        crate::surface::identity::Selector::AssociatedFunction {
+                            item: crate::surface::identity::Definition::text_member(
+                                implementation.id(),
+                                definition.id(),
+                            ),
+                        }
+                    }
                     selector => selector,
                 };
                 self.retain_selector(&selector)?;
@@ -4931,7 +4947,10 @@ impl<P: api::Phase> Context<'_, P> {
     /// Whether `definition` is a provided method of the trait
     /// `implementation` implements that another impl of the trait for the
     /// same type also has, as `PartialOrd::lt` is of both of `Degrees`'s
-    /// `PartialOrd` and `PartialOrd<f32>`.
+    /// `PartialOrd` and `PartialOrd<f32>`, or as a blanket impl's method is
+    /// of each of its applications to one type through that type's impls
+    /// of its bound. Each impl's parameters are its own, so the self types
+    /// match by the type they name.
     fn shared_provided(
         &self,
         implementation: &model::Implementation,
@@ -4942,11 +4961,18 @@ impl<P: api::Phase> Context<'_, P> {
         else {
             return false;
         };
+        let same_type = |left: &model::Type, right: &model::Type| match (left, right) {
+            (
+                model::Type::Definition { id: left, .. },
+                model::Type::Definition { id: right, .. },
+            ) => left == right,
+            _ => left == right,
+        };
         owner == id
             && self.graph.implementations_of(id).any(|other| {
                 other.id() != implementation.id()
                     && matches!(other.trait_ref(), model::Trait::Trait { id: other_id, .. } if other_id == id)
-                    && other.self_type() == implementation.self_type()
+                    && same_type(other.self_type(), implementation.self_type())
                     && other.associated().any(|associated| associated == definition.id())
             })
     }
@@ -5549,7 +5575,7 @@ impl<P: api::Phase> Context<'_, P> {
             // A public field of a type Rawr cannot hold (palette's
             // `standard: PhantomData<S>`) is unavailable by itself. The
             // struct stays, without a constructor, as with a private field.
-            let ty = match self.convert(field.ty()) {
+            let ty = match self.convert_field(field.ty()) {
                 Ok(ty) => ty,
                 Err(Failure::Reject(_)) => {
                     constructible = false;
@@ -6663,6 +6689,38 @@ impl<P: api::Phase> Context<'_, P> {
         })
     }
 
+    /// A shared borrow of `target`, a slice of scalars or `str`, that
+    /// `borrowed_argument` admits.
+    fn convert_borrowed(
+        &self,
+        target: &model::Type,
+    ) -> Result<representability::convert::Type, Failure> {
+        use representability::convert::{Builtin, Type};
+        Ok(Type::Borrowed {
+            mutable: false,
+            ty: Box::new(match target {
+                model::Type::Slice(element) => Type::Sequence {
+                    element: Box::new(self.convert(element)?),
+                    owned: false,
+                    length: None,
+                },
+                _ => Type::Builtin(Builtin::Str),
+            }),
+        })
+    }
+
+    /// A struct's public field: as `convert`, and a shared slice of
+    /// scalars or a `&str` that borrows for the struct's own lifetime, as
+    /// iced's `LineDash<'a>` has `segments: &'a [f32]`. A value Rawr builds
+    /// keeps what it lends for as long as the runner lives, as a literal's
+    /// is.
+    fn convert_field(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
+        match borrowed_argument(ty) {
+            Some(target) => self.convert_borrowed(target),
+            None => self.convert(ty),
+        }
+    }
+
     fn convert(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
         use representability::convert::{Builtin, Type};
         Ok(match ty {
@@ -6795,21 +6853,11 @@ impl<P: api::Phase> Context<'_, P> {
                                 )
                             }
                         };
+                        // `Reader<&'a [u8]>`: a shared slice of scalars or
+                        // a `&str` a type argument names, which a scope
+                        // frame's value borrows (D558 tier 1).
                         converted.push(match borrowed_argument(argument) {
-                            // `Reader<&'a [u8]>`: a shared slice of scalars
-                            // or a `&str` a type argument names, which a
-                            // scope frame's value borrows (D558 tier 1).
-                            Some(target) => Type::Borrowed {
-                                mutable: false,
-                                ty: Box::new(match target {
-                                    model::Type::Slice(element) => Type::Sequence {
-                                        element: Box::new(self.convert(element)?),
-                                        owned: false,
-                                        length: None,
-                                    },
-                                    _ => Type::Builtin(Builtin::Str),
-                                }),
-                            },
+                            Some(target) => self.convert_borrowed(target)?,
                             None => self.convert(argument)?,
                         });
                     }
@@ -9128,6 +9176,15 @@ fn receiver(kind: &model::Kind) -> Option<representability::ownership::Receiver>
             model::Mutability::Mutable => representability::ownership::Receiver::Mutable,
         }),
     }
+}
+
+/// Whether `definition`, a member of `implementation`, is declared by the
+/// trait it implements rather than by the impl itself.
+fn trait_member(implementation: &model::Implementation, definition: &model::Definition) -> bool {
+    matches!(
+        (definition.owner(), implementation.trait_ref()),
+        (model::Owner::Definition(owner), model::Trait::Trait { id, .. }) if owner == id
+    )
 }
 
 fn export_name_ref(export: &api::identity::Export) -> &str {

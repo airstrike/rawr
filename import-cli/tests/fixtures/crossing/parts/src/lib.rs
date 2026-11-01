@@ -101,6 +101,49 @@ pub mod geometry {
         }
     }
 
+    pub use stroke::{LineDash, Stroke};
+
+    /// How a path is outlined, as iced_graphics's `geometry::stroke`.
+    pub mod stroke {
+        /// The dash pattern of a stroke, as iced_graphics's `LineDash<'a>`:
+        /// public fields, one of them a borrowed slice.
+        #[derive(Debug, Clone, Copy, Default)]
+        pub struct LineDash<'a> {
+            /// The lengths of the dashes and the gaps between them.
+            pub segments: &'a [f32],
+            /// Where in the pattern the stroke starts.
+            pub offset: usize,
+        }
+
+        /// A stroke, as iced_graphics's `Stroke<'a>`.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Stroke<'a> {
+            /// Its width.
+            pub width: f32,
+            /// Its dash pattern.
+            pub line_dash: LineDash<'a>,
+        }
+
+        impl Default for Stroke<'_> {
+            fn default() -> Self {
+                Stroke {
+                    width: 1.0,
+                    line_dash: LineDash::default(),
+                }
+            }
+        }
+
+        impl Stroke<'_> {
+            /// What it draws, as a frame's `stroke` would.
+            pub fn describe(&self) -> String {
+                format!(
+                    "stroke {} dash {:?}+{}",
+                    self.width, self.line_dash.segments, self.line_dash.offset
+                )
+            }
+        }
+    }
+
     /// A traced shape and what traces it, as iced_graphics's
     /// `geometry::path`.
     pub mod path {

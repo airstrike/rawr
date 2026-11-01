@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 
+pub mod color;
 pub mod controls;
 pub mod conversions;
 pub mod custom;
@@ -768,6 +769,10 @@ pub mod canvas {
 
     /// A traced shape, re-exported as iced's `canvas::{Path, path}` are.
     pub use parts::geometry::{path, Frame, Path};
+
+    /// How a path is outlined, re-exported as iced's `canvas::{LineDash,
+    /// Stroke, stroke}` are.
+    pub use parts::geometry::{stroke, LineDash, Stroke};
 
     /// A cache at the crate's renderer: an alias that passes its parameter
     /// on, defaulted to another alias, as iced's `canvas::Cache<Renderer =

@@ -475,6 +475,8 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
         host::type_ref::Shape::Result(ok, err) => {
             copy_scalar(ok, facade) && copy_scalar(err, facade)
         }
+        // A shared borrow, as iced's `LineDash::segments: &'a [f32]`.
+        host::type_ref::Shape::Reference { mutable: false, .. } => true,
         _ => false,
     }
 }

@@ -1080,9 +1080,20 @@ fn augment_external(
         .map_err(|_| diagnostic::Error::Allocation)?;
     let mut reasons = Vec::new();
     for outcome in outcomes {
+        // Where the item is defined, and the path that makes it public
+        // when that is elsewhere, as a `pub use` is: the first of a span's
+        // labels is kept.
         if let Some(origin) = outcome.origin() {
-            spans.push(origin.source());
-            spans.push(origin.declaration());
+            spans.push((
+                origin.declaration(),
+                0,
+                format!("`{}` is defined here", outcome.name()),
+            ));
+            spans.push((
+                origin.source(),
+                1,
+                format!("`{}` is exported here", outcome.name()),
+            ));
         }
         let reason = match outcome.representability() {
             Representability::Rejected(reason) => Some(reason.kind().describe()),
@@ -1101,7 +1112,7 @@ fn augment_external(
         }
     }
     spans.sort_unstable();
-    spans.dedup();
+    spans.dedup_by(|later, earlier| later.0 == earlier.0);
     reasons.sort_unstable();
     reasons.dedup();
     if spans.is_empty() && reasons.is_empty() {
@@ -1139,11 +1150,8 @@ fn augment_external(
         builder = builder.note(reason);
     }
     builder.reserve_external_labels(spans.len())?;
-    for span in spans {
-        builder = builder.secondary_external(
-            external_position(span)?,
-            Some("relevant Rust declaration is retained here".into()),
-        );
+    for (span, _, label) in spans {
+        builder = builder.secondary_external(external_position(span)?, Some(label.into()));
     }
     Ok(Some(builder.finish()))
 }
