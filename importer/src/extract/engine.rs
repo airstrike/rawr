@@ -210,17 +210,17 @@ pub(crate) enum Unit {
         implementation: Hash,
         obligation: String,
     },
-    /// A demanded `Type::member` that a trait provides. The traits the
-    /// compiler sees are every selected crate's, so the unit is keyed by
-    /// them too (`session`).
+    /// A demanded `Type::member` that a trait provides, among the traits of
+    /// the crates the walked crate reaches. That crate keys it
+    /// (`session`), so another selected crate never changes it (#672).
     Member {
         #[serde(with = "hex16")]
         owner: Hash,
         name: String,
         session: String,
     },
-    /// A demanded `Trait::member`, for the trait's impls on `&str` in every
-    /// selected crate (`session`).
+    /// A demanded `Trait::member`, for the trait's impls on `&str` in the
+    /// crates the walked crate reaches (`session`).
     TraitMember {
         #[serde(with = "hex16")]
         owner: Hash,
@@ -706,8 +706,8 @@ pub(crate) struct Engine<'o, O: Oracle> {
 }
 
 impl<'o, O: Oracle> Engine<'o, O> {
-    /// A walk of `root`'s crate under `aliases`, in a session of selected
-    /// crates `session` names (`session_key`).
+    /// A walk of `root`'s crate under `aliases`, whose member units
+    /// `session` keys: the crate's own unit key (`session_key`).
     pub(crate) fn new(
         oracle: &'o mut O,
         root: Root,
@@ -1557,7 +1557,9 @@ impl<'o, O: Oracle> Engine<'o, O> {
     }
 }
 
-/// What names a session's selected crates: their unit keys, in any order.
+/// What keys a walk's member units: the walked crate's unit key, which
+/// covers every crate it reaches. Its members see only those crates, so the
+/// key holds in any program that selects the crate (#672).
 pub(crate) fn session_key<'a>(unit_keys: impl IntoIterator<Item = &'a str>) -> String {
     use sha2::{Digest as _, Sha256};
     let mut keys = unit_keys.into_iter().collect::<Vec<_>>();

@@ -32,7 +32,7 @@ const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
 pub const HOST: &str = include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"));
 const REQUIRED_COMPONENTS: [&str; 2] = ["rustc-dev", "rust-src"];
 #[cfg(feature = "rustc-driver")]
-const SUPPORTED_PLAN_SCHEMA: u32 = 8;
+const SUPPORTED_PLAN_SCHEMA: u32 = 9;
 // The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 // `extract/protocol.rs`'s `SCHEMA` are the same number.
 const SUPPORTED_PROBE_PROTOCOL: u32 = 40;

@@ -9,7 +9,7 @@ use rustc_data_structures::stable_hash::{StableHash, StableHasher};
 use rustc_hir::def::{CtorOf, DefKind, MacroKinds, Res};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_span::def_id::{CrateNum, DefId};
+use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_span::symbol::kw;
 use rustc_span::Symbol;
 use rustc_trait_selection::infer::InferCtxtExt;
@@ -19,11 +19,11 @@ use sha2::{Digest as _, Sha256};
 
 use super::engine::{self, Emission, Fault, Hash, Key, Level, Unit};
 use super::{
-    associated_path_kind, crate_segment, defaulted_instance, hex, implementation_crate_authority,
-    name_index, namespace, projected_alias_instance, safety, AssociatedDemandKind,
-    AssociatedObligation, AssociatedPathKind, Binding, Budget, Builder, Diagnostic, ExternalCrate,
-    Generics, ImplementationCrateAuthority, Invocation, Namespace, Polarity, Sysroot, Trait,
-    TraitObligation,
+    associated_path_kind, canonical_path, crate_segment, defaulted_instance, hex,
+    implementation_crate_authority, name_index, namespace, projected_alias_instance, safety,
+    AssociatedDemandKind, AssociatedObligation, AssociatedPathKind, Binding, Budget, Builder,
+    Diagnostic, ExternalCrate, Generics, ImplementationCrateAuthority, Invocation, Namespace,
+    Polarity, Sysroot, Trait, TraitObligation,
 };
 
 /// A value as the protocol writes it, kept verbatim.
@@ -99,6 +99,7 @@ impl<'tcx, 'invocation, 'budget, 'diagnostic> Builder<'tcx, 'invocation, 'budget
             reowned: None,
             instance_aliases: None,
             passing_aliases: std::collections::HashMap::new(),
+            scope: None,
             budget,
             diagnostic,
         }
@@ -664,6 +665,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let mut implementations = Vec::new();
         for impl_id in tcx.all_impls(trait_id) {
             self.budget.edge(1)?;
+            if !self.reaches(impl_id.krate)? {
+                continue;
+            }
             let Some(reference) = tcx.impl_opt_trait_ref(impl_id) else {
                 continue;
             };
@@ -691,6 +695,46 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         Ok(())
     }
 
+    /// Whether the selected crate reaches `krate` through its dependencies,
+    /// or `krate` is the sysroot's or the probe's own. A member of the
+    /// crate's type is resolved among these crates' traits and impls alone,
+    /// as the crate would see them on its own: another selected crate, as
+    /// the program's own, never changes what its table records (#672).
+    pub(super) fn reaches(&mut self, krate: CrateNum) -> Result<bool, String> {
+        if self.scope.is_none() {
+            let tcx = self.tcx;
+            let closure = self
+                .invocation
+                .closure
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let sysroot = tcx.sess.opts.sysroot.path();
+            let mut scope = BTreeSet::from([LOCAL_CRATE, self.selected]);
+            for loaded in tcx.crates(()) {
+                let source = tcx.used_crate_source(*loaded);
+                let mut paths = 0_usize;
+                let mut all_sysroot = true;
+                let mut reached = false;
+                for path in source.paths() {
+                    self.budget.edge(1)?;
+                    paths = paths.saturating_add(1);
+                    all_sysroot &= path.starts_with(sysroot);
+                    let path = canonical_path(path, "loaded artifact", self.budget)?;
+                    reached |= path.to_str().is_some_and(|path| closure.contains(path));
+                }
+                if reached || (paths != 0 && all_sysroot) {
+                    scope.insert(*loaded);
+                }
+            }
+            self.scope = Some(scope);
+        }
+        Ok(self
+            .scope
+            .as_ref()
+            .is_some_and(|scope| scope.contains(&krate)))
+    }
+
     /// One demanded `Type::member` that is no inherent member of the type:
     /// the member of every trait the type implements that declares it. A
     /// trait implemented for the type itself selects that member of its
@@ -714,14 +758,17 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         let self_ty = tcx.type_of(adt).instantiate_identity().skip_norm_wip();
         let param_env = tcx.param_env(adt);
-        let mut traits = tcx
-            .visible_traits()
-            .filter(|trait_id| {
-                tcx.associated_items(*trait_id)
-                    .filter_by_name_unhygienic(name)
-                    .any(|item| item.is_fn())
-            })
-            .collect::<Vec<_>>();
+        let mut traits = Vec::new();
+        for trait_id in tcx.visible_traits() {
+            if tcx
+                .associated_items(trait_id)
+                .filter_by_name_unhygienic(name)
+                .any(|item| item.is_fn())
+                && self.reaches(trait_id.krate)?
+            {
+                traits.push(trait_id);
+            }
+        }
         traits
             .sort_unstable_by_key(|trait_id| tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0);
         traits.dedup();
@@ -780,10 +827,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             else {
                 continue;
             };
-            let mut candidates = Vec::new();
+            let mut relevant = Vec::new();
             tcx.for_each_relevant_impl(trait_id, self_ty, |implementation| {
-                candidates.push(implementation);
+                relevant.push(implementation);
             });
+            let mut candidates = Vec::new();
+            for implementation in relevant {
+                if self.reaches(implementation.krate)? {
+                    candidates.push(implementation);
+                }
+            }
             let owned = |implementation: &DefId| {
                 tcx.impl_opt_trait_ref(*implementation)
                     .is_some_and(|reference| {

@@ -37,7 +37,7 @@ mod compiler;
 )]
 mod attempt_protocol;
 
-const PLAN_SCHEMA: u32 = 8;
+const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
 const PROTOCOL_SCHEMA: u32 = 40;
@@ -77,6 +77,7 @@ struct Entry {
     root: Root,
     unit_key: String,
     dependencies: Vec<String>,
+    closure: Vec<String>,
     target: String,
     target_kind: String,
     target_kinds: Vec<String>,
@@ -229,6 +230,7 @@ fn execute() -> Result<ExitCode, String> {
             demand,
             unit_key: entry.unit_key,
             dependencies: entry.dependencies,
+            closure: entry.closure,
             target: entry.target,
             target_kind: entry.target_kind,
             target_kinds: entry.target_kinds,
@@ -643,6 +645,7 @@ mod tests {
                 "root": {"kind": "selected", "aliases": aliases},
                 "unit_key": "unit",
                 "dependencies": ["dependency"],
+                "closure": ["dependency.rmeta"],
                 "target": "src/lib.rs",
                 "target_kind": "lib",
                 "target_kinds": ["lib"],

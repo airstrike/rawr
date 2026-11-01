@@ -19,7 +19,7 @@ use crate::cargo::{self, resolution, toolchain, unit};
 use crate::process::{self, Program};
 use crate::{Error, Result};
 
-const PLAN_SCHEMA: u32 = 8;
+const PLAN_SCHEMA: u32 = 9;
 const DIRECTORY: &str = "extraction";
 pub(crate) const PLAN_FILE: &str = "plan.json";
 const PROTOCOL_DIRECTORY: &str = "protocol";
@@ -142,6 +142,10 @@ struct Prepared;
 #[serde(deny_unknown_fields)]
 struct Sealed {
     artifact: Artifact,
+    /// The artifacts of every crate the unit reaches through its
+    /// dependencies, the crates whose traits and impls its API names
+    /// whatever else is selected (#672).
+    closure: Box<[Box<str>]>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -540,7 +544,6 @@ impl Plan {
             return None;
         }
         self.sharing.bindings.as_ref()?;
-        let session = engine::session_key(self.entries.iter().map(|entry| entry.unit_key.as_ref()));
         let mut fragments = Vec::new();
         let mut external = BTreeMap::new();
         let mut settled = Vec::new();
@@ -578,11 +581,12 @@ impl Plan {
                 })
                 .map(|path| path.iter().map(ToString::to_string).collect::<Vec<_>>())
                 .collect::<Vec<_>>();
+            // Each crate's units are its own, as the driver records them.
             let extracted = engine::Engine::new(
                 &mut engine::Replay(&memo),
                 root,
                 aliases.clone(),
-                session.clone(),
+                engine::session_key([entry.unit_key.as_ref()]),
             )
             .run(&demand)
             .ok()?;
@@ -782,6 +786,9 @@ impl Plan {
         metadata: &unit::Metadata,
         limits: &cargo::Limits,
     ) -> Result<Capture> {
+        if let Some(reuse) = &self.reuse {
+            seed(reuse, &self.sharing, &build.binding_scripts());
+        }
         self.bind(build, graph, limits)?
             .run(native, limits)?
             .validate_outputs(build, graph, metadata, limits, native.evidence_session())
@@ -854,7 +861,8 @@ impl Plan {
                 selected.digest,
                 &mut allocation,
             )?;
-            entries.push(entry.seal(artifact));
+            let closure = build.closure_artifacts(graph, &entry.unit_key, &mut allocation)?;
+            entries.push(entry.seal(artifact, closure));
         }
         artifacts.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         let probe_directories = build.probe_directories(graph, &mut allocation)?;
@@ -971,9 +979,6 @@ impl Probe {
             let snapshot =
                 namespace::Snapshot::capture(&roots, &explicit, &mut self.allocation, graph)?;
             self.namespace = Some(Namespace::Cold(search, snapshot));
-        }
-        if let Some(reuse) = &self.reuse {
-            seed(reuse, &self.sharing);
         }
         let allocation = &mut self.allocation;
         publish(&self.plan_file, &self.plan_bytes, allocation)?;
@@ -1411,29 +1416,74 @@ impl Probe {
 }
 
 /// Name each shared crate's key for the driver, and give it the table the
-/// home keeps, when the project has none of its own yet. Best effort: a
-/// table that is not there is extracted.
-fn seed(reuse: &Path, sharing: &Sharing) {
+/// home keeps. The driver reads the table of a crate from registries and
+/// git commits whichever nightly artifact it came from (#672), so a table
+/// is kept only under the build-script outputs it was made under: this
+/// nightly's, which `<key>.scripts` records beside it. A table made under
+/// others is dropped, and the home's is seeded only when its entry was made
+/// under these. Best effort: a table that is not there is extracted.
+fn seed(
+    reuse: &Path,
+    sharing: &Sharing,
+    nightly: &BTreeMap<String, Option<Vec<crate::bindings::Script>>>,
+) {
     if sharing.keys.is_empty() {
         return;
     }
     let keys = sharing
         .keys
         .iter()
-        .map(|(correlation, shared)| (correlation.as_ref(), shared.key.as_ref()))
+        .map(|(correlation, shared)| {
+            (
+                correlation.as_ref(),
+                serde_json::json!({ "key": shared.key.as_ref(), "local": shared.local }),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     if let Ok(bytes) = serde_json::to_vec(&keys) {
         let _ = fs::write(reuse.join("keys.json"), bytes);
     }
-    let Some(bindings) = &sharing.bindings else {
-        return;
-    };
     for shared in sharing.keys.values() {
+        // A path closure's table keeps its crate hash, which the driver
+        // checks; its key never enters the home.
+        if shared.local {
+            continue;
+        }
         let local = reuse.join(shared.key.as_ref());
+        let record = reuse.join(format!("{}.scripts", shared.key));
+        let outputs = shared
+            .scripts
+            .iter()
+            .map(|package| {
+                Some((
+                    package.to_string(),
+                    nightly.get(package.as_ref())?.as_ref()?.clone(),
+                ))
+            })
+            .collect::<Option<BTreeMap<_, _>>>();
+        let recorded = fs::read(&record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        if outputs.is_none() || recorded != outputs {
+            let _ = fs::remove_file(&local);
+            let _ = fs::remove_file(reuse.join(format!("{}.served", shared.key)));
+            let _ = fs::remove_file(&record);
+        }
+        let Some(outputs) = outputs else {
+            continue;
+        };
+        if let Ok(bytes) = serde_json::to_vec(&outputs) {
+            let _ = fs::write(&record, bytes);
+        }
         if local.exists() {
             continue;
         }
-        if let Some(entry) = crate::bindings::read(bindings, &shared.key) {
+        let Some(bindings) = &sharing.bindings else {
+            continue;
+        };
+        if let Some(entry) = crate::bindings::read(bindings, &shared.key)
+            && entry.meta.scripts == outputs
+        {
             let temporary = reuse.join(format!(".{}.seed-{}", shared.key, std::process::id()));
             if fs::write(&temporary, &entry.table).is_ok() {
                 let _ = fs::rename(&temporary, &local);
@@ -1915,7 +1965,7 @@ fn clone_strings(values: &[Box<str>], allocation: &mut Allocation) -> Result<Box
 }
 
 impl Entry<Prepared> {
-    fn seal(self, artifact: Artifact) -> Entry<Sealed> {
+    fn seal(self, artifact: Artifact, closure: Box<[Box<str>]>) -> Entry<Sealed> {
         Entry {
             package: self.package,
             root: self.root,
@@ -1931,7 +1981,7 @@ impl Entry<Prepared> {
             features: self.features,
             invocation_nonce: self.invocation_nonce,
             unit_correlation: self.unit_correlation,
-            state: Sealed { artifact },
+            state: Sealed { artifact, closure },
         }
     }
 }

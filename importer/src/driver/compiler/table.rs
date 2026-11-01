@@ -24,7 +24,18 @@ use super::{Invocation, PROTOCOL_SCHEMA};
 pub(super) struct Tables {
     directory: PathBuf,
     /// Shared keys by unit correlation, as the importer named them.
-    shared: BTreeMap<String, String>,
+    shared: BTreeMap<String, Shared>,
+}
+
+/// A crate's key as the importer named it (`extract::shared`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Shared {
+    key: String,
+    /// The crate's closure reaches a path package: its key leaves its
+    /// sources out, so its crate hash still says which build its table
+    /// came from.
+    local: bool,
 }
 
 /// What a table holds, beside it in `<key>.served`: the demands of one
@@ -118,7 +129,7 @@ impl Tables {
     /// crate's own.
     pub(super) fn key_for(&self, invocation: &Invocation, crate_hash: &str) -> String {
         match self.shared.get(&invocation.unit_correlation) {
-            Some(key) => key.clone(),
+            Some(shared) => shared.key.clone(),
             None => Self::key(invocation, crate_hash),
         }
     }
@@ -169,7 +180,11 @@ impl Tables {
     }
 
     /// The crate's recorded units, when a table of this format for this very
-    /// crate is kept. A table that fails to read is extracted again.
+    /// crate is kept. A table that fails to read is extracted again. The
+    /// key of a crate from registries and git commits alone names the crate
+    /// (`extract::shared`), so its table holds whichever nightly artifact
+    /// it came from: another project's build of the same crate gives
+    /// another crate hash (#672).
     pub(super) fn load(
         &self,
         key: &str,
@@ -180,9 +195,13 @@ impl Tables {
         used.push(key.to_owned());
         let bytes = fs::read(self.directory.join(key)).ok()?;
         let table: Table = serde_json::from_slice(&bytes).ok()?;
+        let shared = self
+            .shared
+            .values()
+            .any(|shared| shared.key == key && !shared.local);
         (table.schema == engine::TABLE_SCHEMA
             && table.root == *root
-            && table.crate_hash == crate_hash)
+            && (shared || table.crate_hash == crate_hash))
             .then(|| Memo::from_table(table))
     }
 
@@ -234,7 +253,10 @@ impl Tables {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let key = name.strip_suffix(&format!(".{SERVED}")).unwrap_or(name);
+            let key = name
+                .strip_suffix(&format!(".{SERVED}"))
+                .or_else(|| name.strip_suffix(".scripts"))
+                .unwrap_or(name);
             if key.len() == 64
                 && key
                     .bytes()
@@ -363,6 +385,49 @@ mod tests {
                 .unwrap()
                 .whole
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The key of a crate from registries and git commits names the crate,
+    /// so its table replays whichever project's nightly build of the crate
+    /// it came from; a path closure's still needs its own build (#672).
+    #[test]
+    fn a_shared_crate_table_replays_another_projects_nightly_artifact() {
+        let directory =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-shared-table-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let shared = "a".repeat(64);
+        let local = "b".repeat(64);
+        std::fs::write(
+            directory.join(super::KEYS),
+            serde_json::json!({
+                "shared": { "key": shared, "local": false },
+                "local": { "key": local, "local": true },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let tables = Tables::open(&directory).unwrap();
+        let root = Root {
+            module: [2; 16],
+            krate: "crate".to_owned(),
+        };
+        let memo = Memo {
+            whole: true,
+            ..Memo::default()
+        };
+        let mut used = Vec::new();
+        for key in [&shared, &local] {
+            tables.store(key, &root, "first-project", &memo, None);
+        }
+        assert!(tables
+            .load(&shared, &root, "second-project", &mut used)
+            .is_some_and(|memo| memo.whole));
+        assert!(tables
+            .load(&local, &root, "second-project", &mut used)
+            .is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
