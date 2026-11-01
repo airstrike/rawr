@@ -5,7 +5,8 @@
 // A snippet runs in the browser by default: rawr-web (WEB_MODULE, from
 // web/build.sh) loads once the page is up, and a program's output shows as
 // the server's would. "Run on server" runs it through POST /play/render
-// instead, which answers the same way. The server also
+// instead, which answers the same way, and shows an iced program's first
+// settled frame as a PNG. The server also
 // runs a snippet when the module did not load. Share goes through POST
 // /play/share.
 //
@@ -67,6 +68,8 @@ export type Output =
   | { kind: "note" }
   /** A plain program's output, with its status. */
   | { kind: "term"; chunks: Chunk[]; status: number; note?: string }
+  /** An iced program's first settled frame, from the server. */
+  | { kind: "image"; url: string }
   | { kind: "error"; text: string };
 
 export interface State {
@@ -127,6 +130,8 @@ export class Session {
   private pass: boolean;
   private widget: string | null = null;
   private token: string | null = null;
+  /** The object URL of the frame shown, revoked when the next one replaces it. */
+  private url: string | null = null;
   private web: Promise<Web> | null = null;
   private loaded = false;
   private runs = 0;
@@ -312,6 +317,11 @@ export class Session {
       if (response.ok && type.startsWith("application/json")) {
         const result: TextResult = await response.json();
         this.result(result, ms + " ms");
+      } else if (response.ok && type.startsWith("image/")) {
+        if (this.url) URL.revokeObjectURL(this.url);
+        this.url = URL.createObjectURL(await response.blob());
+        this.show({ kind: "image", url: this.url });
+        this.set({ status: ms + " ms" });
       } else {
         this.show({ kind: "error", text: await response.text() });
         this.set({ status: response.status === 429 ? "slow down" : response.status === 422 ? "error" : "failed" });

@@ -1,9 +1,10 @@
-//! Run untrusted Rawr snippets for `?play`: a plain program runs, and its
-//! output comes back as text.
+//! Run untrusted Rawr snippets for `?play`: a program runs, and its output
+//! comes back as text, or an iced program's first settled frame as a PNG.
 //!
-//! [`run`] parses a snippet once and runs it on the base language (see
-//! [`plain`]). Every snippet takes that one path: one that names a crate
-//! the base language doesn't have fails as any program would.
+//! [`run`] runs a snippet on the universe runner when the environment
+//! names one (see [`universe`]), and else parses it once and runs it on the
+//! base language (see [`plain`]). Every snippet takes that one path: one
+//! that names a crate the runner doesn't have fails as any program would.
 //!
 //! Snippets are untrusted. Every run is on a fresh Engine with bounded
 //! operations, call depth, data sizes, output and a wall-clock deadline,
@@ -88,6 +89,8 @@ impl std::error::Error for PlayError {}
 pub enum Outcome {
     /// The text a program wrote, and how it ended.
     Text(Output),
+    /// The PNG of an iced program's first settled frame.
+    Image(Vec<u8>),
 }
 
 /// Why a snippet reads no file: it runs on a server whose files are not
@@ -98,7 +101,7 @@ const NO_FILES: &str = "?play has no files";
 /// (`universe::ROOT`, as the image does), and else on the base language.
 pub fn run(source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
     if let Some(universe) = universe::Universe::from_env() {
-        return universe.run(source, limits).map(Outcome::Text);
+        return universe.run(source, limits);
     }
     rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + limits.time;
@@ -153,6 +156,7 @@ mod tests {
     fn text(source: &str) -> super::Output {
         match run(source, &Limits::default()).unwrap() {
             Outcome::Text(output) => output,
+            Outcome::Image(_) => panic!("{source} drew a frame"),
         }
     }
 
@@ -306,7 +310,9 @@ mod tests {
         };
         let source =
             "fn main() {\n    println!(\"start\");\n    let mut n = 0;\n    loop { n += 1; }\n}\n";
-        let Outcome::Text(output) = run(source, &limits).unwrap();
+        let Outcome::Text(output) = run(source, &limits).unwrap() else {
+            panic!("no frame")
+        };
         assert_eq!((output.status, output.limit), (1, true));
         assert_eq!(output.text(), "start\ntime limit exceeded\n");
     }
@@ -320,7 +326,9 @@ mod tests {
         };
         let source = "fn main() {\n    loop { println!(\"0123456789abcdef\"); }\n}\n";
         let started = std::time::Instant::now();
-        let Outcome::Text(output) = run(source, &limits).unwrap();
+        let Outcome::Text(output) = run(source, &limits).unwrap() else {
+            panic!("no frame")
+        };
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "stopped once full"
@@ -356,6 +364,7 @@ mod tests {
             let refused = match run(&source, &Limits::default()) {
                 Err(_) => true,
                 Ok(Outcome::Text(output)) => output.status != 0,
+                Ok(Outcome::Image(_)) => false,
             };
             assert!(refused, "{body}");
         }

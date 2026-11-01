@@ -107,6 +107,17 @@ test("the server answers with text or a refusal", async () => {
   assert.equal(page.session.state.status, "slow down");
 });
 
+test("the server answers an iced program with its frame as a PNG", async () => {
+  const page = standIn({ code: "iced::run(update, view)" });
+  page.respond(() => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } }));
+  page.session.choose("server");
+  await new Promise((done) => setTimeout(done, 0));
+  const output = page.session.state.output;
+  assert.equal(output.kind, "image");
+  assert.match(output.kind === "image" ? output.url : "", /^blob:/);
+  assert.equal(page.session.state.status, "0 ms");
+});
+
 test("the address restores an example from its hash and the server from ?run=server", () => {
   const page = standIn({ url: "http://localhost/play?run=server#traits", examples: EXAMPLES });
   assert.equal(page.session.state.code, "traits code");

@@ -19,5 +19,6 @@ body.play .bar a:hover, body.play .bar a[aria-current] { color: var(--text); }
 .out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); color: var(--text); }
 .out pre.error { border-left: 2px solid var(--pink); padding-left: 12px; }
 .out .note { color: var(--dim); }
+.out img { max-width: 100%; height: auto; }
 .term .err { color: var(--err); }
 .term .exit, .term .none, .term .note { color: var(--dim); }

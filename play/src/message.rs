@@ -83,29 +83,63 @@ fn code_block(content: &str) -> Option<String> {
     (!code.is_empty()).then(|| code.to_owned())
 }
 
+/// Discord's attachment limit for a bot, in bytes.
+pub const MAX_ATTACHMENT: usize = 8 * 1024 * 1024;
+
 /// What a finished `rawr-play` process gave.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Done {
     /// The program's output.
     Text(Output),
+    /// The PNG of an iced program's first settled frame.
+    Image(Vec<u8>),
 }
 
-/// The reply to a finished `rawr-play` process: the output fenced, its
-/// error text fenced on a clean failure, and a short notice when it was killed (out of memory
-/// under `--memory-mb`, or a crash).
+/// What the bot sends back.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Reply {
+    /// This text, already fenced and within [`MAX_REPLY`].
+    Text(String),
+    /// This PNG, attached.
+    Image(Vec<u8>),
+}
+
+/// The reply to a finished `rawr-play` process: the output fenced or the
+/// frame attached, its error text fenced on a clean failure, and a short
+/// notice when it was killed (out of memory under `--memory-mb`, or a
+/// crash).
 #[must_use]
-pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> String {
+pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> Reply {
     match outcome(success, stdout, stderr) {
-        Ok(Done::Text(output)) => output_text(&output),
-        Err(text) => error_text(&text),
+        Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
+        Ok(Done::Image(png)) => Reply::Image(png),
+        Err(text) => Reply::Text(error_text(&text)),
     }
 }
 
+/// Whether `bytes` are a PNG.
+#[must_use]
+pub fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+}
+
 /// The result of a finished `rawr-play` process, or its error text
-/// unfenced (as [`reply`] reads it; the playground shows it as is).
+/// unfenced (as [`reply`] reads it; the playground shows it as is). A
+/// result starting with `{` is a program's output, and a PNG is an iced
+/// program's frame.
 pub fn outcome(success: bool, stdout: &[u8], stderr: &str) -> Result<Done, String> {
     if success && stdout.first() == Some(&b'{') {
         return Output::from_json(stdout).map(Done::Text);
+    }
+    if success && is_png(stdout) {
+        if stdout.len() > MAX_ATTACHMENT {
+            return Err(format!(
+                "the window's frame is {} MiB as a PNG, over Discord's {} MiB",
+                stdout.len().div_ceil(1024 * 1024),
+                MAX_ATTACHMENT / (1024 * 1024)
+            ));
+        }
+        return Ok(Done::Image(stdout.to_vec()));
     }
     let stderr = stderr.trim();
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
@@ -267,10 +301,32 @@ pub fn own_reply(
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{channels, error_text, output_text, parse, reply, RateLimit, Request, MAX_REPLY};
+    use super::{
+        channels, error_text, output_text, parse, reply, RateLimit, Reply, Request, MAX_REPLY,
+    };
 
     fn parsed(content: &str) -> Request {
         parse(content).unwrap().unwrap()
+    }
+
+    /// The text of a reply that is text.
+    fn reply_text(reply: Reply) -> String {
+        match reply {
+            Reply::Text(text) => text,
+            Reply::Image(_) => panic!("an image reply"),
+        }
+    }
+
+    #[test]
+    fn message_reply_for_a_frame_attaches_it() {
+        let png = b"\x89PNG\r\n\x1a\n rest".to_vec();
+        assert_eq!(reply(true, &png, ""), Reply::Image(png));
+        let big = [
+            b"\x89PNG\r\n\x1a\n".as_slice(),
+            &vec![0; super::MAX_ATTACHMENT],
+        ]
+        .concat();
+        assert!(reply_text(reply(true, &big, "")).contains("over Discord's 8 MiB"));
     }
 
     #[test]
@@ -317,11 +373,11 @@ mod tests {
 
     #[test]
     fn message_reply_decision() {
-        let text = reply(false, &[], "error: ```oops```\n");
+        let text = reply_text(reply(false, &[], "error: ```oops```\n"));
         assert!(text.starts_with("```text\n") && text.ends_with("\n```"));
         assert_eq!(text.matches("```").count(), 2, "{text}");
         for stderr in ["memory allocation of 9 bytes failed", ""] {
-            let text = reply(false, &[], stderr);
+            let text = reply_text(reply(false, &[], stderr));
             assert!(text.contains("out of memory"), "{text}");
         }
         let long = error_text(&"é".repeat(5000));
@@ -336,7 +392,7 @@ mod tests {
             ..crate::Output::default()
         };
         assert_eq!(
-            reply(true, output.to_json().as_bytes(), ""),
+            reply_text(reply(true, output.to_json().as_bytes(), "")),
             "```text\ntotal: 27\n```"
         );
         let failed = crate::Output {
@@ -408,7 +464,7 @@ mod tests {
         let stderr = "\nthread 'main' (17) panicked at /usr/local/cargo/git/checkouts/iced-3e930cb38a75fe30/be88873/tiny_skia/src/raster.rs:138:14:\n\
                       Image should be allocated\n\
                       note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
-        let text = reply(false, &[], stderr);
+        let text = reply_text(reply(false, &[], stderr));
         assert_eq!(
             text,
             "```text\n?play crashed. This is a bug in ?play, not in your code.\nImage should be allocated\n```"

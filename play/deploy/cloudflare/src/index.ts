@@ -138,7 +138,7 @@ export const DOCS_MOVED: Record<string, string> = {
 
 /**
  * A share's preview: a plain program's output (JSON), or a failure (kept
- * forever for a code error or a limit).
+ * forever for a code error, a limit or an iced program's frame).
  */
 export type Preview =
   | { kind: "text"; output: string }
@@ -340,9 +340,10 @@ export class PlayBot extends Container<Env> {
       return { kind: "text", output };
     }
     await response.body?.cancel();
-    // A code error or a bad request never changes for the same snippet; busy or
+    // A code error, a bad request or an iced program's frame (a PNG, which
+    // has no text line) never changes for the same snippet; busy or
     // unreachable is retried after RETRY_MS.
-    return this.failed(id, response.status === 422 || response.status === 400);
+    return this.failed(id, response.ok || response.status === 422 || response.status === 400);
   }
 
   private failed(id: string, permanent: boolean): Preview {

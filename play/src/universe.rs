@@ -4,14 +4,20 @@
 //! there against the runner's own native surface, with no Cargo and no
 //! nightly, and runs once. A snippet whose native calls the runner doesn't
 //! cover fails as any program whose native calls are missing does.
+//!
+//! The universe's iced has no window: its shell (`play/universe/shell`,
+//! patched in for iced_winit) runs an iced program in iced_test's emulator
+//! until its boot settles and writes that frame as a PNG to the file
+//! `PLAY_FRAME` names. A run that wrote one gives that image.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::plain::{Output, Stream};
-use crate::{Limits, PlayError};
+use crate::{Limits, Outcome, PlayError};
 
 /// The variable naming the universe's root: the directory `rawr-import`
 /// built the runner from, whose `Cargo.toml` every snippet is compiled
@@ -19,6 +25,9 @@ use crate::{Limits, PlayError};
 pub const ROOT: &str = "PLAY_UNIVERSE";
 /// The variable naming the runner binary; `<root>/runner` when unset.
 pub const RUNNER: &str = "PLAY_UNIVERSE_RUNNER";
+/// The variable the universe's iced shell reads: the file it writes an
+/// iced program's settled frame to.
+const FRAME: &str = "PLAY_FRAME";
 
 /// The prebuilt runner and the root it was built from.
 #[derive(Clone, Debug)]
@@ -36,14 +45,27 @@ impl Universe {
         Some(Self { root, runner })
     }
 
-    /// Run `source` on the runner, stopped at `limits.time`.
-    pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
+    /// Run `source` on the runner, stopped at `limits.time`: the frame an
+    /// iced program settled on, or the text a program wrote.
+    pub fn run(&self, source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+        let frame = Frame::new();
+        let output = self.run_with(source, limits, &frame.0)?;
+        match std::fs::read(&frame.0) {
+            Ok(png) if output.status == 0 && !png.is_empty() => Ok(Outcome::Image(png)),
+            _ => Ok(Outcome::Text(output)),
+        }
+    }
+
+    fn run_with(&self, source: &str, limits: &Limits, frame: &Path) -> Result<Output, PlayError> {
         let failed = |what: &str, error: std::io::Error| {
             PlayError::Compile(format!("?play could not {what}: {error}"))
         };
         let mut child = Command::new(&self.runner)
             .env_clear()
             .env("RAWR_PLAY_ROOT", &self.root)
+            .env(FRAME, frame)
+            // The server has no GPU: iced_test draws with tiny-skia.
+            .env("ICED_TEST_BACKEND", "tiny-skia")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -84,6 +106,26 @@ impl Universe {
         output.status = status;
         output.limit = limit;
         Ok(output)
+    }
+}
+
+/// The file one run's frame is written to, removed when dropped.
+struct Frame(PathBuf);
+
+impl Frame {
+    fn new() -> Self {
+        static RUNS: AtomicU64 = AtomicU64::new(0);
+        let run = RUNS.fetch_add(1, Ordering::Relaxed);
+        let name = format!("rawr-play-{}-{run}.png", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_file(&path);
+        Self(path)
+    }
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
