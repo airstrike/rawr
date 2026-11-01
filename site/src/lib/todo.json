@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.52",
+  "version": "0.3.53",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr mcp` can pause a running program, with or without Rust dependencies: `break` on a line or a function, `step` over, into or out, `continue` and `clear`. `inspect` reads values where it paused. A breakpoint stays across saves while its line's text is in the file. A plain `rawr run` pays nothing.","issues":[489]},
-        {"text":"?play prepares its runner once. The runner decodes its bindings, installs them and binds their runtime when the bot starts, and each snippet runs in a fork of it under its own time and memory limits, so a snippet pays only for its own compile and run.","issues":[515],"refs":[516]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.53",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`rawr mcp` can pause a running program, with or without Rust dependencies: `break` on a line or a function, `step` over, into or out, `continue` and `clear`. `inspect` reads values where it paused. A breakpoint stays across saves while its line's text is in the file. A plain `rawr run` pays nothing.","issues":[489]},
+          {"text":"?play prepares its runner once. The runner decodes its bindings, installs them and binds their runtime when the bot starts, and each snippet runs in a fork of it under its own time and memory limits, so a snippet pays only for its own compile and run.","issues":[515],"refs":[516]}
+        ]
+      },
       {
         "version": "0.3.52",
         "date": "2026-11-01",
@@ -1112,7 +1114,7 @@
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health"},
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
-    {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"closed","category":"Health"},
+    {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"closed","category":"Health","release":"0.3.53"},
     {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
     {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
     {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health","release":"0.3.47"},
@@ -1138,7 +1140,7 @@
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
     {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
-    {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)"},
+    {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)","release":"0.3.53"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
     {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"closed","category":"Divergences from rustc","release":"0.3.51"},
