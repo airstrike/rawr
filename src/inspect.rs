@@ -6,12 +6,23 @@
 //! program's own `Debug` impls and derives and a crate type's `Debug`.
 //!
 //! The protocol is one JSON line each way:
-//! - the request: `{"name": "count", "file": "/abs/src/main.rs", "timeout_ms": 2000}`,
-//!   each field optional;
-//! - the answer: `{"reached": true, "file": .., "line": .., "function": ..,
-//!   "bindings": [{"name": .., "value": ..} or {"name": .., "error": ..}]}`,
-//!   or `{"reached": false}` when the program ran none of its own code
-//!   that matched before the timeout.
+//! - the request: `{"name": "count", "file": "/abs/src/main.rs", "frame": 1,
+//!   "timeout_ms": 2000}`, each field optional. `frame` picks a call: 0
+//!   (the default) for the function the program is in, 1 for its caller,
+//!   and on (#511); `name` and `file` apply to that call;
+//! - the answer: `{"reached": true, "frame": .., "file": .., "line": ..,
+//!   "function": .., "bindings": [{"name": .., "value": ..} or {"name": ..,
+//!   "error": ..}], "frames": [{"function": .., "file": .., "line": ..}]}`,
+//!   the frames innermost first, a caller's line the line of its call; or
+//!   `{"reached": false}` when the program ran none of its own code that
+//!   matched before the timeout (with `"paused"` and `"depth"` while
+//!   paused).
+//!
+//! A `&mut` parameter or `self`, which the compiled function holds as its
+//! receiver, reads under the name the program gave it (#534). A caller's
+//! bindings are read where its call keeps them, while it runs: the
+//! debugger's call stack records where, and only while a debugger is
+//! registered (D675.5).
 //!
 //! Nothing runs while no request waits: the engine checks one flag at each
 //! step.
@@ -29,6 +40,10 @@
 //!   `{"op": "continue"}` on a paused program, then a wait of up to
 //!   `timeout_ms` for the next pause: `{"paused": .. or null}`, or
 //!   `{"error": "not paused"}`.
+//!
+//! Under `rawr mcp`, a pause and its end are also told as `paused` (with
+//! the file, line, function and reason) and `resumed` events in the file
+//! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
 //!
 //! A pause holds the thread that runs the program's code inside the
 //! debugger callback. Native code that called into the program, such as a
@@ -53,6 +68,12 @@ use crate::{Dynamic, Engine, EvalAltResult, EvalContext, Position};
 
 /// How long a request waits by default.
 const TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The variable naming the file `rawr mcp` reads a supervised run's events
+/// from, one JSON object per line, where the program says where it paused
+/// and when it went on. The process that runs the program has it, a
+/// runner or the program's own.
+pub const EVENTS: &str = "RAWR_MCP_DEBUG_EVENTS";
 
 /// One binding as a tool reads it: its name and its `Debug` text, or why it
 /// has none.
@@ -79,57 +100,163 @@ fn is_written(name: &str) -> bool {
     !name.is_empty() && !name.starts_with("__rawr") && !name.contains('\0') && !name.contains('$')
 }
 
+/// The program's own function calls where `context` is: their indices in
+/// the debugger's call stack, the innermost first. A crate's native calls
+/// between them are left out.
+fn script_frames(context: &EvalContext) -> Vec<usize> {
+    let Some(debugger) = context.global_runtime_state().debugger.as_ref() else {
+        return Vec::new();
+    };
+    let stack = debugger.call_stack();
+    (0..stack.len())
+        .rev()
+        .filter(|&index| stack[index].bindings.is_some())
+        .collect()
+}
+
+/// How many frames the program has where `context` is: its function calls,
+/// or one for code outside any function.
+fn depth_of(context: &EvalContext) -> usize {
+    script_frames(context).len().max(1)
+}
+
+/// The entries of frame `frame` where `context` is (0 is the function the
+/// program is in, 1 its caller, and on), the newest first: its scope's
+/// entries, then its receiver under the name the program gave it (#534).
+/// `None` when the program isn't that deep.
+fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<(&'c str, &'c Dynamic)>> {
+    let frames = script_frames(context);
+    let stack = context
+        .global_runtime_state()
+        .debugger
+        .as_ref()
+        .map(|debugger| debugger.call_stack());
+    let at =
+        |index: usize| stack.and_then(|stack| stack.get(*frames.get(index)?)?.bindings.as_ref());
+    let mut found: Vec<(&'c str, &'c Dynamic)> = Vec::new();
+    let current: *const crate::Scope = context.scope();
+    if frame == 0 {
+        found.extend(
+            context
+                .scope()
+                .iter_rev_inner()
+                .map(|(name, _, value)| (name.as_str(), value)),
+        );
+        if let (Some(name), Some(this)) = (
+            at(0).and_then(|bindings| bindings.this_name.as_ref()),
+            context.this_ptr(),
+        ) {
+            found.push((name.as_str(), this));
+        }
+        return Some(found);
+    }
+    let bindings = at(frame)?;
+    // The caller's scope is the current one when the call extended it.
+    let scope: &'c crate::Scope =
+        if std::ptr::eq(bindings.scope.as_ptr().cast_const().cast(), current) {
+            context.scope()
+        } else {
+            // SAFETY: the frame is on the call stack, so its call runs on this
+            // thread below the step `context` is at, and its scope lives
+            // (`FrameBindings`). Nothing changes it while this step's callback
+            // runs, and the reference ends with `context`'s borrow.
+            unsafe { bindings.scope.cast::<crate::Scope<'c>>().as_ref() }
+        };
+    // Its entries end where a call it made extended the same scope.
+    let end = (0..frame)
+        .filter_map(at)
+        .filter(|inner| inner.scope == bindings.scope)
+        .map(|inner| inner.start)
+        .min()
+        .unwrap_or(usize::MAX);
+    let mut own: Vec<(&'c str, &'c Dynamic)> = scope
+        .iter_inner()
+        .enumerate()
+        .filter(|(index, _)| (bindings.start..end).contains(index))
+        .map(|(_, (name, _, value))| (name.as_str(), value))
+        .collect();
+    own.reverse();
+    found.extend(own);
+    if let (Some(name), Some(this)) = (bindings.this_name.as_ref(), bindings.this) {
+        // SAFETY: as for the scope: the receiver is the call's own, which
+        // runs below this step.
+        found.push((name.as_str(), unsafe { this.as_ref() }));
+    }
+    Some(found)
+}
+
+/// The bindings of frame `frame` where `context` is, the last of each name,
+/// in the order they were made; or one binding, `name`. `None` when the
+/// program isn't that deep.
+fn read(context: &mut EvalContext, frame: usize, name: Option<&str>) -> Option<Vec<Binding>> {
+    let mut seen = HashSet::new();
+    let mut found: Vec<(String, Dynamic)> = entries(context, frame)?
+        .into_iter()
+        .filter(|(entry, _)| {
+            name.map_or_else(|| is_written(entry), |name| *entry == name)
+                && seen.insert(entry.to_string())
+        })
+        .map(|(entry, value)| (entry.to_owned(), value.flatten_clone()))
+        .collect();
+    found.reverse();
+    Some(
+        found
+            .into_iter()
+            .map(|(name, value)| Binding {
+                value: debug_text(context, &value),
+                name,
+            })
+            .collect(),
+    )
+}
+
 /// The bindings in scope where `context` is, the last of each name, in the
 /// order they were made.
 pub fn bindings(context: &mut EvalContext) -> Vec<Binding> {
-    let mut seen = HashSet::new();
-    let mut found: Vec<(String, Dynamic)> = context
-        .scope()
-        .iter_rev_inner()
-        .filter(|(name, ..)| is_written(name) && seen.insert(name.to_string()))
-        .map(|(name, _, value)| (name.to_string(), value.flatten_clone()))
-        .collect();
-    found.reverse();
-    found
-        .into_iter()
-        .map(|(name, value)| Binding {
-            value: debug_text(context, &value),
-            name,
-        })
-        .collect()
+    read(context, 0, None).unwrap_or_default()
 }
 
 /// The binding `name` in scope where `context` is.
 pub fn binding(context: &mut EvalContext, name: &str) -> Option<Binding> {
-    let value = context
-        .scope()
-        .iter_rev_inner()
-        .find(|(entry, ..)| entry.as_str() == name)
-        .map(|(_, _, value)| value.flatten_clone())?;
-    Some(Binding {
-        name: name.to_owned(),
-        value: debug_text(context, &value),
-    })
+    read(context, 0, Some(name))?.pop()
 }
 
-/// Whether `name` is in scope where `context` is.
-fn in_scope(context: &EvalContext, name: &str) -> bool {
-    context
-        .scope()
-        .iter_rev_inner()
-        .any(|(entry, ..)| entry.as_str() == name)
+/// Whether `name` is in scope in frame `frame` where `context` is.
+fn in_scope(context: &EvalContext, frame: usize, name: &str) -> bool {
+    entries(context, frame).is_some_and(|entries| entries.iter().any(|(entry, _)| *entry == name))
 }
 
 /// The function the program is in where `context` is, as Rust names it.
 #[must_use]
 pub fn function(context: &EvalContext) -> Option<String> {
-    let frame = context
+    frame_function(context, 0)
+}
+
+/// The function of frame `frame` where `context` is, as Rust names it.
+fn frame_function(context: &EvalContext, frame: usize) -> Option<String> {
+    let index = *script_frames(context).get(frame)?;
+    let call = &context
         .global_runtime_state()
         .debugger
         .as_ref()?
-        .call_stack()
-        .last()?;
-    Some(crate::resolve::lower_nominal::function_display_name(&frame.fn_name).to_owned())
+        .call_stack()[index];
+    Some(crate::resolve::lower_nominal::function_display_name(&call.fn_name).to_owned())
+}
+
+/// Where frame `frame` is when `context` is at `position`: there for the
+/// innermost, and for a caller, where it made the call the next frame up
+/// came from.
+fn frame_position(context: &EvalContext, frame: usize, position: Position) -> Option<Position> {
+    if frame == 0 {
+        return Some(position);
+    }
+    let index = *script_frames(context).get(frame)?;
+    let stack = context
+        .global_runtime_state()
+        .debugger
+        .as_ref()?
+        .call_stack();
+    Some(stack.get(index + 1)?.pos)
 }
 
 /// `value` as the program's `{:?}` prints it: a hand-written `Debug` impl
@@ -270,6 +397,9 @@ struct Request {
     id: u64,
     name: Option<String>,
     file: Option<String>,
+    /// Which frame: 0 for the function the program is in, 1 for its
+    /// caller, and on (#511).
+    frame: usize,
     reply: mpsc::Sender<Value>,
 }
 
@@ -333,6 +463,9 @@ struct Shared {
     locate: Mutex<Option<Arc<Locate>>>,
     /// Where the breakpoints are kept across restarts.
     saved: std::path::PathBuf,
+    /// The file a supervising `rawr mcp` reads the program's events from,
+    /// where a pause and its end are told (#535).
+    events: Option<std::path::PathBuf>,
 }
 
 impl Shared {
@@ -397,6 +530,9 @@ impl Inspector {
             one: Mutex::new(()),
             locate: Mutex::new(None),
             saved,
+            events: std::env::var_os(EVENTS)
+                .filter(|path| !path.is_empty())
+                .map(std::path::PathBuf::from),
         });
         let listening = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -511,6 +647,11 @@ impl Shared {
             id,
             name: text("name"),
             file: text("file"),
+            frame: request
+                .get("frame")
+                .and_then(Value::as_u64)
+                .and_then(|frame| usize::try_from(frame).ok())
+                .unwrap_or(0),
             reply,
         });
         self.wake.store(true, Ordering::Release);
@@ -665,7 +806,13 @@ impl Shared {
         if self.answering.load(Ordering::Acquire) {
             return DebuggerCommand::Continue;
         }
-        if self.wake.load(Ordering::Acquire) {
+        // A native call's end has no bindings of the program's to read.
+        if self.wake.load(Ordering::Acquire)
+            && !matches!(
+                event,
+                DebuggerEvent::FunctionExitWithValue(_) | DebuggerEvent::FunctionExitWithError(_)
+            )
+        {
             self.answer(context, position);
         }
         match event {
@@ -730,12 +877,14 @@ impl Shared {
         let mut state = self.state();
         state.stepping = None;
         self.stepping.store(false, Ordering::Release);
+        let mut event = at.clone();
+        event["event"] = json!("paused");
+        self.emit(&event);
         state.paused = Some(at.clone());
         state.last = at;
         state.pauses += 1;
         state.resume = None;
         self.changed.notify_all();
-        let location = (stop.file.clone(), stop.line);
         let resume = loop {
             if !state.pending.is_empty() {
                 let pending = std::mem::take(&mut state.pending);
@@ -744,17 +893,14 @@ impl Shared {
                 drop(state);
                 self.answering.store(true, Ordering::Release);
                 for request in pending {
-                    let here = request.file.as_deref().is_none_or(|file| file == stop.file)
-                        && request
-                            .name
-                            .as_deref()
-                            .is_none_or(|name| in_scope(context, name));
-                    if here {
-                        reply(context, &request, Some(&location));
+                    if self.matches(context, &request, position) {
+                        self.reply(context, &request, position);
                     } else {
-                        let _ = request
-                            .reply
-                            .send(json!({ "reached": false, "paused": paused }));
+                        let _ = request.reply.send(json!({
+                            "reached": false,
+                            "paused": paused,
+                            "depth": depth_of(context),
+                        }));
                     }
                 }
                 self.answering.store(false, Ordering::Release);
@@ -770,6 +916,7 @@ impl Shared {
                 .unwrap_or_else(PoisonError::into_inner);
         };
         state.paused = None;
+        self.emit(&json!({ "event": "resumed" }));
         if let Resume::Step(step) = resume {
             state.stepping = Some(Stepping {
                 step,
@@ -789,29 +936,13 @@ impl Shared {
         if self.answering.swap(true, Ordering::AcqRel) {
             return;
         }
-        let locate = |position| self.locate(position);
-        let mut location = None;
-        let mut located = false;
         let mut matched = Vec::new();
         {
             let mut state = self.state();
             let pending = &mut state.pending;
             let mut index = 0;
             while index < pending.len() {
-                let request = &pending[index];
-                let named = request
-                    .name
-                    .as_deref()
-                    .is_none_or(|name| in_scope(context, name));
-                let here = named
-                    && request.file.as_deref().is_none_or(|file| {
-                        if !located {
-                            location = locate(position);
-                            located = true;
-                        }
-                        location.as_ref().is_some_and(|(at, _)| at == file)
-                    });
-                if here {
+                if self.matches(context, &pending[index], position) {
                     matched.push(pending.swap_remove(index));
                 } else {
                     index += 1;
@@ -821,15 +952,79 @@ impl Shared {
                 self.wake.store(false, Ordering::Release);
             }
         }
-        if !matched.is_empty() {
-            if !located {
-                location = locate(position);
-            }
-            for request in matched {
-                reply(context, &request, location.as_ref());
-            }
+        for request in matched {
+            self.reply(context, &request, position);
         }
         self.answering.store(false, Ordering::Release);
+    }
+
+    /// Whether `request` reads where `context` is, at `position`: the
+    /// program is as deep as its frame, which is in its file and has its
+    /// binding.
+    fn matches(&self, context: &EvalContext, request: &Request, position: Position) -> bool {
+        request.frame < depth_of(context)
+            && request
+                .name
+                .as_deref()
+                .is_none_or(|name| in_scope(context, request.frame, name))
+            && request.file.as_deref().is_none_or(|file| {
+                self.frame_line(context, request.frame, position)
+                    .is_some_and(|(at, _)| at == file)
+            })
+    }
+
+    /// The file and line frame `frame` is at where `context` is, at
+    /// `position`.
+    fn frame_line(
+        &self,
+        context: &EvalContext,
+        frame: usize,
+        position: Position,
+    ) -> Option<(String, usize)> {
+        self.locate(frame_position(context, frame, position)?)
+    }
+
+    /// Answer `request` with the values of its frame where `context` is, at
+    /// `position`, and where each frame is.
+    fn reply(&self, context: &mut EvalContext, request: &Request, position: Position) {
+        let frame = request.frame;
+        let location = self.frame_line(context, frame, position);
+        let frames: Vec<Value> = (0..depth_of(context))
+            .map(|index| {
+                let at = self.frame_line(context, index, position);
+                json!({
+                    "function": frame_function(context, index),
+                    "file": at.as_ref().map(|(file, _)| file),
+                    "line": at.as_ref().map(|(_, line)| line),
+                })
+            })
+            .collect();
+        let function = frame_function(context, frame);
+        let found = read(context, frame, request.name.as_deref()).unwrap_or_default();
+        let _ = request.reply.send(json!({
+            "reached": true,
+            "frame": frame,
+            "file": location.as_ref().map(|(file, _)| file),
+            "line": location.as_ref().map(|(_, line)| line),
+            "function": function,
+            "bindings": found.iter().map(Binding::to_json).collect::<Vec<_>>(),
+            "frames": frames,
+        }));
+    }
+
+    /// Tell a supervising `rawr mcp` `event`, as a line of its events file.
+    fn emit(&self, event: &Value) {
+        use std::io::Write as _;
+        let Some(path) = &self.events else {
+            return;
+        };
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = file.write_all(format!("{event}\n").as_bytes());
+        }
     }
 }
 
@@ -863,25 +1058,120 @@ fn ends(stepping: &Stepping, depth: usize, position: Position, stop: &stops::Sto
     }
 }
 
-/// Answer `request` with the values where `context` is.
-fn reply(context: &mut EvalContext, request: &Request, location: Option<&(String, usize)>) {
-    let found = match &request.name {
-        Some(name) => binding(context, name).into_iter().collect(),
-        None => bindings(context),
-    };
-    let _ = request.reply.send(json!({
-        "reached": true,
-        "file": location.map(|(file, _)| file),
-        "line": location.map(|(_, line)| line),
-        "function": function(context),
-        "bindings": found.iter().map(Binding::to_json).collect::<Vec<_>>(),
-    }));
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{short_type_name, undebuggable};
+    use super::{depth_of, frame_function, read, short_type_name, undebuggable};
     use crate::Dynamic;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// What `look` saw at each step of `source`'s function `function`,
+    /// with a debugger registered before it compiled.
+    fn at_steps(
+        source: &str,
+        function: &'static str,
+        look: impl Fn(&mut crate::EvalContext) -> String + Send + Sync + 'static,
+    ) -> Vec<String> {
+        let mut engine = crate::Engine::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seeing = Arc::clone(&seen);
+        let looking = AtomicBool::new(false);
+        #[allow(deprecated)]
+        engine.register_debugger(
+            |_, mut debugger| {
+                debugger.status = crate::eval::DebuggerStatus::STEP;
+                debugger
+            },
+            move |mut context, event, _, _, _| {
+                // The `Debug` code a read runs steps too.
+                if matches!(event, crate::debugger::DebuggerEvent::Step)
+                    && super::function(&context).is_some_and(|name| name.ends_with(function))
+                    && !looking.swap(true, Ordering::AcqRel)
+                {
+                    let saw = look(&mut context);
+                    seeing.lock().unwrap().push(saw);
+                    looking.store(false, Ordering::Release);
+                }
+                Ok(crate::debugger::DebuggerCommand::StepInto)
+            },
+        );
+        engine
+            .eval::<i64>(source)
+            .unwrap_or_else(|error| panic!("{error}"));
+        seen.lock().unwrap().clone()
+    }
+
+    fn shown(context: &mut crate::EvalContext, frame: usize) -> String {
+        read(context, frame, None).map_or_else(
+            || "none".to_owned(),
+            |found| {
+                found
+                    .iter()
+                    .map(|binding| {
+                        format!(
+                            "{}={}",
+                            binding.name,
+                            binding.value.clone().unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            },
+        )
+    }
+
+    #[test]
+    fn a_mut_parameter_and_self_read_under_the_names_the_program_gave_them() {
+        let seen = at_steps(
+            "fn tick(count: &mut u64, step: u64) { *count += step; }\n\
+             pub fn run() -> i64 { let mut n: u64 = 3; tick(&mut n, 2); n as i64 }\n\
+             run()",
+            "tick",
+            |context| shown(context, 0),
+        );
+        assert!(seen.iter().any(|saw| saw == "count=3 step=2"), "{seen:?}");
+        let seen = at_steps(
+            "struct Counter { count: i64 }\n\
+             impl Counter { fn bump(&mut self, by: i64) { self.count += by; } }\n\
+             pub fn run() -> i64 { let mut c = Counter { count: 1 }; c.bump(4); c.count }\n\
+             run()",
+            "bump",
+            |context| shown(context, 0),
+        );
+        assert!(
+            seen.iter()
+                .any(|saw| saw == "self=Counter { count: 1 } by=4"),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn each_caller_frame_reads_its_own_bindings_while_its_call_runs() {
+        let seen = at_steps(
+            "fn inner(x: i64) -> i64 { x * 2 }\n\
+             fn outer(a: i64) -> i64 { let b = a + 1; inner(b) }\n\
+             pub fn run() -> i64 { let n = 5; let m = outer(n); m }\n\
+             run()",
+            "inner",
+            |context| {
+                let frames = (0..=depth_of(context))
+                    .map(|frame| {
+                        format!(
+                            "{}: {}",
+                            frame_function(context, frame).unwrap_or_default(),
+                            shown(context, frame)
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                frames.join(" | ")
+            },
+        );
+        assert!(
+            seen.iter()
+                .any(|saw| saw == "inner: x=6 | outer: a=5 b=6 | run: n=5 | : none"),
+            "{seen:?}"
+        );
+    }
 
     #[derive(Clone)]
     struct Opaque;

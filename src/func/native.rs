@@ -194,10 +194,16 @@ impl<'a> NativeCallContext<'a> {
     #[must_use]
     #[allow(deprecated)]
     pub fn store_data(&self) -> NativeCallContextStore {
+        let mut global = self.global.clone();
+        // The store can outlive the calls on its call stack.
+        #[cfg(feature = "debugging")]
+        if let Some(debugger) = global.debugger.as_mut() {
+            debugger.forget_bindings();
+        }
         NativeCallContextStore {
             fn_name: self.fn_name.to_string(),
             source: self.source.map(ToString::to_string),
-            global: self.global.clone(),
+            global,
             pos: self.pos,
         }
     }

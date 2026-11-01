@@ -41,6 +41,7 @@ mod debugging_functions {
                              args: _args,
                              source: _source,
                              pos: _pos,
+                             ..
                          }| {
                             let display = frame.to_string();
 

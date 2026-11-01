@@ -42,10 +42,10 @@
   <tr><td><code>run</code></td><td>Runs the program with <code>args</code> and <code>stdin</code> until it ends or <code>timeout_ms</code> passes. It returns the exit status, stdout and stderr.</td></tr>
   <tr><td><code>start</code></td><td>Starts the program and keeps it running. It answers <code>running</code>, <code>failed</code> with diagnostics, or <code>building</code> while a first start builds. Starting the same project again replaces the program.</td></tr>
   <tr><td><code>wait</code></td><td>Waits for the next events of the started program and returns them with the output since the last call.</td></tr>
-  <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting.</td></tr>
+  <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting. A paused program says where it is paused.</td></tr>
   <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
   <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone.</td></tr>
-  <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file.</td></tr>
+  <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file. <code>frame</code> reads a caller&rsquo;s bindings.</td></tr>
   <tr><td><code>break</code></td><td>Sets a breakpoint on a <code>line</code> of a <code>file</code>, or on a <code>function</code>. It returns where the program paused, if it pauses within <code>timeout_ms</code>.</td></tr>
   <tr><td><code>step</code></td><td>Runs the paused program to its next statement. <code>kind</code> is <code>over</code>, <code>into</code> or <code>out</code>.</td></tr>
   <tr><td><code>continue</code></td><td>Lets the paused program run on. It returns where it pauses next, if it pauses within <code>timeout_ms</code>.</td></tr>
@@ -59,6 +59,8 @@
   <li><code>restarting</code>: a save restarts the program, for the reason given.</li>
   <li><code>failed</code>: a start or a save failed, with diagnostics. The last good program keeps running.</li>
   <li><code>ended</code>: the program ended, with its status. The next save runs it again.</li>
+  <li><code>paused</code>: the program paused at a breakpoint or after a step, with its file, line and function. <code>wait</code> and <code>status</code> then say <code>paused</code>.</li>
+  <li><code>resumed</code>: a paused program went on.</li>
 </ul>
 <p>Each event has a number. <code>wait</code> goes on from the last event it returned, so an event that came between two calls is still returned. Pass <code>cursor</code> to start from another one.</p>
 
@@ -72,12 +74,15 @@ counter = Counter { count: 41, label: "ticks" }</code></pre></div>
   <li>A value of a crate&rsquo;s type prints through the crate&rsquo;s <code>Debug</code> impl. A type without one says so, as rustc does: <code>`Window` doesn&rsquo;t implement `Debug`</code>.</li>
   <li>A program with Rust dependencies answers too. In an iced app, <code>{"name": "state"}</code> reads the state in <code>update</code> or <code>view</code> the next time iced calls one.</li>
   <li>A program waiting for input or for an event runs none of its own code. <code>inspect</code> then says nothing was read within <code>timeout_ms</code>. Call it again once the program runs.</li>
+  <li>A <code>&amp;mut</code> parameter and <code>self</code> read under those names.</li>
+  <li>The answer lists the calls the program is in. <code>frame</code> reads one of them: 0 is the function the program is in, 1 is its caller, and so on. A caller&rsquo;s line is the line of its call.</li>
 </ul>
 
 <h2 id="break">Pausing and stepping</h2>
 <p><code>break</code> pauses the running program when it reaches a line, or a function&rsquo;s first statement. While it is paused, <code>inspect</code> reads the values where it stopped.</p>
 <div class="block"><pre><code>break    {"path": "counter", "file": "counter/src/main.rs", "line": 9}
 inspect  {"path": "counter", "name": "count"}
+inspect  {"path": "counter", "frame": 1}
 step     {"path": "counter", "kind": "into"}
 continue {"path": "counter"}
 clear    {"path": "counter"}</code></pre></div>

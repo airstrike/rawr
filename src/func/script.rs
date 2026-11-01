@@ -73,19 +73,20 @@ impl Engine {
             v.take()
         })));
 
-        // Push a new call stack frame
+        // Push a new call stack frame. Its bindings stay where the call
+        // keeps them: the scope from here, and the receiver (#511, #513).
         #[cfg(feature = "debugging")]
         if self.is_debugger_registered() {
-            let fn_name = fn_def.name.clone();
-            let args = scope
-                .iter_inner()
-                .skip(orig_scope_len)
-                .map(|(.., v)| v.flatten_clone());
+            let bindings = crate::eval::FrameBindings {
+                scope: std::ptr::NonNull::from(&mut *scope).cast(),
+                start: orig_scope_len,
+                this: this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                this_name: fn_def.this_name.clone(),
+            };
             let source = global.source.clone();
-
             global
                 .debugger_mut()
-                .push_call_stack_frame(fn_name, args, source, pos);
+                .push_script_frame(fn_def.name.clone(), source, pos, bindings);
         }
 
         // Merge in encapsulated environment, if any
@@ -108,16 +109,22 @@ impl Engine {
             },
         );
 
+        // The frame stays until the call ends, below, even when the
+        // debugger fails here: the frame points into this call.
         #[cfg(feature = "debugging")]
-        if self.is_debugger_registered() {
+        let entered = if self.is_debugger_registered() {
             let node = crate::ast::Stmt::Noop(fn_def.body.position());
-            self.dbg(global, caches, scope, this_ptr.as_deref_mut(), &node)?;
-        }
+            self.dbg(global, caches, scope, this_ptr.as_deref_mut(), &node)
+        } else {
+            Ok(())
+        };
+        #[cfg(not(feature = "debugging"))]
+        let entered: crate::RawrResultOf<()> = Ok(());
 
         // Evaluate the function. `this_ptr` is reborrowed because the
         // debugger reads it after the call.
         #[cfg_attr(not(feature = "debugging"), allow(clippy::needless_option_as_deref))]
-        let evaluated = match &fn_def.machine {
+        let evaluated = entered.and_then(|()| match &fn_def.machine {
             Some(machine) => self.run_machine(
                 global,
                 caches,
@@ -134,7 +141,7 @@ impl Engine {
                 fn_def.body.statements(),
                 rewind_scope,
             ),
-        };
+        });
         let mut _result: RawrResult = evaluated.or_else(|err| match *err {
             // Convert return statement to return value
             ERR::Return(x, ..) => Ok(x),

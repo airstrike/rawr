@@ -30,6 +30,9 @@ pub enum Phase {
     Building,
     /// The program runs.
     Running,
+    /// The program is paused at a breakpoint or a step (#535); where is in
+    /// the session's answer.
+    Paused,
     /// A save restarts it.
     Restarting,
     /// It failed to start; a save that fixes it starts it.
@@ -50,6 +53,7 @@ impl Phase {
             Self::Starting => "starting",
             Self::Building => "building",
             Self::Running => "running",
+            Self::Paused => "paused",
             Self::Restarting => "restarting",
             Self::Failed => "failed",
             Self::Ended(_) => "ended",
@@ -69,6 +73,12 @@ impl Phase {
     pub const fn is_over(&self) -> bool {
         matches!(self, Self::Exited(_) | Self::Stopped)
     }
+
+    /// The program is there to answer: running or paused.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        matches!(self, Self::Running | Self::Paused)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +96,8 @@ struct State {
     /// The latest failure while a program kept running, cleared by the
     /// next good reload.
     failure: Option<Value>,
+    /// Where the program is paused: its file, line, function and reason.
+    paused: Option<Value>,
     output: VecDeque<(u64, Stream, String)>,
     output_bytes: usize,
     next_output: u64,
@@ -174,6 +186,7 @@ impl Sessions {
                 root.parent().unwrap_or(root)
             })
             .env(crate::events::EVENTS, &events)
+            .env(crate::events::DEBUG_EVENTS, &events)
             .env(crate::events::INSPECT, &socket)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -191,6 +204,7 @@ impl Sessions {
                 events: Vec::new(),
                 building: None,
                 failure: None,
+                paused: None,
                 output: VecDeque::new(),
                 output_bytes: 0,
                 next_output: 0,
@@ -294,6 +308,28 @@ impl Session {
     #[must_use]
     pub fn phase(&self) -> Phase {
         self.state().phase.clone()
+    }
+
+    /// Where the program is paused, if it is.
+    #[must_use]
+    pub fn paused(&self) -> Option<Value> {
+        self.state().paused.clone()
+    }
+
+    /// The program answered a debugger tool: paused at `paused`, or
+    /// running. Its own `paused` and `resumed` events say the same once
+    /// they are read.
+    pub fn observe_pause(&self, paused: Option<Value>) {
+        let mut state = self.state();
+        if !state.phase.is_live() {
+            return;
+        }
+        state.phase = if paused.is_some() {
+            Phase::Paused
+        } else {
+            Phase::Running
+        };
+        state.paused = paused;
     }
 
     fn read_output(&self, mut pipe: Box<dyn std::io::Read + Send>, stream: Stream) {
@@ -490,6 +526,7 @@ impl Session {
             .or(state.failure.as_ref())
             .map(|event| event["diagnostics"].clone());
         let phase = state.phase.clone();
+        let paused = state.paused.clone();
         let status = match phase {
             Phase::Ended(status) | Phase::Exited(status) => Some(status),
             _ => None,
@@ -504,6 +541,7 @@ impl Session {
             "root": self.root,
             "pid": self.pid,
             "state": phase.name(),
+            "paused": paused,
             "status": status,
             "building": building,
             "events": events,
@@ -525,7 +563,11 @@ impl Session {
 impl State {
     fn record(&mut self, event: Value) {
         let seq = self.events.last().map_or(1, |(seq, _)| seq + 1);
-        match event["event"].as_str().unwrap_or_default() {
+        let name = event["event"].as_str().unwrap_or_default();
+        if name != "paused" && name != "failed" {
+            self.paused = None;
+        }
+        match name {
             "building" => {
                 self.phase = Phase::Building;
                 self.building = Some((
@@ -537,9 +579,20 @@ impl State {
                 self.phase = Phase::Running;
                 self.failure = None;
             }
+            // The program's own debugger says where it paused, and that it
+            // went on (#535).
+            "paused" => {
+                self.phase = Phase::Paused;
+                let mut at = event.clone();
+                if let Some(at) = at.as_object_mut() {
+                    at.remove("event");
+                }
+                self.paused = Some(at);
+            }
+            "resumed" => self.phase = Phase::Running,
             "restarting" => self.phase = Phase::Restarting,
             "failed" => {
-                if self.phase == Phase::Running {
+                if self.phase.is_live() {
                     self.failure = Some(event.clone());
                 } else {
                     self.phase = Phase::Failed;
@@ -565,6 +618,9 @@ fn summary(structured: &Value) -> String {
     if let Some(status) = structured["status"].as_i64() {
         text.push_str(&format!(" (status {status})"));
     }
+    if let Some(paused) = structured["paused"].as_object() {
+        text.push_str(&format!(" {}", pause_text(paused)));
+    }
     if let Some(building) = structured["building"].as_object() {
         text.push_str(&format!(
             ", {} {}%",
@@ -588,6 +644,11 @@ fn summary(structured: &Value) -> String {
                 "#{} ended with {}\n",
                 event["seq"], event["status"]
             )),
+            "paused" => text.push_str(&format!(
+                "#{} paused {}\n",
+                event["seq"],
+                event.as_object().map(pause_text).unwrap_or_default()
+            )),
             _ => text.push_str(&format!("#{} {name}\n", event["seq"])),
         }
     }
@@ -609,6 +670,27 @@ fn summary(structured: &Value) -> String {
     text
 }
 
+/// Where a paused program is, as a session's summary says it: `at
+/// file:line in `function` (reason)`.
+#[must_use]
+pub fn pause_text(paused: &serde_json::Map<String, Value>) -> String {
+    let mut text = format!(
+        "at {}:{}",
+        paused
+            .get("file")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        paused.get("line").unwrap_or(&Value::Null)
+    );
+    if let Some(function) = paused.get("function").and_then(Value::as_str) {
+        text.push_str(&format!(" in `{function}`"));
+    }
+    if let Some(reason) = paused.get("reason").and_then(Value::as_str) {
+        text.push_str(&format!(" ({reason})"));
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Phase, State};
@@ -621,6 +703,7 @@ mod tests {
             events: Vec::new(),
             building: None,
             failure: None,
+            paused: None,
             output: VecDeque::new(),
             output_bytes: 0,
             next_output: 0,
@@ -647,6 +730,27 @@ mod tests {
             state.events.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
             [1, 2, 3, 4, 5]
         );
+        let mut paused = super::tests::state();
+        paused.record(json!({ "event": "running" }));
+        paused.record(json!({
+            "event": "paused", "file": "/p/src/main.rs", "line": 9,
+            "function": "p::main", "reason": "breakpoint"
+        }));
+        assert_eq!(paused.phase, Phase::Paused);
+        assert_eq!(paused.phase.name(), "paused");
+        assert_eq!(paused.paused.as_ref().unwrap()["line"], 9);
+        assert!(paused.paused.as_ref().unwrap().get("event").is_none());
+        // A failed save leaves it paused where it was.
+        paused.record(json!({ "event": "failed", "diagnostics": [] }));
+        assert_eq!(paused.phase, Phase::Paused);
+        assert!(paused.failure.is_some());
+        paused.record(json!({ "event": "resumed" }));
+        assert_eq!(paused.phase, Phase::Running);
+        assert!(paused.paused.is_none());
+        paused.record(json!({ "event": "paused", "file": "/p/src/main.rs", "line": 3 }));
+        paused.record(json!({ "event": "restarting", "reason": "a save" }));
+        assert_eq!(paused.phase, Phase::Restarting);
+        assert!(paused.paused.is_none());
         let mut failing = super::tests::state();
         failing.record(json!({ "event": "failed", "diagnostics": [] }));
         assert_eq!(failing.phase, Phase::Failed);
