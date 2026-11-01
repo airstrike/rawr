@@ -2257,7 +2257,7 @@ fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf> {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "must be a canonical regular file without symlink traversal".into(),
+            reason: "is not a file, or is reached through a symlink".into(),
         });
     }
     Ok(canonical)
@@ -2274,7 +2274,7 @@ fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf> {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "must be a canonical directory without symlink traversal".into(),
+            reason: "is not a directory, or is reached through a symlink".into(),
         });
     }
     Ok(canonical)
@@ -2338,7 +2338,7 @@ fn path_text<'a>(field: &'static str, path: &'a Path) -> Result<&'a str> {
     let value = path.to_str().ok_or_else(|| Error::Path {
         field,
         path: path.to_path_buf(),
-        reason: "is not valid Unicode".into(),
+        reason: "is not valid UTF-8".into(),
     })?;
     bounded_path_text(value)?;
     Ok(value)
@@ -3034,7 +3034,11 @@ mod build_message_tests {
         )
         .err()
         .expect("dep-info decoding is pinned to one Cargo/rustc layout");
-        assert!(format!("{skew}").contains("cargo-commit-skew"));
+        assert_eq!(
+            skew.to_string(),
+            "this Cargo (commit `unsupported-cargo-commit`) is not the one rawr builds with; \
+             install the toolchain rawr names"
+        );
     }
 
     #[cfg(feature = "rustc-driver")]

@@ -1399,9 +1399,7 @@ mod tests {
                         assert!(!held(&store.root().join("locks/publication.lock")));
                         stages.push(stage);
                         if stages.len() == fail_at + 1 {
-                            return Err(crate::Error::Owner {
-                                state: "injected metadata failure",
-                            });
+                            return Err(crate::Error::Owner);
                         }
                     }
                     Ok(raw.clone())

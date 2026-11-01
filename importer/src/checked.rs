@@ -417,13 +417,22 @@ fn usize_at(bytes: &[u8], offset: usize, reason: &'static str) -> Result<usize, 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A required generic, facade, or profile parent was not DAG-validated.
-    #[error("checked application requires current generic, bindings, and profile parents")]
+    #[error(
+        "internal error: rawr checked the program against out-of-date crate bindings. \
+         This is a rawr bug"
+    )]
     ForeignEvidence,
     /// Generic and profile classifications refer to different API graphs.
-    #[error("checked application parents disagree on their imported API graph")]
+    #[error(
+        "internal error: rawr read two different versions of the program's crates. \
+         This is a rawr bug"
+    )]
     DefinitionDrift,
     /// The cold transform returned demand for another contract or source snapshot.
-    #[error("checked application transform returned demand for different inputs")]
+    #[error(
+        "internal error: rawr checked a different version of the program than it built. \
+         This is a rawr bug"
+    )]
     DemandDrift,
     /// A checked-node payload exceeded its existing bounded authority.
     #[error("{resource} exceeded limit {limit} with observed size {actual}")]
@@ -433,13 +442,13 @@ pub enum Error {
         actual: usize,
     },
     /// Exact checked-node bytes could not be retained.
-    #[error("checked application cache allocation failed")]
+    #[error("out of memory while checking the program")]
     Allocation,
     /// Cached symbolic demand reconstruction failed.
     #[error(transparent)]
     Surface(#[from] crate::surface::Error),
     /// The shared content-addressed node failed validation or storage.
-    #[error("checked application node failed: {0}")]
+    #[error("{0}")]
     Node(#[source] Box<node::Error>),
 }
 

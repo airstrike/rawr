@@ -231,7 +231,7 @@ fn spelled(path: &Path) -> Result<&str> {
         .ok_or_else(|| Error::Path {
             field: "shared Cargo build directory",
             path: path.to_path_buf(),
-            reason: "must be UTF-8 without control characters to relocate".into(),
+            reason: "is not valid UTF-8 or contains control characters".into(),
         })
 }
 

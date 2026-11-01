@@ -452,7 +452,7 @@ impl Plan {
             return Err(Error::Path {
                 field: "metadata probe source",
                 path: probe_source,
-                reason: "must retain its exact reserved path".into(),
+                reason: "was moved or replaced during the build".into(),
             });
         }
         let entries = prepare_entries(units, &run_nonce, limits, &mut allocation)?;
@@ -1155,7 +1155,7 @@ impl Probe {
                 return Err(Error::Path {
                     field: "extraction protocol file",
                     path,
-                    reason: "must be a regular non-symlink file".into(),
+                    reason: "is not a file, or is a symlink".into(),
                 });
             }
             let name = path
@@ -2217,7 +2217,7 @@ fn create_directory(path: &Path, field: &'static str) -> Result<()> {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "must be a real directory".into(),
+            reason: "is not a directory".into(),
         });
     }
     Ok(())
@@ -2236,7 +2236,7 @@ fn fresh_directory(path: &Path, field: &'static str) -> Result<()> {
             return Err(Error::Path {
                 field,
                 path: path.to_path_buf(),
-                reason: "must be absent or a real directory".into(),
+                reason: "is not a directory".into(),
             });
         }
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
@@ -2299,7 +2299,7 @@ fn canonical_under_either(
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "escaped its sealed parent".into(),
+            reason: "is outside its directory".into(),
         });
     }
     Ok(canonical)
@@ -2331,7 +2331,7 @@ fn canonical_directory_under(
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "must retain its exact reserved path".into(),
+            reason: "was moved or replaced during the build".into(),
         });
     }
     let metadata = match fs::symlink_metadata(&canonical) {
@@ -2348,7 +2348,7 @@ fn canonical_directory_under(
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "must be a precreated directory".into(),
+            reason: "is not a directory".into(),
         });
     }
     Ok(canonical)
@@ -2358,7 +2358,7 @@ fn path_string<'a>(path: &'a Path, field: &'static str) -> Result<&'a str> {
     path.to_str().ok_or_else(|| Error::Path {
         field,
         path: path.to_path_buf(),
-        reason: "must be UTF-8".into(),
+        reason: "is not valid UTF-8".into(),
     })
 }
 
@@ -2528,7 +2528,7 @@ fn read_bounded_with_graph(
         return Err(Error::Path {
             field: "compiler sidecar",
             path: path.to_path_buf(),
-            reason: "must be a regular non-symlink file".into(),
+            reason: "is not a file, or is a symlink".into(),
         });
     }
     if let Some(allocation) = allocation {

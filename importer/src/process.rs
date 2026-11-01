@@ -1341,7 +1341,7 @@ fn find_driver_in(budget: Option<&crate::node::GraphBudget>) -> Result<PathBuf> 
         directory.parent().ok_or_else(|| Error::Path {
             field: "current importer executable",
             path: executable.clone(),
-            reason: "dependency executable has no target directory".into(),
+            reason: "is not inside a Cargo target directory".into(),
         })?
     } else {
         directory
@@ -1446,7 +1446,7 @@ fn canonical_program_in(
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "expected a file".into(),
+            reason: "is not a file".into(),
         });
     }
     Ok(canonical)

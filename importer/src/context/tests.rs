@@ -123,7 +123,7 @@ fn missing_empty_and_relative_cargo_home_authority_rejects_before_store_creation
                 "target",
                 &cargo::Limits::standard(),
             ),
-            Err(Error::Environment(crate::Error::Path { .. }))
+            Err(Error::Environment(crate::Error::Request { .. }))
         ));
     }
 
