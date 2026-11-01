@@ -8430,32 +8430,27 @@ impl Ty {
 
     fn name(&self, models: &Models) -> ImmutableString {
         match self {
-            Self::Never => "<never>".into(),
+            Self::Never => "!".into(),
             Self::Unit => "()".into(),
-            Self::Callable { inputs, output, .. } => format!(
-                "fn({}) -> {}",
-                inputs
-                    .iter()
-                    .map(|input| input.name(models).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                output.name(models)
-            )
-            .into(),
+            Self::Callable { inputs, output, .. } => fn_type_name(inputs, output, models).into(),
+            // A crate's function item, as rustc writes one: `fn(Id) ->
+            // Task<Message> {window::close}`.
             #[cfg(feature = "rust-import")]
-            Self::ImportedFunctionItem { input, output, .. } => format!(
-                "imported fn({}) -> {}",
-                input.name(models),
-                output.name(models)
-            )
-            .into(),
+            Self::ImportedFunctionItem {
+                input,
+                output,
+                item,
+            } => {
+                let mut name = fn_type_name(std::slice::from_ref(&**input), output, models);
+                if let Some(item) = item {
+                    name += &format!(" {{{}}}", item.item.path());
+                }
+                name.into()
+            }
             #[cfg(feature = "rust-import")]
-            Self::ProfileMapper { input, output, .. } => format!(
-                "profile mapper fn({}) -> {}",
-                input.name(models),
-                output.name(models)
-            )
-            .into(),
+            Self::ProfileMapper { input, output, .. } => {
+                fn_type_name(std::slice::from_ref(&**input), output, models).into()
+            }
             #[cfg(feature = "rust-import")]
             Self::ProfileMessage { script, .. } => script.name(models),
             Self::Bool => "bool".into(),
@@ -8473,12 +8468,7 @@ impl Ty {
             Self::Fn { inputs, output }
             | Self::FnItem { inputs, output, .. }
             | Self::FnChoice { inputs, output, .. } => {
-                let inputs = inputs
-                    .iter()
-                    .map(|input| input.name(models).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let mut name = format!("fn({inputs}) -> {}", output.name(models));
+                let mut name = fn_type_name(inputs, output, models);
                 if let Self::FnItem { key, .. } = self {
                     name += &format!(" {{{key}}}");
                 }
@@ -8545,11 +8535,11 @@ impl Ty {
             )
             .into(),
             Self::Host { proof, arguments } if arguments.is_empty() => {
-                host_type_name(&proof.definition, proof.alias.as_ref(), &proof.owner)
+                host_type_name(proof, models)
             }
             Self::Host { proof, arguments } => format!(
                 "{}<{}>",
-                host_type_name(&proof.definition, proof.alias.as_ref(), &proof.owner),
+                host_type_name(proof, models),
                 arguments
                     .iter()
                     .map(|argument| argument.name(models))
@@ -8572,8 +8562,9 @@ impl Ty {
             .into(),
             Self::Param(name) => name.clone(),
             Self::Projection(base, _, name) => format!("{}::{name}", base.name(models)).into(),
-            Self::Infer(_) => "<inferred>".into(),
-            Self::Unknown => "<dynamic>".into(),
+            // rustc writes a type it has yet to infer as `_`. A value of any
+            // type has no other name in Rust.
+            Self::Infer(_) | Self::Unknown => "_".into(),
         }
     }
 
@@ -8778,18 +8769,55 @@ impl Ty {
     }
 }
 
-fn host_type_name(
-    definition: &crate::host::type_def::Definition,
-    alias: Option<&crate::host::type_def::Definition>,
-    owner: &Option<crate::host::facade::Dependency>,
-) -> ImmutableString {
-    if definition.identity().imported().is_some() && alias.is_none() {
-        return owner.as_ref().map_or_else(
-            || "<semantic imported type>".into(),
-            |owner| format!("{}::<semantic imported type>", owner.root()).into(),
-        );
+/// `fn(A, B) -> R`, leaving out `-> ()` as rustc does.
+fn fn_type_name(inputs: &[Ty], output: &Ty, models: &Models) -> String {
+    let inputs = inputs
+        .iter()
+        .map(|input| input.name(models).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match output {
+        Ty::Unit => format!("fn({inputs})"),
+        output => format!("fn({inputs}) -> {}", output.name(models)),
     }
-    alias.unwrap_or(definition).path().into()
+}
+
+/// A host type's path as a message names it: the path the program wrote,
+/// else the one a `use` in this source imports it by, else its shortest
+/// public path (`iced::Vector`, not `iced::advanced::graphics::Vector`),
+/// as rustc names a type by a visible path. Every type a message names
+/// goes through here, by way of [`Ty::name`].
+fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableString {
+    if let Some(alias) = &proof.alias {
+        return alias.path().into();
+    }
+    #[cfg(feature = "rust-import")]
+    if let Some(identity) = proof.definition.identity().imported() {
+        let imported = models
+            .imports
+            .range((models.context, ImmutableString::new())..)
+            .take_while(|((source, _), _)| *source == models.context)
+            .find_map(|(_, binding)| match &binding.target {
+                crate::resolve::item::Import::Type { definition, .. }
+                    if definition.identity().imported() == Some(identity) =>
+                {
+                    Some(definition.path())
+                }
+                _ => None,
+            });
+        let shortest = || {
+            models
+                .host
+                .imported_type_paths(identity, proof.owner.as_ref()?)?
+                .min_by_key(|path| path.matches("::").count())
+        };
+        if let Some(path) = imported.or_else(shortest) {
+            return path.into();
+        }
+    }
+    #[cfg(not(feature = "rust-import"))]
+    let _ = models;
+    proof.definition.path().into()
 }
 
 fn same_head(left: &Ty, right: &Ty) -> bool {
@@ -30983,7 +31011,7 @@ impl<'a> Parser<'a> {
                 && self.models.host.entry(&path).is_none()
             {
                 let error = Error::UnknownMember {
-                    owner: proof.definition.path().into(),
+                    owner: host_type_name(proof, &self.models),
                     member: method.into(),
                     reference: expression,
                 };
@@ -31427,7 +31455,7 @@ impl<'a> Parser<'a> {
                     && self.models.host.entry(&path).is_none()
                 {
                     let error = Error::UnknownMember {
-                        owner: proof.definition.path().into(),
+                        owner: host_type_name(proof, &self.models),
                         member: method.into(),
                         reference: span(lhs.span.start(), rhs.span.end()),
                     };
@@ -53593,6 +53621,79 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
                 panic!("imported payload pattern: {}", failure.into_error())
             });
         }
+    }
+
+    /// A crate type exported under several paths, as iced's `Vector` is,
+    /// prints as the program imports it, else by its shortest path (#508).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_type_of_several_paths_prints_by_one_of_them() {
+        fn mismatch(source: &str) -> (String, String) {
+            let mut engine = Engine::new();
+            engine
+                .register_host_facade(vector_alias_facade())
+                .expect("a type under two paths installs");
+            let program = imported_program(&engine, source);
+            let error = symbolic_imported(&engine, &program)
+                .expect_err("an i64 can't hold a Vector")
+                .into_error();
+            let ParseErrorType::Resolution(crate::resolve::Error::TypeMismatch {
+                expected,
+                actual,
+                ..
+            }) = error.err_type()
+            else {
+                panic!("a type mismatch: {error}");
+            };
+            (expected.to_string(), actual.to_string())
+        }
+
+        // No `use` names the type: its shortest path.
+        assert_eq!(
+            mismatch("use vectors::make; let value: i64 = make();"),
+            ("i64".into(), "vectors::Vector<f32>".into())
+        );
+        // A `use` of the longer path: that path.
+        assert_eq!(
+            mismatch("use vectors::Deep::Vector; use vectors::make; let value: i64 = make();"),
+            ("i64".into(), "vectors::Deep::Vector<f32>".into())
+        );
+    }
+
+    /// `Vector<T>` at `vectors::Deep::Vector` and `vectors::Vector`, and
+    /// `make() -> Vector<f32>`.
+    #[cfg(feature = "rust-import")]
+    fn vector_alias_facade() -> facade::Definition {
+        let mut builder = facade::Builder::new("vectors", facade::Abi::new(1).unwrap()).unwrap();
+        let mut allocation = host::TestImportAllocation::default();
+        let identity = host::type_def::import::Identity::new([0x56; 32]);
+        builder.imported_module("Deep", &mut allocation).unwrap();
+        for path in ["Deep::Vector", "Vector"] {
+            builder
+                .imported_type(
+                    path,
+                    identity,
+                    &[],
+                    Box::from(["T".into()]),
+                    Box::from([None]),
+                    host::type_def::Shape::Opaque.into(),
+                    &mut allocation,
+                )
+                .unwrap();
+        }
+        let mut make = signature::Builder::new();
+        make.output(type_ref::Type::imported(
+            identity,
+            [type_ref::Type::builtin(type_ref::Builtin::F32)],
+        ));
+        builder
+            .item(
+                item::Definition::function("make", make.finish())
+                    .unwrap()
+                    .imported(rawr_import::surface::identity::Selector::Unavailable),
+            )
+            .unwrap();
+        builder.finish().unwrap()
     }
 
     #[cfg(feature = "rust-import")]
