@@ -105,6 +105,18 @@
       ]
     },
     {
+      "id": "debug",
+      "title": "Debugger",
+      "subtitle": "D557, toward 0.5",
+      "open": true,
+      "rows": [
+        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"next","note":"rawr mcp and the editor","issues":[488]},
+        {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"next","note":"The interpreter's hooks in rawr run","issues":[489]},
+        {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"next","note":"The same interpreter, the same errors","issues":[490]},
+        {"id":"record-replay","name":"Record, replay and comet","start":63,"size":4,"state":"next","note":"Messages and state over time","issues":[491]}
+      ]
+    },
+    {
       "id": "end",
       "title": "Retire rawr-iced",
       "subtitle": "The last step",

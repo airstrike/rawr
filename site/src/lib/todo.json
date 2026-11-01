@@ -1013,7 +1013,11 @@
     {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc"},
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"open","category":"Health"},
-    {"issue":487,"title":"Delete the dead host-profile request path","state":"open","category":"Importer"}
+    {"issue":487,"title":"Delete the dead host-profile request path","state":"open","category":"Importer"},
+    {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open","category":"Health"},
+    {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"open","category":"Health"},
+    {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
+    {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1528,6 +1532,58 @@
           "note": "rawr-web",
           "issues": [
             {"number":435,"title":"The browser playground runs iced snippets on generated bindings built for wasm","state":"open"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "debug",
+      "title": "Debugger",
+      "subtitle": "D557, toward 0.5",
+      "open": true,
+      "rows": [
+        {
+          "id": "read-values",
+          "name": "Read a running program's values",
+          "start": 53,
+          "size": 3,
+          "state": "next",
+          "note": "rawr mcp and the editor",
+          "issues": [
+            {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open"}
+          ]
+        },
+        {
+          "id": "breakpoints",
+          "name": "Breakpoints and stepping",
+          "start": 56,
+          "size": 4,
+          "state": "next",
+          "note": "The interpreter's hooks in rawr run",
+          "issues": [
+            {"number":489,"title":"Breakpoints and stepping under rawr run","state":"open"}
+          ]
+        },
+        {
+          "id": "repl",
+          "name": "Evaluate in a paused frame",
+          "start": 60,
+          "size": 3,
+          "state": "next",
+          "note": "The same interpreter, the same errors",
+          "issues": [
+            {"number":490,"title":"Evaluate Rust in a paused frame","state":"open"}
+          ]
+        },
+        {
+          "id": "record-replay",
+          "name": "Record, replay and comet",
+          "start": 63,
+          "size": 4,
+          "state": "next",
+          "note": "Messages and state over time",
+          "issues": [
+            {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"}
           ]
         }
       ]
