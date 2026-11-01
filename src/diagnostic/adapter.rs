@@ -410,6 +410,7 @@ fn resolution_report_with_sources(
     let secondary_message = error.secondary_span().map(|_| match error {
         resolve::Error::MovedValue { .. } => "value moved here",
         resolve::Error::BorrowConflict { .. } => "borrow made here",
+        resolve::Error::ArgumentCount { callee, .. } => callee.defined_here(),
         _ => "first declaration or related definition is here",
     });
     let mut builder = builder.source(source.clone());
@@ -519,6 +520,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
+        resolve::Category::ArgumentCount => match error {
+            resolve::Error::ArgumentCount {
+                callee: resolve::Callee::Closure,
+                ..
+            } => code::RESOLVE_CLOSURE_ARGUMENT_COUNT,
+            _ => code::RESOLVE_ARGUMENT_COUNT,
+        },
     };
     let builder = Report::error(stable_code, resolution_message(error));
     match error {
@@ -558,6 +566,14 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => builder.help(format!("derive `{capability}` for `{owner}`")),
+        resolve::Error::ArgumentCount {
+            expected, found, ..
+        } => builder.help(match (found < expected, expected.abs_diff(*found)) {
+            (true, 1) => "provide the argument",
+            (true, _) => "provide the arguments",
+            (false, 1) => "remove the extra argument",
+            (false, _) => "remove the extra arguments",
+        }),
         _ => builder,
     }
 }
@@ -743,6 +759,17 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")
         }
+        resolve::Error::ArgumentCount {
+            callee,
+            expected,
+            found,
+            ..
+        } => resolve::ArgumentCount {
+            callee: *callee,
+            expected: *expected,
+            found: *found,
+        }
+        .to_string(),
     }
 }
 

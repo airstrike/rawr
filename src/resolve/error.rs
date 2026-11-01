@@ -72,6 +72,9 @@ pub enum Category {
     AsyncMain,
     /// A generic parameter whose type nothing gives, as rustc's E0282.
     TypeAnnotationsNeeded,
+    /// A call with more or fewer arguments than its callee takes, as
+    /// rustc's E0061, or E0057 for a closure.
+    ArgumentCount,
 }
 
 impl fmt::Display for Category {
@@ -110,7 +113,83 @@ impl fmt::Display for Category {
             }
             Self::AsyncMain => formatter.write_str("async main"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
+            Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
         }
+    }
+}
+
+/// What a call calls, as rustc names it in E0061 and E0057.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Callee {
+    /// A free function, or a value of a function's or `fn` pointer's type.
+    Function,
+    /// A function of a type or trait called by its path (`Type::new(..)`).
+    AssociatedFunction,
+    /// A method called on a receiver (`value.method(..)`).
+    Method,
+    /// A closure, or a value of a closure trait's type (E0057).
+    Closure,
+    /// A tuple struct's constructor.
+    Struct,
+    /// A tuple variant's constructor.
+    Variant,
+}
+
+impl Callee {
+    /// rustc's code: E0057 for a closure, E0061 otherwise.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Closure => "E0057",
+            _ => "E0061",
+        }
+    }
+
+    /// The noun rustc's message names the callee by.
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Function | Self::AssociatedFunction | Self::Closure => "function",
+            Self::Method => "method",
+            Self::Struct => "struct",
+            Self::Variant => "enum variant",
+        }
+    }
+
+    /// rustc's note at the callee's definition: "function defined here".
+    #[must_use]
+    pub const fn defined_here(self) -> &'static str {
+        match self {
+            Self::Function => "function defined here",
+            Self::AssociatedFunction => "associated function defined here",
+            Self::Method => "method defined here",
+            Self::Closure => "closure defined here",
+            Self::Struct => "tuple struct defined here",
+            Self::Variant => "tuple variant defined here",
+        }
+    }
+}
+
+/// rustc's E0061 and E0057 message: "this function takes 2 arguments but 1
+/// argument was supplied".
+pub(crate) struct ArgumentCount {
+    pub(crate) callee: Callee,
+    pub(crate) expected: usize,
+    pub(crate) found: usize,
+}
+
+impl fmt::Display for ArgumentCount {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let plural = |count: usize| if count == 1 { "" } else { "s" };
+        write!(
+            formatter,
+            "this {} takes {} argument{} but {} argument{} {} supplied",
+            self.callee.noun(),
+            self.expected,
+            plural(self.expected),
+            self.found,
+            plural(self.found),
+            if self.found == 1 { "was" } else { "were" },
+        )
     }
 }
 
@@ -430,9 +509,46 @@ pub enum Error {
         /// The call.
         reference: Span,
     },
+    /// A call with more or fewer arguments than its callee takes, which
+    /// rustc refuses (E0061, or E0057 for a closure).
+    ArgumentCount {
+        /// What the call calls.
+        callee: Callee,
+        /// The callee as the program names it: `name` or `Owner::name`.
+        name: ImmutableString,
+        /// How many arguments the callee takes.
+        expected: usize,
+        /// How many the call gives.
+        found: usize,
+        /// The call, from the callee's name to its closing parenthesis.
+        call: Span,
+        /// The callee's name or header where the program defines it, when
+        /// that is in the call's file.
+        definition: Option<Span>,
+    },
 }
 
 impl Error {
+    /// rustc's E0061 (E0057 for a closure) for a call of `name` that gives
+    /// `found` arguments where it takes `expected`. Its definition is not in
+    /// the program's source.
+    pub(crate) fn argument_count(
+        callee: Callee,
+        name: impl Into<ImmutableString>,
+        expected: usize,
+        found: usize,
+        call: Span,
+    ) -> Self {
+        Self::ArgumentCount {
+            callee,
+            name: name.into(),
+            expected,
+            found,
+            call,
+            definition: None,
+        }
+    }
+
     /// Classify this resolution failure without parsing its message.
     #[must_use]
     pub const fn category(&self) -> Category {
@@ -470,6 +586,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
+            Self::ArgumentCount { .. } => Category::ArgumentCount,
         }
     }
 
@@ -510,6 +627,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
+            Self::ArgumentCount { name, .. } => name.as_str(),
         }
     }
 
@@ -549,6 +667,7 @@ impl Error {
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
+            Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
         }
     }
@@ -579,6 +698,7 @@ impl Error {
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
             Self::InvalidImport { declaration, .. } => *declaration,
+            Self::ArgumentCount { definition, .. } => *definition,
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
             | Self::InvalidTypeArguments { .. }
@@ -854,6 +974,22 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "type annotations needed at {reference}: cannot infer the type of the type \
                  parameter `{parameter}` (E0282)"
+            ),
+            Error::ArgumentCount {
+                callee,
+                expected,
+                found,
+                call,
+                ..
+            } => write!(
+                formatter,
+                "{} at {call} ({})",
+                ArgumentCount {
+                    callee: *callee,
+                    expected: *expected,
+                    found: *found,
+                },
+                callee.code()
             ),
         }
     }

@@ -57,11 +57,13 @@ impl Parser<'_> {
         let (arguments, end) = self.parse_call_arguments("`Reverse` arguments")?;
         let call = span(name_span.start(), end);
         let [value] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|arguments| {
-            Error::InvalidConstruction {
-                owner: "Reverse".into(),
-                reason: format!("`Reverse` takes 1 value, found {}", arguments.len()).into(),
-                construction: call,
-            }
+            Error::argument_count(
+                crate::resolve::Callee::Struct,
+                "Reverse",
+                1,
+                arguments.len(),
+                call,
+            )
         })?;
         let ty = Ty::Reverse(Box::new(self.inference.resolve(&value.ty)));
         let source = self.prelude_op(PreludeOp::ReverseWrap, [value.rendered_source()]);

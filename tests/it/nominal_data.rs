@@ -213,7 +213,7 @@ fn construction_shape_and_types_are_compile_checked() {
         ("struct Pair { left: i64 } Pair { left: 1, left: 2 }", Category::InvalidConstruction, "initialized more than once"),
         ("struct Pair { left: i64 } Pair { left: 1, missing: 2 }", Category::UnknownMember, "Pair::missing"),
         ("struct Pair { left: i64 } Pair { left: true }", Category::TypeMismatch, "expected 'i64', found 'bool'"),
-        ("enum Message { Move(i64, bool) } Message::Move(1)", Category::InvalidConstruction, "expects 2 value(s), found 1"),
+        ("enum Message { Move(i64, bool) } Message::Move(1)", Category::ArgumentCount, "this enum variant takes 2 arguments but 1 argument was supplied"),
         ("enum Message { Move(i64) } Message::Move(true)", Category::TypeMismatch, "expected 'i64', found 'bool'"),
         ("enum Message { Tick } Message::Missing", Category::UnknownMember, "Message::Missing"),
         ("enum Message { Tick } Message :: Missing", Category::UnknownMember, "Message::Missing"),

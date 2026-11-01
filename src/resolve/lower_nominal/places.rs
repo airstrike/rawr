@@ -871,12 +871,13 @@ impl Parser<'_> {
         let (mut arguments, end) = arguments?;
         let expression = span(value.span.start(), end);
         let [predicate] = arguments.as_mut_slice() else {
-            return Err(Error::InvalidMethodCall {
-                owner: "Iterator".into(),
-                method: "find".into(),
-                reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
-                call: expression,
-            });
+            return Err(Error::argument_count(
+                crate::resolve::Callee::Method,
+                crate::resolve::Qualified("Iterator", "find").to_string(),
+                1,
+                arguments.len(),
+                expression,
+            ));
         };
         let slot = self.temporary("index");
         let at = self.temporary("at");

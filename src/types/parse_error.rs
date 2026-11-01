@@ -450,6 +450,17 @@ impl fmt::Display for ParseErrorType {
                     f,
                     "Type annotations needed: cannot infer the type of the type parameter '{parameter}'"
                 ),
+                crate::resolve::Error::ArgumentCount {
+                    callee,
+                    expected,
+                    found,
+                    ..
+                } => crate::resolve::ArgumentCount {
+                    callee: *callee,
+                    expected: *expected,
+                    found: *found,
+                }
+                .fmt(f),
             }
             Self::PropertyExpected => f.write_str("Expecting name of a property"),
             Self::VariableExpected => f.write_str("Expecting name of a variable"),
