@@ -579,6 +579,25 @@ pub mod widgets {
         }
     }
 
+    /// An optional widget is a widget that shows nothing when it is
+    /// `None`, as iced's `impl Widget for Option<T>` makes
+    /// `column![.., maybe.map(|x| text(x))]` box an `Option`.
+    impl<T, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Option<T>
+    where
+        T: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            match self {
+                Some(widget) => widget.labels(labels),
+                None => labels.push("none".to_string()),
+            }
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.as_ref().and_then(|widget| widget.press(label))
+        }
+    }
+
     /// Widgets one above another.
     pub struct Column<W> {
         children: Vec<W>,

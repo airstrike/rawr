@@ -359,6 +359,21 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
+/// iced's qr_code, solar_system and screenshot: `column!` boxes an
+/// `Option` of a slider or of a caption through the crate's impl of its
+/// widget trait for `Option<T>`, a std type, as it boxes the crate's own
+/// widgets. The output is `cargo run`'s.
+#[test]
+fn an_option_of_a_widget_boxes_through_the_crates_impl_for_option() {
+    let (rawr, cargo) = both_printed("crossing-optional", "optional.rs", "slide,slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 1..=100@50/None none none")
+            && rawr.contains("last view pad 0 1..=100@100/None \"100\" 1..=100@100/None"),
+        "{rawr}"
+    );
+}
+
 /// iced's styling and delineate: crate constants that aren't scalars, a
 /// struct (`Font::MONOSPACE`) and a `&'static [Self]` (`Theme::ALL`), are
 /// read by their paths, and a macro's `$crate::Alias::new(..)` reaches the

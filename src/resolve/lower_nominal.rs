@@ -34405,6 +34405,26 @@ impl<'a> Parser<'a> {
             {
                 builtin = inner;
             }
+            // `Trait::method(value, ..)` of a crate's trait on an `Option`,
+            // `Result` or `Vec` the crate implements it for, as `column!`'s
+            // `Widget::_boxed(maybe)` of an `Option<T>` that iced's `impl<T>
+            // Widget for Option<T>` boxes: the trait's method over its
+            // `Self` (`surface::member`), which rustc selects the impl for
+            // by the crate's impl headers, never the std type's own method
+            // of that name. Text keeps the trait's impl for `&str`
+            // (`surface::text`).
+            #[cfg(feature = "rust-import")]
+            if matches!(&builtin, Ty::Option(_) | Ty::Result(..) | Ty::Array { .. })
+                && self.spliced_traits.contains_key(&member_span.start())
+            {
+                match self.spliced_trait_call(value, &member, member_span)? {
+                    Ok(called) => {
+                        value = called;
+                        continue;
+                    }
+                    Err(back) => value = back,
+                }
+            }
             // `a.min(b)`, `a.max(b)`, `a.clamp(lo, hi)` through `Ord`, unless
             // the type has its own method of that name.
             if matches!(member.as_str(), "min" | "max" | "clamp")
