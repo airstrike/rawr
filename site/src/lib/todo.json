@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.63",
+  "version": "0.3.64",
   "examples": {
     "running": 19,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]},
-        {"text":"A reference to a crate value fills a crate's type argument, as `pick_list(Some(&self.backend), Backend::ALL, Backend::to_string)` does. The view borrows the value in place, and `update` then changes it in place.","issues":[591]},
-        {"text":"A crate function whose output borrows its `&'a T` inputs, as iced's `qr_code(&data)` does, has a binding. qr_code passes `rawr check`.","issues":[590]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.64",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]},
+          {"text":"A reference to a crate value fills a crate's type argument, as `pick_list(Some(&self.backend), Backend::ALL, Backend::to_string)` does. The view borrows the value in place, and `update` then changes it in place.","issues":[591]},
+          {"text":"A crate function whose output borrows its `&'a T` inputs, as iced's `qr_code(&data)` does, has a binding. qr_code passes `rawr check`.","issues":[590]}
+        ]
+      },
       {
         "version": "0.3.63",
         "date": "2026-11-01",
@@ -1317,9 +1319,9 @@
     {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)"},
     {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)"},
     {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"},
-    {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)"},
-    {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"closed","category":"No glue (D593)"},
-    {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)"},
+    {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)","release":"0.3.64"},
+    {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"closed","category":"No glue (D593)","release":"0.3.64"},
+    {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)","release":"0.3.64"},
     {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"},
     {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)"},
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"open","category":"Divergences from rustc"},
