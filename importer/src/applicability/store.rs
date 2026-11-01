@@ -77,7 +77,7 @@ pub fn read(directory: &Path, key: &[u8; 32]) -> Option<Held> {
     let name = name(key);
     let lease = home::hold(directory, &name)?;
     let bytes = std::fs::read(directory.join(&name).join(ENTRY)).ok()?;
-    let entry = Entry::decode(&bytes, key).ok()?;
+    let entry = Entry::decode(&bytes, key)?;
     Some(Held {
         entry,
         _lease: lease,
@@ -87,10 +87,7 @@ pub fn read(directory: &Path, key: &[u8; 32]) -> Option<Held> {
 /// Publish one entry under its key. A reader holding the key makes this a
 /// skipped publication, never a wait.
 pub fn publish(directory: &Path, entry: &Entry) -> std::io::Result<()> {
-    let bytes = entry
-        .encode()
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    home::publish(directory, &name(entry.key()), &[(ENTRY, &bytes)])
+    home::publish(directory, &name(entry.key()), &[(ENTRY, &entry.encode())])
 }
 
 /// Build-script outputs by cargo package id: their cfgs, environment and a

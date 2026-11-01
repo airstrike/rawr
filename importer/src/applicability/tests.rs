@@ -252,19 +252,16 @@ fn independent_facts_prove_closed_obligations_without_any_child_process() {
         })
         .expect("composition has no permission to launch any child process");
     let [first, second] = inventories;
-    let first = first
-        .mutate_for_test(|facts| {
-            let definition = facts
-                .definitions
-                .iter_mut()
-                .find(|definition| definition.id() == &retained)
-                .unwrap();
-            let mut value = serde_json::to_value(&*definition).unwrap();
-            value["kind"]["Function"]["signature"]["output"] =
-                serde_json::json!({"Primitive":"bool"});
-            *definition = serde_json::from_value(value).unwrap();
-        })
-        .unwrap();
+    let first = first.mutate_for_test(|facts| {
+        let definition = facts
+            .definitions
+            .iter_mut()
+            .find(|definition| definition.id() == &retained)
+            .unwrap();
+        let mut value = serde_json::to_value(&*definition).unwrap();
+        value["kind"]["Function"]["signature"]["output"] = serde_json::json!({"Primitive":"bool"});
+        *definition = serde_json::from_value(value).unwrap();
+    });
     assert!(first.exports().cloned().eq(original_exports));
     assert_ne!(first.fingerprint(), &original_inventory);
     let mutated = [first, second];
@@ -377,7 +374,7 @@ fn a_capture_splits_its_exports_into_one_entry_per_crate() {
         roots.into_iter().collect::<Vec<_>>(),
         ["facts_a", "facts_b"]
     );
-    let entries = acquired.entries(|_| Some([7; 32])).unwrap();
+    let entries = acquired.entries(|_| Some([7; 32]));
     assert_eq!(entries.len(), 2);
     let mut split = 0;
     for entry in &entries {
@@ -404,6 +401,57 @@ fn a_capture_splits_its_exports_into_one_entry_per_crate() {
             "facts_a exports {name}"
         );
     }
+}
+
+/// An implementation whose header holds a signed constant keeps its body,
+/// as zerocopy's derived ones must (#478). One whose constant the extractor
+/// cannot read, here a `char`, is listed as unsupported: the capture still
+/// holds together, and no proof reads its trait's domain as complete. A
+/// crate implementing a trait its dependency re-exports from its own
+/// dependency keeps that trait's declarations in its entry.
+#[test]
+fn a_capture_keeps_signed_constants_and_lists_unread_implementations_as_unsupported() {
+    let _turn = crate::store::test_turn();
+    crate::store::isolate_for_tests();
+    let limits = Limits::standard();
+    let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/constant-headers");
+    let acquired = capture(&root, &["b", "d", "e"], &native, &limits);
+    let partition = acquired
+        .facts()
+        .partitions
+        .iter()
+        .find(|partition| partition.unit.crate_name() == "facts_d")
+        .expect("facts_d is captured");
+    assert_eq!(
+        partition.implementations.len(),
+        4,
+        "four trait implementations"
+    );
+    assert_eq!(
+        partition.unsupported.len(),
+        2,
+        "the `char` trait and inherent implementations are unsupported"
+    );
+    let signed = acquired
+        .implementations()
+        .filter(|implementation| {
+            matches!(
+                implementation.self_type(),
+                model::Type::Definition { arguments, .. }
+                    if arguments.iter().any(|argument| matches!(
+                        argument,
+                        model::Argument::Const(model::Const::Literal { ty, value })
+                            if &**ty == "i128" && value.starts_with('-')
+                    ))
+            )
+        })
+        .count();
+    assert_eq!(
+        signed, 2,
+        "both `Field<{{ id(..) }}>` implementations keep their bodies"
+    );
+    assert_eq!(acquired.entries(|_| Some([9; 32])).len(), 3);
 }
 
 #[test]
