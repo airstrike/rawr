@@ -1371,6 +1371,31 @@ impl Plan {
         Ok(bytes.into_boxed_slice())
     }
 
+    /// The plan a generated runner embeds: its facades alone. A runner
+    /// installs facades at every start; the alias, source, ABI and
+    /// operation sites serve generation, so a runner never decodes them or
+    /// rehashes their selectors.
+    pub(crate) fn runner_bytes(&self) -> Result<Vec<u8>, super::Error> {
+        #[derive(Serialize)]
+        struct Runner<'a> {
+            schema: u32,
+            aliases: &'a [AliasSite],
+            sources: &'a [ProjectionSourceSite],
+            abis: &'a [AbiSite],
+            operations: &'a [OperationSite],
+            facades: &'a [Facade],
+        }
+        serde_json::to_vec(&Runner {
+            schema: self.schema,
+            aliases: &[],
+            sources: &[],
+            abis: &[],
+            operations: &[],
+            facades: &self.facades,
+        })
+        .map_err(|_| super::Error::Encoding)
+    }
+
     /// Decode one generated plan under the active importer bounds.
     pub fn decode(bytes: &[u8], limits: &crate::cargo::Limits) -> Result<Self, super::Error> {
         Self::decode_accounted(bytes, limits, &mut super::account::Account::surface())

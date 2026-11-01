@@ -5656,10 +5656,11 @@ fn render_source(
             b"static IMPORTED_BINDINGS: &[u8] = include_bytes!(\"imported_bindings.bin\");\n",
         )
         .map_err(|_| request::Error::Encoding)?;
-    sources.push((
-        BINDINGS_PATH.into(),
-        facade_plan.unwrap_or_default().to_vec(),
-    ));
+    let embedded = match &facade {
+        Some(plan) => plan.runner_bytes().map_err(|_| request::Error::Encoding)?,
+        None => Vec::new(),
+    };
+    sources.push((BINDINGS_PATH.into(), embedded));
     output
         .write_all(RUNTIME_SOURCE)
         .map_err(|_| request::Error::Encoding)?;
