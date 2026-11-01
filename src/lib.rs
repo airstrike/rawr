@@ -148,6 +148,10 @@ pub mod parse;
 mod parser;
 /// Typed native places and ownership-preserving sequence operations.
 pub mod place;
+/// `?play`'s runner: prepared once, each snippet in a fork of it.
+#[cfg(unix)]
+#[doc(hidden)]
+pub mod play;
 /// Opaque data retained by resolved programs.
 pub mod program;
 /// Canonical Rawr source and project discovery.

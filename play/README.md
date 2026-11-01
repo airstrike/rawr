@@ -27,10 +27,19 @@ every snippet runs on it instead of the base language
 (`play/src/universe.rs`). `rawr-import` builds it once, in the image's
 `universe` stage, from `play/universe` with `RAWR_UNIVERSE_RUNNER=1`: the
 generated bindings of iced (at the pinned rev), iced_test and tokio, and a
-runner that links them. The bot hands it a snippet on stdin with
-`RAWR_PLAY_ROOT` set; the runner compiles it beside the universe's
-`Cargo.toml` against its own native surface, with no Cargo and no nightly,
-and runs `main` once. The process's wall time is the snippet's time budget.
+runner that links them.
+
+The bot starts the runner once, as a server, with `RAWR_PLAY_ROOT` and
+the socket it serves on (`RAWR_PLAY_SOCKET`). The runner decodes its
+bindings, installs them in an engine and binds their runtime, and then
+answers each snippet in a fork of itself (`src/play.rs` in rawr). The fork
+compiles the snippet beside the universe's `Cargo.toml` against that
+engine, with no Cargo and no nightly, and runs `main` once. So a snippet
+pays only for its own compile and run, and has its own copy of the
+engine, its globals and its native values. Its time budget runs from the
+fork, and `--memory-mb` caps its address space. Each `rawr-play` the bot
+runs names the server's socket (`PLAY_UNIVERSE_SOCKET`). A `rawr-play` run
+that names none starts a server of its own for that one snippet.
 
 iced has no window in the universe. Its `[patch]` puts ?play's shell
 (`play/universe/shell`) in place of iced_winit, the crate iced's `run`

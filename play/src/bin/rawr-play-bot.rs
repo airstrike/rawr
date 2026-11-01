@@ -100,6 +100,9 @@ struct Renderer {
     /// `PLAY_TIME_MS`: the script time of one run.
     time: Duration,
     timeout: Duration,
+    /// The universe runner, prepared once and serving every run (#515),
+    /// when the image names one.
+    universe: Option<rawr_play::universe::Served>,
 }
 
 impl Renderer {
@@ -148,6 +151,15 @@ impl Renderer {
         for name in [rawr_play::universe::ROOT, rawr_play::universe::RUNNER] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
+            }
+        }
+        // The server it runs on; a run that names none starts its own.
+        if let Some(universe) = &self.universe {
+            match tokio::task::block_in_place(|| universe.socket()) {
+                Ok(socket) => {
+                    command.env(rawr_play::universe::SOCKET, socket);
+                }
+                Err(error) => eprintln!("rawr-play-bot: {error}"),
             }
         }
         let child = command
@@ -934,6 +946,8 @@ async fn main() {
             memory_mb: env_u64("PLAY_MEMORY_MB", 1024),
             time: Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000)),
             timeout: Duration::from_millis(env_u64("PLAY_TIMEOUT_MS", 10_000)),
+            universe: rawr_play::universe::Universe::from_env()
+                .map(rawr_play::universe::Served::new),
         },
         channels: tokio::sync::Mutex::new(
             Channels::from_json("", only.clone()).unwrap_or_default(),
@@ -952,6 +966,15 @@ async fn main() {
     });
     #[cfg(unix)]
     tokio::spawn(exit_on_sigterm(Arc::clone(&shared)));
+    // Prepare the universe runner before the first snippet asks for it.
+    let preparing = Arc::clone(&shared);
+    tokio::task::spawn_blocking(move || {
+        if let Some(universe) = &preparing.renderer.universe
+            && let Err(error) = universe.socket()
+        {
+            eprintln!("rawr-play-bot: {error}");
+        }
+    });
     // Listen first: the container counts as started once this port answers.
     if let Some(port) = std::env::var("PLAY_HTTP_PORT")
         .ok()

@@ -42,6 +42,9 @@ pub struct Limits {
     pub map_size: usize,
     /// Wall-clock budget for one run.
     pub time: Duration,
+    /// The address space a run on the universe runner may have, in bytes
+    /// (`RLIMIT_AS`, Linux only); `None` for no limit.
+    pub memory: Option<u64>,
 }
 
 impl Default for Limits {
@@ -55,6 +58,7 @@ impl Default for Limits {
             // against the array limit, so maps get the same 65,536 items.
             map_size: 64 * 1024,
             time: Duration::from_secs(2),
+            memory: None,
         }
     }
 }

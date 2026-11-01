@@ -2347,10 +2347,20 @@ fn native_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ordering> {
     arena_access(|arena| arena.compare(lhs, rhs)).flatten()
 }
 
+thread_local! {
+    /// The runtime a universe runner bound before it served (#515): the
+    /// program a fork of it compiles binds this one instead of its own.
+    static PREPARED_RUNTIME: std::cell::RefCell<Option<__rawr_internal::host::runtime::Registry>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn imported_runtime(
     engine: &__rawr_internal::Engine,
     definitions: &[__rawr_internal::host::facade::Definition],
 ) -> Result<__rawr_internal::host::runtime::Registry, __rawr_internal::host::runtime::Error> {
+    if let Some(runtime) = PREPARED_RUNTIME.take() {
+        return Ok(runtime);
+    }
     __rawr_internal::host::value::register_relations::<NativeHandle>(native_equal, native_compare);
     __rawr_internal::host::value::register_relations::<__rawr_internal::scope::Scoped>(native_equal, native_compare);
     register_defaults();
@@ -2607,27 +2617,16 @@ enum Compilation<'a> {
     Live(&'a __rawr_internal::Shared<__rawr_internal::Engine>),
 }
 
-fn compile_program(
-    input: &[u8],
-    compilation: Compilation<'_>,
+/// A new engine with this runner's generated bindings installed, which
+/// keeps their native account: what every program compiles against.
+fn prepare_engine(
+    mut native: __rawr_internal::package::import::runner::account::Native,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
-    observation: &mut Option<__rawr_internal::package::import::runner::account::Observation>,
-) -> std::io::Result<Option<Program>> {
-    let (expected, input) = input
-        .split_first_chunk::<32>()
-        .ok_or_else(|| std::io::Error::other("application semantic"))?;
-    let snapshot = decode_snapshot(input)?;
-    progress(1)?;
-    if !COMPILE_SNAPSHOT { return Ok(None); }
-    let (native, observed) = match compilation {
-        Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode_observed(GENERATED_MANIFEST),
-        Compilation::Replacement(current) => current.as_ref()
-            .ok_or_else(|| std::io::Error::other("missing original compiler ownership"))?
-            .engine.reconstruct_imported_native(GENERATED_MANIFEST),
-        Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
-    };
-    *observation = Some(observed);
-    let mut native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
+) -> std::io::Result<(
+    __rawr_internal::Shared<__rawr_internal::Engine>,
+    Box<[__rawr_internal::host::facade::Definition]>,
+    __rawr_profile::ApplicationContract,
+)> {
     let mut engine = __rawr_internal::Engine::new();
     // Under `rawr mcp`, before the program compiles (#526).
     if let Some(inspector) = inspector() {
@@ -2652,6 +2651,31 @@ fn compile_program(
     progress(3)?;
     let engine = engine.retain_imported_native(native)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok((engine, bindings, application_contract))
+}
+
+fn compile_program(
+    input: &[u8],
+    compilation: Compilation<'_>,
+    progress: &mut impl FnMut(u8) -> std::io::Result<()>,
+    observation: &mut Option<__rawr_internal::package::import::runner::account::Observation>,
+) -> std::io::Result<Option<Program>> {
+    let (expected, input) = input
+        .split_first_chunk::<32>()
+        .ok_or_else(|| std::io::Error::other("application semantic"))?;
+    let snapshot = decode_snapshot(input)?;
+    progress(1)?;
+    if !COMPILE_SNAPSHOT { return Ok(None); }
+    let (native, observed) = match compilation {
+        Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode_observed(GENERATED_MANIFEST),
+        Compilation::Replacement(current) => current.as_ref()
+            .ok_or_else(|| std::io::Error::other("missing original compiler ownership"))?
+            .engine.reconstruct_imported_native(GENERATED_MANIFEST),
+        Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
+    };
+    *observation = Some(observed);
+    let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
+    let (engine, bindings, application_contract) = prepare_engine(native, &mut *progress)?;
     let (candidate, ast) = __rawr_profile::compile_initial(
         &engine,
         &snapshot,
@@ -3802,50 +3826,91 @@ fn finish(result: std::io::Result<()>) -> ! {
     }
 }
 
-/// `?play`'s entry in a universe runner (#434, #436): the crate root's
-/// source on stdin, beside the manifest in `root`, compiled against this
-/// runner's own native surface with no parent and no Cargo, and run once
-/// as Rust runs it. The snapshot is the one the runner's build compiled:
-/// the same manifest at the same path, so a program whose native calls the
-/// build covered finds every one of them here.
+/// `?play`'s entry in a universe runner (#434, #436, #515): a server on the
+/// socket `RAWR_PLAY_SOCKET` names. What every snippet needs is made once,
+/// here: the runner's bindings decoded and installed in an engine, and the
+/// runtime bound. Each snippet then runs in a fork of this process (see
+/// `__rawr_internal::play`), which compiles the crate root's source beside
+/// the manifest in `root` against that engine, with no parent and no
+/// Cargo, and runs it once as Rust runs it. The snapshot is the one the
+/// runner's build compiled: the same manifest at the same path, so a
+/// program whose native calls the build covered finds every one of them.
 fn run_play(root: std::path::PathBuf) -> ! {
-    fn push(input: &mut Vec<u8>, bytes: &[u8]) {
-        input.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        input.extend_from_slice(bytes);
+    let Some(socket) = std::env::var_os(__rawr_internal::play::SOCKET) else {
+        eprintln!("error: `{}` names no socket to serve on", __rawr_internal::play::SOCKET);
+        exit(1);
+    };
+    if !COMPILE_SNAPSHOT {
+        eprintln!("error: this runner compiles no program");
+        exit(1);
     }
-    fn text(path: &std::path::Path) -> std::io::Result<&[u8]> {
-        path.to_str().map(str::as_bytes).ok_or_else(|| std::io::Error::other("play root UTF-8"))
-    }
-    let compiled = (|| -> std::io::Result<Option<Program>> {
-        let mut source = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut source)?;
-        let manifest_path = root.join("Cargo.toml");
-        let manifest = std::fs::read(&manifest_path)?;
-        let entry = root.join("src").join("main.rs");
-        // No semantic is expected of a plain program, and paths go in
-        // order: `Cargo.toml` before `src/main.rs`.
-        let mut input = vec![0_u8; 32];
-        input.extend_from_slice(b"rawr.snapshot.entry/v1");
-        push(&mut input, text(&entry)?);
-        push(&mut input, text(&manifest_path)?);
-        push(&mut input, &manifest);
-        push(&mut input, text(&entry)?);
-        push(&mut input, source.as_bytes());
+    let manifest_path = root.join("Cargo.toml");
+    let entry = root.join("src").join("main.rs");
+    let prepared = (|| -> std::io::Result<_> {
+        let manifest = std::fs::read_to_string(&manifest_path)?;
         install_arena([0; 32]);
-        let mut observation = None;
-        compile_program(&input, Compilation::Initial, &mut |_| Ok(()), &mut observation)
+        let (native, observation) =
+            __rawr_internal::package::import::runner::account::Native::decode_observed(GENERATED_MANIFEST);
+        let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
+        let (engine, bindings, application_contract) = prepare_engine(native, &mut |_| Ok(()))?;
+        let bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]> = bindings.into();
+        let runtime = imported_runtime(&engine, &bindings)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        PREPARED_RUNTIME.set(Some(runtime));
+        Ok((manifest, engine, bindings, application_contract, observation))
     })();
-    let mut program = match compiled {
-        Ok(Some(program)) => program,
-        Ok(None) => {
-            eprintln!("error: this runner compiles no program");
-            exit(1);
-        }
+    let (manifest, engine, bindings, application_contract, observation) = match prepared {
+        Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
             exit(1);
         }
     };
+    let mut observation = Some(observation);
+    let served = __rawr_internal::play::serve(std::path::Path::new(&socket), |source| {
+        // A fork of this process, with its own copy of all of the above.
+        let files = vec![
+            (manifest_path.clone(), Box::from(manifest.as_str())),
+            (entry.clone(), source.into_boxed_str()),
+        ];
+        let compiled = __rawr_internal::package::snapshot::Snapshot::new(entry.clone(), files)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+            .and_then(|snapshot| {
+                let (candidate, ast) = __rawr_profile::compile_initial(
+                    &engine,
+                    &snapshot,
+                    &application_contract,
+                    &[0; 32],
+                )?;
+                Ok(Program {
+                    engine: engine.clone(),
+                    ast: Some(ast),
+                    candidate,
+                    application_contract: application_contract.clone(),
+                    _bindings: bindings.clone(),
+                    observation: observation.take(),
+                    marked_main: snapshot.marked_root(),
+                })
+            });
+        match compiled {
+            Ok(program) => run_snippet(program),
+            Err(error) => {
+                eprintln!("{error}");
+                exit(1);
+            }
+        }
+    });
+    match served {
+        Ok(()) => exit(0),
+        Err(error) => {
+            eprintln!("error: ?play's runner stopped: {error}");
+            exit(1);
+        }
+    }
+}
+
+/// Run a snippet's program once, as Rust runs it, and end the process.
+fn run_snippet(mut program: Program) -> ! {
     if let Err(error) = evaluate_program(&mut program) {
         eprintln!("error: {error}");
         exit(101);
@@ -15156,36 +15221,51 @@ mod tests {
     #[test]
     fn generated_compiler_retains_one_native_account_before_initial_compilation() {
         let runtime = std::str::from_utf8(RUNTIME_SOURCE).expect("runtime source is UTF-8");
-        let compile = runtime
-            .split_once("fn compile_program(")
-            .expect("initial compiler")
+        let (prepare, compile) = runtime
+            .split_once("fn prepare_engine(")
+            .expect("engine preparation")
             .1
             .split_once("fn compile_live(")
             .expect("live compiler")
-            .0;
-        let mut remaining = compile;
-        for operation in [
-            "if !COMPILE_SNAPSHOT { return Ok(None); }",
-            "account::Native::decode_observed(GENERATED_MANIFEST)",
+            .0
+            .split_once("fn compile_program(")
+            .expect("initial compiler");
+        let in_order = |mut remaining: &str, operations: &[&str]| {
+            for operation in operations {
+                remaining = remaining
+                    .split_once(operation)
+                    .unwrap_or_else(|| {
+                        panic!("missing or reordered generated operation: {operation}")
+                    })
+                    .1;
+            }
+        };
+        in_order(prepare, &[
             "install_compiler_bindings(&mut engine, &mut native)?",
             "admit_generated_structural_retained(\n        &mut engine,\n        &bindings,\n        STRUCTURAL_ROWS,\n        &mut native,",
             "engine.retain_imported_native(native)",
-            "__rawr_profile::compile_initial(",
-            "Ok(Some(Program { engine,",
-        ] {
-            remaining = remaining
-                .split_once(operation)
-                .unwrap_or_else(|| panic!("missing or reordered generated operation: {operation}"))
-                .1;
-        }
+        ]);
+        assert!(!prepare.contains("Shared::new(engine)"));
+        assert!(!prepare.contains("admit_generated_structural("));
+        in_order(
+            compile,
+            &[
+                "if !COMPILE_SNAPSHOT { return Ok(None); }",
+                "account::Native::decode_observed(GENERATED_MANIFEST)",
+                "prepare_engine(native, &mut *progress)?",
+                "__rawr_profile::compile_initial(",
+                "Ok(Some(Program { engine,",
+            ],
+        );
         assert_eq!(compile.matches("Native::decode_observed(").count(), 1);
         assert!(compile.contains("Compilation::Replacement(current) => current.as_ref()"));
         assert!(compile.contains(".engine.reconstruct_imported_native(GENERATED_MANIFEST)"));
         assert!(!compile.contains("Shared::new(engine)"));
         assert!(!compile.contains("admit_generated_structural("));
-        // The plain runner compiles initially once per process: under its
-        // parent's protocol, or as `?play`'s entry in a universe runner.
-        for (source, initial) in [(RUNNER_MAIN, 2), (PROFILE_RUNNER_MAIN, 1)] {
+        // The plain runner compiles initially once per process, under its
+        // parent's protocol. `?play`'s entry in a universe runner prepares
+        // the engine once and compiles each snippet in a fork against it.
+        for (source, initial) in [(RUNNER_MAIN, 1), (PROFILE_RUNNER_MAIN, 1)] {
             let source = std::str::from_utf8(source).expect("runner source is UTF-8");
             assert_eq!(source.matches("Compilation::Initial").count(), initial);
             assert_eq!(

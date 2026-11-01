@@ -3,7 +3,8 @@
 //! `--time-ms N` is the wall-clock budget for a run.
 //!
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
-//! runs one of these per snippet, so `--memory-mb` caps the whole process.
+//! runs one of these per snippet, so `--memory-mb` caps the whole process,
+//! and a run on the universe runner too.
 //!
 //! A program writes its output as one JSON object
 //! (`rawr_play::Output::to_json`):
@@ -79,7 +80,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "--time-ms" => {
                 limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
             }
-            "--memory-mb" => limit_memory(number(value("--memory-mb")?)?)?,
+            "--memory-mb" => {
+                let bytes = number(value("--memory-mb")?)?.saturating_mul(1024 * 1024);
+                limit_memory(bytes)?;
+                limits.memory = Some(bytes);
+            }
             "-h" | "--help" => return Err(USAGE.to_owned()),
             _ if arg.starts_with('-') && arg != "-" => {
                 return Err(format!("unknown option `{arg}`\n{USAGE}"));
@@ -126,8 +131,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
 /// Cap this process's address space, so an allocation past it fails and the
 /// process aborts instead of exhausting the host.
 #[cfg(target_os = "linux")]
-fn limit_memory(megabytes: u64) -> Result<(), String> {
-    let bytes = megabytes.saturating_mul(1024 * 1024);
+fn limit_memory(bytes: u64) -> Result<(), String> {
     let limit = libc::rlimit {
         rlim_cur: bytes,
         rlim_max: bytes,
@@ -145,6 +149,6 @@ fn limit_memory(megabytes: u64) -> Result<(), String> {
 
 /// macOS does not enforce `RLIMIT_AS`; the cap applies on Linux hosts.
 #[cfg(not(target_os = "linux"))]
-fn limit_memory(_megabytes: u64) -> Result<(), String> {
+fn limit_memory(_bytes: u64) -> Result<(), String> {
     Ok(())
 }

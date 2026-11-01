@@ -26,9 +26,23 @@ impl Abi {
     }
 }
 
-/// One opaque, fully validated static facade contract.
+/// One opaque, fully validated static facade contract. A copy shares the
+/// contract: the compiler and a runtime bound to it read one (#516).
 #[derive(Clone, Debug)]
-pub struct Definition {
+pub struct Definition(Shared<Body>);
+
+impl std::ops::Deref for Definition {
+    type Target = Body;
+
+    fn deref(&self) -> &Body {
+        &self.0
+    }
+}
+
+/// A [`Definition`]'s contents.
+#[derive(Clone, Debug)]
+#[doc(hidden)]
+pub struct Body {
     root: host::path::Path,
     abi: Abi,
     modules: Box<[host::path::Path]>,
@@ -1145,7 +1159,7 @@ impl Builder {
             modules.push(alias.proof_path()?);
         }
         let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
-        Ok(Definition {
+        Ok(Definition(Shared::new(Body {
             root: self.root,
             abi: self.abi,
             modules: self.modules.into_boxed_slice(),
@@ -1156,7 +1170,7 @@ impl Builder {
             trait_headers: Box::default(),
             impl_headers: Box::default(),
             fingerprint,
-        })
+        })))
     }
 
     #[cfg(feature = "rust-import")]
@@ -1385,7 +1399,7 @@ impl Builder {
         }
         let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
         Ok((
-            Definition {
+            Definition(Shared::new(Body {
                 root: self.root,
                 abi: self.abi,
                 modules: self.modules.into_boxed_slice(),
@@ -1396,7 +1410,7 @@ impl Builder {
                 trait_headers: trait_headers.into_boxed_slice(),
                 impl_headers: impl_headers.into_boxed_slice(),
                 fingerprint,
-            },
+            })),
             families,
         ))
     }
@@ -1532,13 +1546,13 @@ impl Definition {
 
     /// Return this facade's declared ABI version.
     #[must_use]
-    pub const fn abi(&self) -> Abi {
+    pub fn abi(&self) -> Abi {
         self.abi
     }
 
     /// Return the deterministic exact facade proof.
     #[must_use]
-    pub const fn fingerprint(&self) -> &Fingerprint {
+    pub fn fingerprint(&self) -> &Fingerprint {
         &self.fingerprint
     }
 
@@ -1579,21 +1593,24 @@ impl Definition {
         ))
     }
 
-    pub(crate) const fn root_path(&self) -> &host::path::Path {
+    pub(crate) fn root_path(&self) -> &host::path::Path {
         &self.root
     }
 
+    /// The parts the compiler's registry keeps: this contract's own when
+    /// nothing else shares it, and else a copy.
     pub(crate) fn into_registry_parts(self) -> RegistryParts {
+        let body = Shared::try_unwrap(self.0).unwrap_or_else(|shared| Body::clone(&shared));
         RegistryParts {
-            root: self.root,
-            modules: self.modules,
-            types: self.types,
-            items: self.items,
-            aliases: self.aliases,
-            type_aliases: self.type_aliases,
-            trait_headers: self.trait_headers,
-            impl_headers: self.impl_headers,
-            fingerprint: self.fingerprint,
+            root: body.root,
+            modules: body.modules,
+            types: body.types,
+            items: body.items,
+            aliases: body.aliases,
+            type_aliases: body.type_aliases,
+            trait_headers: body.trait_headers,
+            impl_headers: body.impl_headers,
+            fingerprint: body.fingerprint,
         }
     }
 
@@ -1653,11 +1670,11 @@ impl Definition {
         (items, bytes)
     }
 
-    pub(crate) const fn modules(&self) -> &[host::path::Path] {
+    pub(crate) fn modules(&self) -> &[host::path::Path] {
         &self.modules
     }
 
-    pub(crate) const fn type_map(&self) -> &[host::type_def::Definition] {
+    pub(crate) fn type_map(&self) -> &[host::type_def::Definition] {
         &self.types
     }
 
