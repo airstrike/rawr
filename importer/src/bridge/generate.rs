@@ -1911,7 +1911,7 @@ impl OpaqueTable {
 /// The table of `entries`, each a call that takes a value of `T`'s type.
 #[allow(dead_code)]
 fn opaque_table<T: 'static, const N: usize>(
-    _: &T,
+    _: std::marker::PhantomData<T>,
     entries: [fn(&mut Arguments<'_, '_, '_>, OpaqueTable, std::marker::PhantomData<T>) -> Result<Dynamic, Error>; N],
 ) -> Box<[OpaqueEntry]> {
     entries
@@ -1973,6 +1973,23 @@ fn take_like<T: 'static>(
     _witness: std::marker::PhantomData<T>,
 ) -> Result<T, Error> {
     take_native(arguments, index)
+}
+
+/// The value at `handle`, at the type `witness` names, as an `Option` of
+/// an opaque type holds it.
+#[allow(dead_code)]
+fn take_handle_like<T: 'static>(
+    arena: &mut Arena,
+    handle: NativeHandle,
+    _witness: std::marker::PhantomData<T>,
+) -> Result<T, Error> {
+    arena.take(handle)
+}
+
+/// The type of `value`, which Rust code can't write when it is opaque.
+#[allow(dead_code)]
+fn witness_of<T>(_: &T) -> std::marker::PhantomData<T> {
+    std::marker::PhantomData
 }
 
 fn take_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], Error> {
@@ -6622,11 +6639,28 @@ fn render_adapter(
     let name = adapter_name(plan);
     // A call that takes a value whose type holds an opaque `impl Trait`
     // type runs what the call that made the value compiled for it.
-    if let Some((position, key)) = opaque_operand(plan)? {
+    if let Some((position, key, operand)) = opaque_operand(plan)? {
         let index = opaque_consumers(cohort, &key)?
             .iter()
             .position(|consumer| std::ptr::eq(*consumer, plan))
             .ok_or_else(|| request::drift("an opaque type's consumer"))?;
+        // An operand that holds the opaque type inside another, as an
+        // `Option` of it, may hold no value of it at all: the table is the
+        // one the call that makes such values compiled for its type.
+        if !by_handle(&operand, &key)
+            && let Some(producer) = opaque_producer(cohort, &key)?
+        {
+            return writeln!(
+                output,
+                "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    super::{module}::{producer}_opaque().call({index}, arguments)
+}}
+",
+                module = adapter_module(producer),
+                producer = adapter_name(producer),
+            )
+            .map_err(encoding);
+        }
         return writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
@@ -6638,7 +6672,7 @@ fn render_adapter(
         )
         .map_err(encoding);
     }
-    let _producing = OpaqueProducing::enter(opaque_table_source(plan, cohort, profile, facade)?);
+    let table = opaque_table_source(plan, cohort, profile, facade)?;
     let plain = method_message(plan, cohort, profile, facade)?.is_none()
         && replay(plan, profile)?.is_none();
     let lent = if plain {
@@ -6646,6 +6680,40 @@ fn render_adapter(
     } else {
         Vec::new()
     };
+    // The table of a type some call takes inside another type is reached
+    // without a value of it (`opaque_producer`): rustc reads the type from
+    // this call's body, which is never run there.
+    let table = match table {
+        Some(table) if witnessed(plan, cohort)? => {
+            let inputs = if lent.is_empty() {
+                "arguments: &mut Arguments<'_, '_, '_>"
+            } else {
+                "arguments: &mut Arguments<'_, '_, '_>, lent: &mut LentArguments<'_>"
+            };
+            writeln!(
+                output,
+                "pub(super) fn {name}_opaque() -> OpaqueTable {{
+    let mut witness = std::marker::PhantomData;
+    let _ = |{inputs}| -> Result<Dynamic, Error> {{
+    let _ = &mut *arguments;"
+            )
+            .map_err(encoding)?;
+            {
+                let _witnessing = OpaqueWitnessing::enter();
+                let _lent = LentArguments::enter(!lent.is_empty());
+                render_adapter_body(plan, cohort, profile, facade, output)?;
+            }
+            writeln!(
+                output,
+                "    }};\n    {}\n}}\n",
+                table.replace("__RAWR_WITNESS__", "witness")
+            )
+            .map_err(encoding)?;
+            Some(format!("{name}_opaque()"))
+        }
+        table => table,
+    };
+    let _producing = OpaqueProducing::enter(table);
     let region = if plain {
         region_inputs(plan)?
     } else {
@@ -6794,6 +6862,42 @@ thread_local! {
     /// While a call that takes such a value is rendered inside the call
     /// that made it: a value of the same type it gives takes `table`.
     static OPAQUE_CONSUMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// While a call in a table is rendered: the type of the value that made
+    /// the table, which its `_w` names.
+    static OPAQUE_WITNESSED: std::cell::RefCell<Option<convert::Type>> = const { std::cell::RefCell::new(None) };
+    /// While the call that makes such a value is rendered only for rustc
+    /// to read its type: the value goes to `witness`.
+    static OPAQUE_WITNESSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets `OPAQUE_WITNESSED` for as long as it lives.
+struct OpaqueWitnessed(Option<convert::Type>);
+
+impl OpaqueWitnessed {
+    fn enter(ty: Option<convert::Type>) -> Self {
+        Self(OPAQUE_WITNESSED.replace(ty))
+    }
+}
+
+impl Drop for OpaqueWitnessed {
+    fn drop(&mut self) {
+        OPAQUE_WITNESSED.set(self.0.take());
+    }
+}
+
+/// Sets `OPAQUE_WITNESSING` for as long as it lives.
+struct OpaqueWitnessing(bool);
+
+impl OpaqueWitnessing {
+    fn enter() -> Self {
+        Self(OPAQUE_WITNESSING.replace(true))
+    }
+}
+
+impl Drop for OpaqueWitnessing {
+    fn drop(&mut self) {
+        OPAQUE_WITNESSING.set(self.0);
+    }
 }
 
 /// Sets `OPAQUE_PRODUCING` for as long as it lives.
@@ -6843,8 +6947,11 @@ fn first_opaque(ty: &convert::Type) -> Option<&convert::Type> {
 }
 
 /// The operand of `plan` whose type holds an opaque type, by its argument
-/// index, with that opaque type: the receiver, or an input.
-fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request::Error> {
+/// index, with that opaque type and the operand's whole type: the
+/// receiver, or an input.
+fn opaque_operand(
+    plan: &Plan,
+) -> Result<Option<(usize, convert::Type, convert::Type)>, request::Error> {
     let (signature, substitutions, receiver, functions) = match plan.operation() {
         Operation::Method {
             signature,
@@ -6858,7 +6965,7 @@ fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request
             if let Some(instance) = signature.instance() {
                 let instance = substituted(instance, signature, substitutions)?;
                 if let Some(opaque) = first_opaque(&instance) {
-                    return Ok(Some((0, opaque.clone())));
+                    return Ok(Some((0, opaque.clone(), instance.clone())));
                 }
             }
             if let Some(opaque) = substitutions
@@ -6866,7 +6973,7 @@ fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request
                 .take(*container_parameters)
                 .find_map(first_opaque)
             {
-                return Ok(Some((0, opaque.clone())));
+                return Ok(Some((0, opaque.clone(), opaque.clone())));
             }
             (signature, substitutions, 1, functions)
         }
@@ -6888,7 +6995,7 @@ fn opaque_operand(plan: &Plan) -> Result<Option<(usize, convert::Type)>, request
         }
         let ty = substituted(input, signature, substitutions)?;
         if let Some(opaque) = first_opaque(&ty) {
-            return Ok(Some((runtime, opaque.clone())));
+            return Ok(Some((runtime, opaque.clone(), ty.clone())));
         }
         runtime += 1;
     }
@@ -6903,11 +7010,74 @@ fn opaque_consumers<'p>(
 ) -> Result<Vec<&'p Plan>, request::Error> {
     let mut consumers = Vec::new();
     for plan in cohort {
-        if opaque_operand(plan)?.is_some_and(|(_, opaque)| same_opaque(&opaque, key)) {
+        if opaque_operand(plan)?.is_some_and(|(_, opaque, _)| same_opaque(&opaque, key)) {
             consumers.push(plan);
         }
     }
     Ok(consumers)
+}
+
+/// Whether an operand of type `operand` is the value of the opaque type
+/// `opaque` at a handle, or a borrow of it, so the value carries its table.
+fn by_handle(operand: &convert::Type, opaque: &convert::Type) -> bool {
+    match operand {
+        convert::Type::Borrowed { ty, .. } => by_handle(ty, opaque),
+        operand => operand == opaque || !matches!(operand, convert::Type::Option(_)),
+    }
+}
+
+/// The opaque type the value `plan` gives holds, when it does.
+fn produced_opaque(plan: &Plan) -> Result<Option<convert::Type>, request::Error> {
+    let returned = match plan.operation() {
+        Operation::Function {
+            signature,
+            substitutions,
+            ..
+        }
+        | Operation::Method {
+            signature,
+            substitutions,
+            ..
+        } => substituted(signature.output(), signature, substitutions)?,
+        _ => return Ok(None),
+    };
+    Ok(first_opaque(&returned).cloned())
+}
+
+/// The call in `cohort` whose adapter compiles the table of the opaque type
+/// `key` for calls that take it inside another type: the first that gives a
+/// value holding it and takes none.
+fn opaque_producer<'p>(
+    cohort: &'p [Plan],
+    key: &convert::Type,
+) -> Result<Option<&'p Plan>, request::Error> {
+    for plan in cohort {
+        if opaque_operand(plan)?.is_none()
+            && produced_opaque(plan)?.is_some_and(|produced| same_opaque(&produced, key))
+        {
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether `plan` compiles the table of the opaque type it gives for calls
+/// that take that type inside another, as an `Option` of it.
+fn witnessed(plan: &Plan, cohort: &[Plan]) -> Result<bool, request::Error> {
+    let Some(key) = produced_opaque(plan)? else {
+        return Ok(false);
+    };
+    if !opaque_producer(cohort, &key)?.is_some_and(|producer| std::ptr::eq(producer, plan)) {
+        return Ok(false);
+    }
+    for consumer in opaque_consumers(cohort, &key)? {
+        if opaque_operand(consumer)?
+            .is_some_and(|(_, opaque, operand)| !by_handle(&operand, &opaque))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The table of calls that take the value `plan` gives, when its type holds
@@ -6937,7 +7107,7 @@ fn opaque_table_source(
     };
     let mut entries = Vec::new();
     for consumer in opaque_consumers(cohort, &key)? {
-        let Some((position, _)) = opaque_operand(consumer)? else {
+        let Some((position, _, _)) = opaque_operand(consumer)? else {
             continue;
         };
         // A call that gives a value of another opaque type, as iced's
@@ -6966,6 +7136,7 @@ fn opaque_table_source(
         let body = {
             let _producing = OpaqueProducing::enter(inner);
             let _consuming = OpaqueConsuming::enter(!other);
+            let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
             let mut body = Vec::new();
             let region = region_inputs(consumer)?;
             if !region.is_empty() {
@@ -7008,7 +7179,7 @@ fn opaque_table_source(
     Ok(Some(format!(
         "{{
         static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
-        OpaqueTable(TABLE.get_or_init(|| opaque_table(&__RAWR_VALUE__, [{}])))
+        OpaqueTable(TABLE.get_or_init(|| opaque_table(__RAWR_WITNESS__, [{}])))
     }}",
         entries.join(",\n")
     )))
@@ -11550,12 +11721,20 @@ fn render_give(
         // A value whose type holds an opaque type carries the calls that
         // take it, compiled here (`opaque_table_source`), or those of the
         // value of the same type the call took.
+        convert::Type::Nominal { .. } if holds_opaque(ty) && OPAQUE_WITNESSING.get() => {
+            writeln!(
+                output,
+                "    witness = witness_of(&{value});\n    Err(Error::TypeMismatch)"
+            )
+        }
         convert::Type::Nominal { .. } if holds_opaque(ty) => {
             let table = if OPAQUE_CONSUMING.get() {
                 Some("table".to_owned())
             } else {
                 OPAQUE_PRODUCING.with_borrow(|table| {
-                    table.as_ref().map(|table| table.replace("__RAWR_VALUE__", value))
+                    table.as_ref().map(|table| {
+                        table.replace("__RAWR_WITNESS__", &format!("witness_of(&{value})"))
+                    })
                 })
             };
             match table {
@@ -11736,6 +11915,17 @@ fn render_from_dynamic(
             write!(
                 output,
                 "Ok::<{rust}, Error>(<{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new({value})))"
+            )
+        }
+        // The value a table's call takes inside another type, as an
+        // `Option` of the opaque type the table's maker gave: at the type
+        // its `_w` names.
+        convert::Type::Nominal { .. }
+            if OPAQUE_WITNESSED.with_borrow(|witnessed| witnessed.as_ref() == Some(ty)) =>
+        {
+            write!(
+                output,
+                "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| take_handle_like(arguments.arena, handle, _w))"
             )
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => write!(

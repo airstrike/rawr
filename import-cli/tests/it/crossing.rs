@@ -717,6 +717,19 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
 
+/// iced's color_palette (#628): `Rgb::from_color(lab)` goes through
+/// palette's `impl<S> FromColorUnclamped<Lab<<S::Space as
+/// RgbSpace>::WhitePoint, f32>> for Rgb<S, f32>`. The projection of a
+/// projection is a synthetic parameter the call infers from `S`, as `Srgb`'s
+/// `Space` is `Srgb`, whose `WhitePoint` is `D65`, as rustc normalizes it.
+/// The output is `cargo run`'s.
+#[test]
+fn an_impl_whose_input_projects_through_a_projection_converts() {
+    let (rawr, cargo) = both_printed("crossing-lab", "lab.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "rgb 0.6 0.35 0.7\nrgb 0.84999996 0.99999994 0.75");
+}
+
 /// iced's color_palette (#617): `Rgb { red, ..Rgb::default() }` reads
 /// green and blue from a default whose component type `red` and the return
 /// type fix, and `Hsl { lightness, ..hsl }` in a loop copies the other
@@ -969,6 +982,23 @@ fn an_option_of_an_opaque_widget_takes_the_written_bounds_defaults() {
     assert!(
         rawr.contains("2 view pad 0 [Increment] none")
             && rawr.contains("3 view pad 0 [Increment] opaque pad 0 0..=10@2/None")
+            && rawr.ends_with("last view pad 0 [Increment] opaque pad 0 0..=10@3/None"),
+        "{rawr}"
+    );
+}
+
+/// iced's gallery (#626): `stack![content, viewer]` takes the `Option<impl
+/// Widget<Message>>` itself, through the crate's `impl Widget for
+/// Option<T>`. It is `None` before anything made a value of the opaque
+/// type, and the call that boxes it runs at that type all the same, from
+/// the table the call that makes such values compiles. The output is
+/// `cargo run`'s.
+#[test]
+fn an_option_of_an_opaque_widget_crosses_whole_while_it_is_none() {
+    let (rawr, cargo) = both_printed("crossing-stacked", "stacked.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 [Increment] none")
             && rawr.ends_with("last view pad 0 [Increment] opaque pad 0 0..=10@3/None"),
         "{rawr}"
     );
