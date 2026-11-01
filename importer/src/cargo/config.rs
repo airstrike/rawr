@@ -638,17 +638,18 @@ impl Environment {
             return Ok(None);
         };
         if path.as_os_str().is_empty() {
-            return Err(Error::Path {
-                field: "Cargo home",
-                path,
-                reason: format!("{source} is explicitly empty").into_boxed_str(),
+            return Err(Error::Request {
+                reason: format!("the environment variable {source} is set but empty")
+                    .into_boxed_str(),
             });
         }
         if !path.is_absolute() {
-            return Err(Error::Path {
-                field: "Cargo home",
-                path,
-                reason: format!("{source} must be absolute").into_boxed_str(),
+            return Err(Error::Request {
+                reason: format!(
+                    "the environment variable {source} is `{}`, which is not an absolute path",
+                    path.display()
+                )
+                .into_boxed_str(),
             });
         }
         let path = normalized_absolute("Cargo home", &path)?;
@@ -1352,7 +1353,7 @@ fn candidate_state_inner(
                 return Err(Error::Path {
                     field: "Cargo config candidate",
                     path: path.to_path_buf(),
-                    reason: "contains a symlink or non-canonical ancestor".into(),
+                    reason: "is reached through a symlink".into(),
                 });
             }
             let bytes = if let Some(allocation) = allocation {
@@ -1365,7 +1366,7 @@ fn candidate_state_inner(
         Ok(_) => Err(Error::Path {
             field: "Cargo config candidate",
             path: path.to_path_buf(),
-            reason: "exists but is not a file".into(),
+            reason: "is not a file".into(),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(State::Absent),
         Err(source) => Err(Error::Io {
@@ -1389,7 +1390,7 @@ fn reject_symlink_components(path: &Path) -> Result<()> {
                 return Err(Error::Path {
                     field: "Cargo config candidate",
                     path: current,
-                    reason: "contains a symlink component".into(),
+                    reason: "is reached through a symlink".into(),
                 });
             }
             Ok(_) => {}
@@ -1535,6 +1536,27 @@ mod tests {
     use crate::cargo::{digest, Limits, RequestAllocation};
     use crate::Error;
     use toml_edit::DocumentMut;
+
+    /// An empty or relative CARGO_HOME is named as the variable it is (#483).
+    #[test]
+    fn an_unusable_cargo_home_names_the_variable() {
+        let cases = [
+            ("", "the environment variable CARGO_HOME is set but empty"),
+            (
+                "relative/home",
+                "the environment variable CARGO_HOME is `relative/home`, which is not an \
+                 absolute path",
+            ),
+        ];
+        for (value, expected) in cases {
+            let environment =
+                Environment::from_pairs([("CARGO_HOME", value)]).expect("the environment seals");
+            let error = environment
+                .context_cargo_home()
+                .expect_err("an unusable CARGO_HOME is refused");
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 
     /// A target one unit under an exact total refuses nothing; the
     /// account records the axis with that target and a high water equal to

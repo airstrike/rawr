@@ -344,7 +344,7 @@ fn selected_artifacts_from_other_attempt_roots_reject_before_launch() {
                     field: "selected rmeta artifact",
                     reason,
                     ..
-                } if reason.as_ref() == "escaped its sealed parent"));
+                } if reason.as_ref() == "is outside its directory"));
                 assert!(!layout.extraction().plan().exists());
                 Ok(())
             })

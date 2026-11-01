@@ -383,7 +383,7 @@ fn internal_directory_aliases_are_rejected_before_probe_publication() {
                 .expect("a contained alias cannot change the assigned directory");
                 assert!(
                     matches!(&error, Error::Path { field, reason, .. }
-                    if *field == expected && reason.as_ref() == "must retain its exact reserved path"),
+                    if *field == expected && reason.as_ref() == "was moved or replaced during the build"),
                     "unexpected rejection for {expected}: {error}"
                 );
                 assert!(!layout.extraction().source().exists());

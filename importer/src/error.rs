@@ -17,12 +17,10 @@ pub enum Error {
         source: Box<crate::node::Error>,
     },
 
-    /// The process-wide or cross-process Cargo writer authority is unavailable.
-    #[error("Cargo resolution owner is unavailable: {state}")]
-    Owner {
-        /// The structured unavailable-owner state.
-        state: &'static str,
-    },
+    /// Another build holds the build directory, as Cargo's "Blocking
+    /// waiting for file lock on build directory" says of its own.
+    #[error("the build directory is locked by another build; run again when it finishes")]
+    Owner,
 
     /// Something in the user's Cargo setup or environment that rawr can't
     /// build with, said as Cargo or rustc would say it. A condition only a
@@ -33,14 +31,15 @@ pub enum Error {
         reason: Box<str>,
     },
 
-    /// A filesystem path could not be promoted into canonical importer input.
-    #[error("invalid {field} path `{path}`: {reason}")]
+    /// A path rawr can't build from, as Cargo names one: the path, then
+    /// what is wrong with it.
+    #[error("`{}` {reason}", path.display())]
     Path {
-        /// The request field that supplied the path.
+        /// Which path this is, for tests. Never shown.
         field: &'static str,
         /// The rejected path.
         path: PathBuf,
-        /// Why the path could not be sealed.
+        /// What is wrong with the path, in words that follow it.
         reason: Box<str>,
     },
 
@@ -129,8 +128,9 @@ pub enum Error {
         actual: Box<str>,
     },
 
-    /// A pinned Cargo schema could not be decoded exactly.
-    #[error("invalid {document} schema: {reason}")]
+    /// rawr could not read what Cargo, rustup or its own cache wrote: a bug
+    /// in rawr, never in the program, so it says so as rustc's ICEs do.
+    #[error("internal error: rawr misread {document}: {reason}. This is a rawr bug")]
     Schema {
         /// The bounded document being decoded.
         document: &'static str,
@@ -138,8 +138,13 @@ pub enum Error {
         reason: Box<str>,
     },
 
-    /// Cargo changed the sealed resolution universe during a command.
-    #[error("Cargo resolution drift after {command}: {field} changed")]
+    /// Cargo answered differently for the same project within one build:
+    /// a Cargo.toml, Cargo.lock or Cargo configuration file changed while
+    /// it ran, or rawr misread Cargo.
+    #[error(
+        "Cargo.toml, Cargo.lock or the Cargo configuration changed during the build; \
+         run it again. If none changed, this is a rawr bug ({field} differs after {command})"
+    )]
     ResolutionDrift {
         /// The command whose postcondition failed.
         command: &'static str,
@@ -147,8 +152,9 @@ pub enum Error {
         field: &'static str,
     },
 
-    /// Content or saved-output evidence could not become an exact freshness proof.
-    #[error("normal-build input proof rejected `{code}`: {reason}")]
+    /// A file the build read changed, or can't be read as Cargo wrote it.
+    /// `code` names the condition for tests and is shown only for a bug.
+    #[error("{}", input_message(code, reason))]
     Input {
         /// Stable machine-readable rejection code.
         code: &'static str,
@@ -169,4 +175,118 @@ pub enum Error {
         /// Positioned or identity-bearing rejection detail.
         reason: Box<str>,
     },
+}
+
+/// An input failure in Cargo's words: a file that changed during the build,
+/// a path or registry entry that can't be read, or else a rawr bug, said as
+/// rustc's ICEs say one.
+fn input_message(code: &str, reason: &str) -> String {
+    match code {
+        "input-changed" => "a file the build read changed during the build; run it again".into(),
+        "input-changed-during-read" | "package-file-set-changed" | "registry-marker-changed" => {
+            format!("`{reason}` changed during the build; run it again")
+        }
+        "package-file-set-utf8"
+        | "dep-info-utf8"
+        | "saved-output-utf8"
+        | "toolchain-executable-path-encoding"
+        | "protected-build-package-path-encoding"
+        | "runner-harness-fixture-path"
+        | "runner-harness-fixture-root" => format!("a path is not valid UTF-8: {reason}"),
+        "symlink-input" => {
+            format!("`{reason}` is reached through a symlink, which rawr can't build from yet")
+        }
+        "cargo-commit-skew" => format!(
+            "this Cargo (commit `{reason}`) is not the one rawr builds with; \
+             install the toolchain rawr names"
+        ),
+        "registry-checksum-authority-absent" => {
+            format!("`{reason}` has no checksum in Cargo.lock")
+        }
+        "registry-root-outside-cargo-home" => format!(
+            "`{reason}` is outside CARGO_HOME: a replaced or vendored registry source, \
+             which rawr can't build from yet"
+        ),
+        "registry-marker-malformed" | "registry-marker-schema" => format!(
+            "Cargo's registry copy of a package is damaged ({reason}); \
+             delete it under CARGO_HOME/registry/src and run again"
+        ),
+        "missing-cargo-home-authority" => {
+            format!("CARGO_HOME is unset and there is no home directory, so Cargo can't fetch `{reason}`")
+        }
+        "cargo-env-config-unproved" => "a build script's `cargo::rerun-if-env-changed` names a \
+             variable that `[env]` in .cargo/config.toml sets, which rawr can't build with yet"
+            .into(),
+        code => format!(
+            "internal error: rawr lost track of a build input (`{code}`): {reason}. \
+             This is a rawr bug"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    /// Each message names the user's files and setup in Cargo's words, and
+    /// a condition only rawr can cause says it's a rawr bug (#483, D664).
+    #[test]
+    fn messages_name_the_project_in_cargos_words() {
+        let cases = [
+            (
+                Error::Owner,
+                "the build directory is locked by another build; run again when it finishes",
+            ),
+            (
+                Error::Path {
+                    field: "Cargo config candidate",
+                    path: "/project/.cargo/config.toml".into(),
+                    reason: "is reached through a symlink".into(),
+                },
+                "`/project/.cargo/config.toml` is reached through a symlink",
+            ),
+            (
+                Error::ResolutionDrift {
+                    command: "metadata",
+                    field: "selected whole lock",
+                },
+                "Cargo.toml, Cargo.lock or the Cargo configuration changed during the build; \
+                 run it again. If none changed, this is a rawr bug (selected whole lock differs \
+                 after metadata)",
+            ),
+            (
+                Error::Schema {
+                    document: "Cargo unit graph",
+                    reason: "missing field `units`".into(),
+                },
+                "internal error: rawr misread Cargo unit graph: missing field `units`. \
+                 This is a rawr bug",
+            ),
+            (
+                Error::Input {
+                    code: "input-changed-during-read",
+                    reason: "/project/src/main.rs".into(),
+                },
+                "`/project/src/main.rs` changed during the build; run it again",
+            ),
+            (
+                Error::Input {
+                    code: "registry-checksum-authority-absent",
+                    reason: "crunchy 0.2.4".into(),
+                },
+                "`crunchy 0.2.4` has no checksum in Cargo.lock",
+            ),
+            (
+                Error::Input {
+                    code: "protected-build-package-owner-missing",
+                    reason: "crunchy 0.2.4".into(),
+                },
+                "internal error: rawr lost track of a build input \
+                 (`protected-build-package-owner-missing`): crunchy 0.2.4. This is a rawr bug",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 }

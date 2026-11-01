@@ -301,16 +301,9 @@ fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failu
         assert_eq!(executions.len(), 1);
         assert!(locked(&executions[0]));
         assert!(!locked(&store.root().join("locks/publication.lock")));
-        Err(crate::Error::Owner {
-            state: "injected native failure",
-        })
+        Err(crate::Error::Owner)
     });
-    assert!(matches!(
-        failure,
-        Err(crate::Error::Owner {
-            state: "injected native failure"
-        })
-    ));
+    assert!(matches!(failure, Err(crate::Error::Owner)));
     assert!(!locked(&store.root().join("locks/heavy.lock")));
     scope
         .run(|| Ok(()))

@@ -3370,25 +3370,11 @@ impl Resolution {
         limits: &Limits,
         publish: impl FnOnce(Self) -> Result<T>,
     ) -> Result<T> {
-        let _process_owner = match HEAVY_OWNER.try_lock() {
-            Ok(owner) => owner,
-            Err(TryLockError::WouldBlock) => {
-                return Err(Error::Owner {
-                    state: "process busy",
-                });
-            }
-            Err(TryLockError::Poisoned(_)) => {
-                return Err(Error::Owner {
-                    state: "process gate poisoned",
-                });
-            }
-        };
+        let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease_at(&self.project_root, &self.cache_root)?;
         let _lease_owner = lease.try_write().map_err(|source| {
             if source.kind() == std::io::ErrorKind::WouldBlock {
-                Error::Owner {
-                    state: "cache busy",
-                }
+                Error::Owner
             } else {
                 Error::Io {
                     operation: "acquire publication cache lease",
@@ -3700,12 +3686,10 @@ fn open_lease(request: &Request) -> Result<fd_lock::RwLock<File>> {
 fn acquire_process_owner() -> Result<std::sync::MutexGuard<'static, ()>> {
     match HEAVY_OWNER.try_lock() {
         Ok(owner) => Ok(owner),
-        Err(TryLockError::WouldBlock) => Err(Error::Owner {
-            state: "process busy",
-        }),
-        Err(TryLockError::Poisoned(_)) => Err(Error::Owner {
-            state: "process gate poisoned",
-        }),
+        Err(TryLockError::WouldBlock) => Err(Error::Owner),
+        // The gate guards no data, so a panic while another build held it
+        // leaves nothing to repair.
+        Err(TryLockError::Poisoned(owner)) => Ok(owner.into_inner()),
     }
 }
 
@@ -3716,9 +3700,7 @@ fn acquire_lease<'lease>(
 ) -> Result<fd_lock::RwLockWriteGuard<'lease, File>> {
     lease.try_write().map_err(|source| {
         if source.kind() == std::io::ErrorKind::WouldBlock {
-            Error::Owner {
-                state: "cache busy",
-            }
+            Error::Owner
         } else {
             Error::Io {
                 operation,
@@ -3741,7 +3723,7 @@ fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock:
         return Err(Error::Path {
             field: "project cache root",
             path: cache_root,
-            reason: "escaped its sealed canonical project location".into(),
+            reason: "is outside the project directory".into(),
         });
     }
     let lease_path = cache_root.join(LEASE_FILE);
@@ -3768,7 +3750,7 @@ fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock:
         return Err(Error::Path {
             field: "resolution cache lease",
             path: lease_path,
-            reason: "contains a symlink or non-canonical ancestor".into(),
+            reason: "is reached through a symlink".into(),
         });
     }
     Ok(fd_lock::RwLock::new(file))
@@ -4051,7 +4033,7 @@ fn select_placement_inner(
             return Err(Error::Path {
                 field: "final resolution namespace",
                 path: fixed,
-                reason: "must be a real directory".into(),
+                reason: "is not a directory".into(),
             });
         }
         Ok(_) => {}
@@ -4084,7 +4066,7 @@ fn select_placement_inner(
             Err(Error::Path {
                 field: "side-by-side resolution candidate",
                 path: candidate,
-                reason: "must be a real directory".into(),
+                reason: "is not a directory".into(),
             })
         }
         Ok(_) => {
@@ -4312,7 +4294,7 @@ fn prepare_harness(
         return Err(Error::Path {
             field: "project cache root",
             path: cache_root,
-            reason: "escaped the canonical project root".into(),
+            reason: "is outside the project directory".into(),
         });
     }
     let harness_root = cache_root.join(HARNESS_DIRECTORY);
@@ -5624,7 +5606,7 @@ fn read_bounded_inner(
         return Err(Error::Path {
             field: resource,
             path: path.to_path_buf(),
-            reason: "contains a symlink or non-canonical ancestor".into(),
+            reason: "is reached through a symlink".into(),
         });
     }
     let mut file = File::open(path).map_err(|source| Error::Io {
@@ -5701,14 +5683,14 @@ pub(crate) fn canonical_directory(field: &'static str, path: &Path) -> Result<Pa
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "expected a directory".into(),
+            reason: "is not a directory".into(),
         });
     }
     if canonical != normalized {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "contains a symlink or non-canonical ancestor".into(),
+            reason: "is reached through a symlink".into(),
         });
     }
     Ok(canonical)
@@ -5737,14 +5719,14 @@ pub(crate) fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf
         return Err(Error::Path {
             field,
             path: canonical,
-            reason: "expected a file".into(),
+            reason: "is not a file".into(),
         });
     }
     if canonical != normalized {
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "contains a symlink or non-canonical ancestor".into(),
+            reason: "is reached through a symlink".into(),
         });
     }
     Ok(canonical)
@@ -5777,7 +5759,7 @@ pub(crate) fn normalized_absolute(field: &'static str, path: &Path) -> Result<Pa
                     return Err(Error::Path {
                         field,
                         path: path.to_path_buf(),
-                        reason: "escapes the filesystem root".into(),
+                        reason: "is outside the filesystem root".into(),
                     });
                 }
             }
@@ -5791,7 +5773,7 @@ fn reject_existing_symlink(root: &Path, target: &Path) -> Result<()> {
     let relative = target.strip_prefix(root).map_err(|_| Error::Path {
         field: "Rawr-owned cache path",
         path: target.to_path_buf(),
-        reason: "escapes the canonical project root".into(),
+        reason: "is outside the project directory".into(),
     })?;
     let mut current = root.to_path_buf();
     for component in relative.components() {
@@ -5801,7 +5783,7 @@ fn reject_existing_symlink(root: &Path, target: &Path) -> Result<()> {
                 return Err(Error::Path {
                     field: "Rawr-owned cache path",
                     path: current,
-                    reason: "contains a symlink component".into(),
+                    reason: "is reached through a symlink".into(),
                 });
             }
             Ok(_) => {}
@@ -5822,7 +5804,7 @@ fn path_string<'a>(field: &'static str, path: &'a Path) -> Result<&'a str> {
     path.to_str().ok_or_else(|| Error::Path {
         field,
         path: path.to_path_buf(),
-        reason: "is not valid Unicode Cargo TOML input".into(),
+        reason: "is not valid UTF-8, which Cargo.toml requires".into(),
     })
 }
 
@@ -7272,12 +7254,7 @@ mod epoch_tests {
         let mut lease = open_lease_at(&root, &cache).expect("contender opens the cache lease");
         let error = acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease")
             .expect_err("the production epoch excludes a competing process");
-        assert!(matches!(
-            error,
-            Error::Owner {
-                state: "cache busy"
-            }
-        ));
+        assert!(matches!(error, Error::Owner));
     }
 
     #[test]
@@ -7295,12 +7272,7 @@ mod epoch_tests {
             let contender_barrier = Arc::clone(&barrier);
             scope.spawn(move || {
                 contender_barrier.wait();
-                assert!(matches!(
-                    acquire_process_owner(),
-                    Err(Error::Owner {
-                        state: "process busy"
-                    })
-                ));
+                assert!(matches!(acquire_process_owner(), Err(Error::Owner)));
                 contender_barrier.wait();
             });
             barrier.wait();

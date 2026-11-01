@@ -463,7 +463,7 @@ fn executable_evidence_in(
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "must be a bounded regular non-symlink executable".into(),
+            reason: "is not an executable file".into(),
         });
     }
     // The digest is a pure function of the bytes: an unchanged identity reuses

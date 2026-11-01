@@ -3,13 +3,16 @@
 /// Failure before a generated manifest can be sealed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("generated overlay node failed: {0}")]
+    #[error("{0}")]
     Node(#[source] Box<crate::node::Error>),
-    #[error("normal-build proof changed during generation: {0}")]
+    #[error("{0}")]
     Native(#[from] crate::Error),
-    #[error("generated runner manifest is invalid: {reason}")]
+    /// rawr wrote a runner Cargo.toml it can't read back: a rawr bug.
+    #[error("internal error: rawr wrote an invalid Cargo.toml for the program: {reason}. This is a rawr bug")]
     Manifest { reason: Box<str> },
-    #[error("generated bridge drifted in {field}")]
+    /// The generated Rust disagrees with what rawr read of the crates: a
+    /// rawr bug.
+    #[error("internal error: rawr's generated Rust disagrees with the crates on {field}. This is a rawr bug")]
     Drift { field: &'static str },
     #[error("{resource} exceeded limit {limit} with observed size {actual}")]
     Limit {
@@ -17,8 +20,10 @@ pub enum Error {
         limit: usize,
         actual: usize,
     },
-    #[error("cannot allocate generated bridge bytes")]
+    #[error("out of memory while generating the program's Rust")]
     Allocation,
-    #[error("cannot encode generated bridge evidence")]
+    #[error(
+        "internal error: rawr could not encode the program's generated Rust. This is a rawr bug"
+    )]
     Encoding,
 }

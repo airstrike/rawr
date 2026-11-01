@@ -44,7 +44,7 @@ impl Declarations {
         if cargo_commit != toolchain::supported_cargo_commit() {
             return Err(Error::Input {
                 code: "cargo-commit-skew",
-                reason: format!("unsupported Cargo commit `{cargo_commit}`").into_boxed_str(),
+                reason: cargo_commit.into(),
             });
         }
         // The PackageId length is an accounting target; record it.

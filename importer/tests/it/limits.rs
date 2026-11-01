@@ -74,7 +74,11 @@ fn pinned_saved_output_decodes_ordered_directives_with_strict_binding() {
     )
     .err()
     .expect("Cargo commit skew rejects");
-    assert!(format!("{skew}").contains("cargo-commit-skew"));
+    assert_eq!(
+        skew.to_string(),
+        "this Cargo (commit `0000000000000000000000000000000000000000`) is not the one rawr \
+         builds with; install the toolchain rawr names"
+    );
 
     let wrong = layout.0.parent().expect("OUT_DIR has a parent");
     let layout_error = Declarations::read(

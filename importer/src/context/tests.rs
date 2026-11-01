@@ -95,7 +95,7 @@ fn missing_empty_relative_and_symlinked_cargo_home_authority_rejects_before_stor
                 "target",
                 &cargo::Limits::standard(),
             ),
-            Err(Error::Environment(crate::Error::Path { .. }))
+            Err(Error::Environment(crate::Error::Request { .. }))
         ));
     }
 
