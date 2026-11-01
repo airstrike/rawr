@@ -606,6 +606,6 @@
     {"t":"T603","issue":603,"title":"T603: Evaluate #[cfg_attr(..)] on items, fields and variants","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T604","issue":604,"title":"T604: Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T605","issue":605,"title":"T605: Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T606","issue":606,"title":"T606: Two rawr integration tests fail on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T606","issue":606,"title":"T606: Two rawr integration tests fail on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"17ccfd54b","release":null}
   ]
 }

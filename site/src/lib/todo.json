@@ -1348,7 +1348,7 @@
     {"issue":603,"title":"Evaluate #[cfg_attr(..)] on items, fields and variants","state":"open","category":"Divergences from rustc"},
     {"issue":604,"title":"Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc"},
     {"issue":605,"title":"Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc"},
-    {"issue":606,"title":"Two rawr integration tests fail on main","state":"open","category":"Health"}
+    {"issue":606,"title":"Two rawr integration tests fail on main","state":"closed","category":"Health"}
   ],
   "groups": [
     {
