@@ -782,13 +782,40 @@ pub fn anchor() -> Option<Nonce> {
 /// they belong to is lent (D594): the strings a script `view(&state)`
 /// gives native widgets that borrow them for `'a` of `&'a State`. Each is
 /// held by its shared handle, so pinning copies no text, and one held
-/// already is not held twice. They are let go when the owner is next
-/// reached `&mut`, when no borrow of them can remain.
+/// already is not held twice. Native values such widgets borrow are held
+/// the same way, by their [`Rc`](std::rc::Rc) ([`Pins::hold`]). They are
+/// let go when the owner is next reached `&mut`, when no borrow of them can
+/// remain.
 #[derive(Default)]
-pub struct Pins(std::sync::Mutex<Vec<crate::ImmutableString>>);
+pub struct Pins {
+    strings: std::sync::Mutex<Vec<crate::ImmutableString>>,
+    values: std::sync::Mutex<Vec<Kept>>,
+}
+
+/// A native value [`Pins::hold`] keeps, with the thread whose `Rc` it is.
+struct Kept {
+    thread: std::thread::ThreadId,
+    value: std::mem::ManuallyDrop<std::rc::Rc<dyn std::any::Any>>,
+}
+
+// SAFETY: a `Kept` touches its `Rc`'s count only on `thread`: `hold` makes
+// it there, and `Drop` drops it there and leaks it on any other thread. Its
+// value is never reached through it, so no other thread can see the value.
+unsafe impl Send for Kept {}
+// SAFETY: as for `Send`; `&Kept` reaches nothing but the `Rc`'s address.
+unsafe impl Sync for Kept {}
+
+impl Drop for Kept {
+    fn drop(&mut self) {
+        if std::thread::current().id() == self.thread {
+            // SAFETY: dropped once, here, on the thread whose `Rc` it is.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self.value) }
+        }
+    }
+}
 
 impl Pins {
-    /// No strings pinned.
+    /// Nothing pinned.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -797,7 +824,7 @@ impl Pins {
     /// `text`, borrowed for as long as these pins are.
     pub fn pin(&self, text: crate::ImmutableString) -> &str {
         let mut pinned = self
-            .0
+            .strings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = match pinned.iter().position(|held| held.ptr_eq(&text)) {
@@ -818,24 +845,64 @@ impl Pins {
         unsafe { &*text }
     }
 
-    /// Let every pinned string go.
+    /// `value`, borrowed for as long as these pins are: a runner's native
+    /// value that a value made in a view borrows, as `qr_code(&state.data)`
+    /// borrows `data` for `'a` of `&'a State` (D568). The runner shares it
+    /// by its `Rc`, so nothing is copied, and takes it back whole once the
+    /// pins let it go.
+    pub fn hold<T: 'static>(&self, value: std::rc::Rc<T>) -> &T {
+        let thread = std::thread::current().id();
+        let pointer: *const T = std::rc::Rc::as_ptr(&value);
+        let mut kept = self
+            .values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !kept.iter().any(|held| {
+            held.thread == thread && std::ptr::addr_eq(std::rc::Rc::as_ptr(&held.value), pointer)
+        }) {
+            kept.push(Kept {
+                thread,
+                value: std::mem::ManuallyDrop::new(value),
+            });
+        }
+        // SAFETY: the value lives in the `Rc`'s allocation, which a `Kept`
+        // in these pins keeps alive until `clear` takes `&mut self` or the
+        // pins drop, and neither can happen while `&self` is borrowed; a
+        // `Kept` dropped on another thread leaks it. Moving a `Kept` within
+        // the vector doesn't move the allocation. Nothing writes the value
+        // while the pins share it: `Rc::get_mut` and `Rc::try_unwrap` fail
+        // while they hold a count, and a `&T` allows only what `T`'s own
+        // interior mutability allows.
+        unsafe { &*pointer }
+    }
+
+    /// Let everything pinned go.
     pub fn clear(&mut self) {
-        self.0
+        self.strings
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.values
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
-    /// How many strings are pinned.
+    /// How many strings and values are pinned.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0
+        self.strings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
+            + self
+                .values
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len()
     }
 
-    /// Whether no string is pinned.
+    /// Whether nothing is pinned.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -1363,5 +1430,34 @@ mod tests {
         let expired = ACCESS(1, &mut |_| reached = true);
         assert_eq!(expired.map_err(Error::from_code), Err(Error::Expired));
         assert!(!reached);
+    }
+
+    /// A native value a view borrows is held by its `Rc` once however
+    /// often it is pinned, borrowed in place, and let go by `clear`, so
+    /// its owner gets it back whole.
+    #[test]
+    fn pins_hold_a_native_value_in_place_until_cleared() {
+        let value = std::rc::Rc::new(String::from("data"));
+        let mut pins = super::Pins::new();
+        let held = pins.hold(value.clone());
+        assert!(std::ptr::eq(held, &*value));
+        assert!(std::ptr::eq(pins.hold(value.clone()), held));
+        assert_eq!(pins.len(), 1);
+        assert_eq!(std::rc::Rc::strong_count(&value), 2);
+        pins.clear();
+        assert!(pins.is_empty());
+        assert_eq!(std::rc::Rc::try_unwrap(value).as_deref(), Ok("data"));
+    }
+
+    /// Pins dropped on another thread leak a held value rather than touch
+    /// its count there.
+    #[cfg(feature = "sync")]
+    #[test]
+    fn pins_dropped_on_another_thread_leak_what_they_hold() {
+        let value = std::rc::Rc::new(7_u8);
+        let pins = super::Pins::new();
+        let _ = pins.hold(value.clone());
+        std::thread::scope(|scope| scope.spawn(move || drop(pins)).join().unwrap());
+        assert_eq!(std::rc::Rc::strong_count(&value), 2);
     }
 }

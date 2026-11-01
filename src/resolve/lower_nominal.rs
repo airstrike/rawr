@@ -2301,6 +2301,9 @@ fn instance_surface_type(
                     length: None,
                 },
                 Ty::Str | Ty::String => Type::Builtin(Builtin::Str),
+                // A crate value the program holds, as `Some(&self.backend)`
+                // fills iced's `pick_list`'s `V: Borrow<T>`.
+                target @ Ty::Host { .. } => instance_surface_type(inference, models, &target)?,
                 _ => return None,
             }),
         },

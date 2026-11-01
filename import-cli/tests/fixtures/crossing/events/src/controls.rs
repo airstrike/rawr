@@ -947,3 +947,97 @@ impl Look {
         format!("{}{}", if self.mono { "mono" } else { "plain" }, self.tone)
     }
 }
+
+/// A code's cells, as iced's `qr_code` module has them: data that isn't
+/// `Clone` and keeps a count of its draws in a `Cell`, as iced's keeps its
+/// canvas cache, so a widget borrows it and a copy would count from zero.
+pub mod qr_code {
+    use crate::widgets::Widget;
+
+    /// The cells of a code, as iced's `qr_code::Data`.
+    #[derive(Debug)]
+    pub struct Data {
+        width: usize,
+        draws: std::cell::Cell<u32>,
+    }
+
+    /// Why a code can't hold some text.
+    #[derive(Debug, Clone, Copy)]
+    pub enum Error {
+        /// There is no text.
+        Empty,
+    }
+
+    impl Data {
+        /// The code of `text`.
+        pub fn new(text: &str) -> Result<Self, Error> {
+            if text.is_empty() {
+                return Err(Error::Empty);
+            }
+            Ok(Self {
+                width: 2 * text.len() + 1,
+                draws: std::cell::Cell::new(0),
+            })
+        }
+
+        /// The code with a border of cells around it.
+        pub fn grow(&mut self) {
+            self.width += 2;
+        }
+    }
+
+    /// A widget that borrows a code's data, as iced's `QRCode<'a, Theme>`:
+    /// no renderer parameter, and the theme defaults to the crate's.
+    pub struct QRCode<'a, Theme = crate::Theme> {
+        data: &'a Data,
+        cell_size: f32,
+        theme: std::marker::PhantomData<Theme>,
+    }
+
+    impl<'a, Theme> QRCode<'a, Theme> {
+        /// The widget of `data`, which it borrows.
+        pub fn new(data: &'a Data) -> Self {
+            Self {
+                data,
+                cell_size: 4.0,
+                theme: std::marker::PhantomData,
+            }
+        }
+
+        /// The size of one cell.
+        pub fn cell_size(mut self, cell_size: f32) -> Self {
+            self.cell_size = cell_size;
+            self
+        }
+
+        /// The size of the whole code, with a quiet zone of one cell.
+        pub fn total_size(mut self, total_size: f32) -> Self {
+            self.cell_size = total_size / (self.data.width + 2) as f32;
+            self
+        }
+    }
+
+    impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for QRCode<'_, Theme> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            let draws = self.data.draws.get() + 1;
+            self.data.draws.set(draws);
+            labels.push(format!(
+                "qr {}@{} draw {draws}",
+                self.data.width, self.cell_size
+            ));
+        }
+
+        fn press(&self, _label: &str) -> Option<Message> {
+            None
+        }
+    }
+}
+
+/// The widget of a code's `data`, which it borrows for `'a`, as iced's
+/// `qr_code(data)`: the module beside it shares its name.
+pub fn qr_code<'a, Theme>(data: &'a qr_code::Data) -> qr_code::QRCode<'a, Theme>
+where
+    Theme: 'a,
+{
+    qr_code::QRCode::new(data)
+}

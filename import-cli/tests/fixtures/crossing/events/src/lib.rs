@@ -199,6 +199,34 @@ impl std::fmt::Display for Family {
     }
 }
 
+/// A graphics backend, as iced's `Backend`: a crate enum that isn't
+/// `Copy`, listed by a constant slice and `Display`ed.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Backend {
+    /// The best one available.
+    #[default]
+    Best,
+    /// Drawn in software.
+    Software,
+    /// A backend the program names.
+    Custom(String),
+}
+
+impl Backend {
+    /// The backends a program may choose.
+    pub const ALL: &'static [Self] = &[Self::Best, Self::Software];
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backend::Best => f.write_str("Best"),
+            Backend::Software => f.write_str("Software"),
+            Backend::Custom(name) => f.write_str(name),
+        }
+    }
+}
+
 /// Why the families weren't listed, as iced's empty `font::Error`.
 #[derive(Debug, Clone)]
 pub enum Error {}
