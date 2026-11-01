@@ -68,7 +68,7 @@ fn test_method_call_with_full_optimization() {
     );
 }
 
-/// AST walk tests — verify that `walk` visits arguments inside method calls.
+// AST walk tests — verify that `walk` visits arguments inside method calls.
 
 #[cfg(feature = "internals")]
 fn walk_vars(engine: &Engine, src: &str) -> Vec<String> {

@@ -177,11 +177,12 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
             "status",
             "stop",
             "screenshot",
+            "inspect",
             "echo",
             "hang"
         ]
     );
-    let echo = &tools[8];
+    let echo = &tools[9];
     assert!(echo["description"].as_str().unwrap().contains("rawr-fake"));
     assert!(echo["inputSchema"]["properties"]["path"].is_object());
     assert!(echo["inputSchema"]["properties"]["word"].is_object());
@@ -381,6 +382,110 @@ fn a_started_program_reports_its_end_and_runs_again_on_a_save() {
         .status()
         .unwrap()
         .success());
+    drop(client.input.take());
+    assert!(client.child.wait().unwrap().success());
+}
+
+#[test]
+fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
+    let sandbox = Sandbox::new("mcp-inspect");
+    let mut client = Client::start(&sandbox);
+    client.request("initialize", json!({ "protocolVersion": "2025-06-18" }));
+    let made = client.call("new", json!({ "path": "counter" }));
+    assert_eq!(made["isError"], false, "{made}");
+    let main = sandbox.work().join("counter/src/main.rs");
+    std::fs::write(
+        &main,
+        "// rawr\n\
+         #[derive(Debug)]\n\
+         struct Counter {\n    count: u64,\n    label: String,\n}\n\
+         \n\
+         fn tick(counter: &mut Counter, step: u64) {\n    counter.count += step;\n}\n\
+         \n\
+         fn main() {\n    let mut counter = Counter { count: 0, label: String::from(\"ticks\") };\n    let names = vec![\"a\", \"b\"];\n    loop {\n        tick(&mut counter, 1);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n",
+    )
+    .unwrap();
+    let started = client.call("start", json!({ "path": "counter", "wait_ms": 20000 }));
+    assert_eq!(
+        started["structuredContent"]["state"], "running",
+        "{started}"
+    );
+
+    // One binding by name, at a step where it is in scope: `main`'s.
+    let read = client.call(
+        "inspect",
+        json!({ "path": "counter", "name": "names", "timeout_ms": 5000 }),
+    );
+    assert_eq!(read["isError"], false, "{read}");
+    let structured = &read["structuredContent"];
+    assert_eq!(structured["file"], json!(main), "{read}");
+    assert_eq!(structured["function"], "counter::main", "{read}");
+    assert_eq!(structured["line"], 16, "{read}");
+    assert_eq!(
+        structured["bindings"],
+        json!([{ "name": "names", "value": "[\"a\", \"b\"]" }])
+    );
+
+    // A parameter is read in its function.
+    let read = client.call(
+        "inspect",
+        json!({ "path": "counter", "name": "step", "timeout_ms": 5000 }),
+    );
+    assert_eq!(
+        read["structuredContent"]["function"], "counter::tick",
+        "{read}"
+    );
+    assert_eq!(
+        read["structuredContent"]["bindings"],
+        json!([{ "name": "step", "value": "1" }])
+    );
+
+    // The program's own type prints through its derived `Debug`.
+    let read = client.call(
+        "inspect",
+        json!({ "path": "counter", "name": "counter", "file": "counter/src/main.rs", "timeout_ms": 5000 }),
+    );
+    let value = read["structuredContent"]["bindings"][0]["value"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        value.starts_with("Counter { count: ") && value.ends_with(", label: \"ticks\" }"),
+        "{read}"
+    );
+    let text = read["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with(&format!("{}:", main.display())), "{text}");
+    assert!(text.contains("counter = Counter { count: "), "{text}");
+
+    // A binding the program never reaches says so.
+    let missing = client.call(
+        "inspect",
+        json!({ "path": "counter", "name": "nowhere", "timeout_ms": 300 }),
+    );
+    assert_eq!(missing["isError"], true, "{missing}");
+    assert!(
+        missing["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("where `nowhere` is in scope"),
+        "{missing}"
+    );
+    // Every binding in scope where the program is, and it still runs.
+    let read = client.call("inspect", json!({ "path": "counter", "timeout_ms": 5000 }));
+    assert_eq!(read["isError"], false, "{read}");
+    let names: Vec<&str> = read["structuredContent"]["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|binding| binding["name"].as_str())
+        .collect();
+    assert!(
+        names == ["counter", "names"] || names == ["counter", "step"],
+        "{read}"
+    );
+
+    let stopped = client.call("stop", json!({ "path": "counter" }));
+    assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());
 }

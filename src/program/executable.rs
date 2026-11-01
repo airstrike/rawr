@@ -105,7 +105,19 @@ impl Positions {
         entry: &'a crate::diagnostic::Source,
         error: &crate::EvalAltResult,
     ) -> Option<(&'a crate::diagnostic::Source, crate::Span)> {
-        let position = deepest_position(error);
+        self.locate_position(entry, deepest_position(error))
+    }
+
+    /// The source and span that `position` in the lowered program comes
+    /// from: in the entry source, `entry`, or in another source of the
+    /// program. It is `None` in code the compiler wrote around the
+    /// sources'.
+    #[must_use]
+    pub fn locate_position<'a>(
+        &'a self,
+        entry: &'a crate::diagnostic::Source,
+        position: crate::Position,
+    ) -> Option<(&'a crate::diagnostic::Source, crate::Span)> {
         if position.is_none() {
             return None;
         }

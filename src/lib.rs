@@ -125,6 +125,9 @@ pub mod future;
 pub mod grain;
 /// Host type metadata visible during Rawr resolution.
 pub mod host;
+/// Reading a running program's values for a debugger.
+#[cfg(feature = "debugging")]
+pub mod inspect;
 /// Source-level Rawr items.
 #[cfg(feature = "rust-import")]
 #[doc(hidden)]

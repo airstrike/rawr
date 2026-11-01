@@ -106,6 +106,8 @@ pub struct Session {
     pub arguments: Vec<String>,
     /// The pid of `rawr run`, which leads the session's group.
     pub pid: u32,
+    /// The socket the program answers `inspect` on.
+    pub socket: PathBuf,
     events: PathBuf,
     state: Mutex<State>,
     changed: Condvar,
@@ -154,6 +156,7 @@ impl Sessions {
             next_number()
         ));
         File::create(&events)?;
+        let socket = socket_directory()?.join("inspect.sock");
         let mut command = Command::new(std::env::current_exe()?);
         command
             .arg("run")
@@ -171,6 +174,7 @@ impl Sessions {
                 root.parent().unwrap_or(root)
             })
             .env(crate::events::EVENTS, &events)
+            .env(crate::events::INSPECT, &socket)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -180,6 +184,7 @@ impl Sessions {
             path: path.to_path_buf(),
             arguments: arguments.to_vec(),
             pid: child.id(),
+            socket,
             events,
             state: Mutex::new(State {
                 phase: Phase::Starting,
@@ -248,6 +253,22 @@ impl Sessions {
             session.stop();
         }
     }
+}
+
+/// A directory of the server's own for a session's socket: under the
+/// system's temporary directory, since a socket's path has a short limit,
+/// and readable by this user alone.
+fn socket_directory() -> std::io::Result<PathBuf> {
+    let directory =
+        std::env::temp_dir().join(format!("rawr-mcp-{}-{}", std::process::id(), next_number()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    Ok(directory)
 }
 
 fn next_number() -> u64 {
@@ -352,6 +373,9 @@ impl Session {
 
     /// End the session's group: SIGTERM, then SIGKILL after a grace.
     pub fn stop(&self) {
+        if let Some(directory) = self.socket.parent() {
+            let _ = std::fs::remove_dir_all(directory);
+        }
         {
             let mut state = self.state();
             if state.phase.is_over() {

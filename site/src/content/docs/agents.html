@@ -28,7 +28,8 @@
   <li><code>run</code> runs a command-line program to its end, with arguments and stdin.</li>
   <li><code>start</code> runs a window or a long-running program and keeps it running.</li>
   <li>After each save, <code>wait</code> says whether the program swapped, restarted or failed.</li>
-  <li><code>screenshot</code> shows its window, and <code>stop</code> ends it.</li>
+  <li><code>screenshot</code> shows its window, and <code>inspect</code> reads its values.</li>
+  <li><code>stop</code> ends it.</li>
 </ol>
 
 <h2 id="tools">The tools</h2>
@@ -43,6 +44,7 @@
   <tr><td><code>status</code></td><td>Says what each started program is doing, without waiting.</td></tr>
   <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
   <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone.</td></tr>
+  <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file.</td></tr>
 </table>
 <p>The events <code>wait</code> returns are these:</p>
 <ul>
@@ -54,6 +56,17 @@
   <li><code>ended</code>: the program ended, with its status. The next save runs it again.</li>
 </ul>
 <p>Each event has a number. <code>wait</code> goes on from the last event it returned, so an event that came between two calls is still returned. Pass <code>cursor</code> to start from another one.</p>
+
+<h2 id="inspect">Reading values</h2>
+<p><code>inspect</code> asks the running program for its values. The program answers at its next step in its own code. With <code>name</code>, it answers at the next step where that binding is in scope. With <code>file</code>, it answers at the next step in that file.</p>
+<div class="block"><pre><code>inspect  {"path": "counter", "name": "counter"}</code></pre></div>
+<div class="block"><pre><code>/work/counter/src/main.rs:16 in `counter::main`
+counter = Counter { count: 41, label: "ticks" }</code></pre></div>
+<ul>
+  <li>A value of the program&rsquo;s own type prints through its <code>Debug</code> impl or derive.</li>
+  <li>A value of a crate&rsquo;s type prints through the crate&rsquo;s <code>Debug</code> impl. A type without one says so, as rustc does: <code>`Window` doesn&rsquo;t implement `Debug`</code>.</li>
+  <li>A program waiting for input or for an event runs none of its own code. <code>inspect</code> then says nothing was read within <code>timeout_ms</code>. Call it again once the program runs.</li>
+</ul>
 
 <h2 id="example">An example session</h2>
 <p>An agent making a command-line tool calls these, in order:</p>
@@ -83,5 +96,6 @@ stop        {"path": "counter"}</code></pre></div>
   <li><code>start</code> refuses a program that draws a terminal UI, such as a <a href="/docs/ratatui">ratatui</a> app. Run it with <code>rawr run</code> in a terminal of your own.</li>
   <li>A screenshot uses macOS&rsquo;s window capture. macOS asks for Screen Recording permission for the app the agent runs in. Other systems have no such capture yet.</li>
   <li>One project has one started program at a time.</li>
+  <li><code>inspect</code> reads programs without Rust dependencies. A program with dependencies doesn&rsquo;t answer it yet.</li>
 </ul>
 </article>
