@@ -2470,6 +2470,9 @@ fn lower_with_context(
     optimization_level: crate::OptimizationLevel,
     #[cfg(feature = "rust-import")] mut imported: Option<ImportedContext<'_>>,
 ) -> Result<Output, LoweringFailure> {
+    // The name the program gave each generated function's receiver, which
+    // its body reads as `this`: a debugger reads it by that name (#534).
+    let mut receivers: BTreeMap<ImmutableString, ImmutableString> = BTreeMap::new();
     let mut symbol_rewrites: BTreeMap<ImmutableString, ImmutableString> = program
         .methods
         .iter()
@@ -2583,6 +2586,12 @@ fn lower_with_context(
             .parse_function_body(definition)
             .map_err(|error| LoweringFailure::original(shell.source, error.into()))?;
         let generated_name = function_name(shell.id);
+        if let Some(index) = this_parameter(definition) {
+            receivers.insert(
+                generated_name.as_str().into(),
+                definition.parameters[index].name.text.clone(),
+            );
+        }
         let body = write_function(
             &mut generated,
             shell.source,
@@ -2643,6 +2652,9 @@ fn lower_with_context(
         let lowered = parser
             .parse_method_body(definition)
             .map_err(|error| LoweringFailure::original(definition.source(), error.into()))?;
+        if definition.receiver().is_some() {
+            receivers.insert(method_name(definition.id()).into(), "self".into());
+        }
         let body = write_method(&mut generated, definition, &lowered, &models);
         retain_locations(
             &mut locations,
@@ -2771,8 +2783,15 @@ fn lower_with_context(
     }
 
     rewrite_statements(ast.statements_mut(), &rewrites, &nominal_patterns);
+    #[cfg(feature = "debugging")]
+    let named = engine.is_debugger_registered();
+    #[cfg(not(feature = "debugging"))]
+    let named = false;
     ast.for_each_fn_def_mut(|function| {
         rewrite_statements(function.body.statements_mut(), &rewrites, &nominal_patterns);
+        if named {
+            function.this_name = receivers.get(&function.name).cloned();
+        }
         if let Some(name) = rewrites.get(&function.name)
             && name.as_str() != NATIVE_ONLY
         {

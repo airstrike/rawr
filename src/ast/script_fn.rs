@@ -35,6 +35,10 @@ pub struct ScriptFuncDef {
     pub comments: crate::StaticVec<crate::SmartString>,
     /// The async body this function runs instead of `body`, once lowered.
     pub(crate) machine: Option<crate::Shared<crate::eval::machine::Machine>>,
+    /// The name the program gave the receiver `this` stands for: a `&mut`
+    /// parameter, or `self`. Kept only while a debugger is registered, so
+    /// it reads the receiver by that name (#534).
+    pub(crate) this_name: Option<ImmutableString>,
 }
 
 impl ScriptFuncDef {
@@ -52,6 +56,7 @@ impl ScriptFuncDef {
             #[cfg(feature = "metadata")]
             comments: <_>::default(),
             machine: None,
+            this_name: self.this_name.clone(),
         }
     }
 }

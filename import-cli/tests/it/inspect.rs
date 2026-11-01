@@ -55,6 +55,8 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("inspect-dependency");
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);
+    let events = root.join("debug-events");
+    let _ = fs::remove_file(&events);
     copy(Path::new(FIXTURE), &root);
     // A Unix socket's path is short: under the system's temp directory, as
     // `rawr mcp` makes it.
@@ -65,6 +67,7 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         &root,
         &[
             ("RAWR_MCP_INSPECT", socket.clone()),
+            ("RAWR_MCP_DEBUG_EVENTS", events.clone()),
             ("PUMP_STOP", stop.clone()),
         ],
     );
@@ -121,11 +124,30 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     let first = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
     let again = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
     assert_eq!(first["bindings"], again["bindings"], "{again}");
+    // The pause is told as an event (#535), and the answer lists the calls
+    // the program is in (#511).
+    let told = fs::read_to_string(&events).unwrap_or_default();
+    assert!(
+        told.lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .any(|event| event["event"] == "paused" && event["line"] == 18),
+        "{told}"
+    );
+    assert_eq!(
+        first["frames"][0],
+        json!({ "function": "inspect_dependency::update", "file": main, "line": 18 }),
+        "{first}"
+    );
     let step = ask(
         &socket,
         &json!({ "op": "step", "kind": "over", "timeout_ms": 5000 }),
     );
     assert_eq!(step["paused"]["line"], 19, "{step}");
+    let told = fs::read_to_string(&events).unwrap_or_default();
+    assert!(
+        told.lines().any(|line| line.contains("\"resumed\"")),
+        "{told}"
+    );
     // Past the function's end, the step pauses at the loop's next call.
     let step = ask(
         &socket,

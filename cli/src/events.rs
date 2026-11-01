@@ -28,6 +28,11 @@ pub const EVENTS: &str = "RAWR_MCP_EVENTS";
 /// ([`rawr::inspect`]): the process that runs the program serves it.
 pub const INSPECT: &str = "RAWR_MCP_INSPECT";
 
+/// The events file again, for the program's debugger: where it paused and
+/// when it went on (#535). The process that runs the program has it, which
+/// [`EVENTS`] leaves out so it doesn't report as an owner.
+pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
+
 /// The pid of the `rawr mcp` server that started this process.
 pub const PARENT: &str = "RAWR_MCP_PARENT";
 

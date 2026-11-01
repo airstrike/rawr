@@ -148,7 +148,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "wait",
-            "description": "Wait for what happens next to the started program: `running`, `queued` (a save reached a program whose native loop takes it at its next call into script code), `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call. Call it after each save.",
+            "description": "Wait for what happens next to the started program: `running`, `paused` (at a breakpoint or after a step, with its file and line), `resumed`, `queued` (a save reached a program whose native loop takes it at its next call into script code), `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call. Call it after each save.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -161,7 +161,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "status",
-            "description": "The programs this server started: each one's state, without waiting.",
+            "description": "The programs this server started: each one's state (`running`, `paused` with where, and so on), without waiting.",
             "inputSchema": { "type": "object", "properties": { "path": path_schema() } },
         }),
         json!({
@@ -182,13 +182,14 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "inspect",
-            "description": "Read the started program's values while it runs: the bindings in scope where it is, or one binding by `name`, each as Rust's `{:?}` prints it. The program answers at its next step in its own code; with `name` or `file`, at the next step where that binding is in scope or in that file. A program waiting for input or an event answers once it runs again.",
+            "description": "Read the started program's values while it runs: the bindings in scope where it is, or one binding by `name`, each as Rust's `{:?}` prints it. The program answers at its next step in its own code; with `name` or `file`, at the next step where that binding is in scope or in that file. The answer lists the calls the program is in; `frame` reads a caller's bindings: 0 is the function it is in, 1 its caller, and on. A program waiting for input or an event answers once it runs again.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": path_schema(),
                     "name": { "type": "string", "description": "A binding's name, such as a local or a parameter like `state`" },
                     "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
+                    "frame": { "type": "integer", "minimum": 0, "default": 0, "description": "Which call's bindings: 0 for the function the program is in, 1 for its caller, and on" },
                     "timeout_ms": milliseconds("How long to wait for the program to reach such a step", 2_000),
                 },
             },
@@ -454,6 +455,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             text("path"),
             text("name"),
             text("file"),
+            arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
             bounded(&arguments, "timeout_ms", 2_000),
         ),
         "break" | "step" | "continue" | "clear" => debug(server, name, &arguments),
@@ -668,6 +670,7 @@ fn status(server: &Server, path: Option<&str>) -> Value {
                 "args": session.arguments,
                 "pid": session.pid,
                 "state": session.phase().name(),
+                "paused": session.paused(),
             })
         })
         .collect();
@@ -676,12 +679,16 @@ fn status(server: &Server, path: Option<&str>) -> Value {
     } else {
         list.iter()
             .map(|entry| {
-                format!(
-                    "{}: {} (pid {})",
+                let mut line = format!(
+                    "{}: {}",
                     entry["root"].as_str().unwrap_or_default(),
                     entry["state"].as_str().unwrap_or_default(),
-                    entry["pid"]
-                )
+                );
+                if let Some(paused) = entry["paused"].as_object() {
+                    line.push_str(&format!(" {}", session::pause_text(paused)));
+                }
+                line.push_str(&format!(" (pid {})", entry["pid"]));
+                line
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -719,6 +726,7 @@ fn inspect(
     path: Option<&str>,
     name: Option<&str>,
     file: Option<&str>,
+    frame: u64,
     timeout: Duration,
 ) -> Result<Value, String> {
     let session = session(server, path)?;
@@ -726,11 +734,12 @@ fn inspect(
     let request = json!({
         "name": name,
         "file": file,
+        "frame": frame,
         "timeout_ms": timeout.as_millis() as u64,
     });
     let answer = ask(&session.socket, &request, timeout).map_err(|error| {
         let phase = session.phase();
-        if phase == session::Phase::Running {
+        if phase.is_live() {
             format!("cannot reach the running program: {error}")
         } else {
             format!(
@@ -744,10 +753,17 @@ fn inspect(
         let paused = &answer["paused"];
         if paused.is_object() {
             let mut missing = Vec::new();
-            if let Some(name) = name {
+            let depth = answer["depth"].as_u64().unwrap_or(1);
+            if frame >= depth {
+                missing.push(format!(
+                    "the program is {depth} frame{} deep, so there is no frame {frame}",
+                    if depth == 1 { "" } else { "s" }
+                ));
+            }
+            if let (true, Some(name)) = (missing.is_empty(), name) {
                 missing.push(format!("`{name}` isn't in scope"));
             }
-            if let Some(file) = &file {
+            if let (true, Some(file)) = (frame < depth, &file) {
                 missing.push(format!("it isn't in {}", file.display()));
             }
             return Err(format!(
@@ -758,6 +774,12 @@ fn inspect(
             ));
         }
         let mut place = String::new();
+        if frame > 0 {
+            place.push_str(&format!(
+                " {frame} call{} deep",
+                if frame == 1 { "" } else { "s" }
+            ));
+        }
         if let Some(name) = name {
             place.push_str(&format!(" where `{name}` is in scope"));
         }
@@ -791,12 +813,28 @@ fn inspect(
             )),
         }
     }
+    // The calls the program is in, when there is more than one: `frame`
+    // reads a caller's bindings.
+    let frames = answer["frames"].as_array().cloned().unwrap_or_default();
+    if frames.len() > 1 {
+        summary.push_str("frames (read one with `frame`):\n");
+        for (index, at) in frames.iter().enumerate() {
+            summary.push_str(&format!(
+                "  #{index} {} at {}:{}\n",
+                at["function"].as_str().unwrap_or("?"),
+                at["file"].as_str().unwrap_or("?"),
+                at["line"]
+            ));
+        }
+    }
     let structured = json!({
         "root": session.root,
+        "frame": answer["frame"],
         "file": answer["file"],
         "line": answer["line"],
         "function": answer["function"],
         "bindings": bindings,
+        "frames": frames,
     });
     Ok(content::success(structured, summary.trim_end(), Vec::new()))
 }
@@ -820,7 +858,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
     });
     let answer = ask(&session.socket, &request, timeout).map_err(|error| {
         let phase = session.phase();
-        if phase == session::Phase::Running {
+        if phase.is_live() {
             format!("cannot reach the running program: {error}")
         } else {
             format!(
@@ -880,6 +918,9 @@ fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String
         _ => String::new(),
     };
     let paused = &answer["paused"];
+    // `status` and `wait` say so at once, before the program's own event
+    // arrives (#535).
+    session.observe_pause(paused.as_object().map(|_| paused.clone()));
     if paused.is_object() {
         summary.push_str(&format!(
             "paused at {}:{}",

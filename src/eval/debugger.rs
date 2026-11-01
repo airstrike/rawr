@@ -241,16 +241,44 @@ impl BreakPoint {
 
 /// A function call.
 #[derive(Debug, Clone, Hash)]
+#[non_exhaustive]
 pub struct CallStackFrame {
     /// Function name.
     pub fn_name: ImmutableString,
-    /// Copies of function call arguments, if any.
+    /// Copies of a native function call's arguments, if any. A script
+    /// function's arguments are its bindings, read where its call keeps
+    /// them (#513).
     pub args: ThinVec<Dynamic>,
     /// Source of the function.
     pub source: Option<ImmutableString>,
     /// [Position][`Position`] of the function call.
     pub pos: Position,
+    /// Where a script function's bindings are while its call runs (#511).
+    pub(crate) bindings: Option<FrameBindings>,
 }
+
+/// Where a script function's call keeps its bindings: the scope its
+/// parameters went into, from `start`, and its receiver, which the program
+/// named `this_name` (a `&mut` parameter or `self`, #534).
+///
+/// The pointers are the call's own, valid while the call runs, which is
+/// while its frame is on the call stack. They are read only there, on the
+/// thread that runs the call, by the debugger callback of a step the call
+/// led to (`crate::inspect`). A copy of the call stack that can outlive the
+/// calls (`NativeCallContext::store_data`) drops them.
+#[derive(Debug, Clone, Hash)]
+pub(crate) struct FrameBindings {
+    pub(crate) scope: std::ptr::NonNull<Scope<'static>>,
+    pub(crate) start: usize,
+    pub(crate) this: Option<std::ptr::NonNull<Dynamic>>,
+    pub(crate) this_name: Option<ImmutableString>,
+}
+
+// SAFETY: the pointers are dereferenced only on the thread that runs the
+// call they point into, while it runs (see `FrameBindings`).
+unsafe impl Send for FrameBindings {}
+// SAFETY: as for `Send`.
+unsafe impl Sync for FrameBindings {}
 
 impl fmt::Display for CallStackFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -323,7 +351,33 @@ impl Debugger {
             args: args.into_iter().collect(),
             source,
             pos,
+            bindings: None,
         });
+    }
+    /// Add a script function's frame, whose bindings stay where its call
+    /// keeps them.
+    #[inline(always)]
+    pub(crate) fn push_script_frame(
+        &mut self,
+        fn_name: ImmutableString,
+        source: Option<ImmutableString>,
+        pos: Position,
+        bindings: FrameBindings,
+    ) {
+        self.call_stack.push(CallStackFrame {
+            fn_name,
+            args: ThinVec::new(),
+            source,
+            pos,
+            bindings: Some(bindings),
+        });
+    }
+    /// Forget where each call keeps its bindings, for a copy of this
+    /// debugger that can outlive the calls.
+    pub(crate) fn forget_bindings(&mut self) {
+        for frame in &mut self.call_stack {
+            frame.bindings = None;
+        }
     }
     /// Change the current status to [`CONTINUE`][DebuggerStatus::CONTINUE] and return the previous status.
     pub(crate) fn clear_status_if(
