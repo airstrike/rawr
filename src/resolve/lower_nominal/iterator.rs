@@ -850,13 +850,13 @@ impl Parser<'_> {
             if arguments.len() == expected {
                 Ok(())
             } else {
-                Err(Error::InvalidMethodCall {
-                    owner: "Iterator".into(),
-                    method: member.clone(),
-                    reason: format!("expects {expected} argument(s), found {}", arguments.len())
-                        .into(),
-                    call: expression,
-                })
+                Err(Error::argument_count(
+                    crate::resolve::Callee::Method,
+                    crate::resolve::Qualified("Iterator", &member).to_string(),
+                    expected,
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         let function = |inputs: Vec<Ty>, output: Ty| Ty::Fn {

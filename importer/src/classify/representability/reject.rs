@@ -51,6 +51,10 @@ pub enum Kind {
     /// `LocalKey::scope` returns a `TaskLocalFuture<T, F>`. A script
     /// future fills `F` with a type Rawr has no name for (D527).
     ScriptFutureType,
+    /// A closure parameter whose output is a future or a sipper, as
+    /// `sipper(f: F)` with `F: FnOnce(Sender<P>) -> Fut, Fut: Future` takes:
+    /// a script's `async` block has no Rust type to give it (#545).
+    FutureClosure,
     /// A `macro_rules!` macro: Rawr expands its source, so it has no native
     /// operation (the facade plan carries the source).
     MacroRules,
@@ -106,6 +110,7 @@ impl Kind {
             Self::UnsupportedConstant => "it is a constant of an unsupported type",
             Self::Extraction => "the importer couldn't extract it",
             Self::ScriptFutureType => "its signature names a future parameter's own type",
+            Self::FutureClosure => "it takes a closure that returns a future",
             Self::MacroRules => "it is a `macro_rules!` macro, which rawr expands from its source",
         }
     }
@@ -204,9 +209,10 @@ mod tests {
             Kind::UnsupportedConstant,
             Kind::Extraction,
             Kind::ScriptFutureType,
+            Kind::FutureClosure,
             Kind::MacroRules,
         ];
-        assert_eq!(kinds.len(), 44);
+        assert_eq!(kinds.len(), 45);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

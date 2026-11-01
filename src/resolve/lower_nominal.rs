@@ -18,6 +18,8 @@ use places::PlacePattern;
 mod reborrow;
 mod reverse;
 
+#[cfg(test)]
+mod argument_count_tests;
 #[cfg(all(test, feature = "rust-import"))]
 mod collected_tests;
 mod compare;
@@ -35,7 +37,7 @@ use super::borrowck::{
     record::{Matched, ScopeEnd},
     Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
 };
-use super::{intrinsic, item, type_ref, Error, LoweringFailure, Program};
+use super::{intrinsic, item, type_ref, Callee, Error, LoweringFailure, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
     NominalPayloadType, Stmt, NOMINAL_MATCH_SENTINEL,
@@ -4261,6 +4263,8 @@ fn model_clones() -> usize {
 #[derive(Clone)]
 struct ScriptFunction {
     key: crate::item::Key,
+    /// The file that defines it.
+    source: crate::program::source::Id,
     definition: item::Function,
     generated: ImmutableString,
 }
@@ -4431,6 +4435,7 @@ impl Models {
                     .expect("resolved functions retain stable item keys");
                 let script = ScriptFunction {
                     key: key.clone(),
+                    source: shell.source,
                     definition: function.clone(),
                     generated: function_name(shell.id).into(),
                 };
@@ -5164,6 +5169,8 @@ struct LiftedClosure {
     captures: Vec<origin::Fragment>,
     body: origin::Fragment,
     span: Span,
+    /// Its parameters from `|` to `|`.
+    header: Span,
     /// Whether its body reaches a place through a handle made where it is
     /// written (`places::held`), which its generated function has no way to
     /// be given.
@@ -10540,6 +10547,17 @@ type Tokens = Vec<(Token, Position)>;
 /// A call's argument tokens split after the first argument: the first,
 /// and the rest after its comma. Commas inside brackets, braces,
 /// parentheses, a turbofish or a closure's parameters do not split.
+/// How many arguments `tokens` gives, a trailing comma aside.
+fn argument_count(tokens: &Tokens) -> usize {
+    let mut rest = tokens.clone();
+    let mut count = 0;
+    while !rest.is_empty() {
+        rest = split_first_argument(rest).1;
+        count += 1;
+    }
+    count
+}
+
 fn split_first_argument(tokens: Tokens) -> (Tokens, Tokens) {
     let mut depth = 0usize;
     let mut angle = 0usize;
@@ -14351,17 +14369,14 @@ impl<'a> Parser<'a> {
             substitution.insert(parameter.clone(), argument.clone());
         }
         if arguments.len() != function.parameters.len() {
-            return Err(Error::InvalidMethodCall {
-                owner: self_ty.name(&self.models),
-                method: function.name.text.clone(),
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    function.parameters.len(),
-                    arguments.len()
-                )
-                .into(),
+            return Err(Error::argument_count(
+                Callee::AssociatedFunction,
+                crate::resolve::Qualified(&self_ty.name(&self.models), &function.name.text)
+                    .to_string(),
+                function.parameters.len(),
+                arguments.len(),
                 call,
-            });
+            ));
         }
         for (argument, parameter) in arguments.iter_mut().zip(function.parameters.iter()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
@@ -15159,15 +15174,19 @@ impl<'a> Parser<'a> {
         }
         let (arguments, close) = self.take_argument_tokens()?;
         let call = span(start, close);
-        let expects = |count: usize, found: usize| Error::InvalidMethodCall {
-            owner: trait_name.into(),
-            method: member.into(),
-            reason: format!("expects {count} argument(s), found {found}").into(),
-            call,
+        let found = argument_count(&arguments);
+        let expects = |count: usize| {
+            Error::argument_count(
+                Callee::AssociatedFunction,
+                crate::resolve::Qualified(trait_name, member).to_string(),
+                count,
+                found,
+                call,
+            )
         };
         if trait_name == "Default" {
             if !arguments.is_empty() {
-                return Err(expects(0, 1));
+                return Err(expects(0));
             }
             // The type is the expected one, fixed by inference: the default
             // is written once it is known.
@@ -15183,7 +15202,7 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(origin::Fragment::plain(placeholder), ty, call));
         }
         if arguments.is_empty() {
-            return Err(expects(1, 0));
+            return Err(expects(1));
         }
         let identifier = |name: &str| Token::Identifier(Box::new(name.into()));
         let mut tokens = vec![(Token::LeftParen, start)];
@@ -15193,7 +15212,7 @@ impl<'a> Parser<'a> {
             ("From" | "Into" | "Clone" | "ToString", _) => {
                 let (receiver, rest) = split_first_argument(arguments);
                 if !rest.is_empty() {
-                    return Err(expects(1, 2));
+                    return Err(expects(1));
                 }
                 let receiver = if matches!(trait_name, "From" | "Into") {
                     receiver
@@ -15217,7 +15236,7 @@ impl<'a> Parser<'a> {
             ("Ord", "min" | "max" | "clamp") | ("cmp", _) => {
                 let (left, right) = split_first_argument(arguments);
                 if right.is_empty() {
-                    return Err(expects(if member == "clamp" { 3 } else { 2 }, 1));
+                    return Err(expects(if member == "clamp" { 3 } else { 2 }));
                 }
                 tokens.extend(left);
                 tokens.extend([
@@ -15234,7 +15253,7 @@ impl<'a> Parser<'a> {
                 let (left, right) = split_first_argument(arguments);
                 let (right, extra) = split_first_argument(right);
                 if right.is_empty() || !extra.is_empty() {
-                    return Err(expects(2, if right.is_empty() { 1 } else { 3 }));
+                    return Err(expects(2));
                 }
                 tokens.extend(without_reference(left));
                 tokens.extend([
@@ -15251,7 +15270,7 @@ impl<'a> Parser<'a> {
                 let (left, right) = split_first_argument(arguments);
                 let (right, extra) = split_first_argument(right);
                 if right.is_empty() || !extra.is_empty() {
-                    return Err(expects(2, if right.is_empty() { 1 } else { 3 }));
+                    return Err(expects(2));
                 }
                 let operator = match member {
                     "eq" => Token::EqualsTo,
@@ -15277,7 +15296,7 @@ impl<'a> Parser<'a> {
                 let (value, formatter) = split_first_argument(arguments);
                 let (formatter, extra) = split_first_argument(formatter);
                 if formatter.is_empty() || !extra.is_empty() {
-                    return Err(expects(2, 1));
+                    return Err(expects(2));
                 }
                 if self.formatter.is_none() {
                     return Err(Error::UnsupportedNominalSyntax {
@@ -15427,14 +15446,16 @@ impl<'a> Parser<'a> {
             // `x` as written, coerced to its type, then `.into()`, ended by
             // a `;` that stops the postfix loop.
             let (arguments, close) = self.take_argument_tokens()?;
+            let found = argument_count(&arguments);
             let (argument, rest) = split_first_argument(arguments);
             if argument.is_empty() || !rest.is_empty() {
-                return Err(Error::InvalidMethodCall {
-                    owner: trait_name.into(),
-                    method: (*member).into(),
-                    reason: "expects 1 argument(s)".into(),
-                    call: span(start, close),
-                });
+                return Err(Error::argument_count(
+                    Callee::AssociatedFunction,
+                    crate::resolve::Qualified(trait_name, member).to_string(),
+                    1,
+                    found,
+                    span(start, close),
+                ));
             }
             let mut tokens = vec![(Token::LeftParen, start)];
             tokens.extend(argument);
@@ -15710,17 +15731,13 @@ impl<'a> Parser<'a> {
             });
         };
         if arguments.len() != function.parameters.len() {
-            return Err(Error::InvalidMethodCall {
-                owner: param.clone(),
-                method: function.name.text.clone(),
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    function.parameters.len(),
-                    arguments.len()
-                )
-                .into(),
-                call,
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(param, &function.name.text).to_string(),
+                function.parameters.len(),
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         }
         // A trait object's value is unsized: it cannot be moved out.
         if matches!(self_ty, Ty::Dyn(..))
@@ -19133,11 +19150,17 @@ impl<'a> Parser<'a> {
             _ => 1,
         };
         if arguments.len() != expected {
-            return Err(Error::InvalidHostOperation {
-                item: path.into(),
-                reason: format!("expects {expected} argument(s), found {}", arguments.len()).into(),
-                operation: call,
-            });
+            return Err(Error::argument_count(
+                if receiver.is_some() {
+                    Callee::Method
+                } else {
+                    Callee::Function
+                },
+                path,
+                expected,
+                arguments.len(),
+                call,
+            ));
         }
         let mut closure = arguments.pop().expect("the closure argument is present");
         // A host call through `items` of `path`, with `arguments` parsed.
@@ -19390,16 +19413,13 @@ impl<'a> Parser<'a> {
         self.host_turbofish = None;
         let (item, signature) = selected?;
         if signature.inputs.len() != arguments.len() {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    signature.inputs.len(),
-                    arguments.len()
-                )
-                .into(),
-                operation: call,
-            });
+            return Err(Error::argument_count(
+                Callee::Function,
+                item.path(),
+                signature.inputs.len(),
+                arguments.len(),
+                call,
+            ));
         }
         for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
             #[cfg(feature = "rust-import")]
@@ -20966,16 +20986,13 @@ impl<'a> Parser<'a> {
             }
         }
         if signature.inputs.len() != arguments.len() {
-            return Err(Error::InvalidHostOperation {
-                item: item.path().into(),
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    signature.inputs.len(),
-                    arguments.len()
-                )
-                .into(),
-                operation: call,
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                item.path(),
+                signature.inputs.len(),
+                arguments.len(),
+                span(member_span.start(), call.end()),
+            ));
         }
         for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
             // An array where the method takes a slice or an iterable, as
@@ -32496,12 +32513,13 @@ impl<'a> Parser<'a> {
         let ty = self.inference.resolve(&value.ty);
         let count = if member.as_str() == "clamp" { 2 } else { 1 };
         if arguments.len() != count {
-            return Err(Error::InvalidMethodCall {
-                owner: ty.name(&self.models),
-                method: member,
-                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
-                call,
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(&ty.name(&self.models), &member).to_string(),
+                count,
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         }
         for argument in &mut arguments {
             self.coerce_expr(&ty, argument)?;
@@ -32672,13 +32690,14 @@ impl<'a> Parser<'a> {
                         self.coerce_expr(&input, argument)?;
                         (argument.rendered_source(), end)
                     }
-                    _ => {
-                        return Err(Error::InvalidMethodCall {
-                            owner: time.name().into(),
-                            method: member,
-                            reason: format!("found {} argument(s)", arguments.len()).into(),
-                            call: span(path.start(), end),
-                        })
+                    (input, _) => {
+                        return Err(Error::argument_count(
+                            Callee::AssociatedFunction,
+                            crate::resolve::Qualified(time.name(), &member).to_string(),
+                            usize::from(input != Ty::Unit),
+                            arguments.len(),
+                            span(path.start(), end),
+                        ))
                     }
                 }
             }
@@ -32763,13 +32782,14 @@ impl<'a> Parser<'a> {
                 self.coerce_expr(&input, argument)?;
                 argument.rendered_source()
             }
-            _ => {
-                return Err(Error::InvalidMethodCall {
-                    owner: time.name().into(),
-                    method: member,
-                    reason: format!("found {} argument(s)", arguments.len()).into(),
-                    call: span(value.span.start(), end),
-                })
+            (input, _) => {
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified(time.name(), &member).to_string(),
+                    usize::from(input.is_some()),
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         let source = self.prelude_op(
@@ -32866,12 +32886,13 @@ impl<'a> Parser<'a> {
         let (mut arguments, end) = self.parse_call_arguments("comparison arguments")?;
         let call = span(value.span.start(), end);
         if arguments.len() != 1 {
-            return Err(Error::InvalidMethodCall {
-                owner: compared.name(&self.models),
-                method: member,
-                reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(&compared.name(&self.models), &member).to_string(),
+                1,
+                arguments.len(),
                 call,
-            });
+            ));
         }
         let mut other = arguments.remove(0);
         let target = match self.inference.resolve(&compared) {
@@ -33070,7 +33091,13 @@ impl<'a> Parser<'a> {
         };
         let (arguments, end) = self.parse_call_arguments("number method arguments")?;
         let [argument] = arguments.as_slice() else {
-            return Err(self.unsupported("a power method without exactly one argument"));
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(&number.name(&self.models), &member).to_string(),
+                1,
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         };
         self.require_type(&exponent, &argument.ty, argument.span)?;
         // A `u64`'s bits and an `i128` or a `u128` past `i64`: `INT_METHODS`.
@@ -33115,12 +33142,13 @@ impl<'a> Parser<'a> {
                 argument.rendered_source()
             }
             _ => {
-                return Err(Error::InvalidMethodCall {
-                    owner: kind.name().into(),
-                    method: name.into(),
-                    reason: "wrong number of arguments".into(),
-                    call: member_span,
-                })
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified(kind.name(), name).to_string(),
+                    usize::from(operand != 'n'),
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         if name == "is_power_of_two" && kind.signed()
@@ -33185,12 +33213,13 @@ impl<'a> Parser<'a> {
         let (mut arguments, end) = self.parse_call_arguments("range method arguments")?;
         let expected = if code == 2 { 1 } else { 0 };
         if arguments.len() != expected {
-            return Err(Error::InvalidMethodCall {
-                owner: range.name(&self.models),
-                method: member,
-                reason: format!("expects {expected} argument(s), found {}", arguments.len()).into(),
-                call: span(value.span.start(), end),
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(&range.name(&self.models), &member).to_string(),
+                expected,
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         }
         let call = span(value.span.start(), end);
         if code == 4 {
@@ -33246,12 +33275,16 @@ impl<'a> Parser<'a> {
                 "()".into()
             }
             _ => {
-                return Err(Error::InvalidMethodCall {
-                    owner: "char".into(),
-                    method: name.into(),
-                    reason: "wrong number of arguments".into(),
-                    call: member_span,
-                })
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified("char", name).to_string(),
+                    usize::from(matches!(
+                        name,
+                        "to_digit" | "is_digit" | "eq_ignore_ascii_case"
+                    )),
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         let ty = match output {
@@ -33283,12 +33316,13 @@ impl<'a> Parser<'a> {
         let (arguments, end) = self.parse_call_arguments("`parse` arguments")?;
         let expression = span(value.span.start(), end);
         if !arguments.is_empty() {
-            return Err(Error::InvalidMethodCall {
-                owner: "str".into(),
-                method: "parse".into(),
-                reason: format!("expects 0 argument(s), found {}", arguments.len()).into(),
-                call: expression,
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified("str", "parse").to_string(),
+                0,
+                arguments.len(),
+                expression,
+            ));
         }
         let error = self.inference.fresh();
         self.pending_parses
@@ -33499,13 +33533,13 @@ impl<'a> Parser<'a> {
             {
                 let (_, count, output) = STR_METHODS[code];
                 if arguments.len() != count {
-                    return Err(Error::InvalidMethodCall {
-                        owner: "str".into(),
-                        method: member,
-                        reason: format!("expects {count} argument(s), found {}", arguments.len())
-                            .into(),
-                        call: expression,
-                    });
+                    return Err(Error::argument_count(
+                        Callee::Method,
+                        crate::resolve::Qualified("str", &member).to_string(),
+                        count,
+                        arguments.len(),
+                        span(member_span.start(), end),
+                    ));
                 }
                 let mut operands = vec![value.rendered_source(), code.to_string().into()];
                 for argument in &arguments {
@@ -34252,12 +34286,13 @@ impl<'a> Parser<'a> {
             {
                 let (mut arguments, end) = self.parse_call_arguments("`write_str` arguments")?;
                 let [text] = arguments.as_mut_slice() else {
-                    return Err(Error::InvalidMethodCall {
-                        owner: "Formatter".into(),
-                        method: member,
-                        reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
-                        call: span(value.span.start(), end),
-                    });
+                    return Err(Error::argument_count(
+                        Callee::Method,
+                        crate::resolve::Qualified("Formatter", &member).to_string(),
+                        1,
+                        arguments.len(),
+                        span(value.span.start(), end),
+                    ));
                 };
                 self.strip_string_reference(text);
                 self.require_type(&Ty::String, &text.ty, text.span)?;
@@ -34631,12 +34666,13 @@ impl<'a> Parser<'a> {
                 let (mut arguments, end) = self.parse_call_arguments("comparison arguments")?;
                 let call = span(value.span.start(), end);
                 let [other] = arguments.as_mut_slice() else {
-                    return Err(Error::InvalidMethodCall {
-                        owner: number.name(&self.models),
-                        method: member,
-                        reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                    return Err(Error::argument_count(
+                        Callee::Method,
+                        crate::resolve::Qualified(&number.name(&self.models), &member).to_string(),
+                        1,
+                        arguments.len(),
                         call,
-                    });
+                    ));
                 };
                 let mut other = other.clone();
                 while let Ty::Reference { target, .. } = self.inference.resolve(&other.ty) {
@@ -34860,16 +34896,13 @@ impl<'a> Parser<'a> {
                     }
                 };
                 if !args.is_empty() {
-                    return Err(Error::InvalidMethodCall {
-                        owner: model.name().into(),
-                        method: member,
-                        reason: format!(
-                            "capability method expects 0 argument(s), found {}",
-                            args.len()
-                        )
-                        .into(),
-                        call: span(value.span.start(), end),
-                    });
+                    return Err(Error::argument_count(
+                        Callee::Method,
+                        crate::resolve::Qualified(model.name(), &member).to_string(),
+                        0,
+                        args.len(),
+                        span(member_span.start(), end),
+                    ));
                 }
                 self.require_capability(&model, capability, member_span)?;
                 if capability == capability::Kind::Clone {
@@ -36020,12 +36053,13 @@ impl<'a> Parser<'a> {
             let (mut arguments, end) = self.parse_call_arguments("`sleep` arguments")?;
             let call = span(name_span.start(), end);
             let [duration] = arguments.as_mut_slice() else {
-                return Err(Error::InvalidMethodCall {
-                    owner: "std::thread".into(),
-                    method: "sleep".into(),
-                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                return Err(Error::argument_count(
+                    Callee::Function,
+                    crate::resolve::Qualified("std::thread", "sleep").to_string(),
+                    1,
+                    arguments.len(),
                     call,
-                });
+                ));
             };
             self.coerce_expr(&Ty::Time(Time::Duration), duration)?;
             let code = time_code("sleep").to_string();
@@ -36538,12 +36572,13 @@ impl<'a> Parser<'a> {
         let call = span(name_span.start(), end);
         let count = usize::from(function == "size_of_val");
         if arguments.len() != count {
-            return Err(Error::InvalidMethodCall {
-                owner: "std::mem".into(),
-                method: function.into(),
-                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+            return Err(Error::argument_count(
+                Callee::Function,
+                crate::resolve::Qualified("std::mem", function).to_string(),
+                count,
+                arguments.len(),
                 call,
-            });
+            ));
         }
         let ty = match arguments.first_mut() {
             Some(argument) => {
@@ -36585,12 +36620,13 @@ impl<'a> Parser<'a> {
         let call = span(name_span.start(), end);
         let count = if function == "take" { 1 } else { 2 };
         if arguments.len() != count {
-            return Err(Error::InvalidMethodCall {
-                owner: "std::mem".into(),
-                method: function.into(),
-                reason: format!("expects {count} argument(s), found {}", arguments.len()).into(),
+            return Err(Error::argument_count(
+                Callee::Function,
+                crate::resolve::Qualified("std::mem", function).to_string(),
+                count,
+                arguments.len(),
                 call,
-            });
+            ));
         }
         let borrowed = if function == "swap" { 2 } else { 1 };
         let places = self.mutable_arguments(&arguments, 0..borrowed)?;
@@ -37596,6 +37632,26 @@ impl<'a> Parser<'a> {
                 .map(|function| function.definition.clone()),
             _ => None,
         };
+        // rustc's E0061 for a function's value or a `fn` pointer, and E0057
+        // for a closure, at its definition where this file has it.
+        let (callee_kind, definition) = match &ty {
+            Ty::FnItem { key, .. } => match self.models.functions_by_key.get(&**key) {
+                Some(function) => (
+                    Callee::Function,
+                    (function.source == self.models.context)
+                        .then_some(function.definition.name.span),
+                ),
+                None => (
+                    Callee::Closure,
+                    self.lifted
+                        .iter()
+                        .find(|lifted| lifted.key == **key)
+                        .map(|lifted| lifted.header),
+                ),
+            },
+            Ty::FnChoice { .. } => (Callee::Function, None),
+            _ => (Callee::Closure, None),
+        };
         let (Ty::Fn { inputs, output }
         | Ty::FnItem { inputs, output, .. }
         | Ty::FnChoice { inputs, output, .. }) = ty
@@ -37624,16 +37680,13 @@ impl<'a> Parser<'a> {
         };
         let call = span(name_span.start(), end);
         if arguments.len() != inputs.len() {
-            return Err(Error::InvalidMethodCall {
-                owner: ImmutableString::new(),
-                method: name,
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    inputs.len(),
-                    arguments.len()
-                )
-                .into(),
+            return Err(Error::ArgumentCount {
+                callee: callee_kind,
+                name,
+                expected: inputs.len(),
+                found: arguments.len(),
                 call,
+                definition,
             });
         }
         for (expected, argument) in inputs.iter().zip(arguments.iter_mut()) {
@@ -38275,11 +38328,13 @@ impl<'a> Parser<'a> {
             self.expect(Token::RightParen, "')' after tuple struct fields")?
         };
         if args.len() != arity {
-            return Err(Error::InvalidConstruction {
-                owner: definition.name().into(),
-                reason: format!("expects {arity} field(s), found {}", args.len()).into(),
-                construction: span(expression.start(), end),
-            });
+            return Err(Error::argument_count(
+                Callee::Struct,
+                definition.name(),
+                arity,
+                args.len(),
+                span(expression.start(), end),
+            ));
         }
         for (value, expected) in args.iter_mut().zip(inputs.iter()) {
             self.coerce_expr(expected, value)?;
@@ -38839,16 +38894,13 @@ impl<'a> Parser<'a> {
         let (mut arguments, end) = self.parse_call_arguments("prelude variant arguments")?;
         let expression = span(start.start(), end);
         let [value] = arguments.as_mut_slice() else {
-            return Err(Error::InvalidConstruction {
-                owner: variant.owner().into(),
-                reason: format!(
-                    "`{}` takes 1 value, found {}",
-                    variant.name(),
-                    arguments.len()
-                )
-                .into(),
-                construction: expression,
-            });
+            return Err(Error::argument_count(
+                Callee::Variant,
+                variant.name(),
+                1,
+                arguments.len(),
+                expression,
+            ));
         };
         let stored = match variant {
             Prelude::Some | Prelude::None => "stored in an `Option`",
@@ -39131,13 +39183,13 @@ impl<'a> Parser<'a> {
             if arguments.len() == expected {
                 Ok(())
             } else {
-                Err(Error::InvalidMethodCall {
-                    owner: "Option".into(),
-                    method: member.clone(),
-                    reason: format!("expects {expected} argument(s), found {}", arguments.len())
-                        .into(),
-                    call: expression,
-                })
+                Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified("Option", &member).to_string(),
+                    expected,
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         let o = self.temporary("option");
@@ -39539,12 +39591,13 @@ impl<'a> Parser<'a> {
         self.closure_hints = Vec::new();
         let expression = span(value.span.start(), end);
         let [argument] = arguments.as_mut_slice() else {
-            return Err(Error::InvalidMethodCall {
-                owner: "bool".into(),
-                method: member,
-                reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
-                call: expression,
-            });
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified("bool", &member).to_string(),
+                1,
+                arguments.len(),
+                expression,
+            ));
         };
         let element = self.inference.fresh();
         let produced = if member.as_str() == "then_some" {
@@ -39617,13 +39670,13 @@ impl<'a> Parser<'a> {
             if arguments.len() == expected {
                 Ok(())
             } else {
-                Err(Error::InvalidMethodCall {
-                    owner: "Result".into(),
-                    method: member.clone(),
-                    reason: format!("expects {expected} argument(s), found {}", arguments.len())
-                        .into(),
-                    call: expression,
-                })
+                Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified("Result", &member).to_string(),
+                    expected,
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         // `unwrap` and `expect` show the other variant's value, so it must be
@@ -40602,12 +40655,17 @@ impl<'a> Parser<'a> {
             self.closure_hints = Vec::new();
             let (mut arguments, end) = arguments?;
             let [callable] = arguments.as_mut_slice() else {
-                return Err(Error::InvalidMethodCall {
-                    owner: self.inference.resolve(&value.ty).name(&self.models),
-                    method: member,
-                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
-                    call: span(value.span.start(), end),
-                });
+                return Err(Error::argument_count(
+                    Callee::Method,
+                    crate::resolve::Qualified(
+                        &self.inference.resolve(&value.ty).name(&self.models),
+                        &member,
+                    )
+                    .to_string(),
+                    1,
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ));
             };
             let output = self.inference.fresh();
             let (item, items) = (self.temporary("map"), self.temporary("map"));
@@ -41572,6 +41630,8 @@ impl<'a> Parser<'a> {
         let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
         let mut patterns = Vec::<(usize, PatternSyntax)>::new();
+        // `|a, b|` as rustc's note on a call of it shows it.
+        let mut header = start;
         if token == Token::Pipe {
             while !matches!(self.peek(), Token::Pipe) {
                 let (name, declaration) = if matches!(self.peek(), Token::Underscore) {
@@ -41612,7 +41672,7 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("closure parameters without ','"));
                 }
             }
-            self.next();
+            header = span(start.start(), text_end(self.next().1, "|"));
         }
         let annotated = if matches!(self.peek(), Token::ThinArrow) {
             self.next();
@@ -42061,6 +42121,7 @@ impl<'a> Parser<'a> {
                     captures,
                     body: body_block,
                     span: expression,
+                    header,
                     held: !scope.held.is_empty(),
                 });
                 Ty::FnItem {
@@ -42224,12 +42285,13 @@ impl<'a> Parser<'a> {
             let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
             let call = span(name_span.start(), end);
             let [argument] = arguments.as_mut_slice() else {
-                return Err(Error::InvalidMethodCall {
-                    owner: ImmutableString::new(),
-                    method: name,
-                    reason: format!("expects 1 argument, found {}", arguments.len()).into(),
+                return Err(Error::argument_count(
+                    Callee::Function,
+                    name,
+                    1,
+                    arguments.len(),
                     call,
-                });
+                ));
             };
             self.move_local(argument)?;
             // A value with drop glue runs it here.
@@ -42295,16 +42357,14 @@ impl<'a> Parser<'a> {
         let mut witnesses = Vec::new();
         let output = if let Some(function) = function {
             if arguments.len() != function.definition.parameters.len() {
-                return Err(Error::InvalidMethodCall {
-                    owner: ImmutableString::new(),
-                    method: function.definition.name.text,
-                    reason: format!(
-                        "expects {} argument(s), found {}",
-                        function.definition.parameters.len(),
-                        arguments.len()
-                    )
-                    .into(),
+                return Err(Error::ArgumentCount {
+                    callee: Callee::Function,
+                    expected: function.definition.parameters.len(),
+                    found: arguments.len(),
                     call: span(name_span.start(), end),
+                    definition: (function.source == self.models.context)
+                        .then_some(function.definition.name.span),
+                    name: function.definition.name.text,
                 });
             }
             // A generic function's parameters are fresh at each call, as
@@ -43468,16 +43528,20 @@ impl<'a> Parser<'a> {
         substitution: &BTreeMap<ImmutableString, Ty>,
     ) -> Result<(), Error> {
         if arguments.len() != definition.parameters().len() {
-            return Err(Error::InvalidMethodCall {
-                owner: definition.owner_name().into(),
-                method: definition.name().into(),
-                reason: format!(
-                    "expects {} argument(s), found {}",
-                    definition.parameters().len(),
-                    arguments.len()
-                )
-                .into(),
+            return Err(Error::ArgumentCount {
+                callee: if definition.receiver().is_some() {
+                    Callee::Method
+                } else {
+                    Callee::AssociatedFunction
+                },
+                name: crate::resolve::Qualified(definition.owner_name(), definition.name())
+                    .to_string()
+                    .into(),
+                expected: definition.parameters().len(),
+                found: arguments.len(),
                 call,
+                definition: (definition.source() == self.models.context)
+                    .then_some(definition.name_span()),
             });
         }
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
@@ -44495,12 +44559,13 @@ impl<'a> Parser<'a> {
                     ("once", [value]) => value.ty.clone(),
                     ("empty", []) => self.inference.fresh(),
                     _ => {
-                        return Err(Error::InvalidMethodCall {
-                            owner: "std::iter".into(),
-                            method: member.into(),
-                            reason: format!("found {} argument(s)", arguments.len()).into(),
+                        return Err(Error::argument_count(
+                            Callee::Function,
+                            crate::resolve::Qualified("std::iter", member).to_string(),
+                            usize::from(member == "once"),
+                            arguments.len(),
                             call,
-                        })
+                        ))
                     }
                 };
                 let values =
@@ -44717,13 +44782,13 @@ impl<'a> Parser<'a> {
                     let (mut arguments, end) = self.parse_call_arguments("`from` arguments")?;
                     let call = span(owner_span.start(), end);
                     let [argument] = arguments.as_mut_slice() else {
-                        return Err(Error::InvalidMethodCall {
-                            owner: full.into(),
-                            method: member,
-                            reason: format!("expects 1 argument(s), found {}", arguments.len())
-                                .into(),
+                        return Err(Error::argument_count(
+                            Callee::AssociatedFunction,
+                            crate::resolve::Qualified(&full, &member).to_string(),
+                            1,
+                            arguments.len(),
                             call,
-                        });
+                        ));
                     };
                     let source = self.inference.resolve(&argument.ty);
                     let Some((conversion, from, owner)) =
@@ -45168,12 +45233,13 @@ impl<'a> Parser<'a> {
             let (mut arguments, end) = self.parse_call_arguments("`from` arguments")?;
             let call = span(owner_span.start(), end);
             let [argument] = arguments.as_mut_slice() else {
-                return Err(Error::InvalidMethodCall {
-                    owner: model.name().into(),
-                    method: member,
-                    reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
+                return Err(Error::argument_count(
+                    Callee::AssociatedFunction,
+                    crate::resolve::Qualified(model.name(), &member).to_string(),
+                    1,
+                    arguments.len(),
                     call,
-                });
+                ));
             };
             let source = self.inference.resolve(&argument.ty);
             let Some((definition, from, owner)) =
@@ -45500,17 +45566,13 @@ impl<'a> Parser<'a> {
             member_span.end()
         };
         if args.len() != declaration.payload.len() {
-            return Err(Error::InvalidConstruction {
-                owner: definition.name().into(),
-                reason: format!(
-                    "variant `{}` expects {} value(s), found {}",
-                    declaration.name.text,
-                    declaration.payload.len(),
-                    args.len()
-                )
-                .into(),
-                construction: span(owner_span.start(), end),
-            });
+            return Err(Error::argument_count(
+                Callee::Variant,
+                crate::resolve::Qualified(definition.name(), &declaration.name.text).to_string(),
+                declaration.payload.len(),
+                args.len(),
+                span(owner_span.start(), end),
+            ));
         }
         let (enum_ty, substitution) = self.fresh_nominal(
             &Nominal::Enum {

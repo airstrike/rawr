@@ -432,13 +432,13 @@ impl Parser<'_> {
             if arguments.len() == expected {
                 Ok(())
             } else {
-                Err(Error::InvalidMethodCall {
-                    owner: kind.name().into(),
-                    method: member.clone(),
-                    reason: format!("expects {expected} argument(s), found {}", arguments.len())
-                        .into(),
-                    call: expression,
-                })
+                Err(Error::argument_count(
+                    crate::resolve::Callee::Method,
+                    crate::resolve::Qualified(kind.name(), &member).to_string(),
+                    expected,
+                    arguments.len(),
+                    span(member_span.start(), end),
+                ))
             }
         };
         let receiver = value.rendered_source().surrounded("(", ")");
@@ -695,12 +695,13 @@ impl Parser<'_> {
     ) -> Result<ParsedExpr, Error> {
         let (mut arguments, mut end) = self.parse_call_arguments("`entry` arguments")?;
         let [key] = arguments.as_mut_slice() else {
-            return Err(Error::InvalidMethodCall {
-                owner: kind.name().into(),
-                method: "entry".into(),
-                reason: format!("expects 1 argument(s), found {}", arguments.len()).into(),
-                call: span(value.span.start(), end),
-            });
+            return Err(Error::argument_count(
+                crate::resolve::Callee::Method,
+                crate::resolve::Qualified(kind.name(), "entry").to_string(),
+                1,
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         };
         self.coerce_expr(&types[0], key)?;
         self.require_key(kind, &types[0], key.span)?;

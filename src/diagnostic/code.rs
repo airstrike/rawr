@@ -112,6 +112,8 @@ codes!(Resolve;
     (RESOLVE_ASYNC_MAIN, "E0752", "An `async fn main` with no runtime's entry, as rustc reports it."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
+    (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
+    (RESOLVE_CLOSURE_ARGUMENT_COUNT, "E0057", "A call with more or fewer arguments than its closure takes, as rustc reports it."),
     (RESOLVE_MODULE_GRAPH, "RAWR-RESOLVE-MODULE-GRAPH", "Invalid static file-module graph."),
     (RESOLVE_PACKAGE_CYCLE, "RAWR-RESOLVE-PACKAGE-CYCLE", "Cyclic local package dependency."),
     (RESOLVE_PACKAGE_IDENTITY, "RAWR-RESOLVE-PACKAGE-IDENTITY", "Conflicting stable package identity."),

@@ -183,8 +183,8 @@ fn method_owner_arguments_arity_and_call_form_are_compile_checked() {
         ),
         (
             "struct Counter { value: i64 } impl Counter { fn set(&mut self, value: i64) {} } let mut counter = Counter { value: 0 }; counter.set();",
-            Category::InvalidMethodCall,
-            "expects 1 argument(s), found 0",
+            Category::ArgumentCount,
+            "this method takes 1 argument but 0 arguments were supplied",
         ),
         (
             "struct Counter { value: i64 } struct Other { value: i64 } impl Counter { fn value(&self) -> i64 { self.value } } Other { value: 1 }.value()",

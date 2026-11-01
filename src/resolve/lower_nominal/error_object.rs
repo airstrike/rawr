@@ -190,12 +190,13 @@ impl Parser<'_> {
         let (arguments, end) = self.parse_call_arguments("`dyn Error` method arguments")?;
         let call = span(value.span.start(), end);
         if !arguments.is_empty() {
-            return Err(Error::InvalidMethodCall {
-                owner: "dyn Error".into(),
-                method: member,
-                reason: format!("expects 0 argument(s), found {}", arguments.len()).into(),
-                call,
-            });
+            return Err(Error::argument_count(
+                crate::resolve::Callee::Method,
+                crate::resolve::Qualified("dyn Error", &member).to_string(),
+                0,
+                arguments.len(),
+                span(member_span.start(), end),
+            ));
         }
         match member.as_str() {
             "to_string" => {

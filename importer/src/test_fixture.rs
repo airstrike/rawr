@@ -1482,6 +1482,150 @@ pub fn future_parameter_functions() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes the future parameter fixture")
 }
 
+/// Two free functions that take a closure, as iced's `sipper` does:
+/// `fixture::sip<F, R>(make: F) -> i64` with `F: FnOnce() -> R, R:
+/// Future`, whose closure returns a future, and `fixture::ready<F, R>(make:
+/// F) -> i64` with `F: FnOnce() -> R`, whose closure returns a value (#545).
+pub fn future_closure_functions() -> api::Graph<api::Extracted> {
+    let future = sysroot_definition("a0", identity::Namespace::Type, "core");
+    let fn_once = sysroot_definition("a1", identity::Namespace::Type, "core");
+    let output = sysroot_definition("a2", identity::Namespace::Type, "core");
+    let sip = definition("a3", identity::Namespace::Value);
+    let ready = definition("a4", identity::Namespace::Value);
+    let parameter = |owner: &identity::Definition, index: u32| model::Type::Parameter {
+        owner: owner.clone(),
+        index,
+    };
+    let bound = |owner: &identity::Definition,
+                 index: u32,
+                 trait_id: &identity::Definition,
+                 arguments: Box<[model::Argument]>| model::Predicate::Bound {
+        ty: parameter(owner, index),
+        bound: model::Bound::Trait {
+            trait_id: trait_id.clone(),
+            arguments,
+            polarity: model::Polarity::Positive,
+            binders: Box::default(),
+        },
+    };
+    let generics = |owner: &identity::Definition, future_output: bool| {
+        let type_parameter = |index: u32, name: &str| {
+            model::Parameter::new(
+                owner.clone(),
+                index,
+                name.into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            )
+        };
+        let mut predicates = vec![
+            bound(
+                owner,
+                0,
+                &fn_once,
+                Box::from([model::Argument::Type(model::Type::Tuple(Box::default()))]),
+            ),
+            model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection {
+                    trait_id: fn_once.clone(),
+                    associated: output.clone(),
+                    arguments: Box::from([model::Argument::Type(parameter(owner, 0))]),
+                },
+                ty: parameter(owner, 1),
+            },
+        ];
+        if future_output {
+            predicates.push(bound(owner, 1, &future, Box::default()));
+        }
+        model::Generics::new(
+            Box::from([type_parameter(0, "F"), type_parameter(1, "R")]),
+            predicates.into_boxed_slice(),
+        )
+    };
+    let function = |id: &identity::Definition, name: &str, future_output: bool, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(&["fixture", name]),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Function {
+                signature: model::Signature::new(
+                    model::Safety::Safe,
+                    false,
+                    false,
+                    "\"Rust\"".into(),
+                    false,
+                    Box::default(),
+                    model::Receiver::None,
+                    Box::from([parameter(id, 0)]),
+                    model::Type::Primitive("i64".into()),
+                ),
+                generics: generics(id, future_output),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let sysroot = |id: &identity::Definition, segments: &[&str], kind: &str, at: u32| {
+        model::Definition::new(
+            id.clone(),
+            path(segments),
+            model::Owner::Free,
+            model::Visibility::Public,
+            model::Kind::Sysroot {
+                compiler_kind: kind.into(),
+            },
+            span(at, at + 10),
+            model::Origin::Source,
+        )
+    };
+    let mut definitions = vec![
+        sysroot(&future, &["core", "future", "Future"], "trait", 700),
+        sysroot(&fn_once, &["core", "ops", "FnOnce"], "trait", 711),
+        sysroot(
+            &output,
+            &["core", "ops", "FnOnce", "Output"],
+            "associated-type",
+            722,
+        ),
+        function(&sip, "sip", true, 733),
+        function(&ready, "ready", false, 744),
+    ];
+    definitions.sort_by(|left, right| left.id().cmp(right.id()));
+    let export = |name: &str, id: &identity::Definition, at: u32| {
+        ledger::Path::Imported(ledger::Export::new(
+            identity::Export::new(
+                "fixture".into(),
+                Box::from([Box::<str>::from(name)]),
+                identity::Namespace::Value,
+            ),
+            id.clone(),
+            Box::default(),
+            Box::default(),
+            span(at, at + 1),
+        ))
+    };
+    let exports = vec![export("sip", &sip, 755), export("ready", &ready, 757)];
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        definitions,
+        exports,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        usize::MAX,
+        &mut allocation,
+    )
+    .expect("future closure fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes the future closure fixture")
+}
+
 /// The item shapes upstream iced examples reach (T204):
 /// - `fixture::Rgb<S = Srgb, T = f32> { pub red: T, pub standard:
 ///   PhantomData<S> }`, as palette's `Rgb`;

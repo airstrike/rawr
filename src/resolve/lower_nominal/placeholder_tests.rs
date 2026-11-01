@@ -21,7 +21,7 @@ fn a_free_function_call_names_the_function_alone() {
         rejected_at("fn add(a: i64, b: i64) -> i64 { a + b }\npub fn run() -> i64 { add(1) }");
     assert_eq!(
         message,
-        "Invalid call to 'add': expects 2 argument(s), found 1"
+        "this function takes 2 arguments but 1 argument was supplied"
     );
     assert_eq!((line, column), (Some(2), Some(23)));
 }
@@ -32,7 +32,7 @@ fn a_closure_call_names_the_closure_as_its_local() {
         rejected_at("pub fn run() -> i64 { let f = |x: i64| x; f(1, 2) }");
     assert_eq!(
         message,
-        "Invalid call to 'f': expects 1 argument(s), found 2"
+        "this function takes 1 argument but 2 arguments were supplied"
     );
     assert_eq!((line, column), (Some(1), Some(43)));
 }
@@ -42,7 +42,7 @@ fn drop_names_itself() {
     let (message, line, column) = rejected_at("pub fn run() -> i64 { drop(1, 2); 0 }");
     assert_eq!(
         message,
-        "Invalid call to 'drop': expects 1 argument, found 2"
+        "this function takes 1 argument but 2 arguments were supplied"
     );
     assert_eq!((line, column), (Some(1), Some(23)));
 }
