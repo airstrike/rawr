@@ -1,9 +1,44 @@
 //! Conversions at the crate boundary, in the shape of iced's exit, modal
 //! and table examples: a number or an array of two into a `Padding`
 //! through the `From` impls it has, a crate type into another inside
-//! `Some(..)` through `From`, and rows a crate takes by `IntoIterator`.
+//! `Some(..)` through `From`, rows a crate takes by `IntoIterator`, and a
+//! number's `.into()` a field's `Pixels`.
 
 use crate::widgets::Widget;
+
+/// A size in logical pixels, as iced's `Pixels`, from an `f32` or a `u32`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pixels(pub f32);
+
+impl From<f32> for Pixels {
+    fn from(amount: f32) -> Self {
+        Pixels(amount)
+    }
+}
+
+impl From<u32> for Pixels {
+    fn from(amount: u32) -> Self {
+        Pixels(amount as f32 + 0.5)
+    }
+}
+
+/// Text drawn on a canvas, as iced's `canvas::Text`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Caption {
+    /// What it says.
+    pub content: String,
+    /// How big it is.
+    pub size: Pixels,
+}
+
+impl Default for Caption {
+    fn default() -> Self {
+        Caption {
+            content: String::new(),
+            size: Pixels(16.0),
+        }
+    }
+}
 
 /// Space around content, as iced's `Padding`.
 #[derive(Debug, Clone, Copy, PartialEq)]

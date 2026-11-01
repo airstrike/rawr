@@ -11298,7 +11298,19 @@ fn render_take(
     let helper = match ty {
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
-        convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => "take_int",
+        // Named, so an item rustc chooses by its input's type, as
+        // `Pixels::from` of a `From<u32>` beside a `From<f32>`, is the one
+        // the binding is.
+        convert::Type::Builtin(builtin) if builtin.is_narrow_integer() => {
+            let rust = builtin
+                .rust_name()
+                .ok_or_else(|| request::drift("a narrow integer's Rust name"))?;
+            return writeln!(
+                output,
+                "    let argument_{local} = take_int::<{rust}>(arguments, {index})?;"
+            )
+            .map_err(request::unwritable);
+        }
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
         ty if is_duration(ty) || is_facade_value(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",

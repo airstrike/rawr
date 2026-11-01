@@ -15790,7 +15790,6 @@ impl<'a> Parser<'a> {
     /// (`finish_conversions`), by an `into` form's output or the target's
     /// `from` of the value, as Rust's `Into` comes from `From`.
     fn parse_host_into(&mut self, value: ParsedExpr, source: &Ty, end: Position) -> ParsedExpr {
-        let expression = span(value.span.start(), end);
         let Ty::Host { proof, .. } = source else {
             return value;
         };
@@ -15807,6 +15806,23 @@ impl<'a> Parser<'a> {
             })
             .collect();
         let owner = self.models.item_owner(&path).cloned();
+        self.parse_target_into(value, source, forms, owner, end)
+    }
+
+    /// `value.into()` chosen once its target is known
+    /// (`finish_conversions`): the value itself when the target is its own
+    /// type or no use fixes one, else one of `forms` whose output is the
+    /// target or the target's `from` that takes it, as rustc's `Into`
+    /// comes from the target's `From`.
+    fn parse_target_into(
+        &mut self,
+        value: ParsedExpr,
+        source: &Ty,
+        forms: Vec<crate::host::item::Definition>,
+        owner: Option<crate::host::facade::Dependency>,
+        end: Position,
+    ) -> ParsedExpr {
+        let expression = span(value.span.start(), end);
         let placeholder = conversion_placeholder(self.pending_conversions.len());
         // Room for the longest helper an op can be named.
         let width = placeholder.len() + 1;
@@ -33439,6 +33455,23 @@ impl<'a> Parser<'a> {
                     && self.projected_host_types(&source).is_empty()
                 {
                     value = self.parse_host_into(value, &source, end);
+                    continue;
+                }
+                // A value no `From` of the program takes, as a number: the
+                // target the use site needs, through that crate type's
+                // `From` of it, as rustc infers `size: 14.0.into()` a
+                // `Pixels` through `From<f32>` and the literal an `f32`.
+                #[cfg(feature = "rust-import")]
+                if self.host_witnesses.is_empty()
+                    && !matches!(
+                        source,
+                        Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Host { .. }
+                    )
+                    && !source.is_text()
+                    && self.widget_erasure(&source).is_none()
+                    && !self.converts_from(&source)
+                {
+                    value = self.parse_target_into(value, &source, Vec::new(), None, end);
                     continue;
                 }
                 value = if self.projected_host_types(&source).is_empty()
