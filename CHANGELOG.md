@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- ?play and the playground build again. A widget whose `Widget` impl depends on its content, as iced's `Button` with a string label, takes the theme its view gives, as rustc infers it: an impl is chosen by its self type and trait arguments, and a where-clause bound rawr can't prove no longer undoes the choice. A value whose type can't be named fully is stored natively instead of in a region. (#669)
+- A view of text alone, `fn view(&self) -> Element<'_, Message>` returning `Element::from(center(text(..)))` or `.into()`, takes its message, theme and renderer from its return type through the crate's `From` impls, as rustc infers them. (#666)
 
 ## 0.3.83 (2026-11-01)
 

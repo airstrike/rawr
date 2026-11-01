@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"?play and the playground build again. A widget whose `Widget` impl depends on its content, as iced's `Button` with a string label, takes the theme its view gives, as rustc infers it: an impl is chosen by its self type and trait arguments, and a where-clause bound rawr can't prove no longer undoes the choice. A value whose type can't be named fully is stored natively instead of in a region.","issues":[669]},
+        {"text":"A view of text alone, `fn view(&self) -> Element<'_, Message>` returning `Element::from(center(text(..)))` or `.into()`, takes its message, theme and renderer from its return type through the crate's `From` impls, as rustc infers them.","issues":[666]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.83",
@@ -1542,9 +1548,12 @@
     {"issue":663,"title":"The project's compiler is queried once per run","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
     {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
-    {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"open","category":"No glue (D593)"},
+    {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"closed","category":"No glue (D593)"},
     {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"open","category":"No glue (D593)"},
-    {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"}
+    {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"},
+    {"issue":669,"title":"?play's universe runner names a widget's theme from its impl (E0121)","state":"open","category":"No glue (D593)"},
+    {"issue":670,"title":"Impl headers keep impls whose self type is a reference","state":"open","category":"No glue (D593)"},
+    {"issue":671,"title":"`.into()` to a type with no From impl gives rustc's E0277","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
