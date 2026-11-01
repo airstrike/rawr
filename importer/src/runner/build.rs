@@ -6,6 +6,8 @@ use std::process::Command;
 
 mod cached;
 
+pub(crate) use cached::EXECUTION_SCHEMA;
+
 #[cfg(all(test, feature = "test-fixtures"))]
 pub(crate) use cached::fixture_build;
 

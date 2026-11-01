@@ -25,6 +25,35 @@ pub(crate) const STORAGE_DIRECTORY: &str = "0002";
 const MAX_RECIPE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_CONTENT_BYTES: usize = 1_207_959_552;
 
+/// An executed value's schema with the versions its execution key carries
+/// folded in. A store entry whose schema differs from the current one was
+/// written by a rawr whose classifier, generator, protocol or codec differs,
+/// so no current lookup can reach it and the store evicts it (#577).
+pub(crate) const fn reader_schema(codec: u32, versions: &[u32]) -> u32 {
+    let mut hash = fold(0x811c_9dc5, &codec.to_le_bytes());
+    let mut index = 0;
+    while index < versions.len() {
+        hash = fold(hash, &versions[index].to_le_bytes());
+        index += 1;
+    }
+    hash
+}
+
+/// A version string as one word for [`reader_schema`].
+pub(crate) const fn version_word(version: &str) -> u32 {
+    fold(0x811c_9dc5, version.as_bytes())
+}
+
+/// FNV-1a over `bytes`, continuing from `hash`.
+const fn fold(mut hash: u32, bytes: &[u8]) -> u32 {
+    let mut index = 0;
+    while index < bytes.len() {
+        hash = (hash ^ bytes[index] as u32).wrapping_mul(0x0100_0193);
+        index += 1;
+    }
+    hash
+}
+
 /// One versioned importer transform family.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]

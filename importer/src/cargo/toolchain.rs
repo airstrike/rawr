@@ -98,6 +98,23 @@ impl Schemas {
         }
     }
 
+    /// What every execution under the attested toolchain carries in its key:
+    /// the probe, unit and graph protocols, and with the driver, this build's
+    /// version, since the attestation digests the driver executable and a
+    /// release rebuilds it.
+    pub(crate) const fn execution_versions() -> [u32; 4] {
+        [
+            SUPPORTED_PROBE_PROTOCOL,
+            SUPPORTED_UNIT_SCHEMA,
+            SUPPORTED_GRAPH_SCHEMA,
+            if cfg!(feature = "rustc-driver") {
+                crate::node::version_word(env!("CARGO_PKG_VERSION"))
+            } else {
+                0
+            },
+        ]
+    }
+
     /// The pinned Cargo unit-graph schema version.
     pub const fn unit(self) -> u32 {
         self.unit

@@ -16,6 +16,35 @@ const BUNDLE_MAGIC: &[u8; 8] = b"RAWRBNDL";
 const SCHEMA: u32 = 3;
 const BUNDLE_SCHEMA: u32 = 2;
 const COMMAND_SCHEMA: u32 = 6;
+
+/// The runner's store schema: its codec with every version its execution key
+/// carries, through the build request (generator, request schema, contract
+/// schema and classifier), the generated carrier, the command and the
+/// attested toolchain (#577).
+pub(crate) const EXECUTION_SCHEMA: u32 = {
+    let carrier = crate::runner::manifest::carrier_versions();
+    let contract = crate::classify::contract_versions();
+    let toolchain = crate::cargo::toolchain::Schemas::execution_versions();
+    node::reader_schema(
+        SCHEMA,
+        &[
+            BUNDLE_SCHEMA,
+            COMMAND_SCHEMA,
+            carrier[0],
+            carrier[1],
+            carrier[2],
+            carrier[3],
+            carrier[4],
+            contract[0],
+            contract[1],
+            crate::bridge::request_schema(),
+            toolchain[0],
+            toolchain[1],
+            toolchain[2],
+            toolchain[3],
+        ],
+    )
+};
 const PRODUCT_BYTES: usize = 288;
 const BUNDLE_HEADER_BYTES: usize = 296;
 
@@ -717,7 +746,7 @@ impl Product {
             store.root(),
             self.reference,
             node::Kind::Runner,
-            SCHEMA,
+            EXECUTION_SCHEMA,
             key,
             self.seal_bytes,
             self.seal_digest,
@@ -847,7 +876,7 @@ impl Product {
             stored,
             store.clone(),
             retained::Control {
-                schema: SCHEMA,
+                schema: EXECUTION_SCHEMA,
                 key: node::content_digest::<Self>(&self.canonical),
                 seal_bytes: self.seal_bytes,
                 seal_digest: self.seal_digest,
@@ -863,7 +892,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Runner;
-    const SCHEMA: u32 = SCHEMA;
+    const SCHEMA: u32 = EXECUTION_SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         validate(&self.canonical, limit)?;

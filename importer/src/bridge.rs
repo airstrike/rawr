@@ -320,6 +320,11 @@ pub(crate) const fn generator_version() -> u32 {
     GENERATOR_VERSION
 }
 
+/// The request schema every build request key carries.
+pub(crate) const fn request_schema() -> u32 {
+    REQUEST_SCHEMA
+}
+
 #[cfg(all(test, feature = "test-fixtures"))]
 mod tests {
     use super::build_request_key;

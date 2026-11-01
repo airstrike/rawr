@@ -11,9 +11,14 @@ pub(crate) struct Product {
 
 const BYTES: usize = 188;
 
+/// The owner product's store schema: its codec with the versions its
+/// execution key carries through the attested toolchain (#577).
+pub(crate) const EXECUTION_SCHEMA: u32 =
+    node::reader_schema(7, &crate::cargo::toolchain::Schemas::execution_versions());
+
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Resolution;
-    const SCHEMA: u32 = 7;
+    const SCHEMA: u32 = EXECUTION_SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if BYTES > limit {

@@ -3,6 +3,8 @@
 pub mod artifact;
 mod build;
 
+pub(crate) use build::EXECUTION_SCHEMA;
+
 #[cfg(all(test, feature = "test-fixtures"))]
 pub(crate) use build::fixture_build;
 pub mod manifest;

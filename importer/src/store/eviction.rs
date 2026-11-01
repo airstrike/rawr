@@ -421,25 +421,30 @@ fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool,
     })
 }
 
-/// Resolution bundles a project keeps when no root holds them: the
-/// current one and a few an undo or redo returns to.
-pub(super) const RESOLUTIONS_KEPT: usize = 4;
+/// How many unrooted units of each kind a project keeps, newest first, when
+/// no pin holds them: the current one and a few an undo or redo returns to.
+/// Every edit can publish a resolution, and every generated change a runner
+/// or an extraction build. Nothing else retires them, and each execution
+/// holds the build outputs it relocated or the executable it built (#577).
+pub(super) const KEPT: [(Kind, usize); 3] = [
+    (Kind::Resolution, 4),
+    (Kind::Runner, 4),
+    (Kind::NativeProduct, 4),
+];
 
-/// Retire the requesting project's oldest unrooted resolution unit (action,
-/// its bundle, its content when nothing else names it) while it has more than
-/// `keep`. Every edit publishes one; nothing else ever retires them, and each
-/// holds the build outputs it relocated.
-pub(super) fn recover_resolution_excess(
+/// Retire the requesting project's oldest unrooted unit (action, its bundle,
+/// its content when nothing else names it) of the first kind it has more of
+/// than `kept` allows.
+pub(super) fn recover_excess(
     store: &Path,
     requesting: Digest,
-    kind: Kind,
-    keep: usize,
+    kept: &[(Kind, usize)],
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
     let selected = lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        resolution_excess(&snapshot, &registrations, requesting, kind, keep)
+        excess(&snapshot, &registrations, requesting, kept)
     })?;
     let Some(selected) = selected else {
         return Ok(false);
@@ -457,7 +462,7 @@ pub(super) fn recover_resolution_excess(
     lease::with_publication(store, |publication| {
         let registrations = accounting::registrations_recovery(store, budget)?;
         let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
-        if resolution_excess(&snapshot, &registrations, requesting, kind, keep)?.as_deref()
+        if excess(&snapshot, &registrations, requesting, kept)?.as_deref()
             != Some(selected.as_ref())
         {
             return Ok(false);
@@ -474,13 +479,24 @@ pub(super) fn recover_resolution_excess(
     })
 }
 
-fn resolution_excess(
+fn excess(
     snapshot: &pins::lock::Snapshot,
     registrations: &[Registered],
     requesting: Digest,
-    kind: Kind,
-    keep: usize,
+    kept: &[(Kind, usize)],
 ) -> Result<Option<Box<[Registered]>>, Error> {
+    let rooted = rooted(snapshot);
+    for (kind, keep) in kept.iter().copied() {
+        if let Some(selected) = kind_excess(&rooted, registrations, requesting, kind, keep)? {
+            return Ok(Some(selected));
+        }
+    }
+    Ok(None)
+}
+
+/// Everything a pin holds: a running program's, and each project's roots no
+/// process holds now (its Live, LastGood, Prepared and InFlight runners).
+fn rooted(snapshot: &pins::lock::Snapshot) -> BTreeSet<Reference> {
     let mut rooted = BTreeSet::new();
     rooted.extend(snapshot.protected().iter().copied());
     for root in snapshot.active() {
@@ -489,6 +505,16 @@ fn resolution_excess(
     for root in snapshot.stale() {
         rooted.extend(root.references().iter().copied());
     }
+    rooted
+}
+
+fn kind_excess(
+    rooted: &BTreeSet<Reference>,
+    registrations: &[Registered],
+    requesting: Digest,
+    kind: Kind,
+    keep: usize,
+) -> Result<Option<Box<[Registered]>>, Error> {
     let mut actions = registrations
         .iter()
         .copied()
@@ -536,23 +562,156 @@ fn resolution_excess(
         {
             released.insert(content.reference());
         }
-        return deletion_plan(&released, &rooted, registrations).map(Some);
+        return deletion_plan(&released, rooted, registrations).map(Some);
     }
     Ok(None)
+}
+
+/// The schema each executed kind's current value has. Every bundle is one of
+/// these values' executions, and each schema folds in the versions its key
+/// carries, so a bundle of these kinds with another schema is one no current
+/// lookup reaches (#577).
+fn current_execution(kind: Kind) -> Option<u32> {
+    use crate::node::Value as _;
+    match kind {
+        Kind::Runner => Some(crate::runner::EXECUTION_SCHEMA),
+        Kind::NativeProduct => Some(crate::cargo::resolution::BuildProduct::SCHEMA),
+        Kind::Resolution => Some(crate::cargo::resolution::owner::EXECUTION_SCHEMA),
+        _ => None,
+    }
+}
+
+fn unreadable(allocation: Allocation) -> bool {
+    allocation.class == Class::Bundle
+        && current_execution(allocation.kind).is_some_and(|schema| schema != allocation.schema)
+}
+
+/// Retire one execution an older rawr wrote, with its action and content,
+/// and forget the pins that name it, since nothing can look it up or run it
+/// again. A running program keeps what it holds until it ends (#577).
+pub(super) fn recover_unreadable(
+    store: &Path,
+    budget: &mut recovery::Budget,
+) -> Result<bool, Error> {
+    let units = lease::with_publication(store, |publication| {
+        let registrations = accounting::registrations_recovery(store, budget)?;
+        if !registrations
+            .iter()
+            .any(|registered| unreadable(registered.allocation()))
+        {
+            return Ok(Vec::new());
+        }
+        let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
+        unreadable_units(&snapshot, &registrations)
+    })?;
+    for unit in units {
+        let mut evictions = Vec::new();
+        let mut held = false;
+        for registered in unit
+            .iter()
+            .filter(|registered| registered.allocation().class == Class::Bundle)
+        {
+            // A process that reads the bundle holds its lease.
+            let Some(eviction) = bundle::prepare_eviction(store, registered.allocation())? else {
+                held = true;
+                break;
+            };
+            evictions.push((eviction, *registered));
+        }
+        if held {
+            continue;
+        }
+        let retired = lease::with_publication(store, |publication| {
+            let registrations = accounting::registrations_recovery(store, budget)?;
+            let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
+            if !unreadable_units(&snapshot, &registrations)?.contains(&unit) {
+                return Ok(false);
+            }
+            let released = unit
+                .iter()
+                .map(|registered| registered.reference())
+                .collect::<BTreeSet<_>>();
+            if !pins::forget(
+                publication,
+                store,
+                snapshot,
+                &released,
+                &registrations,
+                budget,
+            )? {
+                return Ok(false);
+            }
+            accounting::begin_eviction(publication, store, &unit, budget)?;
+            for (eviction, registered) in evictions {
+                budget.bundle()?;
+                budget.deletion(registered.allocation().charge)?;
+                eviction.retire(publication, store)?;
+            }
+            retire_allocations(publication, store, &unit, false, budget)?;
+            accounting::finish_eviction(publication, store, budget)?;
+            Ok(true)
+        })?;
+        if retired {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Each unreadable execution's unit, oldest first, that no running program
+/// holds. Stale pins don't keep one, since what they name can't run again.
+fn unreadable_units(
+    snapshot: &pins::lock::Snapshot,
+    registrations: &[Registered],
+) -> Result<Vec<Box<[Registered]>>, Error> {
+    let protected = snapshot
+        .protected()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut bundles = registrations
+        .iter()
+        .copied()
+        .filter(|registered| unreadable(registered.allocation()))
+        .collect::<Vec<_>>();
+    bundles.sort_unstable_by_key(|registered| {
+        (
+            registered.sequence(),
+            registered.publisher(),
+            registered.allocation().key,
+        )
+    });
+    let mut units = Vec::new();
+    for bundle in bundles {
+        let Some(action) = registrations
+            .iter()
+            .copied()
+            .find(|action| action_owns_bundle(*action, bundle))
+        else {
+            continue;
+        };
+        if protected.contains(&action.reference()) || protected.contains(&bundle.reference()) {
+            continue;
+        }
+        let mut released = BTreeSet::from([action.reference(), bundle.reference()]);
+        if let Some(content) = registrations.iter().copied().find(|content| {
+            content.allocation().class == Class::Content
+                && content.allocation().kind == action.allocation().kind
+                && content.allocation().schema == action.allocation().schema
+                && content.content() == action.content()
+        }) {
+            released.insert(content.reference());
+        }
+        units.push(deletion_plan(&released, &protected, registrations)?);
+    }
+    Ok(units)
 }
 
 fn unrooted(
     snapshot: &pins::lock::Snapshot,
     registrations: &[Registered],
 ) -> Result<Option<Box<[Registered]>>, Error> {
-    let mut rooted = BTreeSet::new();
-    rooted.extend(snapshot.protected().iter().copied());
-    for root in snapshot.active() {
-        rooted.extend(root.references().iter().copied());
-    }
-    for root in snapshot.stale() {
-        rooted.extend(root.references().iter().copied());
-    }
+    let rooted = rooted(snapshot);
 
     let mut actions = registrations
         .iter()
