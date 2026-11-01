@@ -527,9 +527,9 @@
     {"t":"T524","issue":524,"title":"T524: Three rawr lib tests fail on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"79698f0c1","release":null},
     {"t":"T525","issue":525,"title":"T525: Resident support tests check what a program's support module holds","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"a0f516fc3","release":null},
     {"t":"T526","issue":526,"title":"T526: Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"a0f516fc3","release":"0.3.51"},
-    {"t":"T527","issue":527,"title":"T527: ?play answers an animated iced app with a GIF that plays once and holds its last frame","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T528","issue":528,"title":"T528: ?play shows the text an iced program printed beside its frame","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T529","issue":529,"title":"T529: ?play draws an iced frame at the program's own scale_factor","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T527","issue":527,"title":"T527: ?play answers an animated iced app with a GIF that plays once and holds its last frame","state":"closed","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":"d651a2c9c","release":null},
+    {"t":"T528","issue":528,"title":"T528: ?play shows the text an iced program printed beside its frame","state":"closed","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":"d651a2c9c","release":null},
+    {"t":"T529","issue":529,"title":"T529: ?play draws an iced frame at the program's own scale_factor","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"d651a2c9c","release":null},
     {"t":"T530","issue":530,"title":"T530: A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T531","issue":531,"title":"T531: A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T532","issue":532,"title":"T532: inspect on a real iced app's state in update and view","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -541,6 +541,8 @@
     {"t":"T538","issue":538,"title":"T538: Split stale from broken in the profile, checked and bridge invariants","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
     {"t":"T539","issue":539,"title":"T539: Remove the remaining placeholders from error messages","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
     {"t":"T540","issue":540,"title":"T540: Check the debugger's caller-frame reads under Miri","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T541","issue":541,"title":"T541: inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T541","issue":541,"title":"T541: inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T542","issue":542,"title":"T542: A closure whose input is a borrowed program type fails to import","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T543","issue":543,"title":"T543: ?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
