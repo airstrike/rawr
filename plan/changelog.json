@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"?play sends what an iced program printed together with what it drew. The bot attaches the image to the reply, and the playground shows the image above the text.","issues":[528]},
-      {"text":"?play draws an iced program at its own `scale_factor`, so a program at scale 2 comes back twice as large, as iced opens its window.","issues":[529]},
-      {"text":"?play answers an iced program that animates with a GIF, recorded at 20 frames a second within the snippet's time. It plays once and holds its last frame. A program that never changes still comes back as a PNG.","issues":[527]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.55",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"?play sends what an iced program printed together with what it drew. The bot attaches the image to the reply, and the playground shows the image above the text.","issues":[528]},
+        {"text":"?play draws an iced program at its own `scale_factor`, so a program at scale 2 comes back twice as large, as iced opens its window.","issues":[529]},
+        {"text":"?play answers an iced program that animates with a GIF, recorded at 20 frames a second within the snippet's time. It plays once and holds its last frame. A program that never changes still comes back as a PNG.","issues":[527]}
+      ]
+    },
     {
       "version": "0.3.54",
       "date": "2026-11-01",

@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.55 (2026-11-01)
+
 - ?play sends what an iced program printed together with what it drew. The bot attaches the image to the reply, and the playground shows the image above the text. (#528)
 - ?play draws an iced program at its own `scale_factor`, so a program at scale 2 comes back twice as large, as iced opens its window. (#529)
 - ?play answers an iced program that animates with a GIF, recorded at 20 frames a second within the snippet's time. It plays once and holds its last frame. A program that never changes still comes back as a PNG. (#527)
