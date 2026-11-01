@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A crate struct or variant whose public field is an array of known length, like iced's `SolidVertex2D { position: [f32; 2], color }`, can be built with a literal. When a public field's type still can't be held, the error names that field and its type instead of blaming private fields.","issues":[608]},
-      {"text":"`iced::run((), view)` works: the crate's update for `()` is accepted, and a view of `&()` can return widgets that borrow string literals, held once each with no copy.","issues":[616]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.72",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A crate struct or variant whose public field is an array of known length, like iced's `SolidVertex2D { position: [f32; 2], color }`, can be built with a literal. When a public field's type still can't be held, the error names that field and its type instead of blaming private fields.","issues":[608]},
+        {"text":"`iced::run((), view)` works: the crate's update for `()` is accepted, and a view of `&()` can return widgets that borrow string literals, held once each with no copy.","issues":[616]}
+      ]
+    },
     {
       "version": "0.3.71",
       "date": "2026-11-01",
