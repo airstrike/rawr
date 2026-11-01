@@ -1832,7 +1832,12 @@ struct ImportedFunctionProof {
 #[cfg(feature = "rust-import")]
 pub(crate) fn imported_range(source: &str, span: Span) -> Option<(u32, u32)> {
     let start = u32::try_from(location::byte_at(source, span.start())?).ok()?;
-    let end = u32::try_from(location::byte_at(source, span.end())?).ok()?;
+    // A span of tokens a macro expansion made from one written token can run
+    // past the written one's line, as a report's label reads it: the use is
+    // where they were written.
+    let end = location::byte_at(source, span.end())
+        .and_then(|end| u32::try_from(end).ok())
+        .unwrap_or(start);
     // A use a macro's expansion makes may end at the macro's own token, at
     // its call, before a token the caller passed in: it is the use's start.
     Some((start, end.max(start)))
