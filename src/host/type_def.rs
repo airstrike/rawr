@@ -280,7 +280,7 @@ impl Definition {
             }
             if !names.insert(parameter_path.clone()) {
                 return Err(host::Error::DuplicateTypeParameter {
-                    item: path.to_string().into(),
+                    item: Some(path.to_string().into()),
                     parameter: (*parameter).into(),
                 });
             }
@@ -1065,7 +1065,7 @@ fn validate_parameters(
         match names.binary_search(&parameter_path) {
             Ok(_) => {
                 return Err(host::Error::DuplicateTypeParameter {
-                    item: path.to_string().into(),
+                    item: Some(path.to_string().into()),
                     parameter: parameter.clone(),
                 });
             }

@@ -280,14 +280,6 @@ pub enum Error {
         /// Requested qualified type path.
         ty: ImmutableString,
     },
-    /// An imported type attestation selector names no exact imported definition.
-    #[cfg(feature = "rust-import")]
-    UnknownImportedType {
-        /// Exact facade root.
-        facade: ImmutableString,
-        /// Rejected compiler-derived imported identity.
-        selector: [u8; 32],
-    },
     /// A projection binding names no direct edge owned by its facade.
     UnknownProjection {
         /// Exact facade root.
@@ -542,12 +534,12 @@ impl Builder {
             })
             .map(|ty| ImmutableString::from(ty.path()))
             .collect::<Vec<_>>();
-        if paths.is_empty() {
-            return Err(Error::UnknownImportedType {
-                facade: self.definition.root().into(),
-                selector,
-            });
-        }
+        // A runner binds only the crate types its own bindings declare.
+        assert!(
+            !paths.is_empty(),
+            "the bindings of `{}` declare each crate type their runner attests",
+            self.definition.root()
+        );
         if let Some(path) = paths
             .iter()
             .find(|path| self.attestations.contains_key(path.as_str()))
@@ -1388,14 +1380,6 @@ impl fmt::Display for Error {
                     "the bindings of `{root}` have no generic type `{ty}`"
                 )
             }
-            #[cfg(feature = "rust-import")]
-            Self::UnknownImportedType {
-                facade: root,
-                selector,
-            } => write!(
-                formatter,
-                "the bindings of `{root}` have no imported type for selector {selector:02x?}"
-            ),
             Self::UnknownProjection {
                 facade: root,
                 source,
@@ -1866,13 +1850,21 @@ mod tests {
         let owner = host::facade::Dependency::new(facade.root_path(), facade.fingerprint().clone());
         let mut builder = Builder::new(facade);
 
-        assert!(matches!(
-            builder.bind_imported_type_attestation([0x99; 32], |_, expected| {
-                expected.attest(true)
-            }),
-            Err(super::Error::UnknownImportedType { selector, .. })
-                if selector == [0x99; 32]
-        ));
+        // Binding a crate type its bindings don't declare is a rawr bug,
+        // which panics naming the invariant (D664).
+        let unknown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            builder
+                .bind_imported_type_attestation([0x99; 32], |_, expected| expected.attest(true))
+                .is_ok()
+        }))
+        .expect_err("an undeclared crate type panics");
+        let message = unknown
+            .downcast_ref::<String>()
+            .expect("the panic names its invariant");
+        assert_eq!(
+            message,
+            "the bindings of `gallery_ui` declare each crate type their runner attests"
+        );
         let _ = builder
             .bind_imported_type_attestation(EXACT, |_, expected| expected.attest(false))
             .unwrap();

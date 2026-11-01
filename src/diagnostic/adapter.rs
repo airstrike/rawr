@@ -487,7 +487,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::InvalidTypeArguments => code::RESOLVE_TYPE_ARGUMENTS,
         resolve::Category::LoweringUnavailable => code::RESOLVE_LOWERING,
         resolve::Category::InvalidDerive => code::RESOLVE_DERIVE,
-        resolve::Category::DuplicateMember => code::RESOLVE_DUPLICATE_MEMBER,
+        resolve::Category::DuplicateMember => match error {
+            resolve::Error::DuplicateMember { owner, .. } if owner.is_empty() => {
+                code::RESOLVE_DUPLICATE_GENERIC
+            }
+            _ => code::RESOLVE_DUPLICATE_MEMBER,
+        },
         resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
@@ -513,6 +518,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_UNEXPECTED,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
+        resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
     };
     let builder = Report::error(stable_code, resolution_message(error));
     match error {
@@ -656,6 +662,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             reason,
             ..
         } => format!("cannot derive `{capability}` for `{owner}`: {reason}"),
+        resolve::Error::DuplicateMember { owner, member, .. } if owner.is_empty() => {
+            format!("the name `{member}` is already used for a generic parameter")
+        }
         resolve::Error::DuplicateMember { owner, member, .. } => {
             format!("duplicate member `{owner}::{member}`")
         }
@@ -689,7 +698,10 @@ fn resolution_message(error: &resolve::Error) -> String {
             method,
             reason,
             ..
-        } => format!("invalid call to `{owner}::{method}`: {reason}"),
+        } => format!(
+            "invalid call to `{}`: {reason}",
+            resolve::Qualified(owner, method)
+        ),
         resolve::Error::InvalidHostOperation { item, reason, .. } => {
             format!("cannot use `{item}` here: {reason}")
         }
@@ -710,7 +722,10 @@ fn resolution_message(error: &resolve::Error) -> String {
             method,
             reason,
             ..
-        } => format!("invalid signature for `{owner}::{method}`: {reason}"),
+        } => format!(
+            "invalid signature for `{}`: {reason}",
+            resolve::Qualified(owner, method)
+        ),
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => format!("`{owner}` does not provide `{capability}`"),
@@ -725,6 +740,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
+        resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
+            format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")
+        }
     }
 }
 

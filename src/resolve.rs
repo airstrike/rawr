@@ -13,8 +13,8 @@ pub(crate) mod package;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
-pub(crate) use error::ASYNC_MAIN;
 pub use error::{Category, Error};
+pub(crate) use error::{Qualified, ASYNC_MAIN};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -2876,7 +2876,7 @@ fn resolve_methods(
                 && matches!(name.text.as_str(), "Debug" | "Display");
             for function in &mut item.functions {
                 if !formatter {
-                    validate_method_signature(owner.name(), function, true)
+                    validate_method_signature(Some(owner.name()), function, true)
                         .map_err(|error| LocatedError::primary(shell.source, error))?;
                 }
             }
@@ -2985,7 +2985,7 @@ fn resolve_methods(
                 .into()
             };
             for function in &mut item.functions {
-                validate_method_signature(owner.name(), function, true)
+                validate_method_signature(Some(owner.name()), function, true)
                     .map_err(|error| LocatedError::primary(shell.source, error))?;
                 let member: ImmutableString = format!("{instance}::{}", function.name.text).into();
                 if let Some((previous_source, previous_declaration)) = declarations.insert(
@@ -3021,7 +3021,7 @@ fn resolve_methods(
         }
 
         for function in &mut item.functions {
-            validate_method_signature(owner.name(), function, true)
+            validate_method_signature(Some(owner.name()), function, true)
                 .map_err(|error| LocatedError::primary(shell.source, error))?;
             let name = function.name.text.clone();
             let duplicate_key = (owner_id, name.clone());
@@ -4656,7 +4656,7 @@ fn resolve_functions(items: &mut [item::Shell]) -> Result<(), LocatedError> {
         let item::Kind::Function(function) = &mut shell.kind else {
             continue;
         };
-        validate_method_signature("<module>", function, true)
+        validate_method_signature(None, function, true)
             .map_err(|error| LocatedError::primary(shell.source, error))?;
         function.body.lowering = item::Lowering::NominalFunction;
     }
@@ -4695,7 +4695,7 @@ fn generic_scope(
             names.insert(parameter.name.text.clone(), parameter.name.span)
         {
             return Err(Error::DuplicateMember {
-                owner: "<generics>".into(),
+                owner: ImmutableString::new(),
                 member: parameter.name.text.clone(),
                 declaration: parameter.name.span,
                 previous_declaration,
@@ -5439,14 +5439,17 @@ fn impl_owner(ty: &type_ref::Type) -> Result<(type_def::Id, ImmutableString), Er
     Ok((definition, path.name.clone()))
 }
 
+/// `owner` is the type of an associated function, `None` for a free one.
 fn validate_method_signature(
-    owner: &str,
+    owner: Option<&str>,
     function: &item::Function,
     copied: bool,
 ) -> Result<(), Error> {
+    let free = owner.is_none();
+    let owner = owner.unwrap_or_default();
     // A free function's one `&mut` parameter is its receiver at runtime
     // (`lower_nominal::this_parameter`).
-    let mut receiver_free = owner == "<module>";
+    let mut receiver_free = free;
     for parameter in &function.parameters {
         if let type_ref::Type::Reference { mutable, .. } = parameter.ty {
             // Invocation-scoped references are validated once the full program
@@ -5501,7 +5504,7 @@ fn validate_method_signature(
         ),
         _ => false,
     };
-    let receiver = if owner == "<module>" {
+    let receiver = if free {
         function.parameters.iter().any(|parameter| {
             matches!(
                 parameter.ty,

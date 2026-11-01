@@ -186,7 +186,7 @@ impl Builder {
         {
             Ok(_) => {
                 return Err(host::Error::DuplicateTypeParameter {
-                    item: "<signature>".into(),
+                    item: None,
                     parameter: name,
                 });
             }

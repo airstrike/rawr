@@ -933,9 +933,10 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         // function beside it says why rawr can't call it.
         R::UnknownImport { path, .. } => Some((path.to_string(), ImportedNamespace::Either)),
         R::InvalidMethodCall { owner, method, .. }
-        | R::InvalidMethodSignature { owner, method, .. } => {
-            Some((format!("{owner}::{method}"), ImportedNamespace::Value))
-        }
+        | R::InvalidMethodSignature { owner, method, .. } => Some((
+            crate::resolve::Qualified(owner, method).to_string(),
+            ImportedNamespace::Value,
+        )),
         R::TypeMismatch {
             expected, actual, ..
         } => Some((
@@ -966,6 +967,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::Syntax { .. }
         | R::UnlabeledJumpInWhileCondition { .. }
         | R::AsyncMain { .. }
+        | R::TypeAnnotationsNeeded { .. }
         | R::MemberKind { .. } => None,
     }
 }

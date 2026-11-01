@@ -1577,15 +1577,14 @@ impl Definition {
         path: impl Into<ImmutableString>,
     ) -> Result<host::type_def::Export, host::Error> {
         let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        // Rawr exports only the types its own facades declare, as
+        // `future::Future`.
         let definition = self
             .types
             .binary_search_by(|definition| definition.path_ref().cmp(&path))
             .ok()
             .map(|index| &self.types[index])
-            .ok_or_else(|| host::Error::UnknownFacadeType {
-                item: "<export>".into(),
-                ty: path.to_string().into(),
-            })?;
+            .unwrap_or_else(|| panic!("a facade exports only a type it declares, not `{path}`"));
         Ok(host::type_def::Export::new(
             self.root.clone(),
             self.fingerprint.clone(),

@@ -30,8 +30,9 @@ pub enum Error {
     },
     /// A type parameter name is declared more than once.
     DuplicateTypeParameter {
-        /// Item or type declaring the parameter.
-        item: ImmutableString,
+        /// Item or type declaring the parameter, when it is known: a
+        /// signature is built before its item names it.
+        item: Option<ImmutableString>,
         /// Reused parameter name.
         parameter: ImmutableString,
     },
@@ -57,13 +58,6 @@ pub enum Error {
         item: ImmutableString,
         /// Missing type path.
         ty: ImmutableString,
-    },
-    /// A symbolic imported identity has no definition in this exact facade.
-    UnknownImportedType {
-        /// Item containing the unresolved semantic reference.
-        item: ImmutableString,
-        /// Stable imported definition identity.
-        identity: [u8; 32],
     },
     /// An applied facade type has the wrong number of structural arguments.
     InvalidFacadeTypeArguments {
@@ -212,9 +206,19 @@ impl fmt::Display for Error {
                 formatter,
                 "invocation-scoped host type `{ty}` cannot declare type parameters"
             ),
-            Self::DuplicateTypeParameter { item, parameter } => write!(
+            Self::DuplicateTypeParameter {
+                item: Some(item),
+                parameter,
+            } => write!(
                 formatter,
                 "duplicate type parameter `{parameter}` in host declaration `{item}`"
+            ),
+            Self::DuplicateTypeParameter {
+                item: None,
+                parameter,
+            } => write!(
+                formatter,
+                "the name `{parameter}` is already used for a generic parameter (E0403)"
             ),
             Self::InvalidCapabilitySet {
                 declaration,
@@ -230,13 +234,6 @@ impl fmt::Display for Error {
             ),
             Self::UnknownFacadeType { item, ty } => {
                 write!(formatter, "unknown type `{ty}` in host item `{item}`")
-            }
-            Self::UnknownImportedType { item, identity } => {
-                write!(formatter, "unknown imported type `")?;
-                for byte in identity {
-                    write!(formatter, "{byte:02x}")?;
-                }
-                write!(formatter, "` in host item `{item}`")
             }
             Self::InvalidFacadeTypeArguments {
                 item,
