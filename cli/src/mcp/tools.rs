@@ -13,7 +13,7 @@ use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
 /// listed.
-pub const CORE: [&str; 9] = [
+pub const CORE: [&str; 13] = [
     "new",
     "check",
     "run",
@@ -23,6 +23,10 @@ pub const CORE: [&str; 9] = [
     "stop",
     "screenshot",
     "inspect",
+    "break",
+    "step",
+    "continue",
+    "clear",
 ];
 
 /// Crates whose programs draw a terminal UI, which `start` can't host yet.
@@ -189,6 +193,56 @@ pub fn list() -> Vec<Value> {
                 },
             },
         }),
+        json!({
+            "name": "break",
+            "description": "Set a breakpoint in the started program: on a `line` of a `file`, or on a `function`'s first statement. The program pauses when it reaches it. `inspect` then reads its values there, and `step` or `continue` resumes it. Returns where the program paused, if it pauses within `timeout_ms`. A breakpoint stays across saves while its line's text is still in the file, and moves with that text. Code in Rust dependencies has no breakpoints. A pause inside a call from native code, such as a window's event loop, holds that loop: the window doesn't redraw or take input until the program goes on.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
+                    "line": { "type": "integer", "minimum": 1, "description": "A line of `file`, from 1" },
+                    "function": { "type": "string", "description": "A function of the program, as `tick` or `counter::tick`, in place of `file` and `line`" },
+                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
+                },
+            },
+        }),
+        json!({
+            "name": "step",
+            "description": "Run the paused program to its next statement and pause there: `over` stays in this function, `into` goes into a function it calls, and `out` returns from this one. A step over native code, such as a crate's function, runs it whole. Returns where it paused, if it pauses within `timeout_ms`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "kind": { "type": "string", "enum": ["over", "into", "out"], "default": "over" },
+                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
+                },
+            },
+        }),
+        json!({
+            "name": "continue",
+            "description": "Let the paused program run on. Returns where it pauses next, if it reaches a breakpoint within `timeout_ms`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "timeout_ms": milliseconds("How long to wait for the program to pause", 2_000),
+                },
+            },
+        }),
+        json!({
+            "name": "clear",
+            "description": "Remove the started program's breakpoints: all of them, or those on `file`, on `line` of `file` or on `function`. A paused program stays paused until `continue`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
+                    "line": { "type": "integer", "minimum": 1, "description": "A line of `file`, from 1" },
+                    "function": { "type": "string", "description": "A function a breakpoint was set on" },
+                },
+            },
+        }),
     ];
     tools.extend(
         extension::offered(&installed, &CORE)
@@ -209,7 +263,7 @@ pub fn instructions(root: &Path) -> String {
         .map_or_else(|| "rawr".to_owned(), |path| path.display().to_string());
     let mut text = format!(
         "rawr {} ({executable}) runs Rust programs for dev builds: a Cargo crate whose files start with `// rawr`, or one .rs file. It reloads them when you save.\n\
-         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window. `inspect` reads its values while it runs. `stop` ends it.\n\
+         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window. `inspect` reads its values while it runs. `break` pauses it at a line or a function, `step` and `continue` go on from there, and `clear` removes breakpoints. `stop` ends it.\n\
          Relative paths start at {}.\n",
         rawr::VERSION,
         root.display()
@@ -402,6 +456,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             text("file"),
             bounded(&arguments, "timeout_ms", 2_000),
         ),
+        "break" | "step" | "continue" | "clear" => debug(server, name, &arguments),
         "screenshot" => screenshot(server, text("path"), text("title"), cancel, &progress),
         name => extension_call(server, name, &arguments, cancel, &progress),
     };
@@ -686,6 +741,22 @@ fn inspect(
         }
     })?;
     if answer["reached"] != true {
+        let paused = &answer["paused"];
+        if paused.is_object() {
+            let mut missing = Vec::new();
+            if let Some(name) = name {
+                missing.push(format!("`{name}` isn't in scope"));
+            }
+            if let Some(file) = &file {
+                missing.push(format!("it isn't in {}", file.display()));
+            }
+            return Err(format!(
+                "the program is paused at {}:{}, where {}. Call `step` or `continue` to go on.",
+                paused["file"].as_str().unwrap_or_default(),
+                paused["line"],
+                missing.join(" or ")
+            ));
+        }
         let mut place = String::new();
         if let Some(name) = name {
             place.push_str(&format!(" where `{name}` is in scope"));
@@ -727,6 +798,111 @@ fn inspect(
         "function": answer["function"],
         "bindings": bindings,
     });
+    Ok(content::success(structured, summary.trim_end(), Vec::new()))
+}
+
+/// `break`, `step`, `continue` and `clear`: ask the started program over
+/// its socket, and say where it paused.
+fn debug(server: &Server, tool: &str, arguments: &Value) -> Result<Value, String> {
+    let session = session(server, arguments.get("path").and_then(Value::as_str))?;
+    let file = arguments
+        .get("file")
+        .and_then(Value::as_str)
+        .map(|file| absolute(server, Some(file)));
+    let timeout = bounded(arguments, "timeout_ms", 2_000);
+    let request = json!({
+        "op": tool,
+        "file": file,
+        "line": arguments.get("line"),
+        "function": arguments.get("function"),
+        "kind": arguments.get("kind"),
+        "timeout_ms": timeout.as_millis() as u64,
+    });
+    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
+        let phase = session.phase();
+        if phase == session::Phase::Running {
+            format!("cannot reach the running program: {error}")
+        } else {
+            format!(
+                "the program started for {} isn't running (state: {})",
+                session.root.display(),
+                phase.name()
+            )
+        }
+    })?;
+    match answer["error"].as_str() {
+        Some("not paused") => {
+            return Err(format!(
+                "the program isn't paused, so there is nothing to `{tool}` from. Set a breakpoint with `break`; the program pauses when it reaches it."
+            ))
+        }
+        Some(error) => return Err(error.to_owned()),
+        None => {}
+    }
+    let mut summary = match tool {
+        "break" => {
+            let mut text = match answer["set"]["function"].as_str() {
+                Some(function) => {
+                    let lines: Vec<String> = answer["lines"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|line| {
+                            Some(format!("{}:{}", line["file"].as_str()?, line["line"]))
+                        })
+                        .collect();
+                    if lines.is_empty() {
+                        format!("breakpoint on `{function}`")
+                    } else {
+                        format!("breakpoint on `{function}` at {}", lines.join(", "))
+                    }
+                }
+                None => format!(
+                    "breakpoint at {}:{}",
+                    answer["set"]["file"].as_str().unwrap_or_default(),
+                    answer["set"]["line"]
+                ),
+            };
+            if answer["compiled"] == false {
+                text.push_str(" (it applies once the program has compiled)");
+            }
+            text.push('\n');
+            text
+        }
+        "clear" => {
+            let left = answer["left"].as_array().map_or(0, Vec::len);
+            format!(
+                "removed {} breakpoint{}, {left} left\n",
+                answer["cleared"],
+                if answer["cleared"] == 1 { "" } else { "s" }
+            )
+        }
+        _ => String::new(),
+    };
+    let paused = &answer["paused"];
+    if paused.is_object() {
+        summary.push_str(&format!(
+            "paused at {}:{}",
+            paused["file"].as_str().unwrap_or_default(),
+            paused["line"]
+        ));
+        if let Some(function) = paused["function"].as_str() {
+            summary.push_str(&format!(" in `{function}`"));
+        }
+        summary.push_str(&format!(
+            " ({})\nRead values with `inspect`, and go on with `step` or `continue`.",
+            paused["reason"].as_str().unwrap_or_default()
+        ));
+    } else if tool == "clear" {
+        summary.push_str("the program runs");
+    } else {
+        summary.push_str(&format!(
+            "the program runs and didn't pause within {} ms",
+            timeout.as_millis()
+        ));
+    }
+    let mut structured = answer;
+    structured["root"] = json!(session.root);
     Ok(content::success(structured, summary.trim_end(), Vec::new()))
 }
 

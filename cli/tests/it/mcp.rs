@@ -178,11 +178,15 @@ fn the_server_lists_extension_tools_relays_progress_and_stays_responsive_while_a
             "stop",
             "screenshot",
             "inspect",
+            "break",
+            "step",
+            "continue",
+            "clear",
             "echo",
             "hang"
         ]
     );
-    let echo = &tools[9];
+    let echo = &tools[13];
     assert!(echo["description"].as_str().unwrap().contains("rawr-fake"));
     assert!(echo["inputSchema"]["properties"]["path"].is_object());
     assert!(echo["inputSchema"]["properties"]["word"].is_object());
@@ -485,6 +489,167 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
     );
 
     let stopped = client.call("stop", json!({ "path": "counter" }));
+    assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
+    drop(client.input.take());
+    assert!(client.child.wait().unwrap().success());
+}
+
+/// Where a debugger tool's answer says the program paused: its line and
+/// function.
+fn paused(answer: &Value) -> (u64, String) {
+    let paused = &answer["structuredContent"]["paused"];
+    (
+        paused["line"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("not paused: {answer}")),
+        paused["function"].as_str().unwrap_or_default().to_owned(),
+    )
+}
+
+fn count(client: &mut Client) -> u64 {
+    let read = client.call(
+        "inspect",
+        json!({ "path": "looper", "name": "count", "timeout_ms": 5000 }),
+    );
+    assert_eq!(read["isError"], false, "{read}");
+    read["structuredContent"]["bindings"][0]["value"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("{read}"))
+}
+
+#[test]
+fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_across_a_save() {
+    let sandbox = Sandbox::new("mcp-break");
+    let mut client = Client::start(&sandbox);
+    client.request("initialize", json!({ "protocolVersion": "2025-06-18" }));
+    let made = client.call("new", json!({ "path": "looper" }));
+    assert_eq!(made["isError"], false, "{made}");
+    let main = sandbox.work().join("looper/src/main.rs");
+    let program = "// rawr\n\
+         fn tick(count: u64) -> u64 {\n    count + 1\n}\n\
+         \n\
+         fn main() {\n    let mut count = 0;\n    loop {\n        count = tick(count);\n        std::thread::sleep(std::time::Duration::from_millis(2));\n    }\n}\n";
+    std::fs::write(&main, program).unwrap();
+    let started = client.call("start", json!({ "path": "looper", "wait_ms": 20000 }));
+    assert_eq!(
+        started["structuredContent"]["state"], "running",
+        "{started}"
+    );
+
+    // A line with no statement is refused, as code.
+    let refused = client.call(
+        "break",
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5 }),
+    );
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("line 5 of"),
+        "{refused}"
+    );
+
+    // Break on `count = tick(count);`: the program pauses there.
+    let set = client.call(
+        "break",
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+    );
+    assert_eq!(set["isError"], false, "{set}");
+    assert_eq!(paused(&set), (9, "looper::main".to_owned()), "{set}");
+    assert_eq!(set["structuredContent"]["paused"]["file"], json!(main));
+    let text = set["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!("paused at {}:9", main.display())),
+        "{text}"
+    );
+    let first = count(&mut client);
+    // Paused, it reads the same value again.
+    assert_eq!(count(&mut client), first);
+
+    // Over the call to the next line, then on to the breakpoint again.
+    let stepped = client.call("step", json!({ "path": "looper" }));
+    assert_eq!(
+        paused(&stepped),
+        (10, "looper::main".to_owned()),
+        "{stepped}"
+    );
+    assert_eq!(count(&mut client), first + 1);
+    let continued = client.call("continue", json!({ "path": "looper", "timeout_ms": 5000 }));
+    assert_eq!(
+        paused(&continued),
+        (9, "looper::main".to_owned()),
+        "{continued}"
+    );
+    assert_eq!(
+        continued["structuredContent"]["paused"]["reason"],
+        "breakpoint"
+    );
+
+    // Into `tick`, where `count` is its parameter, and out again.
+    let into = client.call("step", json!({ "path": "looper", "kind": "into" }));
+    assert_eq!(paused(&into), (3, "looper::tick".to_owned()), "{into}");
+    assert_eq!(count(&mut client), first + 1);
+    let out = client.call("step", json!({ "path": "looper", "kind": "out" }));
+    assert_eq!(paused(&out), (10, "looper::main".to_owned()), "{out}");
+    assert_eq!(count(&mut client), first + 2);
+
+    // Cleared, the program runs on and doesn't pause.
+    let cleared = client.call("clear", json!({ "path": "looper" }));
+    assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
+    let continued = client.call("continue", json!({ "path": "looper", "timeout_ms": 300 }));
+    assert_eq!(continued["isError"], false, "{continued}");
+    assert!(
+        continued["structuredContent"]["paused"].is_null(),
+        "{continued}"
+    );
+    let refused = client.call("step", json!({ "path": "looper" }));
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("isn't paused"),
+        "{refused}"
+    );
+
+    // A function's breakpoint pauses at its first statement.
+    let set = client.call(
+        "break",
+        json!({ "path": "looper", "function": "tick", "timeout_ms": 5000 }),
+    );
+    assert_eq!(paused(&set), (3, "looper::tick".to_owned()), "{set}");
+    let cleared = client.call("clear", json!({ "path": "looper", "function": "tick" }));
+    assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
+    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+
+    // A save that adds a line above restarts the program, and the
+    // breakpoint follows its line's text to line 10.
+    let set = client.call(
+        "break",
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 9, "timeout_ms": 5000 }),
+    );
+    assert_eq!(paused(&set).0, 9, "{set}");
+    std::fs::write(&main, program.replace("// rawr\n", "// rawr\n// counts\n")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let read = client.call("inspect", json!({ "path": "looper", "timeout_ms": 2000 }));
+        if read["structuredContent"]["line"] == 10 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no pause at line 10: {read}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let cleared = client.call("clear", json!({ "path": "looper" }));
+    assert_eq!(cleared["structuredContent"]["cleared"], 1, "{cleared}");
+    assert_eq!(
+        cleared["structuredContent"]["paused"]["line"], 10,
+        "{cleared}"
+    );
+    client.call("continue", json!({ "path": "looper", "timeout_ms": 100 }));
+
+    let stopped = client.call("stop", json!({ "path": "looper" }));
     assert_eq!(stopped["structuredContent"]["stopped"], true, "{stopped}");
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());

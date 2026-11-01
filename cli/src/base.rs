@@ -152,6 +152,7 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
             let (file, span) = positions.locate_position(&entry, position)?;
             Some((file.identity().to_owned(), span.start().line()?))
         });
+        inspector.compiled(&ast);
     }
     // A runtime error's position is in the lowered program: the compiler's
     // positions map it back to its file, the entry or a module's, or to

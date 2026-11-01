@@ -29,6 +29,7 @@
   <li><code>start</code> runs a window or a long-running program and keeps it running.</li>
   <li>After each save, <code>wait</code> says whether the program swapped, restarted or failed.</li>
   <li><code>screenshot</code> shows its window, and <code>inspect</code> reads its values.</li>
+  <li><code>break</code> pauses it at a line or a function. <code>step</code> and <code>continue</code> go on from there.</li>
   <li><code>stop</code> ends it.</li>
 </ol>
 
@@ -45,6 +46,10 @@
   <tr><td><code>stop</code></td><td>Stops the started program.</td></tr>
   <tr><td><code>screenshot</code></td><td>Returns a PNG of the started program&rsquo;s window alone.</td></tr>
   <tr><td><code>inspect</code></td><td>Reads the started program&rsquo;s values while it runs. It returns the file, line and function the program is in, and each binding in scope there as Rust&rsquo;s <code>{:?}</code> prints it. <code>name</code> asks for one binding and <code>file</code> for one source file.</td></tr>
+  <tr><td><code>break</code></td><td>Sets a breakpoint on a <code>line</code> of a <code>file</code>, or on a <code>function</code>. It returns where the program paused, if it pauses within <code>timeout_ms</code>.</td></tr>
+  <tr><td><code>step</code></td><td>Runs the paused program to its next statement. <code>kind</code> is <code>over</code>, <code>into</code> or <code>out</code>.</td></tr>
+  <tr><td><code>continue</code></td><td>Lets the paused program run on. It returns where it pauses next, if it pauses within <code>timeout_ms</code>.</td></tr>
+  <tr><td><code>clear</code></td><td>Removes every breakpoint, or those on a <code>file</code>, a <code>line</code> or a <code>function</code>.</td></tr>
 </table>
 <p>The events <code>wait</code> returns are these:</p>
 <ul>
@@ -67,6 +72,20 @@ counter = Counter { count: 41, label: "ticks" }</code></pre></div>
   <li>A value of a crate&rsquo;s type prints through the crate&rsquo;s <code>Debug</code> impl. A type without one says so, as rustc does: <code>`Window` doesn&rsquo;t implement `Debug`</code>.</li>
   <li>A program with Rust dependencies answers too. In an iced app, <code>{"name": "state"}</code> reads the state in <code>update</code> or <code>view</code> the next time iced calls one.</li>
   <li>A program waiting for input or for an event runs none of its own code. <code>inspect</code> then says nothing was read within <code>timeout_ms</code>. Call it again once the program runs.</li>
+</ul>
+
+<h2 id="break">Pausing and stepping</h2>
+<p><code>break</code> pauses the running program when it reaches a line, or a function&rsquo;s first statement. While it is paused, <code>inspect</code> reads the values where it stopped.</p>
+<div class="block"><pre><code>break    {"path": "counter", "file": "counter/src/main.rs", "line": 9}
+inspect  {"path": "counter", "name": "count"}
+step     {"path": "counter", "kind": "into"}
+continue {"path": "counter"}
+clear    {"path": "counter"}</code></pre></div>
+<ul>
+  <li><code>step</code> stops at the program&rsquo;s next statement. <code>over</code> stays in the function, <code>into</code> goes into a function it calls and <code>out</code> returns from it.</li>
+  <li>Code in Rust dependencies runs whole. A step can&rsquo;t stop inside a crate&rsquo;s function.</li>
+  <li>A pause inside a call from native code, such as a window&rsquo;s event loop, holds that call. The window doesn&rsquo;t redraw or take input until the program goes on.</li>
+  <li>A breakpoint stays across saves while its line&rsquo;s text is still in the file. When lines move, it moves to the nearest line with that text. When no line has that text, it is removed.</li>
 </ul>
 
 <h2 id="example">An example session</h2>
