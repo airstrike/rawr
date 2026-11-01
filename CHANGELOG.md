@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.87 (2026-11-01)
+
 - A dependency that the workspace's `[patch]` replaces with a Git or path crate resolves to that crate, as `cargo build` does, instead of failing on every run. (#668)
 - A program that is a member of a Cargo workspace resolves with the workspace root's `[patch]`, `[replace]`, profiles and `Cargo.lock`, as Cargo resolves every member, so fount's own examples check in place. (#664)
 - `Type::from(value)` of a crate type's own value gives the value back, as core's `impl<T> From<T> for T` does, so `column![..]` of `Element`s checks; `Option<String>::as_deref()` is an `Option<&str>`. (#676)
