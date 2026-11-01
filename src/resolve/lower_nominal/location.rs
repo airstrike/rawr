@@ -224,9 +224,12 @@ impl Class {
     }
 }
 
+/// The byte at `position` in `source`. A position's column is 1-based, and
+/// a half-open span's end may sit one past a line's last character: that
+/// is the line's newline, or the text's end.
 pub(super) fn byte_at(source: &str, position: Position) -> Option<usize> {
     let line = position.line()?;
-    let column = position.position().unwrap_or(0);
+    let column = position.position().map_or(0, |column| column - 1);
     let mut current_line = 1_usize;
     let mut current_column = 0_usize;
     for (byte, character) in source.char_indices() {
@@ -359,6 +362,25 @@ mod tests {
                 Position::START,
                 Position::START
             )))
+        );
+    }
+
+    /// A column is 1-based, and a span that ends a line ends one past its
+    /// last character, as table's `.style(if .. { text::success } ..)`
+    /// does: that is the newline, not outside the text (#562).
+    #[test]
+    fn a_span_ending_a_line_ends_at_its_newline() {
+        let source = "fn f() {\n    text::success\n}";
+        let line = |column| super::byte_at(source, Position::new(2, column));
+        assert_eq!(line(5), Some(13));
+        assert_eq!(&source[13..line(18).unwrap()], "text::success");
+        assert_eq!(line(18), Some(source.find("success\n").unwrap() + 7));
+        assert_eq!(line(19), None);
+        assert_eq!(line(0), Some(9));
+        // The last line's end is the text's end.
+        assert_eq!(
+            super::byte_at(source, Position::new(3, 2)),
+            Some(source.len())
         );
     }
 

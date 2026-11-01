@@ -7244,9 +7244,7 @@ fn render_adapter_body(
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
                 }
                 .map_err(request::unwritable)?;
-                if let Some((sipped, progress)) = sipper_output(returned) {
-                    render_give_sipper(sipped, progress, "output", output)?;
-                } else if let Some(element) = facade_task_output(returned, facade, profile) {
+                if let Some(element) = facade_task_output(returned, facade, profile) {
                     render_give_task(element, "output", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
@@ -11778,42 +11776,6 @@ fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// The `Output` and `Progress` of an `impl Sipper<Output, Progress>` output.
-fn sipper_output(ty: &convert::Type) -> Option<(&convert::Type, &convert::Type)> {
-    let convert::Type::Nominal {
-        definition,
-        arguments,
-    } = ty
-    else {
-        return None;
-    };
-    match arguments.as_ref() {
-        [output, progress] if *definition == crate::surface::identity::Definition::sipper() => {
-            Some((output, progress))
-        }
-        _ => None,
-    }
-}
-
-/// Project a Rust sipper into iced's facade `task::Sipper`. Its progress and
-/// its output become Rawr values on the UI thread, never in the stream.
-fn render_give_sipper(
-    sipped: &convert::Type,
-    progress: &convert::Type,
-    value: &str,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
-    let mut on_progress = String::new();
-    render_to_dynamic(progress, "value", 0, &mut on_progress)?;
-    let mut on_output = String::new();
-    render_to_dynamic(sipped, "value", 0, &mut on_output)?;
-    writeln!(
-        output,
-        "    Ok(__rawr_profile_host::task::sipper(\n        {value},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_progress})) }},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_output})) }},\n    ))"
-    )
-    .map_err(request::unwritable)
-}
-
 /// The `T` of an output that is the iced facade's `Task<T>`.
 fn facade_task_output<'a>(
     ty: &'a convert::Type,
@@ -14412,7 +14374,7 @@ mod tests {
         // A native value of an erased instance is attested by its own
         // witness, not checked as a script value.
         let sender = Type::Nominal {
-            definition: Definition::sipper(),
+            definition: Definition::future(),
             arguments: Box::from([value()]),
         };
         assert!(!super::holds_value(&sender));
@@ -14460,7 +14422,7 @@ mod tests {
             0,
             Box::default(),
             Type::Nominal {
-                definition: Definition::sipper(),
+                definition: Definition::future(),
                 arguments: Box::default(),
             },
         );

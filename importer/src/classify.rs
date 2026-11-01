@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 71;
+const CLASSIFIER_VERSION: u32 = 72;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3739,7 +3739,8 @@ fn type_nameable(
             if !nameable {
                 return (false, assumed);
             }
-            // iced's facade names a future or a sipper; no Rust definition does.
+            // Rawr declares a future, a duration, an instant and the like
+            // itself; no Rust definition names them.
             if crate::surface::identity::Definition::is_projected(definition.as_bytes())
                 || names.opaque.contains(definition.as_bytes())
             {
@@ -7049,11 +7050,6 @@ impl<P: api::Phase> Context<'_, P> {
     /// a type that implements `Future`, is iced's `Task<T>`: the bridge
     /// runs it natively and the facade's `Task` carries it.
     fn convert_output(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
-        if let model::Type::ImplTrait { bounds, .. } = ty
-            && let Some(sipper) = self.sipper_bound(bounds)
-        {
-            return sipper;
-        }
         let output = match ty {
             model::Type::ImplTrait { bounds, .. } => self.future_bound_output(bounds).cloned(),
             model::Type::Definition { id, arguments } if arguments.is_empty() => {
@@ -7133,79 +7129,6 @@ impl<P: api::Phase> Context<'_, P> {
                 })?;
                 Some(substitute_parameters(output, &substitutions))
             })
-    }
-
-    /// An `impl Sipper<Output, Progress>`, or an `impl Straw<T, Progress,
-    /// Error>`, which is a sipper of `Result<T, Error>`. It crosses as iced's
-    /// `task::Sipper<Output, Progress>`. `Never`, sipper's `Infallible`, is
-    /// `()` there, since such a sipper never finishes.
-    fn sipper_bound(
-        &self,
-        bounds: &[model::Predicate],
-    ) -> Option<Result<representability::convert::Type, Failure>> {
-        use representability::convert::Type;
-        bounds.iter().find_map(|predicate| {
-            let model::Predicate::Bound {
-                bound:
-                    model::Bound::Trait {
-                        trait_id,
-                        arguments,
-                        polarity: model::Polarity::Positive,
-                        ..
-                    },
-                ..
-            } = predicate
-            else {
-                return None;
-            };
-            let definition = self
-                .graph
-                .definition_index(trait_id)
-                .and_then(|index| self.graph.definitions().nth(index))?;
-            if trait_id.unit().crate_name() != "sipper" {
-                return None;
-            }
-            let name = definition.display_path().last()?;
-            let types = arguments
-                .iter()
-                .filter_map(|argument| match argument {
-                    model::Argument::Type(ty) => Some(ty),
-                    model::Argument::Lifetime(_) | model::Argument::Const(_) => None,
-                })
-                .collect::<Vec<_>>();
-            let converted = (|| match (name, types.as_slice()) {
-                ("Sipper", [.., output, progress]) => {
-                    Ok((self.convert_never(output)?, self.convert(progress)?))
-                }
-                ("Straw", [.., output, progress, error]) => Ok((
-                    Type::Result(
-                        Box::new(self.convert_never(output)?),
-                        Box::new(self.convert_never(error)?),
-                    ),
-                    self.convert(progress)?,
-                )),
-                _ => Err(representability::reject::Kind::OpaqueType.into()),
-            })();
-            Some(converted.map(|(output, progress)| Type::Nominal {
-                definition: crate::surface::identity::Definition::sipper(),
-                arguments: Box::from([output, progress]),
-            }))
-        })
-    }
-
-    /// `()` for `Never`, `core::convert::Infallible`, which has no values.
-    fn convert_never(&self, ty: &model::Type) -> Result<representability::convert::Type, Failure> {
-        if let model::Type::Definition { id, .. } = ty
-            && id.unit().crate_name() == "core"
-            && self
-                .graph
-                .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
-                .is_some_and(|definition| definition.display_path().last() == Some("Infallible"))
-        {
-            return Ok(representability::convert::Type::Unit);
-        }
-        self.convert(ty)
     }
 
     /// `T` of an `impl Future<Output = T>` bound list.
@@ -10329,6 +10252,26 @@ mod tests {
             ok.as_ref(),
             Type::Tuple(members)
                 if matches!(members.as_ref(), [Type::Nominal { .. }, Type::Sequence { owned: true, .. }])
+        ));
+
+        // An `impl Straw<(), i64, i64>` a function gives is an opaque type
+        // of its own, declared beside the function, as any `impl Trait` is.
+        // It crossed as a sipper type that only rawr-iced declared, so a
+        // program's own `download` named a type no bindings declare (#561).
+        let Representability::Function(download) = named("download") else {
+            panic!("`download` is a function plan, not {:?}", named("download"));
+        };
+        let Type::Nominal { definition, .. } = download.signature().output() else {
+            panic!("`download` gives its opaque type");
+        };
+        assert!(
+            crate::surface::opaque::identities(contract.raw_graph())
+                .contains(definition.as_bytes()),
+            "{:?}",
+            download.signature().output()
+        );
+        assert!(!crate::surface::identity::Definition::is_projected(
+            definition.as_bytes()
         ));
     }
 
