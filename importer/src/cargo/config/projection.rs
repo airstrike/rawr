@@ -303,6 +303,12 @@ impl Projection {
 /// included, is keyed: the resolution replay rejects a candidate whose
 /// projection differs, so a key without them would discard one shell's cached
 /// result for another's instead of keeping both.
+///
+/// `CARGO_INCREMENTAL` is absent. rawr's own Cargo commands always run with
+/// `0`, which the projection keys, and incremental compilation changes how a
+/// build is cached, never what it produces. Keying the shell's value too gave
+/// one variable two fingerprints, so an exported `CARGO_INCREMENTAL` split the
+/// context from the resolution it reuses (#625).
 pub(crate) fn build_relevant(key: &str) -> bool {
     const C_TOOLS: [&str; 10] = [
         "CC",
@@ -340,7 +346,7 @@ pub(crate) fn build_relevant(key: &str) -> bool {
         .any(|prefix| key.starts_with(prefix))
         || matches!(
             key,
-            "CARGO_INCREMENTAL" | "RUSTC" | "RUSTDOC" | "RUSTC_WRAPPER" | "RUSTC_WORKSPACE_WRAPPER"
+            "RUSTC" | "RUSTDOC" | "RUSTC_WRAPPER" | "RUSTC_WORKSPACE_WRAPPER"
         )
         || c_tool(key)
 }

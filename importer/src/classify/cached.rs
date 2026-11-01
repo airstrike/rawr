@@ -130,7 +130,12 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Generic;
-    const SCHEMA: u32 = 4;
+    // The codec with the policy the action key carries, so an entry an older
+    // classifier wrote has another schema and the store evicts it (#630).
+    const SCHEMA: u32 = {
+        let contract = super::contract_versions();
+        node::reader_schema(4, &[contract[0], contract[1], super::COMPILER_ABI])
+    };
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if self.canonical.len() > limit {

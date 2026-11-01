@@ -315,8 +315,8 @@ impl Store {
             Ok(())
         })?;
         lease::enroll_project(&root, Digest::from_bytes(project), &mut budget)?;
-        // Executions an older rawr wrote can't be looked up or run again
-        // (#577). Without any, this is one ledger read.
+        // Entries an older rawr wrote can't be looked up or run again
+        // (#577, #630). Without any, this is one ledger read.
         if !fresh {
             while eviction::recover_unreadable(&root, &mut recovery::Budget::new())? {}
         }
@@ -1115,7 +1115,7 @@ impl Store {
     /// something is evictable; each project's Live and LastGood runners stay.
     /// Each eviction is its own bounded recovery pass.
     fn make_room(&self, estimate: accounting::Charge) -> Result<(), Error> {
-        // What an older rawr executed goes first: nothing reads it again.
+        // What an older rawr wrote goes first: nothing reads it again.
         while eviction::recover_unreadable(&self.root, &mut recovery::Budget::new())? {}
         // A project keeps a few unrooted resolutions and executions of each
         // kind, newest first, whatever the caps.

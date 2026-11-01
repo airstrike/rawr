@@ -13,7 +13,9 @@ struct ValueFixture;
 
 impl Value for ValueFixture {
     const KIND: Kind = Kind::Api;
-    const SCHEMA: u32 = 1;
+    // The current API schema: an action with another is one an older rawr
+    // wrote, which the store evicts (#630).
+    const SCHEMA: u32 = <crate::api::cached::Product as crate::node::Value>::SCHEMA;
 
     fn encode(&self, _limit: usize) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::default())
@@ -209,6 +211,51 @@ fn only_build_relevant_environment_changes_context_identity() {
     );
     assert_ne!(base, identity(&[("RUSTFLAGS", "-Copt-level=1")]));
     assert_ne!(base, identity(&[("PATH", "/x")]));
+}
+
+/// A variable is fingerprinted once. rawr's Cargo always builds with
+/// `CARGO_INCREMENTAL=0`, which the projection keys, so the shell's value
+/// leaves both the context and the projection as they are (#625).
+#[test]
+fn an_exported_cargo_incremental_keeps_the_context_and_projection() {
+    let fixture = Fixture::new("incremental");
+    let home = fixture.cargo_home.to_str().expect("the path is Unicode");
+    let limits = cargo::Limits::standard();
+    let environment = |extra: &[(&str, &str)]| {
+        cargo::config::Environment::from_pairs(
+            [("CARGO_HOME", home)]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .expect("the environment seals")
+    };
+    let identity = |extra: &[(&str, &str)]| {
+        Context::capture(&fixture.project, environment(extra), "target-a", &limits)
+            .expect("the context seals")
+            .identity()
+    };
+    let projection = |extra: &[(&str, &str)]| {
+        cargo::config::projection::Projection::derive(
+            &environment(extra),
+            "target-a",
+            "dev",
+            &limits,
+        )
+        .expect("the projection derives")
+    };
+    for value in ["0", "1"] {
+        let exported = [("CARGO_INCREMENTAL", value)];
+        assert_eq!(
+            identity(&[]),
+            identity(&exported),
+            "CARGO_INCREMENTAL={value}"
+        );
+        assert_eq!(
+            projection(&[]),
+            projection(&exported),
+            "CARGO_INCREMENTAL={value}"
+        );
+    }
 }
 
 /// The context identity under one PATH built from fixture tool directories.

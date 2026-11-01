@@ -161,7 +161,14 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Facade;
-    const SCHEMA: u32 = 1;
+    // The codec with the versions the action key carries (the facade plan
+    // schema, and the contract schema and classifier through the contract
+    // fingerprint), so bindings an older rawr selected have another schema
+    // and the store evicts them (#630).
+    const SCHEMA: u32 = {
+        let contract = crate::classify::contract_versions();
+        node::reader_schema(1, &[super::SCHEMA, contract[0], contract[1]])
+    };
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         if self.bytes.len() > limit {

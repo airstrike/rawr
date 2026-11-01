@@ -581,14 +581,35 @@ fn current_execution(kind: Kind) -> Option<u32> {
     }
 }
 
-fn unreadable(allocation: Allocation) -> bool {
-    allocation.class == Class::Bundle
-        && current_execution(allocation.kind).is_some_and(|schema| schema != allocation.schema)
+/// The schema each plain kind's current value has. These kinds have one
+/// value each and no bundle, and each schema folds in the versions its action
+/// key carries, so an action of these kinds with another schema is one no
+/// current lookup reaches (#630).
+fn current_plain(kind: Kind) -> Option<u32> {
+    use crate::node::Value as _;
+    match kind {
+        Kind::Api => Some(crate::api::cached::Product::SCHEMA),
+        Kind::Generic => Some(crate::classify::cached::Product::SCHEMA),
+        Kind::Facade => Some(crate::surface::facade::cached::Product::SCHEMA),
+        Kind::Overlay => Some(crate::bridge::generate::cached::SCHEMA),
+        _ => None,
+    }
 }
 
-/// Retire one execution an older rawr wrote, with its action and content,
+/// An execution's bundle, or a plain entry's action, that an older rawr
+/// wrote.
+fn unreadable(allocation: Allocation) -> bool {
+    let current = match allocation.class {
+        Class::Bundle => current_execution(allocation.kind),
+        Class::Action => current_plain(allocation.kind),
+        Class::Content => None,
+    };
+    current.is_some_and(|schema| schema != allocation.schema)
+}
+
+/// Retire one entry an older rawr wrote, with its action, bundle and content,
 /// and forget the pins that name it, since nothing can look it up or run it
-/// again. A running program keeps what it holds until it ends (#577).
+/// again. A running program keeps what it holds until it ends (#577, #630).
 pub(super) fn recover_unreadable(
     store: &Path,
     budget: &mut recovery::Budget,
@@ -658,8 +679,9 @@ pub(super) fn recover_unreadable(
     Ok(false)
 }
 
-/// Each unreadable execution's unit, oldest first, that no running program
+/// Each unreadable entry's unit, oldest first, that no running program
 /// holds. Stale pins don't keep one, since what they name can't run again.
+/// Its content goes with it unless another action still names it.
 fn unreadable_units(
     snapshot: &pins::lock::Snapshot,
     registrations: &[Registered],
@@ -669,36 +691,52 @@ fn unreadable_units(
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
-    let mut bundles = registrations
+    let mut unreadable = registrations
         .iter()
         .copied()
-        .filter(|registered| unreadable(registered.allocation()))
+        .filter(|registered| self::unreadable(registered.allocation()))
         .collect::<Vec<_>>();
-    bundles.sort_unstable_by_key(|registered| {
+    unreadable.sort_unstable_by_key(|registered| {
         (
             registered.sequence(),
             registered.publisher(),
+            registered.allocation().class == Class::Bundle,
             registered.allocation().key,
         )
     });
     let mut units = Vec::new();
-    for bundle in bundles {
-        let Some(action) = registrations
-            .iter()
-            .copied()
-            .find(|action| action_owns_bundle(*action, bundle))
-        else {
-            continue;
+    for registered in unreadable {
+        let (action, bundle) = if registered.allocation().class == Class::Bundle {
+            let Some(action) = registrations
+                .iter()
+                .copied()
+                .find(|action| action_owns_bundle(*action, registered))
+            else {
+                continue;
+            };
+            (action, Some(registered))
+        } else {
+            (registered, None)
         };
-        if protected.contains(&action.reference()) || protected.contains(&bundle.reference()) {
+        if protected.contains(&action.reference())
+            || bundle.is_some_and(|bundle| protected.contains(&bundle.reference()))
+        {
             continue;
         }
-        let mut released = BTreeSet::from([action.reference(), bundle.reference()]);
+        let mut released = BTreeSet::from([action.reference()]);
+        released.extend(bundle.map(|bundle| bundle.reference()));
+        let names = |candidate: &Registered, content: &Registered| {
+            candidate.allocation().class == Class::Action
+                && candidate.allocation().kind == content.allocation().kind
+                && candidate.allocation().schema == content.allocation().schema
+                && candidate.content() == content.content()
+        };
         if let Some(content) = registrations.iter().copied().find(|content| {
             content.allocation().class == Class::Content
-                && content.allocation().kind == action.allocation().kind
-                && content.allocation().schema == action.allocation().schema
-                && content.content() == action.content()
+                && names(&action, content)
+                && !registrations
+                    .iter()
+                    .any(|other| other.reference() != action.reference() && names(other, content))
         }) {
             released.insert(content.reference());
         }
