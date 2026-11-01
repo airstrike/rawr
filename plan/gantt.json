@@ -100,7 +100,7 @@
       "open": true,
       "rows": [
         {"id":"deploy-gate","name":"Deploy gate","start":36,"size":1,"state":"done","note":"Waits for Cloudflare's rollout","issues":[321],"milestone":"0.3"},
-        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"now","note":"The universe runner ships and tokio runs; iced frames and a shared engine remain","issues":[434,436,465,507,515]},
+        {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"now","note":"iced snippets render a frame and tokio runs; GIFs and a shared engine remain","issues":[434,436,465,507,515]},
         {"id":"browser-wasm-bindings","name":"wasm bindings for the browser","start":58,"size":5,"state":"next","note":"rawr-web","issues":[435]}
       ]
     },
