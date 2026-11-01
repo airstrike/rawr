@@ -578,6 +578,7 @@ fn prune_lock(lock: &str) -> Option<String> {
 }
 
 /// The project's compiler, as its `cargo build` finds it.
+#[derive(Clone)]
 struct Toolchain {
     /// `rustc -vV`: its release, commit, host target and LLVM.
     version: String,
@@ -613,7 +614,38 @@ impl Toolchain {
             .transpose()
     }
 
+    /// The compiler `project`'s build selects with `environment`, asked
+    /// once per process: a run's demand rounds and its runner build all
+    /// ask, and the answer can't change while the run lasts (#663).
     fn query_program(
+        project: &Path,
+        environment: &crate::cargo::config::Environment,
+        configured: Option<PathBuf>,
+    ) -> Result<Self, node::Error> {
+        type Asked = (PathBuf, Vec<(String, String)>, Option<PathBuf>);
+        static ASKED: std::sync::Mutex<Vec<(Asked, Toolchain)>> = std::sync::Mutex::new(Vec::new());
+        let asked: Asked = (
+            project.to_path_buf(),
+            environment
+                .entries()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
+            configured.clone(),
+        );
+        // Held while the compiler answers, so concurrent askers wait for
+        // that answer instead of asking again.
+        let mut answers = ASKED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, toolchain)) = answers.iter().find(|(known, _)| *known == asked) {
+            return Ok(toolchain.clone());
+        }
+        let toolchain = Self::ask(project, environment, configured)?;
+        answers.push((asked, toolchain.clone()));
+        Ok(toolchain)
+    }
+
+    fn ask(
         project: &Path,
         environment: &crate::cargo::config::Environment,
         configured: Option<PathBuf>,
