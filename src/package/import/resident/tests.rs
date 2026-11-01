@@ -15,6 +15,14 @@ fn usage(engine: &Engine) -> (usize, usize) {
     engine.imported_native.as_ref().unwrap().usage()
 }
 
+/// Whether `ast`'s support module holds the program's own support
+/// functions, not only the generic `Debug` op a debugger reads through.
+fn has_own_support(ast: &crate::AST) -> bool {
+    ast.shared_support()
+        .iter_fn()
+        .any(|(_, metadata)| metadata.name.as_str() != crate::resolve::lower_nominal::DEBUG_GENERIC)
+}
+
 #[test]
 fn resident_compilation_requires_the_engines_retained_native_context() {
     let engine = compiler();
@@ -124,7 +132,9 @@ fn initial_and_ordinary_generations_share_the_resident_account() {
 }
 
 mod top_level {
-    use super::{account, compiler, preview_runtime, retained, snapshot, usage, Outcome};
+    use super::{
+        account, compiler, has_own_support, preview_runtime, retained, snapshot, usage, Outcome,
+    };
     use crate::host::ImportAllocation as _;
     use crate::{Dynamic, Engine, Shared, AST};
 
@@ -150,7 +160,7 @@ mod top_level {
              }",
             ))
             .unwrap();
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let copy = ast.clone_functions_only();
         let live = usage(&engine);
@@ -181,7 +191,7 @@ mod top_level {
         );
         let ast = engine.compile_package_snapshot(&source).unwrap();
         let first_support = Shared::downgrade(ast.shared_support());
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         // A live AST copy keeps the first generation's support charged across
         // the reconstruction and the retirement of its engine.
         let first_copy = ast.clone_functions_only();
@@ -265,7 +275,7 @@ mod top_level {
         let (initial, ast) = engine
             .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let initial_usage = usage(&engine);
         assert!(initial_usage.0 > baseline.0 && initial_usage.1 > baseline.1);
@@ -362,7 +372,7 @@ mod top_level {
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let callback = engine.eval_ast::<crate::FnPtr>(&ast).unwrap();
         let live = usage(&engine);
@@ -391,7 +401,7 @@ mod top_level {
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         let original = Shared::downgrade(ast.shared_support());
         let live = usage(&engine);
         let functions = ast.clone_functions_only();
@@ -439,7 +449,7 @@ mod top_level {
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level(&snapshot(source))
             .unwrap();
-        assert!(!ast.shared_support().is_empty());
+        assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let module = crate::Module::eval_ast_as_new(crate::Scope::new(), &ast, &engine).unwrap();
         let mut resolver = crate::module_resolvers::StaticModuleResolver::new();
@@ -457,6 +467,23 @@ mod top_level {
         assert_eq!(usage(&engine), live);
         drop(resolved);
         assert!(support.upgrade().is_none());
+        assert_eq!(usage(&engine), baseline);
+    }
+
+    #[test]
+    fn empty_support_receipt_retires_with_the_executable() {
+        let engine = retained();
+        let baseline = usage(&engine);
+        let (candidate, ast) = engine
+            .compile_package_snapshot_generation_with_top_level(&snapshot(
+                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
+            ))
+            .unwrap();
+        assert!(ast.shared_support().is_empty());
+        assert!(usage(&engine).1 > baseline.1);
+        drop(candidate);
+        assert_eq!(usage(&engine), baseline);
+        drop(ast);
         assert_eq!(usage(&engine), baseline);
     }
 }

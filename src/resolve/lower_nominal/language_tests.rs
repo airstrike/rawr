@@ -11660,3 +11660,38 @@ run()
 "#,
     );
 }
+
+/// Whether `source`'s support module carries the generic `Debug` op.
+fn carries_generic_debug(engine: &Engine, source: &str) -> bool {
+    let ast = engine
+        .compile(source)
+        .unwrap_or_else(|error| panic!("{error}"));
+    ast.shared_support()
+        .iter_fn()
+        .any(|(_, metadata)| metadata.name.as_str() == super::DEBUG_GENERIC)
+}
+
+const WITHOUT_DEBUG: &str = "pub fn run(n: i64) -> i64 { n + 1 } run(1)";
+
+#[test]
+fn generic_debug_is_carried_only_by_programs_whose_debug_formatting_needs_it() {
+    let engine = Engine::new();
+    assert!(!carries_generic_debug(&engine, WITHOUT_DEBUG));
+    // A `Vec`'s `{:?}` formats through it.
+    assert!(carries_generic_debug(
+        &engine,
+        r#"pub fn run() -> String { format!("{:?}", vec![1, 2]) } run()"#
+    ));
+}
+
+#[cfg(feature = "debugging")]
+#[test]
+fn generic_debug_is_carried_while_a_debugger_is_registered() {
+    let mut engine = Engine::new();
+    #[allow(deprecated)]
+    engine.register_debugger(
+        |_, debugger| debugger,
+        |_, _, _, _, _| Ok(crate::debugger::DebuggerCommand::Continue),
+    );
+    assert!(carries_generic_debug(&engine, WITHOUT_DEBUG));
+}
