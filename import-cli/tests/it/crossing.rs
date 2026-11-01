@@ -758,8 +758,10 @@ fn a_view_that_sends_no_message_names_infallible_in_its_revealed_type() {
 /// private, which only the crate's `pack` makes, and `Mesh::Solid { .. }`
 /// a variant's array field. The program is `run((), view)`: the update is
 /// the crate's impl for `()`, and the view of `&()` gives widgets that
-/// borrow string literals, which the slot's own pins hold. The output is
-/// `cargo run`'s.
+/// borrow string literals, which the slot's own pins hold.
+/// `renderer.with_translation(v, |renderer| renderer.draw_mesh(mesh))`
+/// gives the closure the receiver's type for the trait method's `&mut
+/// Self`, as rustc does (#624). The output is `cargo run`'s.
 #[test]
 fn a_vertex_literal_and_a_view_of_unit_state_run() {
     let (rawr, cargo) = both_printed("crossing-geometry", "geometry.rs", "");
@@ -768,7 +770,8 @@ fn a_vertex_literal_and_a_view_of_unit_state_run() {
         rawr.starts_with(
             "3 vertices, last Some(SolidVertex2D { position: [4.0, 0.0], color: \
              Packed([0.5, 0.25, 0.0, 1.0]) }), 1 triangles at [4.0, 1.5]\n\
-             [1.0, 2.0] Packed([0.5, 0.25, 0.0, 1.0])\ntitle ()"
+             [1.0, 2.0] Packed([0.5, 0.25, 0.0, 1.0])\n\
+             drew 3 vertices at [2.0, 3.0]\ntitle ()"
         ) && rawr.ends_with(
             "last view pad 0 pad 20 rainbow@16 'In this example we draw a custom widget \
              Rainbow' 'Move your cursor over it'"

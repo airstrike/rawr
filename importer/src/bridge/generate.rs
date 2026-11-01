@@ -7391,10 +7391,17 @@ fn render_adapter_body(
                 // A slot lends only script values by reference. A callable
                 // whose inputs borrow a native value, as a style's `&Theme`,
                 // crosses as the closure Rawr makes, as it did before
-                // methods took slots.
+                // methods took slots. A slot lends a native value `&mut`
+                // too, as `Frame::with_save` lends its frame, and a closure
+                // that captures crosses as the closure Rawr makes.
                 let lends = |crossing: &crate::classify::representability::callable::Call| {
                     crossing.inputs().iter().all(|input| {
                         match substituted(input, signature, substitutions) {
+                            Ok(convert::Type::Borrowed { mutable: true, ty })
+                                if lent_mutably(&ty) =>
+                            {
+                                true
+                            }
                             Ok(convert::Type::Borrowed { ty, .. }) => {
                                 matches!(*ty, convert::Type::Script { .. })
                             }
@@ -11218,6 +11225,7 @@ fn render_callable_closure(
     let mut values = Vec::new();
     let mut places = Vec::new();
     let mut lent = Vec::new();
+    let mut lends = Vec::new();
     let mut restores = String::new();
     for (position, input) in inputs.iter().enumerate() {
         // A borrow of a script value, as `.theme(|state| ..)` takes the
@@ -11238,6 +11246,20 @@ fn render_callable_closure(
                 parameters.push(format!("input_{position}: &{rust}"));
                 values.push(format!("input_{position}.0.lend()"));
             }
+            continue;
+        }
+        // A native value the closure borrows `&mut`, as iced's
+        // `renderer.with_translation(v, |renderer| ..)` lends the renderer:
+        // lent for the call alone, as a slot lends it (`render_slot`), so
+        // the closure changes the value itself.
+        if let convert::Type::Borrowed { mutable: true, ty } = input
+            && lent_mutably(ty)
+        {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
+            parameters.push(format!("input_{position}: &mut {rust}"));
+            values.push(lent_value(position, true, &rust));
+            lent.push(position.to_string());
+            lends.push((position, true, rust));
             continue;
         }
         let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
@@ -11336,6 +11358,8 @@ fn render_callable_closure(
     };
     let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
     let body = place::around(&places, "witnesses.clone()", body);
+    let (items, body) = lent_around(&lends, body);
+    let body = format!("{items}{body}");
     Ok(format!(
         "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {body}\n        }}\n    }}",
         parameters.join(", "),
@@ -13496,6 +13520,17 @@ fn lent_around(lends: &[(usize, bool, String)], call: String) -> (String, String
         }
     }
     (items, call)
+}
+
+/// Whether a `&mut` of `ty` that native code gives a script closure or slot
+/// is the native value itself, lent for the call (`lent_around`), as
+/// `Frame::with_save` lends its frame and iced's `with_translation` its
+/// renderer.
+fn lent_mutably(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { .. })
+        && !is_value(ty)
+        && !is_duration(ty)
+        && !carries_lifetime(ty)
 }
 
 /// The script value of a native value lent at `position` (`lent_around`).

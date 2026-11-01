@@ -20068,7 +20068,15 @@ impl<'a> Parser<'a> {
         {
             return Err(unsupported(&method_without_call(&member)));
         }
-        let (arguments, end) = self.parse_call_arguments("host method arguments")?;
+        // Without the method's signature, a closure argument has no
+        // parameter types, as `with_translation(v, |renderer| ..)` lends
+        // the receiver as the trait's `&mut Self`. An argument that can't be
+        // read so is the miss: demanded, the member's signature gives the
+        // closure its types, as rustc's selection does before checking it.
+        let (arguments, end) = match self.parse_call_arguments("host method arguments") {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(miss.unwrap_or(error)),
+        };
         let call_span = span(receiver.span.start(), end);
         let mut types = Vec::with_capacity(arguments.len());
         for argument in &arguments {

@@ -359,6 +359,8 @@ pub use std::convert::Infallible as Never;
 
 /// iced's `advanced`: iced_graphics's modules, which another crate defines.
 pub mod advanced {
+    pub use parts::renderer::{self, Renderer};
+
     pub mod graphics {
         pub use parts::graphics::{color, mesh};
     }
