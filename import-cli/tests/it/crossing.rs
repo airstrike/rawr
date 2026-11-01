@@ -602,6 +602,24 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
     );
 }
 
+/// Opaque `impl Widget` outputs as cargo checks them (edition 2024): one
+/// made of its parameter (T462) and one of a `&'static str` (T428) take no
+/// input's lifetime, and a canvas behind one is mapped (T424) and boxed by
+/// `column!` through the trait's own `boxed`, as `Map`'s impl has
+/// parameters its type doesn't. The output is `cargo run`'s.
+#[test]
+fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
+    let (rawr, cargo) = both_printed("crossing-opaque", "opaque.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 [Increment] [Decrement] map canvas[primary value 0#1]")
+            && rawr.contains("4 message Decrement")
+            && rawr
+                .ends_with("last view pad 0 [Increment] [Decrement] map canvas[primary value 2#1]"),
+        "{rawr}"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's
