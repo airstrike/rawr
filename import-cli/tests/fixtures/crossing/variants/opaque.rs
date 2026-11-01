@@ -5,51 +5,31 @@
 // and `column!` boxes the `Map` through the trait's own `boxed`, as `Map`'s
 // impl has parameters its type does not. A button behind `impl
 // Widget<Part>` is mapped too: its type is a `Widget` at any renderer, and
-// only the `impl Widget<Part>` fixes the one `map` is called at.
+// only the `impl Widget<Part>` fixes the one `map` is called at. As
+// iced's bezier_tool, the canvas is a module's: a method borrowing its
+// state and the curves returns it behind `impl Framed<Curve>`, the trait
+// `map` is a method of, and its program borrows both.
 
-use events::canvas::{self, Bounds, Event, Geometry, Pen};
 use events::widgets::{button, column, Framed, Widget};
-use events::Theme;
 
 #[derive(Default)]
 struct Counter {
     value: i64,
+    bezier: bezier::State,
+    curves: Vec<bezier::Curve>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     Increment,
     Decrement,
-    Curve(Curve),
+    Curve(bezier::Curve),
     Part(Part),
 }
 
 #[derive(Debug, Clone)]
 enum Part {
     Down,
-}
-
-#[derive(Debug, Clone)]
-enum Curve {
-    Drawn(String),
-}
-
-struct Bezier {
-    value: i64,
-}
-
-impl canvas::Program<Curve> for Bezier {
-    type State = ();
-
-    fn update(&self, _state: &mut (), event: &Event, _bounds: Bounds) -> Option<Curve> {
-        match event {
-            Event::Pressed(label) => Some(Curve::Drawn(label.clone())),
-        }
-    }
-
-    fn draw(&self, _state: &(), pen: &Pen, _theme: &Theme, _bounds: Bounds) -> Vec<Geometry> {
-        vec![pen.stroke(&format!("value {}", self.value))]
-    }
 }
 
 fn increment(message: Message) -> impl Widget<Message> {
@@ -65,16 +45,15 @@ fn part() -> impl Widget<Part> {
     button("Decrement").on_press(Part::Down)
 }
 
-fn bezier(value: i64) -> impl Widget<Curve> {
-    canvas::canvas(Bezier { value })
-}
-
 impl Counter {
     fn update(&mut self, message: Message) {
         match message {
             Message::Increment => self.value += 1,
             Message::Decrement => self.value -= 1,
-            Message::Curve(Curve::Drawn(label)) => self.value += label.len() as i64,
+            Message::Curve(curve) => {
+                self.value += curve.length();
+                self.curves.push(curve);
+            }
             Message::Part(Part::Down) => self.value -= 2,
         }
     }
@@ -84,8 +63,61 @@ impl Counter {
             increment(Message::Increment),
             part().map(Message::Part),
             decrement(),
-            bezier(self.value).map(Message::Curve),
+            self.bezier.view(&self.curves).map(Message::Curve),
         ]
+    }
+}
+
+mod bezier {
+    use events::canvas::{self, Bounds, Event, Geometry, Pen};
+    use events::widgets::Framed;
+    use events::Theme;
+
+    #[derive(Default)]
+    pub struct State {
+        strokes: i64,
+    }
+
+    impl State {
+        pub fn view<'a>(&'a self, curves: &'a [Curve]) -> impl Framed<Curve> {
+            canvas::canvas(Bezier {
+                state: self,
+                curves,
+            })
+        }
+    }
+
+    struct Bezier<'a> {
+        state: &'a State,
+        curves: &'a [Curve],
+    }
+
+    impl canvas::Program<Curve> for Bezier<'_> {
+        type State = ();
+
+        fn update(&self, _state: &mut (), event: &Event, _bounds: Bounds) -> Option<Curve> {
+            match event {
+                Event::Pressed(label) => Some(Curve::Drawn(label.clone())),
+            }
+        }
+
+        fn draw(&self, _state: &(), pen: &Pen, _theme: &Theme, _bounds: Bounds) -> Vec<Geometry> {
+            let label = format!("curves {} {}", self.curves.len(), self.state.strokes);
+            vec![pen.stroke(&label)]
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum Curve {
+        Drawn(String),
+    }
+
+    impl Curve {
+        pub fn length(&self) -> i64 {
+            match self {
+                Curve::Drawn(label) => label.len() as i64,
+            }
+        }
     }
 }
 
