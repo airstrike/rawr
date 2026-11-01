@@ -553,9 +553,11 @@
     {"t":"T550","issue":550,"title":"T550: An unannotated closure input of an opaque program's P::State is typed _","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"bed95da33","release":"0.3.58"},
     {"t":"T551","issue":551,"title":"T551: A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T552","issue":552,"title":"T552: Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T553","issue":553,"title":"T553: Request builder methods return a Result that can no longer fail","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T554","issue":554,"title":"T554: runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D670"],"commit":null,"release":null},
+    {"t":"T553","issue":553,"title":"T553: Request builder methods return a Result that can no longer fail","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"68d7473c2","release":null},
+    {"t":"T554","issue":554,"title":"T554: runner::account native_account tests fail with ForeignIdentity on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D670"],"commit":"68d7473c2","release":null},
     {"t":"T555","issue":555,"title":"T555: An opaque type's binding that names a closure parameter can't be declared","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T556","issue":556,"title":"T556: An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T556","issue":556,"title":"T556: An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T557","issue":557,"title":"T557: Delete the native account's counters and its account reports","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
+    {"t":"T558","issue":558,"title":"T558: Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

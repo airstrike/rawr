@@ -1225,10 +1225,12 @@
     {"issue":550,"title":"An unannotated closure input of an opaque program's P::State is typed _","state":"closed","category":"No glue (D593)","release":"0.3.58"},
     {"issue":551,"title":"A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)"},
     {"issue":552,"title":"Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc"},
-    {"issue":553,"title":"Request builder methods return a Result that can no longer fail","state":"open","category":"Importer"},
-    {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health"},
+    {"issue":553,"title":"Request builder methods return a Result that can no longer fail","state":"closed","category":"Importer"},
+    {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"closed","category":"Health"},
     {"issue":555,"title":"An opaque type's binding that names a closure parameter can't be declared","state":"open","category":"No glue (D593)"},
-    {"issue":556,"title":"An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)"}
+    {"issue":556,"title":"An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)"},
+    {"issue":557,"title":"Delete the native account's counters and its account reports","state":"open","category":"Importer"},
+    {"issue":558,"title":"Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health"}
   ],
   "groups": [
     {
