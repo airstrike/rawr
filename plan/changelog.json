@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A cache missing one deleted execution forgets it and the pins that held it, and rebuilds it, instead of failing with \"lost a registered allocation\".","issues":[612]},
+      {"text":"A fresh build whose cache key still holds an older entry that no longer checks replaces that entry instead of failing to publish.","issues":[614]},
+      {"text":"A cache entry that goes stale after `rawr check`'s first pass, or during `rawr run`'s runner build, prepares the program again instead of failing.","issues":[613]}
+    ]
   },
   "releases": [
     {

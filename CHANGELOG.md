@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A cache missing one deleted execution forgets it and the pins that held it, and rebuilds it, instead of failing with "lost a registered allocation". (#612)
+- A fresh build whose cache key still holds an older entry that no longer checks replaces that entry instead of failing to publish. (#614)
+- A cache entry that goes stale after `rawr check`'s first pass, or during `rawr run`'s runner build, prepares the program again instead of failing. (#613)
 
 ## 0.3.68 (2026-11-01)
 
