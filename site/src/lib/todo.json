@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A generic method whose signature names its impl's parameter in a crate type is compiled once per type it is used at, and `C::COMPONENT_RANGES` and `C::new(..)` read that type's impl of the bound's trait, as rustc does.","issues":[607]},
+        {"text":"A view that sends no message, `fn view(..) -> impl Widget<Never>`, works: iced's `Never` (std's `Infallible`) is named in the type the body reveals and passed to the crate's generic items.","issues":[599]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.69",
@@ -1369,7 +1375,7 @@
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
     {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"open","category":"No glue (D593)"},
     {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
-    {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"open","category":"No glue (D593)"},
+    {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"closed","category":"No glue (D593)"},
     {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},
     {"issue":601,"title":"Remove the runner's always-None event mapper","state":"open","category":"Importer"},
     {"issue":602,"title":"Derive paths resolve to crate macros; helper attributes kept as source text","state":"closed","category":"No glue (D593)","release":"0.3.66"},
@@ -1377,7 +1383,7 @@
     {"issue":604,"title":"Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc"},
     {"issue":605,"title":"Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc"},
     {"issue":606,"title":"Two rawr integration tests fail on main","state":"closed","category":"Health"},
-    {"issue":607,"title":"color_palette: an associated constant through a generic parameter","state":"open","category":"No glue (D593)"},
+    {"issue":607,"title":"color_palette: an associated constant through a generic parameter","state":"closed","category":"No glue (D593)"},
     {"issue":608,"title":"The struct-literal error blames private fields when a public field's type isn't supported","state":"open","category":"Divergences from rustc"},
     {"issue":609,"title":"invalid stored baseline reaches the user instead of a rebuild","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.68"},
     {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"open","category":"No glue (D593)"},
@@ -1385,7 +1391,12 @@
     {"issue":612,"title":"A store missing a single execution still fails","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":613,"title":"Stale entries after rawr check's prepare loop and in rawr run's runner build still fail","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":614,"title":"A stale stored node at the same action as a fresh build fails on publish","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
-    {"issue":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":616,"title":"A view of unit state, iced::run((), view), panics the generator","state":"open","category":"No glue (D593)"},
+    {"issue":617,"title":"A struct update ..T::default() on a crate type panics","state":"open","category":"No glue (D593)"},
+    {"issue":618,"title":"A program trait's associated function on a crate type, called by the type's name, is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":619,"title":"A derived Default with a crate-type field fails at runtime","state":"open","category":"No glue (D593)"},
+    {"issue":620,"title":"An empty match on Infallible is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
