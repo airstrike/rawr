@@ -46,7 +46,7 @@ pub(super) fn classify_facade(
             })?;
             let parts = generic
                 .value()
-                .replay(&graph, policy, limits)
+                .replay(&graph, policy)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
             let authority =
                 crate::surface::facade::cached::authority(parts.fingerprint.as_bytes())?;
@@ -58,7 +58,7 @@ pub(super) fn classify_facade(
                     limits.node_output_bytes(),
                 )?;
             let facade = facade_recipe.evaluate(batch, || {
-                crate::surface::facade::cached::Product::capture_parts(&graph, &parts, limits)
+                crate::surface::facade::cached::Product::capture_parts(&graph, &parts)
             })?;
             let (generic, facade) = node::staging::promote_pair(generic, facade, &store)?;
             let chain = node::Chain::validated(context.clone(), &generic);
@@ -86,7 +86,7 @@ pub(super) fn classify(
         })
         .map_err(|error| Error::Node(Box::new(error)))?;
     let chain = parent.child(&product);
-    let parts = product.value().replay(&graph, policy, limits)?;
+    let parts = product.value().replay(&graph, policy)?;
     Ok(parts.into_contract(graph, Some(chain)))
 }
 
@@ -123,9 +123,8 @@ impl Product {
         &self,
         graph: &api::Graph<impl api::Phase>,
         policy: &Policy,
-        limits: &crate::cargo::Limits,
     ) -> Result<ClassifiedParts, Error> {
-        ClassifiedParts::decode(&self.canonical, graph, policy, limits)
+        ClassifiedParts::decode(&self.canonical, graph, policy)
     }
 }
 
@@ -255,16 +254,13 @@ mod tests {
         let captured_product = Product::capture(&captured, &policy, &limits).unwrap();
         let current_product = Product::capture(&extracted, &policy, &limits).unwrap();
         assert_eq!(captured_product.canonical, current_product.canonical);
-        let parts = captured_product
-            .replay(&captured, &policy, &limits)
-            .unwrap();
-        let owned_facade =
-            crate::surface::facade::Plan::encode_parts(&captured, &parts, &limits).unwrap();
+        let parts = captured_product.replay(&captured, &policy).unwrap();
+        let owned_facade = crate::surface::facade::Plan::encode_parts(&captured, &parts).unwrap();
         let current = extracted.classify(&policy, &limits).unwrap();
         assert_eq!(parts.fingerprint, current.fingerprint());
         assert_eq!(
             owned_facade,
-            crate::surface::facade::Plan::encode(&current, &limits).unwrap()
+            crate::surface::facade::Plan::encode(&current).unwrap()
         );
         // The captured branch only returns ClassifiedParts and facade bytes;
         // no input proof is supplied and no current contract/Chain is created.
@@ -277,12 +273,12 @@ mod tests {
         let graph = crate::test_fixture::support_outcomes();
         let product = Product::capture(&graph, &policy, &limits).expect("classify owned graph");
         let parts = product
-            .replay(&graph, &policy, &limits)
+            .replay(&graph, &policy)
             .expect("replay owned classification");
-        let staged_bytes = crate::surface::facade::Plan::encode_parts(&graph, &parts, &limits)
+        let staged_bytes = crate::surface::facade::Plan::encode_parts(&graph, &parts)
             .expect("generate facade without a current contract");
         let contract = parts.into_contract(graph, None);
-        let current_bytes = crate::surface::facade::Plan::encode(&contract, &limits)
+        let current_bytes = crate::surface::facade::Plan::encode(&contract)
             .expect("generate facade from the public contract");
         assert_eq!(staged_bytes, current_bytes);
         assert!(contract.node_chain().is_none());
@@ -333,7 +329,7 @@ mod tests {
             .expect("the generic product encodes");
         let decoded = Product::decode(&bytes, crate::node::MAX_CONTENT_BYTES)
             .expect("the generic product decodes");
-        let replayed = ClassifiedParts::decode(&decoded.canonical, &graph, &policy, &limits)
+        let replayed = ClassifiedParts::decode(&decoded.canonical, &graph, &policy)
             .expect("the generic product replays");
         let contract = replayed.into_contract(graph, None);
         assert_eq!(contract.canonical_bytes(), expected.as_ref());
@@ -343,7 +339,7 @@ mod tests {
         let graph = crate::test_fixture::support_outcomes();
         let mut trailing = bytes.into_vec();
         trailing.push(b' ');
-        assert!(ClassifiedParts::decode(&trailing, &graph, &policy, &limits).is_err());
+        assert!(ClassifiedParts::decode(&trailing, &graph, &policy).is_err());
     }
 
     #[cfg(feature = "test-fixtures")]

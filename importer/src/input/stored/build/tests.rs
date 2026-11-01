@@ -248,9 +248,6 @@ fn exact_header_owner_paths_and_ordered_out_directories_precede_native_work() {
             _ => unreachable!(),
         }
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("zero remaining path work");
         let mut allocation = Allocation::for_proof(PRIOR, &Limits::standard());
         assert!(
             matches!(
@@ -444,7 +441,7 @@ fn saved_output_read_failure_precedes_its_header_comparison() {
 }
 
 #[test]
-fn original_nonzero_accounts_have_exact_floors_and_persistent_refusal() {
+fn original_nonzero_accounts_charge_storage_and_refusal_persists() {
     let fixture = Fixture::open(true, true);
     let (recipes, _) = fixture.cold();
     let standard = Limits::standard();
@@ -459,83 +456,7 @@ fn original_nonzero_accounts_have_exact_floors_and_persistent_refusal() {
     .expect("measure actual storage");
     let spent = allocation.usage();
     assert!(spent.items > PRIOR.items && spent.bytes > PRIOR.bytes);
-    for mode in 0..3 {
-        let mut limits = standard;
-        limits.items = spent.items - usize::from(mode == 1);
-        limits.input_proof_bytes = spent.bytes - usize::from(mode == 2);
-        let mut allocation = Allocation::for_proof(PRIOR, &limits);
-        let result = acquire(
-            &fixture,
-            &recipes,
-            false,
-            &mut allocation,
-            &node::GraphBudget::new(),
-        );
-        // The exact storage is charged either way; a ceiling one under
-        // records the axis with the exact total as its high water.
-        result.expect("original storage is owned, not gated");
-        assert_eq!(allocation.usage(), spent, "one-under account {mode}");
-        let record = allocation.exceedances();
-        if mode == 0 {
-            assert!(!record.is_exceeded(), "exact original ceilings");
-        } else {
-            let (name, total) = if mode == 1 {
-                (crate::input::INPUT_ITEMS_RESOURCE, spent.items)
-            } else {
-                (crate::input::INPUT_BYTES_RESOURCE, spent.bytes)
-            };
-            let axis = record.axis(name).expect("one-under axis recorded");
-            assert_eq!(axis.target as usize, total - 1);
-            assert_eq!(axis.high_water as usize, total);
-            assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-            // A genuine failure latches the account persistently.
-            allocation.refuse();
-            let stopped = allocation.usage();
-            assert!(matches!(
-                acquire(
-                    &fixture,
-                    &recipes,
-                    false,
-                    &mut allocation,
-                    &node::GraphBudget::new()
-                ),
-                Err(Error::Refused)
-            ));
-            assert_eq!(allocation.usage(), stopped);
-        }
-    }
-}
-
-#[test]
-fn original_graph_exceedance_is_recorded_and_latched_accounts_stop_later_observation() {
-    let fixture = Fixture::open(false, false);
-    let (recipes, _) = fixture.cold();
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("consume current path account");
-    let mut allocation = Allocation::for_proof(PRIOR, &Limits::standard());
-    // Path checks past the target are charged and recorded; the
-    // observation completes on the exhausted graph.
-    acquire(&fixture, &recipes, false, &mut allocation, &graph)
-        .expect("path checks are measured, not gated");
-    let record = graph.exceedances();
-    let axis = record
-        .axis(node::PATHS_RESOURCE)
-        .expect("path axis recorded");
-    assert_eq!(axis.target as usize, node::MAX_PATH_CHECKS_PER_GRAPH);
-    assert_eq!(
-        axis.first_requested as usize,
-        node::MAX_PATH_CHECKS_PER_GRAPH + 1
-    );
-    assert_eq!(
-        axis.high_water as usize,
-        graph.census_usage().expect("graph census").1,
-        "high water is the truthful cumulative path count"
-    );
-    assert!(axis.site.is_some());
-    assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-    // A genuine failure latches; a latched account observes nothing more.
+    // A genuine failure latches the account persistently.
     allocation.refuse();
     assert!(matches!(
         acquire(
@@ -547,46 +468,7 @@ fn original_graph_exceedance_is_recorded_and_latched_accounts_stop_later_observa
         ),
         Err(Error::Refused)
     ));
-    let mut limits = Limits::standard();
-    limits.input_proof_bytes = PRIOR.bytes;
-    let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    // The real entry slot is admitted and recorded before the observer runs.
-    let mut called = false;
-    let result = super::push(
-        &mut Slots::new(),
-        &mut Budget::borrow(&limits, &mut allocation, &node::GraphBudget::new()),
-        |_| {
-            called = true;
-            Err(Error::Encoding("observer payload"))
-        },
-    );
-    assert!(matches!(result, Err(Error::Encoding("observer payload"))));
-    assert!(called, "the admitted Entry slot reaches the observer");
-    let record = allocation.exceedances();
-    let axis = record
-        .axis(crate::input::INPUT_BYTES_RESOURCE)
-        .expect("slot byte axis recorded");
-    assert_eq!(axis.target as usize, PRIOR.bytes);
-    assert_eq!(
-        axis.first_requested as usize,
-        PRIOR.bytes + std::mem::size_of::<Entry>()
-    );
-    // A latched account refuses the slot before any observer payload.
-    allocation.refuse();
-    let mut called = false;
-    let result = super::push(
-        &mut Slots::new(),
-        &mut Budget::borrow(&limits, &mut allocation, &node::GraphBudget::new()),
-        |_| {
-            called = true;
-            Err(Error::Encoding("must not observe"))
-        },
-    );
-    assert!(matches!(result, Err(Error::Refused)));
-    assert!(
-        !called,
-        "latched Entry slot refuses before observer payload"
-    );
+    assert_eq!(allocation.usage(), spent);
 }
 
 #[test]

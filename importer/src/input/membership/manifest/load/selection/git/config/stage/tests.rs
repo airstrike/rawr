@@ -6,7 +6,7 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn transcript(bytes: &[u8], error: Option<i32>) -> Transcript {
     let mut events = vec![
@@ -39,10 +39,8 @@ fn run(
     refuse: bool,
 ) -> Result<Result<Stage, Failure>, Error<membership::Error>> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = vec![];

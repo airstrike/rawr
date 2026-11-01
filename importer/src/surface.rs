@@ -9,7 +9,6 @@ use sha2::{Digest as _, Sha256};
 use crate::contract::{Classified, Contract};
 
 #[doc(hidden)]
-pub mod account;
 pub(crate) mod adapter;
 pub mod application;
 pub mod builder;
@@ -109,8 +108,6 @@ pub struct SnapshotBuilder {
     bytes: usize,
     item_limit: usize,
     byte_limit: usize,
-    string_limit: usize,
-    account: account::Account,
 }
 
 /// SHA-256 identity of sorted symbolic bridge entries.
@@ -238,8 +235,6 @@ pub struct Compiler<'contract, B> {
     event_projection: Option<crate::profile::contract::EventProjectionRules>,
     item_limit: usize,
     byte_limit: usize,
-    string_limit: usize,
-    account: account::Account,
 }
 
 #[derive(Serialize)]
@@ -318,8 +313,6 @@ impl Snapshot {
             bytes: 0,
             item_limit: limits.items,
             byte_limit: limits.json_bytes,
-            string_limit: limits.string_bytes,
-            account: account::Account::surface(),
         }
     }
 
@@ -339,13 +332,6 @@ impl Snapshot {
 }
 
 impl SnapshotBuilder {
-    /// The accounting axes this snapshot crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
-    }
-
     /// Bind the exact application entry target before retaining input files.
     ///
     /// The path, item and byte targets are accounting; crossing one is
@@ -362,12 +348,6 @@ impl SnapshotBuilder {
             limit: self.item_limit,
             actual: usize::MAX,
         })?;
-        self.account
-            .exceeded("snapshot entry path bytes", self.string_limit, path.len());
-        self.account
-            .exceeded("snapshot retained bytes", self.byte_limit, path.len());
-        self.account
-            .exceeded("snapshot retained items", self.item_limit, items);
         let mut digest = self.digest.clone();
         digest.update(b"rawr.snapshot.entry/v1");
         digest.update(path_length.to_le_bytes());
@@ -411,14 +391,6 @@ impl SnapshotBuilder {
                 limit: self.byte_limit,
                 actual: usize::MAX,
             })?;
-        // Accounting targets are recorded on the surface account; the
-        // file is retained and the cumulative charge continues.
-        self.account
-            .exceeded("snapshot path bytes", self.string_limit, path.len());
-        self.account
-            .exceeded("snapshot retained items", self.item_limit, items);
-        self.account
-            .exceeded("snapshot retained bytes", self.byte_limit, bytes);
         let path_length = u64::try_from(path.len()).map_err(|_| Error::SnapshotOrder)?;
         let content_length = u64::try_from(contents.len()).map_err(|_| Error::SnapshotOrder)?;
         let mut retained = String::new();
@@ -461,38 +433,16 @@ impl SnapshotBuilder {
 impl Origin {
     /// Promote one checked Rawr use-site range into bounded demand evidence.
     #[doc(hidden)]
-    pub fn checked(
-        source: &str,
-        byte_start: u32,
-        byte_end: u32,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Self, Error> {
-        // A free-standing origin has no compiler account in scope, so
-        // its string target is recorded on a surface account of its own.
-        let mut account = account::Account::surface();
-        Self::validate(
-            source,
-            byte_start,
-            byte_end,
-            limits.string_bytes,
-            &mut account,
-        )?;
+    pub fn checked(source: &str, byte_start: u32, byte_end: u32) -> Result<Self, Error> {
+        Self::validate(byte_start, byte_end)?;
         Self::retain(source, byte_start, byte_end)
     }
 
-    /// Prove the half-open range; the source-length target is an accounting
-    /// comparison recorded on `account`, never a refusal.
-    fn validate(
-        source: &str,
-        byte_start: u32,
-        byte_end: u32,
-        string_limit: usize,
-        account: &mut account::Account,
-    ) -> Result<(), Error> {
+    /// Prove the half-open range.
+    fn validate(byte_start: u32, byte_end: u32) -> Result<(), Error> {
         if byte_start > byte_end {
             return Err(Error::InvalidOrigin);
         }
-        account.exceeded("demand origin bytes", string_limit, source.len());
         Ok(())
     }
 
@@ -566,20 +516,11 @@ impl Contract<Classified> {
             event_projection: None,
             item_limit: limits.items,
             byte_limit: limits.json_bytes,
-            string_limit: limits.string_bytes,
-            account: account::Account::surface(),
         })
     }
 }
 
 impl<B> Compiler<'_, B> {
-    /// The accounting axes this compilation crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
-    }
-
     /// Bind the exact selected profile projection rule used only to prove a
     /// mapper-bearing invocation. This does not install a facade projection.
     #[doc(hidden)]
@@ -609,13 +550,6 @@ impl<B> Compiler<'_, B> {
                 return Err(Error::NotDemandable);
             }
         }
-        let actual = self.builders.len().checked_add(1).ok_or(Error::Limit {
-            resource: "symbolic builder plans",
-            limit: self.item_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("symbolic builder plans", self.item_limit, actual);
         self.allocation
             .retain_checked(Some(1), plan.retained_bytes())?;
         self.builders
@@ -637,13 +571,6 @@ impl<B> Compiler<'_, B> {
         if !outcome.representability().is_demandable() {
             return Err(Error::NotDemandable);
         }
-        let actual = self.entries.len().checked_add(1).ok_or(Error::Limit {
-            resource: "symbolic demand entries",
-            limit: self.item_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("symbolic demand entries", self.item_limit, actual);
         let bytes = entry_retained_bytes(identity.checked_retained_bytes(), origin.source.len());
         self.allocation.retain_checked(Some(1), bytes)?;
         self.entries.try_reserve(1).map_err(|_| Error::Allocation)?;
@@ -661,20 +588,7 @@ impl<B> Compiler<'_, B> {
         byte_start: u32,
         byte_end: u32,
     ) -> Result<(), Error> {
-        let actual = self.applications.len().checked_add(1).ok_or(Error::Limit {
-            resource: "symbolic applications",
-            limit: self.item_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("symbolic applications", self.item_limit, actual);
-        Origin::validate(
-            source,
-            byte_start,
-            byte_end,
-            self.string_limit,
-            &mut self.account,
-        )?;
+        Origin::validate(byte_start, byte_end)?;
         let invocation = application.invocation.clone();
         let bytes = serde_json::to_vec(&invocation)
             .map_err(|_| Error::Encoding)?
@@ -706,20 +620,7 @@ impl<B> Compiler<'_, B> {
         if has_unresolved_structural_parameters(outcome.representability()) {
             return Err(Error::UnconstrainedGeneric);
         }
-        let actual = self.entries.len().checked_add(1).ok_or(Error::Limit {
-            resource: "symbolic demand entries",
-            limit: self.item_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("symbolic demand entries", self.item_limit, actual);
-        Origin::validate(
-            source,
-            byte_start,
-            byte_end,
-            self.string_limit,
-            &mut self.account,
-        )?;
+        Origin::validate(byte_start, byte_end)?;
         let bytes = entry_retained_bytes(base.checked_retained_bytes_with(&selector), source.len());
         self.allocation.retain_checked(Some(1), bytes)?;
         self.entries.try_reserve(1).map_err(|_| Error::Allocation)?;
@@ -768,20 +669,7 @@ impl<B> Compiler<'_, B> {
         }
         let predicates = predicate_proofs(self.contract, outcome, &instance)?;
         instance.seal_predicates(predicates);
-        let actual = self.entries.len().checked_add(1).ok_or(Error::Limit {
-            resource: "symbolic demand entries",
-            limit: self.item_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("symbolic demand entries", self.item_limit, actual);
-        Origin::validate(
-            source,
-            byte_start,
-            byte_end,
-            self.string_limit,
-            &mut self.account,
-        )?;
+        Origin::validate(byte_start, byte_end)?;
         let retained = base
             .checked_retained_bytes_with_instance(&selector, &instance)
             .and_then(|bytes| bytes.checked_add(source.len()))
@@ -828,11 +716,6 @@ impl<B> Compiler<'_, B> {
             });
         }
         result.map_err(|_| Error::Encoding)?;
-        // The canonical size is an accounting target recorded on the
-        // surface account; the physical bounds are the P2 allocation and the
-        // reservation below.
-        self.account
-            .exceeded("canonical demand bytes", self.byte_limit, measured.bytes);
         let mut canonical = Vec::new();
         self.allocation.retain(1, measured.bytes)?;
         canonical
@@ -932,8 +815,6 @@ impl<B> Compiler<'_, B> {
             });
         }
         result.map_err(|_| Error::Encoding)?;
-        self.account
-            .exceeded("canonical surface bytes", self.byte_limit, surface.bytes);
         let fingerprint = Fingerprint(surface.digest.finalize().into());
         Ok(Demand {
             _brand: self.brand,
@@ -1558,30 +1439,6 @@ impl<B> Demand<Sealed, B> {
         snapshot: Snapshot,
         limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        // The cached document size is an accounting target recorded on
-        // a surface account for this replay; the physical bound is the node
-        // content ceiling that already admitted the bytes.
-        let mut account = account::Account::surface();
-        Self::replay_cached_accounted(
-            bytes,
-            retained,
-            brand,
-            contract,
-            snapshot,
-            limits,
-            &mut account,
-        )
-    }
-
-    pub(crate) fn replay_cached_accounted(
-        bytes: &[u8],
-        retained: (usize, usize),
-        brand: B,
-        contract: &Contract<Classified>,
-        snapshot: Snapshot,
-        limits: &crate::cargo::Limits,
-        account: &mut account::Account,
-    ) -> Result<Self, Error> {
         Self::replay_with(
             bytes,
             retained,
@@ -1590,7 +1447,6 @@ impl<B> Demand<Sealed, B> {
             contract.allocation(limits)?,
             snapshot,
             limits,
-            account,
             |stored, plans| {
                 for identity in unique_identities(&stored.entries) {
                     let outcome = contract.outcome(identity).ok_or(Error::ForeignIdentity)?;
@@ -1627,7 +1483,6 @@ impl<B> Demand<Sealed, B> {
         limits: &crate::cargo::Limits,
         resolved: Vec<adapter::Plan>,
     ) -> Result<Self, Error> {
-        let mut account = account::Account::surface();
         Self::replay_with(
             bytes,
             retained,
@@ -1636,7 +1491,6 @@ impl<B> Demand<Sealed, B> {
             allocation,
             snapshot,
             limits,
-            &mut account,
             |_, plans| {
                 plans.extend(resolved);
                 Ok(())
@@ -1659,15 +1513,9 @@ impl<B> Demand<Sealed, B> {
         mut allocation: crate::contract::Allocation,
         snapshot: Snapshot,
         limits: &crate::cargo::Limits,
-        account: &mut account::Account,
         resolve: impl FnOnce(&StoredCanonical, &mut Vec<adapter::Plan>) -> Result<(), Error>,
     ) -> Result<Self, Error> {
         let (fingerprint, chain) = contract;
-        account.exceeded(
-            "cached symbolic demand bytes",
-            limits.json_bytes,
-            bytes.len(),
-        );
         let stored: StoredCanonical =
             serde_json::from_slice(bytes).map_err(|_| Error::Canonical)?;
         let exact = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
@@ -1690,28 +1538,15 @@ impl<B> Demand<Sealed, B> {
         allocation.retain(additional_items, additional_bytes)?;
 
         for entry in &stored.entries {
-            Origin::validate(
-                entry.origin.source(),
-                entry.origin.byte_start,
-                entry.origin.byte_end,
-                limits.string_bytes,
-                account,
-            )?;
+            Origin::validate(entry.origin.byte_start, entry.origin.byte_end)?;
         }
         for applied in stored.applications.iter() {
-            Origin::validate(
-                applied.origin.source(),
-                applied.origin.byte_start,
-                applied.origin.byte_end,
-                limits.string_bytes,
-                account,
-            )?;
+            Origin::validate(applied.origin.byte_start, applied.origin.byte_end)?;
         }
         let unique = unique_identity_count(&stored.entries)
             .checked_add(stored.builders.len())
             .and_then(|count| count.checked_add(unique_applications(&stored.applications).len()))
             .ok_or(Error::Canonical)?;
-        account.exceeded("cached adapter plan count", limits.items, unique);
         let mut plans = Vec::new();
         plans
             .try_reserve_exact(unique)
@@ -1748,11 +1583,6 @@ impl<B> Demand<Sealed, B> {
             });
         }
         result.map_err(|_| Error::Encoding)?;
-        account.exceeded(
-            "cached canonical surface bytes",
-            limits.json_bytes,
-            surface.bytes,
-        );
         Ok(Self {
             _brand: brand,
             contract_chain: chain.map(runner::Binding::capture),
@@ -1999,7 +1829,7 @@ mod tests {
             .expect("fixture has a struct")
             .identity()
             .clone();
-        let origin = Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
+        let origin = Origin::checked("/fixture/main.rs", 0, 4).expect("origin is bounded");
         let mut first = contract
             .compiler((), snapshot(b"Pair", &limits), &limits)
             .expect("compiler binds first snapshot");
@@ -2031,7 +1861,7 @@ mod tests {
             .identity()
             .clone();
         let source = snapshot(b"Pair", &limits);
-        let origin = Origin::checked("/fixture/main.rs", 0, 4, &limits).expect("origin is bounded");
+        let origin = Origin::checked("/fixture/main.rs", 0, 4).expect("origin is bounded");
         let mut compiler = contract
             .compiler((), source, &limits)
             .expect("the fixture compiler starts");
@@ -2095,7 +1925,7 @@ mod tests {
         compiler
             .require(
                 structure.identity().clone(),
-                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .unwrap();
         compiler
@@ -2111,20 +1941,15 @@ mod tests {
             compiler
                 .require(
                     outcome.identity().clone(),
-                    Origin::checked(
-                        "/fixture/main.rs",
-                        8 + index as u32,
-                        9 + index as u32,
-                        &limits,
-                    )
-                    .unwrap(),
+                    Origin::checked("/fixture/main.rs", 8 + index as u32, 9 + index as u32)
+                        .unwrap(),
                 )
                 .unwrap();
         }
         compiler
             .require(
                 function.identity().clone(),
-                Origin::checked("/fixture/main.rs", 20, 21, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 20, 21).unwrap(),
             )
             .unwrap();
         let demand = compiler.seal().expect("adapter plans seal");
@@ -2214,7 +2039,7 @@ mod tests {
         compiler
             .require(
                 rectangle.identity().clone(),
-                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             )
             .expect("a defaulted generic struct is demandable");
 
@@ -2243,7 +2068,7 @@ mod tests {
         assert!(matches!(
             compiler.require(
                 outcome.identity().clone(),
-                Origin::checked("/fixture/main.rs", 0, 1, &limits).unwrap(),
+                Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
             ),
             Err(Error::UnconstrainedGeneric)
         ));
@@ -2298,7 +2123,7 @@ mod tests {
             compiler
                 .require(
                     method.identity().clone(),
-                    Origin::checked("/fixture/main.rs", range.start, range.end, &limits).unwrap(),
+                    Origin::checked("/fixture/main.rs", range.start, range.end).unwrap(),
                 )
                 .unwrap();
             compiler.seal().expect("receiver demand seals")
@@ -2319,7 +2144,7 @@ mod tests {
     }
 
     #[test]
-    fn adapter_plan_allocation_accepts_exact_and_records_one_short() {
+    fn adapter_plan_allocation_accepts_its_exact_usage() {
         let standard = crate::cargo::Limits::standard();
         let contract = contract();
         let identity = contract
@@ -2335,7 +2160,7 @@ mod tests {
             compiler
                 .require(
                     identity.clone(),
-                    Origin::checked("/fixture/main.rs", 0, 1, limits).unwrap(),
+                    Origin::checked("/fixture/main.rs", 0, 1).unwrap(),
                 )
                 .expect("one function use is retained");
             compiler.seal()
@@ -2344,31 +2169,10 @@ mod tests {
         let exact_usage = demand._allocation.usage();
         let exact = p2_limits(exact_usage.1, exact_usage.0, standard.string_bytes);
         seal(&exact).expect("exact adapter-plan allocation seals");
-
-        // The P2 limits are accounting targets. One short on either
-        // axis still seals and records the truthful cumulative amount.
-        let short_items = p2_limits(exact_usage.1, exact_usage.0 - 1, standard.string_bytes);
-        let sealed = seal(&short_items).expect("the item target records and admits");
-        let axis = *sealed
-            ._allocation
-            .exceedances()
-            .axis("P2 cumulative retained items")
-            .unwrap();
-        assert_eq!(axis.target as usize, exact_usage.0 - 1);
-        assert_eq!(axis.high_water as usize, exact_usage.0);
-        let short_bytes = p2_limits(exact_usage.1 - 1, exact_usage.0, standard.string_bytes);
-        let sealed = seal(&short_bytes).expect("the byte target records and admits");
-        let axis = *sealed
-            ._allocation
-            .exceedances()
-            .axis("P2 cumulative retained bytes")
-            .unwrap();
-        assert_eq!(axis.target as usize, exact_usage.1 - 1);
-        assert_eq!(axis.high_water as usize, exact_usage.1);
     }
 
     #[test]
-    fn demand_is_sorted_deduplicated_and_numerically_bounded() {
+    fn demand_is_sorted_and_deduplicated() {
         let limits = crate::cargo::Limits::standard();
         let contract = contract();
         let identities = contract
@@ -2376,8 +2180,8 @@ mod tests {
             .take(2)
             .map(|outcome| outcome.identity().clone())
             .collect::<Vec<_>>();
-        let late = Origin::checked("/fixture/main.rs", 8, 12, &limits).unwrap();
-        let early = Origin::checked("/fixture/main.rs", 0, 4, &limits).unwrap();
+        let late = Origin::checked("/fixture/main.rs", 8, 12).unwrap();
+        let early = Origin::checked("/fixture/main.rs", 0, 4).unwrap();
         let mut compiler = contract
             .compiler((), snapshot(b"Pair Choice", &limits), &limits)
             .unwrap();
@@ -2389,347 +2193,22 @@ mod tests {
         let demand = compiler.seal().unwrap();
         assert_eq!(demand.entries().len(), 2);
         assert!(demand.entries().is_sorted());
-
-        let standard = crate::cargo::Limits::standard();
-        let exact_snapshot = snapshot(b"Pair Choice", &standard);
-        let base = contract
-            .allocation(&standard)
-            .expect("contract allocation proof starts")
-            .usage();
-        let exact_items = base
-            .0
-            .checked_add(exact_snapshot.1.items)
-            .and_then(|items| items.checked_add(1))
-            .expect("fixture retained items fit usize");
-        let one = p2_limits(usize::MAX, exact_items, usize::MAX);
-        let mut compiler = contract
-            .compiler((), exact_snapshot, &one)
-            .expect("the exact cumulative item boundary starts");
-        compiler
-            .require(
-                identities[0].clone(),
-                Origin::checked("/fixture/main.rs", 0, 1, &one).unwrap(),
-            )
-            .expect("the exact cumulative item boundary accepts");
-        assert!(!compiler.allocation.exceedances().is_exceeded());
-        // One past the cumulative item target is accepted and recorded.
-        compiler
-            .require(
-                identities[1].clone(),
-                Origin::checked("/fixture/main.rs", 2, 3, &one).unwrap(),
-            )
-            .expect("the item target records and admits");
-        let axis = *compiler
-            .allocation
-            .exceedances()
-            .axis("P2 cumulative retained items")
-            .unwrap();
-        assert_eq!(axis.target as usize, exact_items);
-        assert_eq!(axis.first_requested as usize, exact_items + 1);
-
-        let facade_bytes = 64_usize;
-        let facade_items = 3_usize;
-        let exact_facade_bytes = base
-            .1
-            .checked_add(facade_bytes)
-            .expect("fixture facade aggregate fits usize");
-        let exact_facade_items = base
-            .0
-            .checked_add(facade_items)
-            .expect("fixture facade aggregate fits usize");
-        let exact_facade = p2_limits(exact_facade_bytes, exact_facade_items, usize::MAX);
-        contract
-            .allocation(&exact_facade)
-            .and_then(|mut allocation| {
-                allocation.retain_checked(Some(facade_items), Some(facade_bytes))
-            })
-            .expect("the checked facade aggregate accepts its exact boundary");
-        let short_facade = p2_limits(exact_facade_bytes - 1, exact_facade_items, usize::MAX);
-        let recorded = contract
-            .allocation(&short_facade)
-            .and_then(|mut allocation| {
-                allocation
-                    .retain_checked(Some(facade_items), Some(facade_bytes))
-                    .map(|()| allocation)
-            })
-            .expect("the byte target records and admits");
-        let axis = *recorded
-            .exceedances()
-            .axis("P2 cumulative retained bytes")
-            .unwrap();
-        assert_eq!(axis.target as usize, exact_facade_bytes - 1);
-        assert_eq!(axis.high_water as usize, exact_facade_bytes);
-
-        let exact_origin = Origin::checked("/fixture/main.rs", 0, 1, &standard).unwrap();
-        let entry_bytes = super::entry_retained_bytes(
-            identities[0].checked_retained_bytes(),
-            exact_origin.source.len(),
-        )
-        .expect("fixture entry size fits usize");
-        let exact_bytes = base
-            .1
-            .checked_add(exact_snapshot.1.bytes)
-            .and_then(|bytes| bytes.checked_add(entry_bytes))
-            .expect("fixture retained bytes fit usize");
-        let exact = p2_limits(exact_bytes, usize::MAX, usize::MAX);
-        contract
-            .compiler((), exact_snapshot, &exact)
-            .and_then(|mut compiler| compiler.require(identities[0].clone(), exact_origin.clone()))
-            .expect("the exact cumulative byte boundary accepts");
-        let short = p2_limits(
-            exact_bytes
-                .checked_sub(1)
-                .expect("positive exact fixture bytes"),
-            usize::MAX,
-            usize::MAX,
-        );
-        let compiler = contract
-            .compiler((), exact_snapshot, &short)
-            .and_then(|mut compiler| {
-                compiler
-                    .require(identities[0].clone(), exact_origin)
-                    .map(|()| compiler)
-            })
-            .expect("the byte target records and admits");
-        let axis = *compiler
-            .allocation
-            .exceedances()
-            .axis("P2 cumulative retained bytes")
-            .unwrap();
-        assert_eq!(axis.target as usize, exact_bytes - 1);
-        assert_eq!(axis.high_water as usize, exact_bytes);
     }
 
     #[test]
-    fn snapshot_and_origin_reject_noncanonical_evidence_and_record_targets() {
-        let limits = crate::cargo::Limits::fixture(4, 2, 8);
+    fn snapshot_and_origin_reject_noncanonical_evidence() {
+        let limits = crate::cargo::Limits::standard();
         let mut order = Snapshot::builder(&limits);
         order.entry("e").unwrap();
         order.file("b", b"").unwrap();
         assert!(matches!(order.file("a", b""), Err(Error::SnapshotOrder)));
-
-        // The byte target is accounting. One over the target still
-        // retains the file and records the truthful cumulative figure.
-        let mut bytes = Snapshot::builder(&limits);
-        bytes.entry("e").unwrap();
-        bytes
-            .file("path", b"x")
-            .expect("a file past the byte target is retained");
-        let axis = *bytes
-            .exceedances()
-            .axis("snapshot retained bytes")
-            .expect("the byte target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (4, 6, 6)
-        );
-        assert!(bytes
-            .exceedances()
-            .axis("snapshot retained items")
-            .is_none());
         assert!(matches!(
-            Origin::checked("source", 5, 4, &limits),
+            Origin::checked("source", 5, 4),
             Err(Error::InvalidOrigin)
         ));
-        // A free-standing origin past the string target admits as well.
-        Origin::checked("source beyond eight", 0, 1, &limits)
-            .expect("the origin string target is recorded, not refused");
 
-        let item_short = crate::cargo::Limits::fixture(usize::MAX, 1, usize::MAX);
-        let mut item_builder = Snapshot::builder(&item_short);
-        item_builder.entry("e").unwrap();
-        assert!(matches!(item_builder.seal(), Err(Error::EmptySnapshot)));
-
-        let mut item_builder = Snapshot::builder(&item_short);
-        item_builder.entry("e").unwrap();
-        assert!(!item_builder.exceedances().is_exceeded());
-        item_builder
-            .file("a", b"")
-            .expect("a file past the item target is retained");
-        let axis = *item_builder
-            .exceedances()
-            .axis("snapshot retained items")
-            .expect("the item target records its axis");
-        assert_eq!((axis.target, axis.high_water), (1, 2));
-        item_builder.file("b", b"").unwrap();
-        assert_eq!(
-            item_builder
-                .exceedances()
-                .axis("snapshot retained items")
-                .unwrap()
-                .high_water,
-            3
-        );
-        assert_eq!(item_builder.exceedances().axes().count(), 1);
-        let sealed = item_builder
-            .seal()
-            .expect("the snapshot seals past its item target");
-        assert_eq!(sealed.1.items, 3);
-
-        // Exactly at the targets admits silently and seals to the same digest as
-        // a snapshot built under the standard targets.
-        let exact = crate::cargo::Limits::fixture(3, 2, 8);
-        let mut bounded = Snapshot::builder(&exact);
-        bounded.entry("e").unwrap();
-        bounded.file("a", b"x").unwrap();
-        assert!(!bounded.exceedances().is_exceeded());
-        let bounded = bounded.seal().unwrap();
-        let mut standard = Snapshot::builder(&crate::cargo::Limits::standard());
-        standard.entry("e").unwrap();
-        standard.file("a", b"x").unwrap();
-        assert_eq!(bounded, standard.seal().unwrap());
-
-        // The path string target is recorded on the entry and on files alike.
-        let strings = crate::cargo::Limits::fixture(usize::MAX, usize::MAX, 1);
-        let mut paths = Snapshot::builder(&strings);
-        paths.entry("ee").unwrap();
-        paths.file("long", b"").unwrap();
-        assert_eq!(
-            paths
-                .exceedances()
-                .axis("snapshot entry path bytes")
-                .map(|axis| (axis.target, axis.high_water)),
-            Some((1, 2))
-        );
-        assert_eq!(
-            paths
-                .exceedances()
-                .axis("snapshot path bytes")
-                .map(|axis| (axis.target, axis.high_water)),
-            Some((1, 4))
-        );
-    }
-
-    /// The compiler's entry, origin and canonical byte targets are
-    /// recorded on its surface account with truthful figures; the demand still
-    /// seals and the only refusals left are the P2 allocation and arithmetic.
-    #[test]
-    fn compiler_entry_and_canonical_targets_record_without_refusal() {
-        let standard = crate::cargo::Limits::standard();
-        let contract = contract();
-        let identities = contract
-            .outcomes()
-            .filter(|outcome| outcome.representability().is_demandable())
-            .take(2)
-            .map(|outcome| outcome.identity().clone())
-            .collect::<Vec<_>>();
-        assert_eq!(identities.len(), 2);
-        let seal = |limits: &crate::cargo::Limits| {
-            let mut compiler = contract
-                .compiler((), snapshot(b"targets", &standard), limits)
-                .expect("compiler starts under every accounting target");
-            for (index, identity) in identities.iter().enumerate() {
-                compiler
-                    .require_selected(
-                        identity,
-                        identity.selector().try_clone().expect("selector clones"),
-                        "/fixture/main.rs",
-                        index as u32,
-                        index as u32 + 1,
-                    )
-                    .expect("entries are retained past every accounting target");
-            }
-            let record = compiler.exceedances();
-            let demand = compiler.seal().expect("the demand seals past every target");
-            (record, demand)
-        };
-        let (record, demand) = seal(&standard);
-        assert!(!record.is_exceeded());
-        let canonical = demand.canonical_bytes().len();
-
-        let items = crate::cargo::Limits::fixture(usize::MAX, 1, usize::MAX);
-        let (record, bounded) = seal(&items);
-        let axis = *record
-            .axis("symbolic demand entries")
-            .expect("the entry target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (1, 2, 2)
-        );
-        assert_eq!(bounded.entries().len(), demand.entries().len());
-        assert_eq!(bounded.fingerprint(), demand.fingerprint());
-
-        let strings = crate::cargo::Limits::fixture(usize::MAX, usize::MAX, 4);
-        let (record, _) = seal(&strings);
-        let axis = *record
-            .axis("demand origin bytes")
-            .expect("the origin string target records its axis");
-        assert_eq!(
-            (axis.target, axis.high_water),
-            (4, "/fixture/main.rs".len() as u64)
-        );
-
-        // The canonical byte target is only measurable at sealing, so it is
-        // observed through the cached replay of the sealed bytes below; here
-        // the demand simply seals one byte under its own canonical size.
-        let bytes = crate::cargo::Limits::fixture(canonical - 1, usize::MAX, usize::MAX);
-        let (_, bounded) = seal(&bytes);
-        assert_eq!(bounded.canonical_bytes(), demand.canonical_bytes());
-    }
-
-    /// A cached demand whose canonical bytes exceed the configured JSON
-    /// target replays whole and records the axis; exactly at the target admits
-    /// silently. The physical bound is the node content ceiling, not the target.
-    #[test]
-    fn cached_demand_past_the_json_target_replays_and_records() {
-        let standard = crate::cargo::Limits::standard();
-        let contract = contract();
-        let identity = contract
-            .outcomes()
-            .find(|outcome| outcome.representability().is_demandable())
-            .expect("the fixture has one demandable outcome")
-            .identity()
-            .clone();
-        let source = snapshot(b"Pair", &standard);
-        let mut compiler = contract
-            .compiler((), source, &standard)
-            .expect("the fixture compiler starts");
-        compiler
-            .require(
-                identity,
-                Origin::checked("/fixture/main.rs", 0, 4, &standard).unwrap(),
-            )
-            .expect("the fixture demand is retained");
-        let demand = compiler.seal().expect("the fixture demand seals");
-        let canonical = demand.canonical_bytes().to_vec();
-        let retained = demand.cached_retained_usage();
-        let replay = |json_bytes: usize| {
-            let mut limits = standard;
-            limits.json_bytes = json_bytes;
-            let mut account = super::account::Account::surface();
-            let replayed = super::Demand::replay_cached_accounted(
-                &canonical,
-                retained,
-                (),
-                &contract,
-                source,
-                &limits,
-                &mut account,
-            )
-            .expect("the cached demand replays under every JSON target");
-            assert_eq!(replayed.canonical_bytes(), canonical.as_slice());
-            assert_eq!(replayed.fingerprint(), demand.fingerprint());
-            account.exceedances()
-        };
-        assert!(!replay(canonical.len()).is_exceeded());
-        let record = replay(canonical.len() - 1);
-        let axis = *record
-            .axis("cached symbolic demand bytes")
-            .expect("the cached byte target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (canonical.len() - 1) as u64,
-                canonical.len() as u64,
-                canonical.len() as u64
-            )
-        );
-        // The surface canonical is smaller than the demand canonical, so a
-        // target far below both records that axis too, with its own size.
-        let record = replay(1);
-        let surface = record
-            .axis("cached canonical surface bytes")
-            .expect("the surface byte target records its axis");
-        assert!(surface.high_water > 1 && surface.high_water < canonical.len() as u64);
+        let mut empty = Snapshot::builder(&limits);
+        empty.entry("e").unwrap();
+        assert!(matches!(empty.seal(), Err(Error::EmptySnapshot)));
     }
 }

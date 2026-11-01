@@ -1,14 +1,5 @@
-use super::{Axis, Evidence, Exceedance, Fault, Graph, Range, Scalar, Stage, GRAPH_ACCOUNTS};
+use super::{Evidence, Fault, Range, Scalar};
 use crate::metrics::{self, recorder, NodeKind, Sink as _};
-
-fn graph(account: u64, admitted: [u64; 6]) -> Graph {
-    Graph {
-        account,
-        stage: Stage::Node(NodeKind::Resolution),
-        admitted,
-        exceedance: None,
-    }
-}
 
 #[test]
 fn actual_scoped_observations_distinguish_unknown_zero_and_repeated_products() {
@@ -20,7 +11,6 @@ fn actual_scoped_observations_distinguish_unknown_zero_and_repeated_products() {
         metrics::record_scalar(Scalar::ApiCanonicalBytes, 5);
         metrics::record_scalar(Scalar::ApiCanonicalBytes, 8);
         metrics::Current.scalar(Scalar::NodePayloadBytes(NodeKind::Api), 7);
-        metrics::record_graph(graph(1, [0; 6]));
     }
     let evidence = recorder.snapshot().unwrap().accounting;
     assert_eq!(
@@ -47,46 +37,6 @@ fn actual_scoped_observations_distinguish_unknown_zero_and_repeated_products() {
             .count,
         1
     );
-}
-
-#[test]
-fn graph_clones_share_a_row_and_late_observations_do_not_reset_high_water() {
-    let recorder = recorder::Recorder::transform_at(10, 1).unwrap();
-    recorder.graph(graph(7, [1, 2, 3, 4, 5, 6]));
-    let exceedance = Exceedance {
-        axis: Axis::Paths,
-        requested: Some(9),
-        limit: 8,
-    };
-    recorder.graph(Graph {
-        account: 7,
-        stage: Stage::Charge(Axis::Paths),
-        admitted: [2, 3, 4, 5, 8, 9],
-        exceedance: Some(exceedance),
-    });
-    recorder.graph(graph(7, [0, 1, 2, 3, 4, 5]));
-    recorder.graph(Graph {
-        account: 7,
-        stage: Stage::Admission,
-        admitted: [2, 3, 4, 5, 8, 9],
-        exceedance: Some(Exceedance {
-            axis: Axis::Paths,
-            requested: Some(10),
-            limit: 8,
-        }),
-    });
-    recorder.graph(graph(9, [0; 6]));
-    let evidence = recorder.snapshot().unwrap().accounting;
-    let row = evidence.graphs[0].unwrap();
-    assert_eq!(row.account, 7);
-    assert_eq!(row.observations, 4);
-    assert_eq!(row.high_water, [2, 3, 4, 5, 8, 9]);
-    assert_eq!(row.last_stage, Stage::Admission);
-    assert_eq!(row.exceedances, 2);
-    assert_eq!(row.first_exceedance.unwrap().exceedance, exceedance);
-    assert_eq!(row.first_exceedance.unwrap().admitted, [2, 3, 4, 5, 8, 9]);
-    assert_eq!(evidence.graphs[1].unwrap().account, 9);
-    assert!(evidence.valid());
 }
 
 #[test]
@@ -156,57 +106,12 @@ fn observation_population_limits_do_not_silently_replace_rows() {
         Some(Fault::ScalarOverflow(Scalar::ApiSelectedBytes))
     );
     assert_eq!(evidence.scalar(Scalar::ApiSelectedBytes).unwrap().count, 1);
-
-    let recorder = recorder::Recorder::transform_at(1, 1).unwrap();
-    recorder.graph(graph(1, [0; 6]));
-    recorder.graph(graph(1, [1; 6]));
-    let evidence = recorder.snapshot().unwrap().accounting;
-    assert_eq!(evidence.fault, Some(Fault::GraphOverflow(1)));
-    assert_eq!(evidence.graphs[0].unwrap().high_water, [0; 6]);
-}
-
-#[test]
-fn graph_capacity_is_fixed_and_arithmetic_refusal_keeps_unknown_required_amount() {
-    let mut evidence = Evidence::default();
-    for account in 1..=GRAPH_ACCOUNTS as u64 {
-        evidence.record_graph(graph(account, [0; 6]), u64::MAX);
-    }
-    evidence.record_graph(graph(GRAPH_ACCOUNTS as u64 + 1, [0; 6]), u64::MAX);
-    assert_eq!(evidence.fault, Some(Fault::GraphCapacity));
-    assert_eq!(evidence.graphs.iter().flatten().count(), GRAPH_ACCOUNTS);
-    assert!(evidence.valid());
-
-    let mut evidence = Evidence::default();
-    evidence.record_graph(
-        Graph {
-            account: 1,
-            stage: Stage::Charge(Axis::Hashed),
-            admitted: [0; 6],
-            exceedance: Some(Exceedance {
-                axis: Axis::Hashed,
-                requested: None,
-                limit: u64::MAX,
-            }),
-        },
-        1,
-    );
-    assert!(evidence.valid());
-    assert_eq!(
-        evidence.graphs[0]
-            .unwrap()
-            .first_exceedance
-            .unwrap()
-            .exceedance
-            .requested,
-        None
-    );
 }
 
 #[test]
 fn malformed_or_missing_serialized_accounting_cannot_be_complete_evidence() {
     let mut evidence = Evidence::default();
     evidence.record_scalar(Scalar::ResolutionRecordBytes, 17, 1);
-    evidence.record_graph(graph(1, [0; 6]), 1);
     let encoded = serde_json::to_vec(&evidence).unwrap();
     let decoded: Evidence = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded, evidence);
@@ -216,12 +121,6 @@ fn malformed_or_missing_serialized_accounting_cannot_be_complete_evidence() {
     let mut value = serde_json::to_value(evidence).unwrap();
     let row = value["scalars"][0].clone();
     value["scalars"].as_array_mut().unwrap().push(row);
-    assert!(serde_json::from_value::<Evidence>(value).is_err());
-    let mut value = serde_json::to_value(evidence).unwrap();
-    value["graphs"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::Value::Null);
     assert!(serde_json::from_value::<Evidence>(value).is_err());
     let mut value = serde_json::to_value(evidence).unwrap();
     value["unknown"] = true.into();
@@ -271,38 +170,6 @@ fn semantic_accounting_slots_are_closed_and_prior_shape_is_rejected() {
 }
 
 #[test]
-fn invalid_identity_or_refusal_marks_evidence_incomplete() {
-    for observation in [
-        graph(0, [0; 6]),
-        Graph {
-            exceedance: Some(Exceedance {
-                axis: Axis::Paths,
-                requested: Some(7),
-                limit: 8,
-            }),
-            ..graph(1, [0; 6])
-        },
-        // An admitted amount above its target is the recorded exceedance
-        // state, so only a request that did not cross the target is invalid.
-        Graph {
-            exceedance: Some(Exceedance {
-                axis: Axis::Paths,
-                requested: Some(8),
-                limit: 8,
-            }),
-            ..graph(1, [9; 6])
-        },
-    ] {
-        let mut evidence = Evidence::default();
-        evidence.record_graph(observation, 1);
-        assert_eq!(
-            evidence.fault,
-            Some(Fault::InvalidGraph(observation.account))
-        );
-    }
-}
-
-#[test]
 fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
     use crate::protocol::account;
 
@@ -319,26 +186,6 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
             total: u64::MAX,
         });
     }
-    // Node(native-product), comparisons, aggregate-overflow and inconsistent
-    // are the longest serialized tags in their respective variable positions.
-    let stage = Stage::Node(NodeKind::NativeProduct);
-    evidence.graphs.fill(Some(super::GraphRow {
-        account: u64::MAX,
-        observations: u64::MAX,
-        first_stage: stage,
-        last_stage: stage,
-        high_water: [u64::MAX; 6],
-        exceedances: u64::MAX,
-        first_exceedance: Some(super::Exceeded {
-            stage,
-            admitted: [u64::MAX; 6],
-            exceedance: Exceedance {
-                axis: Axis::Comparisons,
-                requested: Some(u64::MAX),
-                limit: u64::MAX,
-            },
-        }),
-    }));
     evidence.native.fill(Some(super::NativeRow {
         runner_pid: u32::MAX,
         epoch: u64::MAX,
@@ -366,7 +213,6 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
     });
 
     assert_eq!(evidence.scalars.len(), 83);
-    assert_eq!(evidence.graphs.len(), 32);
     assert_eq!(evidence.native.len(), 32);
     // The full inline payload owns no secondary allocation. These fixed schema
     // terms are regression expectations, not production resource limits. Keep
@@ -374,11 +220,6 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
     assert!(!std::mem::needs_drop::<Evidence>());
     for (name, bytes, bound) in [
         ("scalar-row", std::mem::size_of::<super::ScalarRow>(), 48),
-        (
-            "graph-row",
-            std::mem::size_of::<Option<super::GraphRow>>(),
-            168,
-        ),
         (
             "native-row",
             std::mem::size_of::<Option<super::NativeRow>>(),
@@ -388,16 +229,13 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
     ] {
         assert!(bytes <= bound, "{name}={bytes}, bound={bound}");
     }
-    let retained_bound = 83 * 48 + 32 * 168 + 32 * 136 + 16;
+    let retained_bound = 83 * 48 + 32 * 136 + 16;
 
     // Compact JSON: 20 digits per u64, 10 per u32, 3 per u8, quoted closed
     // tags/field names, braces and separators. The largest scalar tag is
     // semantic-refused-required(api-transaction). All 83 concrete tags are
-    // checked below. 256 covers top-level names/framing and 156 row commas.
-    // The graph row's `refusals`/`first_refusal`/`refusal` fields
-    // were renamed to `exceedances`/`first_exceedance`/`exceedance`: nine more
-    // bytes per row.
-    let encoded_bound = 256 + 83 * 183 + 32 * 615 + 32 * 521 + 88;
+    // checked below. 256 covers top-level names/framing and the row commas.
+    let encoded_bound = 256 + 83 * 183 + 32 * 521 + 88;
     for row in &evidence.scalars {
         assert!(
             json_size(row) <= 183,
@@ -405,9 +243,6 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
             row.scalar,
             json_size(row)
         );
-    }
-    for row in evidence.graphs.iter().flatten() {
-        assert!(json_size(row) <= 615, "graph: {} bytes", json_size(row));
     }
     for row in evidence.native.iter().flatten() {
         assert!(json_size(row) <= 521, "native: {} bytes", json_size(row));
@@ -419,9 +254,8 @@ fn complete_fixed_schema_payload_has_bounded_storage_and_serialization() {
     let encoded_bytes = encoded.len();
     assert!(
         retained_bytes <= retained_bound,
-        "retained={retained_bytes}, bound={retained_bound}, encoded={encoded_bytes}, scalar-row={}, graph-row={}, native-row={}",
+        "retained={retained_bytes}, bound={retained_bound}, encoded={encoded_bytes}, scalar-row={}, native-row={}",
         std::mem::size_of::<super::ScalarRow>(),
-        std::mem::size_of::<Option<super::GraphRow>>(),
         std::mem::size_of::<Option<super::NativeRow>>()
     );
     assert!(
@@ -441,7 +275,6 @@ fn json_size(value: &impl serde::Serialize) -> usize {
 #[test]
 fn no_scope_keeps_accounting_evidence_empty() {
     metrics::record_scalar(Scalar::ResolutionRecordBytes, 99);
-    metrics::record_graph(graph(99, [99; 6]));
     let recorder = recorder::Recorder::transform_at(1, 1).unwrap();
     assert_eq!(
         *recorder.snapshot().unwrap().accounting,

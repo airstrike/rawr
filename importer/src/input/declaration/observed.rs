@@ -56,11 +56,7 @@ fn acquire(
             observe::Error::Policy("saved-output Build execution is not associated").into(),
         );
     }
-    budget.limited(
-        "saved-output PackageId",
-        budget.limits.string_bytes,
-        package_id.len(),
-    )?;
+    budget.check()?;
     let package_id = budget.owned_text(package_id)?;
     let out_dir = observe::path::canonical(out_dir, base, true, budget)?;
     if out_dir.file_name().and_then(|name| name.to_str()) != Some(super::OUT_DIRECTORY)
@@ -80,25 +76,19 @@ fn acquire(
     let output = observe::path::canonical(&candidate, base, false, budget)?;
     let metadata = observe::path::metadata(&output, false, budget)?;
     let maximum = usize::try_from(metadata.len()).map_err(|_| budget.overflow())?;
-    // Saved build output's JSON accounting target only records.
-    budget.limited(
-        "Cargo saved build output",
-        budget.limits.json_bytes,
-        maximum,
-    )?;
+    budget.check()?;
     before_open(&output)?;
     let bytes = observe::read::bounded(&output, maximum, budget)?;
     let mut paths = observe::slots::Slots::new();
     let mut environment = observe::slots::Slots::new();
     let mut directives = observe::slots::Slots::new();
-    let limits = budget.limits;
     let scanned = scan::visit(&bytes, |event| -> Result<(), Failure<'_>> {
         let (values, text) = match event {
             scan::Event::Directive(text) => (&mut directives, text),
             scan::Event::Path(text) => (&mut paths, text),
             scan::Event::Environment(text) => (&mut environment, text),
         };
-        budget.limited("input owned string bytes", limits.string_bytes, text.len())?;
+        budget.check()?;
         let value = budget.owned_text(text)?;
         values.push(value, budget)?;
         Ok(())

@@ -63,10 +63,7 @@ pub(super) fn run(
     {
         let native = terminated(path, budget)?;
         let native = native_path(&native)?;
-        // Source File drop is one-shot and cannot be prevented by later refusal.
-        budget.graph.paths(1)?;
         loop {
-            budget.graph.paths(1)?;
             match source.open(native, budget)? {
                 Ok(()) => break,
                 Err(code) => {
@@ -80,7 +77,6 @@ pub(super) fn run(
     }
     let mut source = Opened(source);
     if role == Role::DiscoveryPath {
-        budget.graph.paths(1)?;
         match source.0.length(budget)? {
             Ok(length) if length > 65536 => {
                 let error = super::manifest::io::oversized(
@@ -106,22 +102,18 @@ pub(super) fn run(
         }
     };
     let mut bytes = Buffer::with_capacity(capacity, budget)?;
-    budget.graph.paths(1)?;
     let hint = match source.0.length(budget)? {
         Err(code) => {
             git_read::errno(code)?;
             None
         }
-        Ok(length) => {
-            budget.graph.paths(1)?;
-            match source.0.position(budget)? {
-                Err(code) => {
-                    git_read::errno(code)?;
-                    None
-                }
-                Ok(position) => Some(length.saturating_sub(position) as usize),
+        Ok(length) => match source.0.position(budget)? {
+            Err(code) => {
+                git_read::errno(code)?;
+                None
             }
-        }
+            Ok(position) => Some(length.saturating_sub(position) as usize),
+        },
     };
     bytes.reserve(hint.unwrap_or(0), budget)?;
     match read_to_end(&mut source, &mut bytes, hint, budget)? {
@@ -130,7 +122,6 @@ pub(super) fn run(
             // ref_contents probes while its File and failed content Vec coexist.
             let directory = if role == Role::LooseReference {
                 let native = terminated(path, budget)?;
-                budget.graph.paths(1)?;
                 let result = source.0.directory(native_path(&native)?, budget)?;
                 if let Err(code) = result {
                     git_read::errno(code)?;
@@ -203,7 +194,6 @@ fn read<S: Source>(
     budget: &mut Budget<'_>,
 ) -> Result<Call<usize>> {
     loop {
-        budget.graph.paths(1)?;
         match source.0.read(bytes, budget)? {
             Ok(count) if count <= bytes.len() => return Ok(Ok(count)),
             Ok(_) => return Err(Error::Encoding("Git native read exceeded requested extent")),
@@ -299,10 +289,8 @@ pub(super) fn configuration<T>(
     }
     let opened = {
         let native = terminated(path, budget)?;
-        let native = native_path(&native)?;
-        budget.graph.paths(1)?; // one unconditional cleanup allowance
+        let native = native_path(&native)?; // one unconditional cleanup allowance
         loop {
-            budget.graph.paths(1)?;
             match source.open(native, budget)? {
                 Ok(()) => break Ok(()),
                 Err(code) => {
@@ -319,22 +307,18 @@ pub(super) fn configuration<T>(
     }
     let mut source = Opened(source);
     bytes.clear();
-    budget.graph.paths(1)?;
     let hint = match source.0.length(budget)? {
         Err(code) => {
             git_read::errno(code)?;
             None
         }
-        Ok(length) => {
-            budget.graph.paths(1)?;
-            match source.0.position(budget)? {
-                Err(code) => {
-                    git_read::errno(code)?;
-                    None
-                }
-                Ok(position) => Some(length.saturating_sub(position) as usize),
+        Ok(length) => match source.0.position(budget)? {
+            Err(code) => {
+                git_read::errno(code)?;
+                None
             }
-        }
+            Ok(position) => Some(length.saturating_sub(position) as usize),
+        },
     };
     bytes.reserve(hint.unwrap_or(0), budget)?;
     let result = read_to_end(&mut source, bytes, hint, budget)?;

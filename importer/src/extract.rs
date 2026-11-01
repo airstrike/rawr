@@ -497,7 +497,7 @@ pub(crate) fn from_owner_parts(
     policy: &Policy,
     limits: &cargo::Limits,
 ) -> Result<api::Graph<api::Extracted>> {
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let (product, graph) = api::cached::evaluate_owner(
         context,
         request,
@@ -590,7 +590,7 @@ pub(crate) fn retain_from_owner_parts(
         + Send
         + 'static,
 ) -> Result<api::Continuation> {
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let memo = memo(&policy_identity);
     api::cached::retain_owner(
         context,
@@ -624,8 +624,8 @@ pub(crate) fn materialize_shared(
 ) -> Result<api::Graph<api::Captured>> {
     let mut allocation = Allocation::new(limits);
     let document = protocol::decode_accounted(document, limits, &mut allocation)?;
-    let invocations = Invocations::seal_document_with_allocation(&document, allocation, limits)?
-        .bind_external(external, limits)?;
+    let invocations = Invocations::seal_document_with_allocation(&document, allocation)?
+        .bind_external(external)?;
     materialize_document(stored, document, invocations, policy, context, limits)
 }
 
@@ -677,7 +677,7 @@ pub(crate) fn retain_shared(
             source: Box::new(source),
         }
     };
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let retention = crate::node::read_set::Retention::from_validated(parent.as_ref(), None)
         .map_err(node_error("shared bindings retention"))?;
     api::cached::retain_under(
@@ -789,9 +789,9 @@ impl FacadeSurfaceEvidenceCapability {
         let contract = graph
             .classify(&crate::classify::Policy::standard(), limits)
             .map_err(|error| extraction("bindings-surface-classification", &error.to_string()))?;
-        let bytes = crate::surface::facade::Plan::encode(&contract, limits)
+        let bytes = crate::surface::facade::Plan::encode(&contract)
             .map_err(|error| extraction("bindings-surface-encoding", &error.to_string()))?;
-        let plan = crate::surface::facade::Plan::decode(&bytes, limits)
+        let plan = crate::surface::facade::Plan::decode(&bytes)
             .map_err(|error| extraction("bindings-surface-decoding", &error.to_string()))?;
         let mut facades = plan.facades().filter(|facade| facade.root() == root);
         let facade = facades.next().ok_or_else(|| {
@@ -839,19 +839,16 @@ impl ClassificationEvidenceCapability {
         let DirectPublication {
             context,
             document,
-            mut invocations,
+            invocations,
             input,
             policy,
         } = self.publication.into_direct()?;
-        invocations
-            .allocation
-            .authorize_retained_classification_evidence();
         let graph = canonicalize_document(document, invocations, policy, &context, limits)?;
         let proof = input.prove(limits)?;
         let graph = graph.publish(proof)?;
         let evidence = graph
             .into_classification_evidence()
-            .measure(&crate::classify::Policy::standard(), limits)
+            .measure(&crate::classify::Policy::standard())
             .map_err(|error| extraction("classification-evidence", &error.to_string()))?;
         let retained = evidence.graph_retained;
         eprintln!(
@@ -960,8 +957,7 @@ impl Publication {
         } = invocations;
         allocation.retain(policy.usage)?;
         validate_resolution_context(&document.fragments, &context, &mut allocation)?;
-        let catalog =
-            Catalog::from_fragments(&document.fragments, &authority, limits, &mut allocation)?;
+        let catalog = Catalog::from_fragments(&document.fragments, &authority, &mut allocation)?;
         let mut partitions = Vec::new();
         allocation.reserve(&mut partitions, document.fragments.len())?;
         for fragment in &document.fragments {
@@ -990,17 +986,15 @@ impl Publication {
             allocation.reserve(&mut inherent, manifest.inherent.len())?;
             for domain in &manifest.inherent {
                 inherent.push(inventory::Inherent {
-                    owner: inventory_id(&domain.owner, &catalog, limits, &mut allocation)?,
+                    owner: inventory_id(&domain.owner, &catalog, &mut allocation)?,
                     implementations: inventory_ids(
                         &domain.implementations,
                         &catalog,
-                        limits,
                         &mut allocation,
                     )?,
                     associated: inventory_associations(
                         &domain.associated,
                         &catalog,
-                        limits,
                         &mut allocation,
                     )?,
                 });
@@ -1052,12 +1046,12 @@ impl Publication {
                         methods.push(allocation.owned(method)?);
                     }
                     traits.push(inventory::TraitNames {
-                        id: inventory_id(&trait_.id, &catalog, limits, &mut allocation)?,
+                        id: inventory_id(&trait_.id, &catalog, &mut allocation)?,
                         methods: methods.into_boxed_slice(),
                     });
                 }
                 preludes.push(inventory::Prelude {
-                    module: inventory_id(&prelude.module, &catalog, limits, &mut allocation)?,
+                    module: inventory_id(&prelude.module, &catalog, &mut allocation)?,
                     edition: allocation.owned(&prelude.edition)?,
                     traits: traits.into_boxed_slice(),
                 });
@@ -1077,7 +1071,6 @@ impl Publication {
                                 implementation: inventory_id(
                                     &header.implementation,
                                     &catalog,
-                                    limits,
                                     &mut allocation,
                                 )?,
                                 receiver: match &header.receiver {
@@ -1085,7 +1078,6 @@ impl Publication {
                                         inventory::Receiver::Nominal(inventory_id(
                                             id,
                                             &catalog,
-                                            limits,
                                             &mut allocation,
                                         )?)
                                     }
@@ -1097,17 +1089,12 @@ impl Publication {
                             });
                         }
                         domains.push(inventory::LookupDomain {
-                            root: inventory_id(&domain.root, &catalog, limits, &mut allocation)?,
+                            root: inventory_id(&domain.root, &catalog, &mut allocation)?,
                             implementations: implementations.into_boxed_slice(),
                         });
                     }
                     Ok::<_, crate::Error>(inventory::Lookup {
-                        trait_id: inventory_id(
-                            &lookup.trait_id,
-                            &catalog,
-                            limits,
-                            &mut allocation,
-                        )?,
+                        trait_id: inventory_id(&lookup.trait_id, &catalog, &mut allocation)?,
                         domains: domains.into_boxed_slice(),
                     })
                 })
@@ -1128,21 +1115,14 @@ impl Publication {
                 implementations: inventory_ids(
                     &manifest.implementations,
                     &catalog,
-                    limits,
                     &mut allocation,
                 )?,
                 associated: inventory_associations(
                     &manifest.associated,
                     &catalog,
-                    limits,
                     &mut allocation,
                 )?,
-                unsupported: inventory_ids(
-                    &manifest.unsupported,
-                    &catalog,
-                    limits,
-                    &mut allocation,
-                )?,
+                unsupported: inventory_ids(&manifest.unsupported, &catalog, &mut allocation)?,
                 inherent: inherent.into_boxed_slice(),
             });
         }
@@ -1239,7 +1219,7 @@ impl Publication {
         let (product, graph) = api::cached::evaluate(
             &dag.context,
             dag.request.as_bytes(),
-            &policy.cache_identity(dag.context.graph_budget())?,
+            &policy.cache_identity()?,
             &dag.build,
             &dag.post_unit,
             &dag.post_metadata,
@@ -1369,21 +1349,13 @@ type ManifestExclusions = BTreeMap<Box<str>, ExclusionsByPath>;
 pub struct Policy {
     exclusions: ManifestExclusions,
     usage: PolicyUsage,
-    /// Accounting targets the manifest policy account crossed.
-    exceeded: crate::exceedance::Record,
 }
 
-/// Limits-bound transformation from manifest exclusions into one sealed policy.
-pub struct ManifestPolicyBuilder<'limits> {
-    limits: &'limits cargo::Limits,
+/// Transformation from manifest exclusions into one sealed policy.
+pub struct ManifestPolicyBuilder {
     exclusions: ManifestExclusions,
     items: usize,
     bytes: usize,
-    /// Process-unique identity of this manifest policy account.
-    id: u64,
-    /// Accounting targets this policy crossed; recorded and published, never
-    /// refused.
-    exceeded: crate::exceedance::Record,
 }
 
 /// One exact source range retained from the validated Rawr manifest.
@@ -1591,20 +1563,13 @@ pub(crate) struct Allocation {
     item_limit: usize,
     byte_limit: usize,
     string_limit: usize,
-    retained_item_limit: usize,
-    retained_byte_limit: usize,
     decoded_documents: usize,
     moved_documents: usize,
     captured_document_nodes: usize,
     evidence: Option<EvidenceCounters>,
     evidence_category: EvidenceCategory,
-    /// Process-unique identity of this canonical account.
-    id: u64,
-    /// Accounting targets this transaction crossed; recorded, never refused.
-    exceeded: std::cell::Cell<crate::exceedance::Record>,
-    /// Set only by genuine allocation failure or checked-arithmetic overflow.
-    /// Accounting exceedance never sets it; a latched account does no
-    /// further work.
+    /// Set only by genuine allocation failure or checked-arithmetic overflow;
+    /// a latched account does no further work.
     refused: bool,
 }
 
@@ -1675,15 +1640,11 @@ impl Allocation {
             item_limit: limits.canonical_items,
             byte_limit: limits.canonical_bytes,
             string_limit: limits.string_bytes,
-            retained_item_limit: limits.retained_graph_items,
-            retained_byte_limit: limits.retained_graph_bytes,
             decoded_documents: 0,
             moved_documents: 0,
             captured_document_nodes: 0,
             evidence: None,
             evidence_category: EvidenceCategory::Entry,
-            id: crate::exceedance::next_id(),
-            exceeded: std::cell::Cell::new(crate::exceedance::Record::new()),
             refused: false,
         }
     }
@@ -1696,15 +1657,11 @@ impl Allocation {
             item_limit,
             byte_limit,
             string_limit: byte_limit,
-            retained_item_limit: usize::MAX,
-            retained_byte_limit: usize::MAX,
             decoded_documents: 0,
             moved_documents: 0,
             captured_document_nodes: 0,
             evidence: None,
             evidence_category: EvidenceCategory::Entry,
-            id: crate::exceedance::next_id(),
-            exceeded: std::cell::Cell::new(crate::exceedance::Record::new()),
             refused: false,
         }
     }
@@ -1713,55 +1670,10 @@ impl Allocation {
         (self.items, self.bytes)
     }
 
-    /// Process-unique identity of this canonical account.
-    #[allow(dead_code, reason = "exceedance registry inspection")]
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// The axes of this canonical account that crossed their targets so far.
-    #[cfg_attr(not(test), allow(dead_code, reason = "exceedance inspection"))]
-    pub(crate) fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded.get()
-    }
-
     /// Whether a genuine failure has latched this account.
     #[cfg_attr(not(test), allow(dead_code, reason = "latch inspection"))]
     pub(crate) const fn is_refused(&self) -> bool {
         self.refused
-    }
-
-    /// A measured amount crossing an accounting target is recorded on
-    /// this account and published, never refused. The work the comparison
-    /// guards has already been admitted and continues.
-    pub(crate) fn exceeded(&self, resource: &'static str, target: usize, actual: usize) {
-        if actual <= target {
-            return;
-        }
-        let mut record = self.exceeded.get();
-        if record.exceeded(resource, target as u64, actual as u64, None) {
-            self.exceeded.set(record);
-            self.publish();
-        }
-    }
-
-    /// Fold a scanner's or sub-account's exceedance record into this account.
-    pub(crate) fn absorb_exceedances(&self, other: &crate::exceedance::Record) {
-        if !other.is_exceeded() {
-            return;
-        }
-        let mut record = self.exceeded.get();
-        record.absorb(other);
-        self.exceeded.set(record);
-        self.publish();
-    }
-
-    fn publish(&self) {
-        crate::exceedance::publish(
-            crate::exceedance::Account::Canonical,
-            self.id,
-            &self.exceeded.get(),
-        );
     }
 
     /// A latched account does no further work.
@@ -1812,25 +1724,14 @@ impl Allocation {
     /// Admit decoder peak work against this same transaction without charging
     /// the peak as exact retained ownership. The caller debits decode work
     /// before entering the allocating decoder, including on malformed input.
-    pub(crate) fn admit_decode(&mut self, items: usize, bytes: usize) -> Result<()> {
+    pub(crate) fn admit_decode(&mut self) -> Result<()> {
         self.check()?;
-        let Some(peak_items) = self.items.checked_add(items) else {
-            return Err(self.overflow("canonical allocation items"));
-        };
-        let Some(peak_bytes) = self.bytes.checked_add(bytes) else {
-            return Err(self.overflow("canonical allocation bytes"));
-        };
-        self.exceeded("canonical allocation items", self.item_limit, peak_items);
-        self.exceeded("canonical allocation bytes", self.byte_limit, peak_bytes);
         Ok(())
     }
 
-    /// The retained-graph targets are accounting targets recorded on
-    /// this account; the measured graph is retained either way.
-    pub(crate) fn validate_retained(&self, items: usize, bytes: usize) -> Result<()> {
+    /// A latched account refuses the retained graph.
+    pub(crate) fn validate_retained(&self) -> Result<()> {
         self.check()?;
-        self.exceeded("retained graph items", self.retained_item_limit, items);
-        self.exceeded("retained graph bytes", self.retained_byte_limit, bytes);
         Ok(())
     }
 
@@ -1841,8 +1742,8 @@ impl Allocation {
         )
     }
 
-    /// Attribute a retained-stage failure (a genuine or correctness failure,
-    /// never an accounting target) to this account's retained stage.
+    /// Attribute a retained-stage failure (a genuine or correctness failure)
+    /// to this account's retained stage.
     pub(crate) fn retained_failure(&self, error: Error) -> Error {
         self.failure_at(
             crate::metrics::accounting::SemanticStage::ApiRetained,
@@ -1852,19 +1753,6 @@ impl Allocation {
 
     fn failure_at(&self, _stage: crate::metrics::accounting::SemanticStage, error: Error) -> Error {
         error
-    }
-
-    #[cfg(all(feature = "rustc-driver", feature = "test-fixtures"))]
-    fn authorize_retained_classification_evidence(&mut self) {
-        self.retained_item_limit = crate::classify::EVIDENCE_RETAINED_ITEMS;
-        self.retained_byte_limit = crate::classify::EVIDENCE_RETAINED_BYTES;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_retained_limits(mut self, item_limit: usize, byte_limit: usize) -> Self {
-        self.retained_item_limit = item_limit;
-        self.retained_byte_limit = byte_limit;
-        self
     }
 
     fn into_evidence(
@@ -1919,7 +1807,6 @@ impl Allocation {
         let Some(actual) = self.items.checked_add(amount) else {
             return Err(self.overflow("canonical allocation items"));
         };
-        self.exceeded("canonical allocation items", self.item_limit, actual);
         self.items = actual;
         let category = self.evidence_category.index();
         self.observe(|evidence| {
@@ -1934,7 +1821,6 @@ impl Allocation {
         let Some(actual) = self.bytes.checked_add(amount) else {
             return Err(self.overflow("canonical allocation bytes"));
         };
-        self.exceeded("canonical allocation bytes", self.byte_limit, actual);
         self.bytes = actual;
         let category = self.evidence_category.index();
         self.observe(|evidence| {
@@ -1952,8 +1838,6 @@ impl Allocation {
         let Some(bytes) = self.bytes.checked_add(usage.bytes) else {
             return Err(self.overflow("canonical allocation bytes"));
         };
-        self.exceeded("canonical allocation items", self.item_limit, items);
-        self.exceeded("canonical allocation bytes", self.byte_limit, bytes);
         self.items = items;
         self.bytes = bytes;
         let category = self.evidence_category.index();
@@ -1968,7 +1852,6 @@ impl Allocation {
 
     pub(crate) fn string(&mut self, value: &str) -> Result<()> {
         self.check()?;
-        self.exceeded("owned string bytes", self.string_limit, value.len());
         self.items(1)?;
         self.bytes(value.len())
     }
@@ -1987,7 +1870,6 @@ impl Allocation {
         let bytes = bytes.as_ref();
         let length = bytes.len().saturating_mul(2);
         self.check()?;
-        self.exceeded("owned hexadecimal string", self.string_limit, length);
         self.items(1)?;
         self.bytes(length)?;
         let mut encoded = String::new();
@@ -2011,11 +1893,6 @@ impl Allocation {
 
     pub(crate) fn path(&mut self, value: &Path) -> Result<()> {
         self.check()?;
-        self.exceeded(
-            "owned path bytes",
-            self.string_limit,
-            value.as_os_str().len(),
-        );
         self.items(1)?;
         self.bytes(value.as_os_str().len())
     }
@@ -2030,7 +1907,6 @@ impl Allocation {
 
     pub(crate) fn path_capacity(&mut self, maximum: usize) -> Result<()> {
         self.check()?;
-        self.exceeded("owned path bytes", self.string_limit, maximum);
         self.items(1)?;
         self.bytes(maximum)
     }
@@ -2041,7 +1917,6 @@ impl Allocation {
     pub(crate) fn validate_path(&mut self, value: &Path, maximum: usize) -> Result<()> {
         self.check()?;
         let length = value.as_os_str().len();
-        self.exceeded("owned path bytes", maximum, length);
         if let Some(extra) = length.checked_sub(maximum).filter(|extra| *extra != 0) {
             self.bytes(extra)?;
         }
@@ -2396,19 +2271,13 @@ impl Invocations {
     fn seal_document_with_allocation(
         document: &protocol::Document,
         mut allocation: Allocation,
-        limits: &cargo::Limits,
     ) -> Result<Self> {
         let mut correlations = BTreeSet::<&str>::new();
         let mut nonces = BTreeSet::<&str>::new();
         let mut aliases = BTreeMap::<&str, &str>::new();
         for fragment in &document.fragments {
             let handshake = &fragment.handshake;
-            validate_handshake(handshake, limits, &allocation)?;
-            allocation.exceeded(
-                "expected compiler units",
-                limits.packages,
-                correlations.len().saturating_add(1),
-            );
+            validate_handshake(handshake)?;
             if correlations.contains(handshake.unit_correlation.as_str()) {
                 return Err(extraction(
                     "duplicate-unit-correlation",
@@ -2458,25 +2327,19 @@ impl Invocations {
 
     #[cfg(test)]
     pub(crate) fn seal(expected: Vec<protocol::Handshake>, limits: &cargo::Limits) -> Result<Self> {
-        Self::seal_with_allocation(expected, Allocation::new(limits), limits)
+        Self::seal_with_allocation(expected, Allocation::new(limits))
     }
 
     #[cfg(test)]
     fn seal_with_allocation(
         expected: Vec<protocol::Handshake>,
         mut allocation: Allocation,
-        limits: &cargo::Limits,
     ) -> Result<Self> {
         let mut sealed = BTreeMap::new();
         let mut nonces = BTreeSet::<Box<str>>::new();
         let mut aliases = BTreeMap::<Box<str>, Box<str>>::new();
         for handshake in expected {
-            validate_handshake(&handshake, limits, &allocation)?;
-            allocation.exceeded(
-                "expected compiler units",
-                limits.packages,
-                sealed.len().saturating_add(1),
-            );
+            validate_handshake(&handshake)?;
             if sealed.contains_key(handshake.unit_correlation.as_str()) {
                 return Err(extraction(
                     "duplicate-unit-correlation",
@@ -2542,16 +2405,7 @@ impl Invocations {
     }
 
     #[cfg(feature = "rustc-driver")]
-    fn bind_external(
-        mut self,
-        values: Vec<ExternalBinding>,
-        limits: &cargo::Limits,
-    ) -> Result<Self> {
-        self.allocation.exceeded(
-            "external compiler authorities",
-            limits.packages,
-            values.len(),
-        );
+    fn bind_external(mut self, values: Vec<ExternalBinding>) -> Result<Self> {
         for value in values {
             let ExternalBinding {
                 crate_name,
@@ -2663,16 +2517,10 @@ impl Invocations {
 impl Policy {
     /// API policy is independent of the Rust owner, but controls the extracted
     /// surface and its diagnostics. Frame every field without retaining a copy.
-    pub(crate) fn cache_identity(&self, budget: &crate::node::GraphBudget) -> Result<[u8; 32]> {
+    pub(crate) fn cache_identity(&self) -> Result<[u8; 32]> {
         use sha2::{Digest as _, Sha256};
         let mut digest = Sha256::new();
         let mut field = |bytes: &[u8]| -> Result<()> {
-            budget
-                .hash(8usize.saturating_add(bytes.len()))
-                .map_err(|source| Error::Node {
-                    operation: "API policy identity",
-                    source: Box::new(source),
-                })?;
             digest.update((bytes.len() as u64).to_le_bytes());
             digest.update(bytes);
             Ok(())
@@ -2699,15 +2547,12 @@ impl Policy {
         Ok(digest.finalize().into())
     }
 
-    /// Begin the limits-bound manifest-policy transformation.
-    pub fn manifest(limits: &cargo::Limits) -> ManifestPolicyBuilder<'_> {
+    /// Begin the manifest-policy transformation.
+    pub fn manifest() -> ManifestPolicyBuilder {
         ManifestPolicyBuilder {
-            limits,
             exclusions: BTreeMap::new(),
             items: 0,
             bytes: 0,
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
         }
     }
 
@@ -2715,18 +2560,11 @@ impl Policy {
         (self.usage.items, self.usage.bytes)
     }
 
-    /// The accounting axes the manifest policy transformation crossed.
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
             exclusions: BTreeMap::new(),
             usage: PolicyUsage::default(),
-            exceeded: crate::exceedance::Record::new(),
         }
     }
 
@@ -2744,31 +2582,13 @@ impl Policy {
                 )]),
             )]),
             usage: PolicyUsage::default(),
-            exceeded: crate::exceedance::Record::new(),
         }
     }
 }
 
-impl ManifestPolicyBuilder<'_> {
-    /// A manifest policy measurement crossing an accounting target is
-    /// recorded on this policy account and published, never refused.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            crate::exceedance::publish(
-                crate::exceedance::Account::Canonical,
-                self.id,
-                &self.exceeded,
-            );
-        }
-    }
-
+impl ManifestPolicyBuilder {
     /// One manifest string: nonempty is correctness; its size is a target.
     fn string(&mut self, field: &'static str, value: &str) -> Result<()> {
-        self.exceeded(field, self.limits.string_bytes, value.len());
         present(field, value)
     }
 
@@ -2781,18 +2601,12 @@ impl ManifestPolicyBuilder<'_> {
         transient_items: usize,
         transient_bytes: usize,
     ) -> Result<()> {
-        let peak_items = retained_items
+        retained_items
             .checked_add(transient_items)
             .ok_or_else(|| arithmetic("manifest policy peak items"))?;
-        let peak_bytes = retained_bytes
+        retained_bytes
             .checked_add(transient_bytes)
             .ok_or_else(|| arithmetic("manifest policy peak bytes"))?;
-        self.exceeded("manifest policy peak items", self.limits.items, peak_items);
-        self.exceeded(
-            "manifest policy peak bytes",
-            self.limits.manifest_bytes,
-            peak_bytes,
-        );
         Ok(())
     }
 
@@ -2810,11 +2624,6 @@ impl ManifestPolicyBuilder<'_> {
         self.string("exclusion alias", alias)?;
         self.string("exclusion reason", reason)?;
         self.string("manifest span file", span.file)?;
-        self.exceeded(
-            "manifest span file bytes",
-            self.limits.manifest_bytes,
-            span.file.len(),
-        );
         let mut borrowed = Vec::new();
         for part in path {
             self.string("exclusion path component", part)?;
@@ -2891,13 +2700,6 @@ impl ManifestPolicyBuilder<'_> {
             .bytes
             .checked_add(owned_bytes)
             .ok_or_else(|| arithmetic("manifest policy bytes"))?;
-        // The retained policy targets are recorded, never gates.
-        self.exceeded("manifest policy items", self.limits.items, next_items);
-        self.exceeded(
-            "manifest policy bytes",
-            self.limits.manifest_bytes,
-            next_bytes,
-        );
         let borrowed_pointer_bytes = borrowed
             .capacity()
             .checked_mul(std::mem::size_of::<&str>())
@@ -2953,17 +2755,12 @@ impl ManifestPolicyBuilder<'_> {
                 items: self.items,
                 bytes: self.bytes,
             },
-            exceeded: self.exceeded,
         }
     }
 }
 
 impl<'manifest> ManifestSpan<'manifest> {
     /// Seal one manifest byte and line/column range.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the source range is one closed diagnostic proof"
-    )]
     pub fn new(
         file: &'manifest str,
         byte_start: usize,
@@ -2972,11 +2769,7 @@ impl<'manifest> ManifestSpan<'manifest> {
         column_start: usize,
         line_end: usize,
         column_end: usize,
-        _limits: &cargo::Limits,
     ) -> Result<Self> {
-        // The span file's size is measured against the manifest and
-        // string targets by the policy builder that retains it; sealing a
-        // span is correctness only.
         present("manifest span file", file)?;
         if byte_start > byte_end || line_start == 0 || line_end == 0 {
             return Err(extraction(
@@ -3051,7 +2844,7 @@ pub(crate) fn canonicalize(
     } = invocations;
     allocation.retain(policy.usage)?;
     let document = protocol::decode_accounted(bytes, limits, &mut allocation)?;
-    let fragments = correlate(document.fragments, &authority, limits, &mut allocation)?;
+    let fragments = correlate(document.fragments, &authority, &mut allocation)?;
     canonicalize_fragments(
         fragments,
         authority,
@@ -3082,11 +2875,6 @@ fn materialize_document(
         mut allocation,
     } = invocations;
     allocation.retain(policy.usage)?;
-    allocation.exceeded(
-        "canonical invocations",
-        limits.packages,
-        document.fragments.len(),
-    );
     let mut current = Vec::new();
     allocation.reserve(&mut current, document.fragments.len())?;
     for fragment in &document.fragments {
@@ -3101,7 +2889,6 @@ fn materialize_document(
 fn inventory_id(
     raw: &engine::model::Id,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<identity::Definition> {
     let engine::model::Authority::Compiler {
@@ -3121,20 +2908,19 @@ fn inventory_id(
         },
     };
     allocation.protocol_id(&raw)?;
-    catalog.id_bounded(raw, limits, allocation)
+    catalog.id_bounded(raw, allocation)
 }
 
 #[cfg(feature = "rustc-driver")]
 fn inventory_ids(
     raw: &[engine::model::Id],
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Box<[identity::Definition]>> {
     let mut ids = Vec::new();
     allocation.reserve(&mut ids, raw.len())?;
     for raw in raw {
-        ids.push(inventory_id(raw, catalog, limits, allocation)?);
+        ids.push(inventory_id(raw, catalog, allocation)?);
     }
     Ok(ids.into_boxed_slice())
 }
@@ -3143,19 +2929,18 @@ fn inventory_ids(
 fn inventory_associations(
     raw: &[engine::model::Association],
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Box<[crate::applicability::inventory::Association]>> {
     let mut links = Vec::new();
     allocation.reserve(&mut links, raw.len())?;
     for raw in raw {
         links.push(crate::applicability::inventory::Association {
-            implementation: inventory_id(&raw.implementation, catalog, limits, allocation)?,
-            item: inventory_id(&raw.item, catalog, limits, allocation)?,
+            implementation: inventory_id(&raw.implementation, catalog, allocation)?,
+            item: inventory_id(&raw.item, catalog, allocation)?,
             declaration: raw
                 .declaration
                 .as_ref()
-                .map(|id| inventory_id(id, catalog, limits, allocation))
+                .map(|id| inventory_id(id, catalog, allocation))
                 .transpose()?,
         });
     }
@@ -3257,7 +3042,7 @@ fn canonicalize_fragments(
     let result = (|| {
         allocation.category(EvidenceCategory::Candidate);
         validate_resolution_context(&fragments, context, allocation)?;
-        let catalog = Catalog::from_fragments(&fragments, &authority, limits, allocation)?;
+        let catalog = Catalog::from_fragments(&fragments, &authority, allocation)?;
         let candidate = Candidate::from_fragments(fragments, &catalog, limits, allocation)?;
         candidate.finish(policy, context, limits, allocation, seal)
     })();
@@ -3340,7 +3125,6 @@ fn validate_resolution_context(
 fn correlate(
     fragments: Vec<protocol::Fragment>,
     invocations: &InvocationAuthority,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Vec<protocol::Fragment>> {
     if fragments.len() > invocations.expected.len() {
@@ -3358,7 +3142,7 @@ fn correlate(
     let mut seen = BTreeSet::new();
     let mut nonces = BTreeSet::new();
     for fragment in &fragments {
-        validate_handshake(&fragment.handshake, limits, allocation)?;
+        validate_handshake(&fragment.handshake)?;
         let correlation = fragment.handshake.unit_correlation.as_str();
         if seen.contains(correlation) {
             return Err(extraction("duplicate-unit-correlation", correlation));
@@ -3390,11 +3174,7 @@ fn correlate(
     Ok(fragments)
 }
 
-fn validate_handshake(
-    handshake: &protocol::Handshake,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
+fn validate_handshake(handshake: &protocol::Handshake) -> Result<()> {
     if handshake.schema != protocol::SCHEMA {
         return Err(extraction(
             "unknown-handshake-schema",
@@ -3417,7 +3197,7 @@ fn validate_handshake(
         ("unit correlation", handshake.unit_correlation.as_str()),
         ("unit key", handshake.unit_key.as_str()),
     ] {
-        nonempty(field, value, limits, allocation)?;
+        nonempty(field, value)?;
     }
     sorted_unique("target kinds", &handshake.target_kinds)?;
     if !handshake
@@ -3459,22 +3239,17 @@ fn validate_handshake(
             handshake.artifact.probe_alias.as_str(),
         ),
     ] {
-        nonempty(field, value, limits, allocation)?;
+        nonempty(field, value)?;
     }
     exact_hex("unit key", &handshake.unit_key, 64)?;
     sorted_unique("enabled features", &handshake.features)?;
     for feature in &handshake.features {
-        nonempty("enabled feature", feature, limits, allocation)?;
+        nonempty("enabled feature", feature)?;
     }
     sorted_unique("normal-library dependency keys", &handshake.dependencies)?;
     for dependency in &handshake.dependencies {
         exact_hex("normal-library dependency key", dependency, 64)?;
     }
-    allocation.exceeded(
-        "handshake sysroot crates",
-        limits.packages,
-        handshake.sysroot.len(),
-    );
     if handshake.sysroot.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(extraction("noncanonical-handshake-set", "sysroot crates"));
     }
@@ -3484,23 +3259,13 @@ fn validate_handshake(
             ("sysroot target", sysroot.selected_target.as_str()),
             ("sysroot crate name", sysroot.crate_name.as_str()),
         ] {
-            nonempty(field, value, limits, allocation)?;
+            nonempty(field, value)?;
         }
         exact_hex("sysroot compiler commit", &sysroot.compiler_commit, 40)?;
         exact_hex("StableCrateId", &sysroot.stable_crate_id, 16)?;
     }
-    validate_external_crates(
-        "loaded crates",
-        &handshake.loaded_crates,
-        limits,
-        allocation,
-    )?;
-    validate_external_crates(
-        "external crates",
-        &handshake.external_crates,
-        limits,
-        allocation,
-    )?;
+    validate_external_crates("loaded crates", &handshake.loaded_crates)?;
+    validate_external_crates("external crates", &handshake.external_crates)?;
     if handshake
         .external_crates
         .iter()
@@ -3533,28 +3298,17 @@ fn validate_handshake(
     }
     sorted_unique("selected aliases", aliases)?;
     for alias in aliases {
-        nonempty("selected alias", alias, limits, allocation)?;
+        nonempty("selected alias", alias)?;
     }
     Ok(())
 }
 
-fn validate_external_crates(
-    label: &'static str,
-    crates: &[protocol::ExternalCrate],
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
-    allocation.exceeded(label, limits.packages, crates.len());
+fn validate_external_crates(label: &'static str, crates: &[protocol::ExternalCrate]) -> Result<()> {
     if crates.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(extraction("noncanonical-handshake-set", label));
     }
     for external in crates {
-        nonempty(
-            "external crate name",
-            &external.crate_name,
-            limits,
-            allocation,
-        )?;
+        nonempty("external crate name", &external.crate_name)?;
         exact_hex("external StableCrateId", &external.stable_crate_id, 16)?;
         if external.artifacts.is_empty()
             || external.artifacts.windows(2).any(|pair| pair[0] >= pair[1])
@@ -3565,7 +3319,7 @@ fn validate_external_crates(
             ));
         }
         for artifact in &external.artifacts {
-            nonempty("external crate artifact", artifact, limits, allocation)?;
+            nonempty("external crate artifact", artifact)?;
         }
     }
     Ok(())
@@ -3575,7 +3329,6 @@ impl Catalog {
     fn from_fragments(
         fragments: &[protocol::Fragment],
         invocations: &InvocationAuthority,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
         let mut packages = BTreeMap::<&str, (&str, &str, &str)>::new();
@@ -3594,34 +3347,23 @@ impl Catalog {
                 }
                 Some(_) => {}
                 None => {
-                    allocation.exceeded(
-                        "sidecar packages",
-                        limits.packages,
-                        packages.len().saturating_add(1),
-                    );
                     allocation.items(1)?;
                     packages.insert(&raw.cargo_id, package_fields);
                 }
             }
             allocation.items(1)?;
             let package = identity::Package::new(
-                boxed("Cargo PackageId", &raw.cargo_id, limits, allocation)?,
-                boxed("package name", &raw.name, limits, allocation)?,
-                boxed("package version", &raw.version, limits, allocation)?,
-                boxed("package source", &raw.source, limits, allocation)?,
+                boxed("Cargo PackageId", &raw.cargo_id, allocation)?,
+                boxed("package name", &raw.name, allocation)?,
+                boxed("package version", &raw.version, allocation)?,
+                boxed("package source", &raw.source, allocation)?,
             );
             let compilation = compilation(&fragment.handshake.compilation);
             let key = CompilerKey {
-                crate_name: boxed(
-                    "crate name",
-                    &fragment.handshake.crate_name,
-                    limits,
-                    allocation,
-                )?,
+                crate_name: boxed("crate name", &fragment.handshake.crate_name, allocation)?,
                 stable_crate_id: boxed(
                     "selected StableCrateId",
                     &fragment.handshake.artifact.stable_crate_id,
-                    limits,
                     allocation,
                 )?,
             };
@@ -3633,27 +3375,12 @@ impl Catalog {
             allocation.items(1)?;
             let unit = identity::Unit::new(
                 identity::Authority::Cargo(package),
-                boxed(
-                    "target identity",
-                    &fragment.handshake.target,
-                    limits,
-                    allocation,
-                )?,
-                boxed(
-                    "target kind",
-                    &fragment.handshake.target_kind,
-                    limits,
-                    allocation,
-                )?,
+                boxed("target identity", &fragment.handshake.target, allocation)?,
+                boxed("target kind", &fragment.handshake.target_kind, allocation)?,
                 allocation.owned(&key.crate_name)?,
                 compilation,
                 features.into_boxed_slice(),
                 allocation.owned(&key.stable_crate_id)?,
-            );
-            allocation.exceeded(
-                "sidecar compiler units",
-                limits.packages,
-                units.len().saturating_add(1),
             );
             match captured_ids.get(fragment.handshake.artifact.stable_crate_id.as_str()) {
                 Some(previous) if **previous != fragment.handshake.crate_name => {
@@ -3679,7 +3406,7 @@ impl Catalog {
             }
             allocation.items(1)?;
             units.insert(key, unit);
-            nonempty("unit key", &fragment.handshake.unit_key, limits, allocation)?;
+            nonempty("unit key", &fragment.handshake.unit_key)?;
             if unit_keys.contains(fragment.handshake.unit_key.as_str()) {
                 return Err(extraction(
                     "duplicate-unit-key",
@@ -3690,28 +3417,13 @@ impl Catalog {
             unit_keys.insert(&fragment.handshake.unit_key);
             for raw in &fragment.handshake.sysroot {
                 let key = CompilerKey {
-                    crate_name: boxed("sysroot crate name", &raw.crate_name, limits, allocation)?,
-                    stable_crate_id: boxed(
-                        "StableCrateId",
-                        &raw.stable_crate_id,
-                        limits,
-                        allocation,
-                    )?,
+                    crate_name: boxed("sysroot crate name", &raw.crate_name, allocation)?,
+                    stable_crate_id: boxed("StableCrateId", &raw.stable_crate_id, allocation)?,
                 };
                 allocation.items(2)?;
                 let authority = identity::Authority::Sysroot(identity::Sysroot::new(
-                    boxed(
-                        "sysroot compiler commit",
-                        &raw.compiler_commit,
-                        limits,
-                        allocation,
-                    )?,
-                    boxed(
-                        "sysroot selected target",
-                        &raw.selected_target,
-                        limits,
-                        allocation,
-                    )?,
+                    boxed("sysroot compiler commit", &raw.compiler_commit, allocation)?,
+                    boxed("sysroot selected target", &raw.selected_target, allocation)?,
                     allocation.owned(&key.crate_name)?,
                     allocation.owned(&key.stable_crate_id)?,
                 ));
@@ -3741,11 +3453,6 @@ impl Catalog {
                     }
                     Some(_) => {}
                     None => {
-                        allocation.exceeded(
-                            "sidecar sysroot crates",
-                            limits.packages,
-                            sysroots.len().saturating_add(1),
-                        );
                         allocation.items(1)?;
                         sysroots.insert(key, unit);
                     }
@@ -3754,11 +3461,6 @@ impl Catalog {
         }
         for (key, authority) in &invocations.external_units {
             let ExternalAuthority::Available(external) = authority else {
-                allocation.exceeded(
-                    "unavailable external authorities",
-                    limits.packages,
-                    unavailable.len().saturating_add(1),
-                );
                 allocation.items(1)?;
                 unavailable.insert(CompilerKey {
                     crate_name: allocation.owned(&key.crate_name)?,
@@ -3828,14 +3530,13 @@ impl Catalog {
     fn unavailable_identity(
         &self,
         raw: &protocol::Id,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Option<CompilerKey>> {
         let protocol::Authority::Compiler {
             crate_name,
             stable_crate_id,
         } = &raw.authority;
-        nonempty("compiler crate name", crate_name, limits, allocation)?;
+        nonempty("compiler crate name", crate_name)?;
         exact_hex("StableCrateId", stable_crate_id, 16)?;
         exact_hex("DefPathHash", &raw.def_path_hash, 32)?;
         let unavailable = self.unavailable.iter().any(|key| {
@@ -3851,33 +3552,23 @@ impl Catalog {
         }
     }
 
-    fn validate_raw_id(
-        &self,
-        raw: &protocol::Id,
-        limits: &cargo::Limits,
-        allocation: &Allocation,
-    ) -> Result<()> {
+    fn validate_raw_id(&self, raw: &protocol::Id) -> Result<()> {
         let protocol::Authority::Compiler {
             crate_name,
             stable_crate_id,
         } = &raw.authority;
-        nonempty("compiler crate name", crate_name, limits, allocation)?;
+        nonempty("compiler crate name", crate_name)?;
         exact_hex("StableCrateId", stable_crate_id, 16)?;
         exact_hex("DefPathHash", &raw.def_path_hash, 32)
     }
 
-    fn id(
-        &self,
-        raw: protocol::Id,
-        limits: &cargo::Limits,
-        allocation: &mut Allocation,
-    ) -> Result<identity::Definition> {
+    fn id(&self, raw: protocol::Id, allocation: &mut Allocation) -> Result<identity::Definition> {
         let unit = match raw.authority {
             protocol::Authority::Compiler {
                 crate_name,
                 stable_crate_id,
             } => {
-                nonempty("compiler crate name", &crate_name, limits, allocation)?;
+                nonempty("compiler crate name", &crate_name)?;
                 exact_hex("StableCrateId", &stable_crate_id, 16)?;
                 let cargo = self.units.iter().find_map(|(key, unit)| {
                     (key.crate_name.as_ref() == crate_name
@@ -3919,24 +3610,17 @@ impl Catalog {
     fn id_bounded(
         &self,
         raw: protocol::Id,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<identity::Definition> {
-        self.id(raw, limits, allocation)
+        self.id(raw, allocation)
     }
 
     fn reexport(
         &self,
         raw: protocol::ReexportId,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<identity::Reexport> {
-        nonempty(
-            "re-export compiler crate name",
-            &raw.crate_name,
-            limits,
-            allocation,
-        )?;
+        nonempty("re-export compiler crate name", &raw.crate_name)?;
         exact_hex("re-export StableCrateId", &raw.stable_crate_id, 16)?;
         exact_hex("re-export DefPathHash", &raw.def_path_hash, 32)?;
         let cargo = self.units.iter().find_map(|(key, unit)| {
@@ -4033,11 +3717,6 @@ impl Candidate {
                     }
                 }
             }
-            allocation.exceeded(
-                "canonical invocations",
-                limits.packages,
-                invocations.len().saturating_add(1),
-            );
             allocation.reserve(&mut invocations, 1)?;
             invocations.push(invocation(&fragment, allocation)?);
             for raw in fragment.definitions {
@@ -4055,20 +3734,16 @@ impl Candidate {
                     ));
                 }
                 definition_count = definition_count.saturating_add(1);
-                allocation.exceeded("canonical definitions", limits.units, definition_count);
-                if catalog
-                    .unavailable_identity(&raw.id, limits, allocation)?
-                    .is_some()
-                {
-                    validate_unavailable_definition(&raw, catalog, limits, allocation)?;
+                if catalog.unavailable_identity(&raw.id, allocation)?.is_some() {
+                    validate_unavailable_definition(&raw, catalog)?;
                     continue;
                 }
                 allocation.protocol_id(&raw.id)?;
                 allocation.cloned_ownership(1);
-                let id = catalog.id_bounded(raw.id.clone(), limits, allocation)?;
+                let id = catalog.id_bounded(raw.id.clone(), allocation)?;
                 allocation.protocol_span(&raw.span)?;
                 allocation.cloned_ownership(1);
-                let span = span(raw.span.clone(), limits, allocation)?;
+                let span = span(raw.span.clone(), allocation)?;
                 match definition(raw, catalog, limits, allocation) {
                     Ok(definition) => {
                         if rejected.contains_key(&id) {
@@ -4188,12 +3863,11 @@ impl Candidate {
             }
             for raw in fragment.reachable {
                 edge_count = edge_count.saturating_add(1);
-                allocation.exceeded("canonical export and impl edges", limits.edges, edge_count);
                 if !root_aliases.contains(raw.root_alias.as_str()) {
                     return Err(extraction("mismatched-root-alias", &raw.root_alias));
                 }
                 let binding = raw.binding;
-                let export = export(raw, catalog, limits, allocation)?;
+                let export = export(raw, catalog, allocation)?;
                 match binding {
                     protocol::Binding::Nameable => {
                         let key = key(&export.key, allocation)?;
@@ -4214,34 +3888,27 @@ impl Candidate {
             }
             for raw in fragment.implementations {
                 edge_count = edge_count.saturating_add(1);
-                allocation.exceeded("canonical export and impl edges", limits.edges, edge_count);
                 // An implementation whose crate Cargo cannot join is
                 // unavailable by itself: its types and trait stay.
-                if catalog
-                    .unavailable_identity(&raw.id, limits, allocation)?
-                    .is_some()
-                {
-                    validate_unavailable_implementation(&raw, catalog, limits, allocation)?;
+                if catalog.unavailable_identity(&raw.id, allocation)?.is_some() {
+                    validate_unavailable_implementation(&raw, catalog)?;
                     allocation.protocol_span(&raw.span)?;
                     continue;
                 }
                 let mut relevance = Vec::new();
                 allocation.temporary_conversions(raw.relevance.len());
                 for anchor in &raw.relevance {
-                    if catalog
-                        .unavailable_identity(anchor, limits, allocation)?
-                        .is_none()
-                    {
+                    if catalog.unavailable_identity(anchor, allocation)?.is_none() {
                         allocation.protocol_id(anchor)?;
                         allocation.cloned_ownership(1);
-                        let id = catalog.id_bounded(anchor.clone(), limits, allocation)?;
+                        let id = catalog.id_bounded(anchor.clone(), allocation)?;
                         allocation.reserve(&mut relevance, 1)?;
                         relevance.push(id);
                     }
                 }
                 allocation.protocol_span(&raw.span)?;
                 allocation.cloned_ownership(1);
-                let implementation_span = span(raw.span.clone(), limits, allocation)?;
+                let implementation_span = span(raw.span.clone(), allocation)?;
                 // An implementation the extractor cannot model is unavailable
                 // by itself. Its self type, its trait and every other
                 // implementation of either stay available: one `impl Debug
@@ -4262,17 +3929,15 @@ impl Candidate {
                         | ShapeFailure::UnnameablePrivate,
                     ) => {
                         allocation.items(1)?;
-                        unmodeled.insert(catalog.id_bounded(id, limits, allocation)?);
+                        unmodeled.insert(catalog.id_bounded(id, allocation)?);
                     }
                     Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
             }
             for raw in fragment.scalar_predicate_proofs {
                 edge_count = edge_count.saturating_add(1);
-                allocation.exceeded("canonical export and impl edges", limits.edges, edge_count);
                 allocation.reserve(&mut scalar_predicate_proofs, 1)?;
-                scalar_predicate_proofs
-                    .push(scalar_predicate_proof(raw, catalog, limits, allocation)?);
+                scalar_predicate_proofs.push(scalar_predicate_proof(raw, catalog, allocation)?);
             }
         }
         for export in imports {
@@ -4292,21 +3957,11 @@ impl Candidate {
                 references = references.saturating_add(1);
             });
             semantic_edges = semantic_edges.saturating_add(references);
-            allocation.exceeded(
-                "canonical export and impl edges",
-                limits.edges,
-                semantic_edges,
-            );
         }
         let mut implementation_index = BTreeMap::<identity::Definition, Vec<usize>>::new();
         for (index, implementation) in implementations.iter().enumerate() {
             for anchor in implementation.relevance() {
                 semantic_edges = semantic_edges.saturating_add(1);
-                allocation.exceeded(
-                    "canonical export and impl edges",
-                    limits.edges,
-                    semantic_edges,
-                );
                 if let Some(indices) = implementation_index.get_mut(anchor) {
                     allocation.reserve(indices, 1)?;
                     indices.push(index);
@@ -4371,7 +4026,7 @@ impl Candidate {
         // Extraction reads only demanded items, so an exclusion for an
         // item that was never read has nothing to exclude.
         allocation.category(EvidenceCategory::Raw);
-        let raw = raw_canonical(&self, context, limits, allocation)?;
+        let raw = raw_canonical(&self, context, allocation)?;
         for export in self.exports.values() {
             validate_alias_chain(export, &self.definitions, &self.spellings)?;
         }
@@ -4389,11 +4044,6 @@ impl Candidate {
             let exact_selector = export.key.root_alias() == "iced"
                 && export.key.namespace() == identity::Namespace::Type
                 && export.key.path().eq(["Element"]);
-            allocation.exceeded(
-                "canonical export outcomes",
-                limits.edges,
-                paths.len().saturating_add(1),
-            );
             let path_key = key(&export.key, allocation)?;
             let rejection = match &export.target {
                 ExportTarget::Available(target) => match outcomes.get(target) {
@@ -4643,7 +4293,6 @@ impl Candidate {
                                 role: ledger::SupportRole::Definition,
                             },
                             &nodes,
-                            limits,
                             allocation,
                         );
                     }
@@ -4697,7 +4346,6 @@ impl Candidate {
                         definition.span(),
                         kind,
                         &nodes,
-                        limits,
                         allocation,
                     )?;
                 }
@@ -4716,7 +4364,6 @@ impl Candidate {
                                 role: ledger::SupportRole::Implementation,
                             },
                             &nodes,
-                            limits,
                             allocation,
                         );
                     }
@@ -5111,8 +4758,7 @@ mod implementation_join_tests {
         ));
     }
 
-    /// The joined capacity is charged before growth. Crossing the item
-    /// target records the axis and the join completes; only a latched
+    /// The joined capacity is charged before growth; only a latched
     /// account (a genuine failure) refuses before any growth.
     #[test]
     fn joined_capacity_is_charged_before_growth() {
@@ -5120,15 +4766,9 @@ mod implementation_join_tests {
             implementation(&["relevance-a"], &[], "u8"),
             implementation(&["relevance-b"], &[], "u8"),
         ];
-        let mut allocation = Allocation::with_limits(0, usize::MAX);
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
         reconcile_implementations(&mut rows, &mut allocation)
-            .expect("an over-target join is charged and completes");
-        let axis = *allocation
-            .exceedances()
-            .axis("canonical allocation items")
-            .expect("the join records the item target");
-        assert_eq!((axis.target, axis.first_requested), (0, 1));
-        assert!(axis.high_water >= 1);
+            .expect("the join is charged and completes");
         assert!(allocation.usage().0 >= 1);
         let mut rows = vec![
             implementation(&["relevance-a"], &[], "u8"),
@@ -5211,14 +4851,8 @@ fn push_fixed_edge<'candidate>(
     span: &'candidate model::Span,
     kind: FixedEdgeKind<'candidate>,
     nodes: &[identity::Definition],
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<()> {
-    allocation.exceeded(
-        "canonical fixed-point edges",
-        limits.edges,
-        edges.len().saturating_add(1),
-    );
     let target = fixed_node_index(nodes, target)?;
     allocation.reserve(edges, 1)?;
     edges.push(FixedEdge {
@@ -5329,7 +4963,6 @@ fn insert_fixed_support(
 fn raw_canonical(
     candidate: &Candidate,
     context: &api::Context,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<api::Raw> {
     let mut definitions = Vec::new();
@@ -5356,9 +4989,7 @@ fn raw_canonical(
         implementations: &candidate.implementations,
         scalar_predicate_proofs: &candidate.scalar_predicate_proofs,
     };
-    let (canonical, semantic) =
-        raw_pair(context, &candidate.invocations, &body, limits, allocation)?;
-    allocation.exceeded("semantic API bytes", limits.json_bytes, semantic.len());
+    let (canonical, semantic) = raw_pair(context, &candidate.invocations, &body, allocation)?;
     Ok(api::Graph::raw_pair(
         canonical,
         semantic,
@@ -5374,7 +5005,6 @@ fn raw_pair(
     context: &api::Context,
     invocations: &[api::Invocation],
     body: &RawBody<'_>,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     let encoding = |error: serde_json::Error| Error::Extraction {
@@ -5414,14 +5044,6 @@ fn raw_pair(
         serde_json::to_vec(context).map_err(encoding)?,
         serde_json::to_vec(invocations).map_err(encoding)?,
     )?;
-    // The raw canonical size is an accounting target recorded on the
-    // canonical account; the physical ceiling is the node content bound the
-    // encoding is later stored under.
-    allocation.exceeded(
-        "canonical raw API bytes",
-        limits.json_bytes,
-        canonical.len(),
-    );
     allocation.items(1)?;
     allocation.bytes(canonical.len())?;
     allocation.raw_canonical_bytes(canonical.len());
@@ -5623,18 +5245,15 @@ fn validate_alias_chain(
 fn shape_id(
     catalog: &Catalog,
     raw: protocol::Id,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<identity::Definition, ShapeFailure> {
-    if let Some(key) = catalog.unavailable_identity(&raw, limits, allocation)? {
+    if let Some(key) = catalog.unavailable_identity(&raw, allocation)? {
         return Err(ShapeFailure::ExternalAuthorityUnavailable {
             crate_name: key.crate_name,
             stable_crate_id: key.stable_crate_id,
         });
     }
-    catalog
-        .id(raw, limits, allocation)
-        .map_err(ShapeFailure::Fatal)
+    catalog.id(raw, allocation).map_err(ShapeFailure::Fatal)
 }
 
 fn sysroot_owner_matches_kind(owner: &protocol::Owner, shape: &protocol::Shape) -> bool {
@@ -5653,13 +5272,8 @@ fn sysroot_owner_matches_kind(owner: &protocol::Owner, shape: &protocol::Shape) 
     }
 }
 
-fn validate_unavailable_definition(
-    raw: &protocol::Definition,
-    catalog: &Catalog,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
-    catalog.validate_raw_id(&raw.id, limits, allocation)?;
+fn validate_unavailable_definition(raw: &protocol::Definition, catalog: &Catalog) -> Result<()> {
+    catalog.validate_raw_id(&raw.id)?;
     if raw.display_path.is_empty() {
         return Err(extraction(
             "empty-definition-path",
@@ -5667,20 +5281,18 @@ fn validate_unavailable_definition(
         ));
     }
     for part in &raw.display_path {
-        nonempty("definition display path", part, limits, allocation)?;
+        nonempty("definition display path", part)?;
     }
     match &raw.owner {
         protocol::Owner::Free => {}
-        protocol::Owner::Definition { id } => catalog.validate_raw_id(id, limits, allocation)?,
-        protocol::Owner::Implementation { id } => {
-            catalog.validate_raw_id(id, limits, allocation)?
-        }
+        protocol::Owner::Definition { id } => catalog.validate_raw_id(id)?,
+        protocol::Owner::Implementation { id } => catalog.validate_raw_id(id)?,
     }
     if let protocol::Visibility::Restricted { scope } = &raw.visibility {
-        catalog.validate_raw_id(scope, limits, allocation)?;
+        catalog.validate_raw_id(scope)?;
     }
-    validate_span(&raw.span, limits, allocation)?;
-    validate_origin(&raw.origin, limits, allocation)?;
+    validate_span(&raw.span)?;
+    validate_origin(&raw.origin)?;
     Ok(())
 }
 
@@ -5692,26 +5304,21 @@ fn definition(
 ) -> std::result::Result<model::Definition, ShapeFailure> {
     validate_type_constant_evidence(&raw)?;
     let rejected_class = rejected_class(&raw.owner, &raw.shape);
-    let id = shape_id(catalog, raw.id, limits, allocation)?;
-    let display_path = strings(
-        "definition display path",
-        raw.display_path,
-        limits,
-        allocation,
-    )?;
+    let id = shape_id(catalog, raw.id, allocation)?;
+    let display_path = strings("definition display path", raw.display_path, allocation)?;
     if display_path.is_empty() {
         return Err(extraction("empty-definition-path", id.def_path_hash()).into());
     }
     let owner = match raw.owner {
         protocol::Owner::Free => model::Owner::Free,
         protocol::Owner::Definition { id } => {
-            model::Owner::Definition(shape_id(catalog, id, limits, allocation)?)
+            model::Owner::Definition(shape_id(catalog, id, allocation)?)
         }
         protocol::Owner::Implementation { id } => {
-            model::Owner::Implementation(shape_id(catalog, id, limits, allocation)?)
+            model::Owner::Implementation(shape_id(catalog, id, allocation)?)
         }
     };
-    let visibility = visibility(raw.visibility, catalog, limits, allocation)?;
+    let visibility = visibility(raw.visibility, catalog, allocation)?;
     let kind = match shape(raw.shape, catalog, limits, allocation) {
         Ok(kind) => kind,
         Err(ShapeFailure::Unknown(compiler_kind)) => model::Kind::Rejected {
@@ -5737,8 +5344,8 @@ fn definition(
         },
         Err(ShapeFailure::Fatal(error)) => return Err(ShapeFailure::Fatal(error)),
     };
-    let span = span(raw.span, limits, allocation)?;
-    let origin = origin(raw.origin, limits, allocation)?;
+    let span = span(raw.span, allocation)?;
+    let origin = origin(raw.origin, allocation)?;
     allocation.items(1)?;
     Ok(model::Definition::new(
         id,
@@ -5922,7 +5529,7 @@ fn shape(
             unsafe_trait,
             auto_trait,
             supertraits: predicates(supertraits, catalog, limits, allocation)?,
-            associated: ids(associated, catalog, limits, allocation)?,
+            associated: ids(associated, catalog, allocation)?,
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
         protocol::Shape::AssociatedType {
@@ -5935,11 +5542,11 @@ fn shape(
             generics: generics_of(generics, catalog, limits, allocation)?,
         },
         protocol::Shape::Sysroot { compiler_kind } => model::Kind::Sysroot {
-            compiler_kind: boxed("sysroot compiler kind", &compiler_kind, limits, allocation)?,
+            compiler_kind: boxed("sysroot compiler kind", &compiler_kind, allocation)?,
         },
         protocol::Shape::MacroRules { source, krate } => model::Kind::MacroRules {
-            source: boxed("macro_rules source", &source, limits, allocation)?,
-            krate: boxed("macro_rules crate", &krate, limits, allocation)?,
+            source: boxed("macro_rules source", &source, allocation)?,
+            krate: boxed("macro_rules crate", &krate, allocation)?,
         },
         protocol::Shape::Unknown { compiler_kind } => {
             allocation.string(&compiler_kind)?;
@@ -5960,11 +5567,11 @@ fn fields_of(
     for field in fields {
         allocation.items(1)?;
         converted.push(model::Field::new(
-            boxed("field name", &field.name, limits, allocation)?,
+            boxed("field name", &field.name, allocation)?,
             field.index,
-            visibility(field.visibility, catalog, limits, allocation)?,
+            visibility(field.visibility, catalog, allocation)?,
             type_of(field.ty, catalog, limits, allocation)?,
-            span(field.span, limits, allocation)?,
+            span(field.span, allocation)?,
         ));
     }
     Ok(converted.into_boxed_slice())
@@ -6004,7 +5611,7 @@ fn variant_of(
 ) -> std::result::Result<model::Variant, ShapeFailure> {
     allocation.items(1)?;
     Ok(model::Variant::new(
-        boxed("variant name", &variant.name, limits, allocation)?,
+        boxed("variant name", &variant.name, allocation)?,
         field_set(
             variant.field_form,
             variant.fields,
@@ -6015,7 +5622,7 @@ fn variant_of(
             allocation,
         )?,
         default_const(variant.discriminant, catalog, limits, allocation)?,
-        span(variant.span, limits, allocation)?,
+        span(variant.span, allocation)?,
     ))
 }
 
@@ -6055,14 +5662,9 @@ fn generics_of(
         allocation.items(1)?;
         parameters.push(
             model::Parameter::new(
-                shape_id(catalog, parameter.owner, limits, allocation)?,
+                shape_id(catalog, parameter.owner, allocation)?,
                 parameter.index,
-                boxed(
-                    "generic parameter name",
-                    &parameter.name,
-                    limits,
-                    allocation,
-                )?,
+                boxed("generic parameter name", &parameter.name, allocation)?,
                 kind,
             )
             .with_covariant(covariant),
@@ -6103,13 +5705,13 @@ fn predicate_of(
         }
         protocol::Predicate::LifetimeOutlives { longer, shorter } => {
             model::Predicate::LifetimeOutlives {
-                longer: lifetime(longer, catalog, limits, allocation)?,
-                shorter: lifetime(shorter, catalog, limits, allocation)?,
+                longer: lifetime(longer, catalog, allocation)?,
+                shorter: lifetime(shorter, catalog, allocation)?,
             }
         }
         protocol::Predicate::TypeOutlives { ty, lifetime: raw } => model::Predicate::TypeOutlives {
             ty: type_of(ty, catalog, limits, allocation)?,
-            lifetime: lifetime(raw, catalog, limits, allocation)?,
+            lifetime: lifetime(raw, catalog, allocation)?,
         },
         protocol::Predicate::ConstEvaluatable { value } => {
             model::Predicate::ConstEvaluatable(const_of(value, catalog, limits, allocation)?)
@@ -6157,18 +5759,18 @@ fn type_of(
                     allocation,
                 )?));
             }
-            model::Type::Primitive(boxed("primitive type", &name, limits, allocation)?)
+            model::Type::Primitive(boxed("primitive type", &name, allocation)?)
         }
         protocol::Type::Definition { id, arguments } => model::Type::Definition {
-            id: shape_id(catalog, id, limits, allocation)?,
+            id: shape_id(catalog, id, allocation)?,
             arguments: arguments_of(arguments, catalog, limits, allocation)?,
         },
         protocol::Type::Parameter { owner, index } => model::Type::Parameter {
-            owner: shape_id(catalog, owner, limits, allocation)?,
+            owner: shape_id(catalog, owner, allocation)?,
             index,
         },
         protocol::Type::SelfType { owner } => {
-            model::Type::SelfType(shape_id(catalog, owner, limits, allocation)?)
+            model::Type::SelfType(shape_id(catalog, owner, allocation)?)
         }
         protocol::Type::Tuple { elements } => {
             let mut converted = Vec::new();
@@ -6195,7 +5797,7 @@ fn type_of(
             mutability,
             ty,
         } => model::Type::Reference {
-            lifetime: lifetime(raw, catalog, limits, allocation)?,
+            lifetime: lifetime(raw, catalog, allocation)?,
             mutability: mutability_of(mutability),
             ty: {
                 allocation.items(1)?;
@@ -6220,14 +5822,14 @@ fn type_of(
             lifetime: lt,
         } => model::Type::TraitObject {
             bounds: object_bounds(raw, catalog, limits, allocation)?,
-            lifetime: lifetime(lt, catalog, limits, allocation)?,
+            lifetime: lifetime(lt, catalog, allocation)?,
         },
         protocol::Type::ImplTrait {
             id,
             bounds: raw,
             captures,
         } => model::Type::ImplTrait {
-            id: shape_id(catalog, id, limits, allocation)?,
+            id: shape_id(catalog, id, allocation)?,
             bounds: predicates(raw, catalog, limits, allocation)?,
             captures: arguments_of(captures, catalog, limits, allocation)?,
         },
@@ -6236,8 +5838,8 @@ fn type_of(
             associated,
             arguments,
         } => model::Type::Projection {
-            trait_id: shape_id(catalog, trait_id, limits, allocation)?,
-            associated: shape_id(catalog, associated, limits, allocation)?,
+            trait_id: shape_id(catalog, trait_id, allocation)?,
+            associated: shape_id(catalog, associated, allocation)?,
             arguments: arguments_of(arguments, catalog, limits, allocation)?,
         },
         protocol::Type::Never => model::Type::Never,
@@ -6264,7 +5866,7 @@ fn signature_of(
             mutability,
             ty,
         } => model::Receiver::Reference {
-            lifetime: lifetime(raw, catalog, limits, allocation)?,
+            lifetime: lifetime(raw, catalog, allocation)?,
             mutability: mutability_of(mutability),
             ty: type_of(ty, catalog, limits, allocation)?,
         },
@@ -6287,9 +5889,9 @@ fn signature_of(
         safety(signature.safety),
         signature.const_function,
         signature.async_function,
-        boxed("function ABI", &signature.abi, limits, allocation)?,
+        boxed("function ABI", &signature.abi, allocation)?,
         signature.variadic,
-        binders_of(signature.binders, catalog, limits, allocation)?,
+        binders_of(signature.binders, catalog, allocation)?,
         receiver,
         types(signature.inputs, catalog, limits, allocation)?,
         type_of(signature.output, catalog, limits, allocation)?,
@@ -6310,10 +5912,10 @@ fn bound_of(
             polarity,
             binders,
         } => model::Bound::Trait {
-            trait_id: shape_id(catalog, trait_id, limits, allocation)?,
+            trait_id: shape_id(catalog, trait_id, allocation)?,
             arguments: arguments_of(arguments, catalog, limits, allocation)?,
             polarity: polarity_of(polarity),
-            binders: binders_of(binders, catalog, limits, allocation)?,
+            binders: binders_of(binders, catalog, allocation)?,
         },
         protocol::Bound::MaybeSized => model::Bound::MaybeSized,
     })
@@ -6338,7 +5940,7 @@ fn object_bounds(
                 arguments,
                 ty,
             } => model::ObjectBound::ProjectionEquality {
-                associated: shape_id(catalog, associated, limits, allocation)?,
+                associated: shape_id(catalog, associated, allocation)?,
                 arguments: arguments_of(arguments, catalog, limits, allocation)?,
                 ty: type_of(ty, catalog, limits, allocation)?,
             },
@@ -6358,18 +5960,18 @@ fn const_of(
 ) -> std::result::Result<model::Const, ShapeFailure> {
     Ok(match value {
         protocol::Const::Literal { ty, value } => model::Const::Literal {
-            ty: boxed("const type", &ty, limits, allocation)?,
-            value: boxed("const literal", &value, limits, allocation)?,
+            ty: boxed("const type", &ty, allocation)?,
+            value: boxed("const literal", &value, allocation)?,
         },
         protocol::Const::Parameter { owner, index } => model::Const::Parameter {
-            owner: shape_id(catalog, owner, limits, allocation)?,
+            owner: shape_id(catalog, owner, allocation)?,
             index,
         },
         protocol::Const::Unevaluated {
             definition,
             arguments,
         } => model::Const::Unevaluated {
-            definition: shape_id(catalog, definition, limits, allocation)?,
+            definition: shape_id(catalog, definition, allocation)?,
             arguments: arguments_of(arguments, catalog, limits, allocation)?,
         },
         protocol::Const::Unknown { compiler_kind } => {
@@ -6386,24 +5988,24 @@ fn implementation(
     allocation: &mut Allocation,
 ) -> std::result::Result<model::Implementation, ShapeFailure> {
     exact_hex("implementation DefPathHash", &raw.key, 32)?;
-    let id = shape_id(catalog, raw.id, limits, allocation)?;
+    let id = shape_id(catalog, raw.id, allocation)?;
     if id.namespace() != identity::Namespace::Type || id.def_path_hash() != raw.key {
         return Err(extraction("implementation-identity-mismatch", &raw.key).into());
     }
     if raw.relevance.is_empty() || raw.relevance.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(extraction("implementation-relevance-order", &raw.key).into());
     }
-    let relevance = ids(raw.relevance, catalog, limits, allocation)?;
+    let relevance = ids(raw.relevance, catalog, allocation)?;
     let trait_ref = match raw.trait_ref {
         protocol::Trait::Inherent => model::Trait::Inherent,
         protocol::Trait::Trait { id, arguments } => model::Trait::Trait {
-            id: shape_id(catalog, id, limits, allocation)?,
+            id: shape_id(catalog, id, allocation)?,
             arguments: arguments_of(arguments, catalog, limits, allocation)?,
         },
     };
     allocation.items(1)?;
     Ok(model::Implementation::new(
-        boxed("implementation key", &raw.key, limits, allocation)?,
+        boxed("implementation key", &raw.key, allocation)?,
         id,
         relevance,
         trait_ref,
@@ -6413,20 +6015,19 @@ fn implementation(
         raw.const_impl,
         raw.default_impl,
         generics_of(raw.generics, catalog, limits, allocation)?,
-        ids(raw.associated, catalog, limits, allocation)?,
-        span(raw.span, limits, allocation)?,
-        origin(raw.origin, limits, allocation)?,
+        ids(raw.associated, catalog, allocation)?,
+        span(raw.span, allocation)?,
+        origin(raw.origin, allocation)?,
     ))
 }
 
 fn scalar_predicate_proof(
     raw: protocol::ScalarPredicateProof,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<model::ScalarPredicateProof> {
-    let owner = catalog.id_bounded(raw.owner, limits, allocation)?;
-    let trait_id = catalog.id_bounded(raw.trait_id, limits, allocation)?;
+    let owner = catalog.id_bounded(raw.owner, allocation)?;
+    let trait_id = catalog.id_bounded(raw.trait_id, allocation)?;
     if trait_id.namespace() != identity::Namespace::Type {
         return Err(extraction(
             "scalar-predicate-trait-namespace",
@@ -6443,7 +6044,7 @@ fn scalar_predicate_proof(
     let outcome = match raw.outcome {
         protocol::ScalarPredicateOutcome::Absent => model::ScalarPredicateOutcome::Absent,
         protocol::ScalarPredicateOutcome::Positive { implementation } => {
-            let implementation = catalog.id_bounded(implementation, limits, allocation)?;
+            let implementation = catalog.id_bounded(implementation, allocation)?;
             if implementation.namespace() != identity::Namespace::Type {
                 return Err(extraction(
                     "scalar-predicate-implementation-namespace",
@@ -6467,11 +6068,9 @@ fn scalar_predicate_proof(
 fn validate_unavailable_implementation(
     raw: &protocol::Implementation,
     catalog: &Catalog,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
 ) -> Result<()> {
     exact_hex("implementation DefPathHash", &raw.key, 32)?;
-    catalog.validate_raw_id(&raw.id, limits, allocation)?;
+    catalog.validate_raw_id(&raw.id)?;
     if raw.id.def_path_hash != raw.key || raw.id.namespace != protocol::Namespace::Type {
         return Err(extraction("implementation-identity-mismatch", &raw.key));
     }
@@ -6479,30 +6078,25 @@ fn validate_unavailable_implementation(
         return Err(extraction("implementation-relevance-order", &raw.key));
     }
     for anchor in &raw.relevance {
-        catalog.validate_raw_id(anchor, limits, allocation)?;
+        catalog.validate_raw_id(anchor)?;
     }
     if let protocol::Trait::Trait { id, .. } = &raw.trait_ref {
-        catalog.validate_raw_id(id, limits, allocation)?;
+        catalog.validate_raw_id(id)?;
     }
     for associated in &raw.associated {
-        catalog.validate_raw_id(associated, limits, allocation)?;
+        catalog.validate_raw_id(associated)?;
     }
-    validate_span(&raw.span, limits, allocation)?;
-    validate_origin(&raw.origin, limits, allocation)?;
+    validate_span(&raw.span)?;
+    validate_origin(&raw.origin)?;
     Ok(())
 }
 
-fn export(
-    raw: protocol::Export,
-    catalog: &Catalog,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<Export> {
+fn export(raw: protocol::Export, catalog: &Catalog, allocation: &mut Allocation) -> Result<Export> {
     allocation.string(&raw.root_alias)?;
     allocation.items(1)?;
     let key = identity::Export::new(
-        boxed("selected root alias", &raw.root_alias, limits, allocation)?,
-        strings("public export path", raw.path, limits, allocation)?,
+        boxed("selected root alias", &raw.root_alias, allocation)?,
+        strings("public export path", raw.path, allocation)?,
         namespace(raw.namespace),
     );
     if key.path().len() == 0 {
@@ -6513,9 +6107,9 @@ fn export(
     for alias in raw.aliases {
         allocation.items(1)?;
         aliases.push(ledger::Alias::new(
-            strings("alias source path", alias.from, limits, allocation)?,
-            strings("alias target path", alias.to, limits, allocation)?,
-            span(alias.span, limits, allocation)?,
+            strings("alias source path", alias.from, allocation)?,
+            strings("alias target path", alias.to, allocation)?,
+            span(alias.span, allocation)?,
         ));
     }
     let mut reexports = Vec::new();
@@ -6539,8 +6133,8 @@ fn export(
                 }
                 reexports.push(ledger::Reexport::identified(
                     kind,
-                    catalog.reexport(item, limits, allocation)?,
-                    span(source, limits, allocation)?,
+                    catalog.reexport(item, allocation)?,
+                    span(source, allocation)?,
                 ));
             }
             protocol::ReexportEvidence::IdentitylessMacro => {
@@ -6556,28 +6150,23 @@ fn export(
     }
     let target = match raw.target {
         protocol::ExportTarget::Definition { id } => {
-            match catalog.unavailable_identity(&id, limits, allocation)? {
+            match catalog.unavailable_identity(&id, allocation)? {
                 Some(key) => ExportTarget::ExternalAuthorityUnavailable {
                     crate_name: key.crate_name,
                     stable_crate_id: key.stable_crate_id,
                 },
-                None => ExportTarget::Available(catalog.id(id, limits, allocation)?),
+                None => ExportTarget::Available(catalog.id(id, allocation)?),
             }
         }
         protocol::ExportTarget::Unsupported { compiler_kind } => {
             ExportTarget::UnsupportedPublicPath {
-                compiler_kind: boxed(
-                    "unsupported public path kind",
-                    &compiler_kind,
-                    limits,
-                    allocation,
-                )?,
+                compiler_kind: boxed("unsupported public path kind", &compiler_kind, allocation)?,
             }
         }
     };
     let variant = raw
         .variant
-        .map(|variant| boxed("re-exported variant name", &variant, limits, allocation))
+        .map(|variant| boxed("re-exported variant name", &variant, allocation))
         .transpose()?;
     allocation.items(1)?;
     Ok(Export {
@@ -6585,7 +6174,7 @@ fn export(
         target,
         aliases: aliases.into_boxed_slice(),
         reexports: reexports.into_boxed_slice(),
-        span: span(raw.span, limits, allocation)?,
+        span: span(raw.span, allocation)?,
         variant,
     })
 }
@@ -6655,13 +6244,12 @@ fn anonymous_import(
 fn visibility(
     raw: protocol::Visibility,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<model::Visibility, ShapeFailure> {
     Ok(match raw {
         protocol::Visibility::Public => model::Visibility::Public,
         protocol::Visibility::Restricted { scope } => {
-            model::Visibility::Restricted(shape_id(catalog, scope, limits, allocation)?)
+            model::Visibility::Restricted(shape_id(catalog, scope, allocation)?)
         }
     })
 }
@@ -6706,7 +6294,7 @@ fn arguments_of(
     for argument in arguments {
         converted.push(match argument {
             protocol::Argument::Lifetime { lifetime: raw } => {
-                model::Argument::Lifetime(lifetime(raw, catalog, limits, allocation)?)
+                model::Argument::Lifetime(lifetime(raw, catalog, allocation)?)
             }
             protocol::Argument::Type { ty } => {
                 model::Argument::Type(type_of(ty, catalog, limits, allocation)?)
@@ -6722,17 +6310,16 @@ fn arguments_of(
 fn lifetime(
     lifetime: protocol::Lifetime,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<model::Lifetime, ShapeFailure> {
     Ok(match lifetime {
         protocol::Lifetime::Static => model::Lifetime::Static,
         protocol::Lifetime::Early { owner, index } => model::Lifetime::Early {
-            owner: shape_id(catalog, owner, limits, allocation)?,
+            owner: shape_id(catalog, owner, allocation)?,
             index,
         },
         protocol::Lifetime::Late { binder, index } => model::Lifetime::Late {
-            binder: binder_of(binder, catalog, limits, allocation)?,
+            binder: binder_of(binder, catalog, allocation)?,
             index,
         },
         protocol::Lifetime::Erased => model::Lifetime::Erased,
@@ -6742,29 +6329,27 @@ fn lifetime(
 fn binder_of(
     binder: protocol::Binder,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<model::Binder, ShapeFailure> {
     allocation.items(1)?;
     Ok(model::Binder::new(
-        shape_id(catalog, binder.owner, limits, allocation)?,
+        shape_id(catalog, binder.owner, allocation)?,
         binder.depth,
         binder.index,
-        boxed("binder name", &binder.name, limits, allocation)?,
+        boxed("binder name", &binder.name, allocation)?,
     ))
 }
 
 fn binders_of(
     binders: Vec<protocol::Binder>,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<Box<[model::Binder]>, ShapeFailure> {
     let mut converted = Vec::new();
     allocation.temporary_conversions(binders.len());
     allocation.reserve(&mut converted, binders.len())?;
     for binder in binders {
-        converted.push(binder_of(binder, catalog, limits, allocation)?);
+        converted.push(binder_of(binder, catalog, allocation)?);
     }
     Ok(converted.into_boxed_slice())
 }
@@ -6823,14 +6408,13 @@ fn predicates(
 fn ids(
     ids: Vec<protocol::Id>,
     catalog: &Catalog,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> std::result::Result<Box<[identity::Definition]>, ShapeFailure> {
     let mut converted = Vec::new();
     allocation.temporary_conversions(ids.len());
     allocation.reserve(&mut converted, ids.len())?;
     for id in ids {
-        converted.push(shape_id(catalog, id, limits, allocation)?);
+        converted.push(shape_id(catalog, id, allocation)?);
     }
     allocation.sort_keys(converted.len());
     converted.sort_unstable();
@@ -6844,35 +6428,24 @@ fn ids(
     Ok(converted.into_boxed_slice())
 }
 
-fn origin(
-    raw: protocol::Origin,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<model::Origin> {
+fn origin(raw: protocol::Origin, allocation: &mut Allocation) -> Result<model::Origin> {
     Ok(match raw {
         protocol::Origin::Source => model::Origin::Source,
         protocol::Origin::Expansion {
             call_site,
             definition_site,
         } => model::Origin::Expansion {
-            call_site: span(call_site, limits, allocation)?,
-            definition_site: span(definition_site, limits, allocation)?,
+            call_site: span(call_site, allocation)?,
+            definition_site: span(definition_site, allocation)?,
         },
-        protocol::Origin::Synthesized { mechanism } => model::Origin::Synthesized(boxed(
-            "synthesis mechanism",
-            &mechanism,
-            limits,
-            allocation,
-        )?),
+        protocol::Origin::Synthesized { mechanism } => {
+            model::Origin::Synthesized(boxed("synthesis mechanism", &mechanism, allocation)?)
+        }
     })
 }
 
-fn span(
-    raw: protocol::Span,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<model::Span> {
-    validate_span(&raw, limits, allocation)?;
+fn span(raw: protocol::Span, allocation: &mut Allocation) -> Result<model::Span> {
+    validate_span(&raw)?;
     allocation.items(1)?;
     allocation.string(&raw.file)?;
     Ok(model::Span::new(
@@ -6886,12 +6459,8 @@ fn span(
     ))
 }
 
-fn validate_span(
-    raw: &protocol::Span,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
-    nonempty("source span file", &raw.file, limits, allocation)?;
+fn validate_span(raw: &protocol::Span) -> Result<()> {
+    nonempty("source span file", &raw.file)?;
     if raw.byte_start > raw.byte_end
         || raw.line_start == 0
         || raw.line_end == 0
@@ -6902,23 +6471,17 @@ fn validate_span(
     Ok(())
 }
 
-fn validate_origin(
-    raw: &protocol::Origin,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
+fn validate_origin(raw: &protocol::Origin) -> Result<()> {
     match raw {
         protocol::Origin::Source => Ok(()),
         protocol::Origin::Expansion {
             call_site,
             definition_site,
         } => {
-            validate_span(call_site, limits, allocation)?;
-            validate_span(definition_site, limits, allocation)
+            validate_span(call_site)?;
+            validate_span(definition_site)
         }
-        protocol::Origin::Synthesized { mechanism } => {
-            nonempty("synthesis mechanism", mechanism, limits, allocation)
-        }
+        protocol::Origin::Synthesized { mechanism } => nonempty("synthesis mechanism", mechanism),
     }
 }
 
@@ -7072,7 +6635,6 @@ fn polarity_of(raw: protocol::Polarity) -> model::Polarity {
 fn strings(
     field: &'static str,
     values: Vec<String>,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Box<[Box<str>]>> {
     for value in &values {
@@ -7081,25 +6643,19 @@ fn strings(
     let mut boxed = Vec::new();
     allocation.reserve(&mut boxed, values.len())?;
     for value in values {
-        nonempty(field, &value, limits, allocation)?;
+        nonempty(field, &value)?;
         boxed.push(value.into_boxed_str());
     }
     Ok(boxed.into_boxed_slice())
 }
 
-fn boxed(
-    field: &'static str,
-    value: &str,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<Box<str>> {
-    nonempty(field, value, limits, allocation)?;
+fn boxed(field: &'static str, value: &str, allocation: &mut Allocation) -> Result<Box<str>> {
+    nonempty(field, value)?;
     allocation.owned(value)
 }
 
 fn prefixed(prefix: &str, value: &str, allocation: &mut Allocation) -> Result<Box<str>> {
     let length = prefix.len().saturating_add(value.len());
-    allocation.exceeded("owned string bytes", allocation.string_limit, length);
     allocation.items(1)?;
     allocation.bytes(length)?;
     let mut owned = String::new();
@@ -7114,15 +6670,8 @@ fn prefixed(prefix: &str, value: &str, allocation: &mut Allocation) -> Result<Bo
     Ok(owned.into_boxed_str())
 }
 
-/// A protocol string's size is an accounting target recorded on the
-/// canonical account; emptiness is a correctness failure.
-fn nonempty(
-    field: &'static str,
-    value: &str,
-    limits: &cargo::Limits,
-    allocation: &Allocation,
-) -> Result<()> {
-    allocation.exceeded(field, limits.string_bytes, value.len());
+/// An empty protocol string is a correctness failure.
+fn nonempty(field: &'static str, value: &str) -> Result<()> {
     present(field, value)
 }
 
@@ -7208,125 +6757,6 @@ fn extraction(code: &'static str, reason: &str) -> Error {
 #[cfg(test)]
 mod api_protocol;
 
-#[cfg(all(test, feature = "rustc-driver", feature = "test-fixtures"))]
-mod classification_evidence_authority {
-    use super::Allocation;
-    use crate::classify::{EVIDENCE_RETAINED_BYTES, EVIDENCE_RETAINED_ITEMS};
-    use crate::Error;
-
-    fn axis(allocation: &Allocation, name: &str) -> crate::exceedance::Axis {
-        *allocation
-            .exceedances()
-            .axis(name)
-            .unwrap_or_else(|| panic!("the canonical account records `{name}`"))
-    }
-
-    /// The production and private retained targets admit their exact
-    /// boundaries silently and record one over, with the target in force at
-    /// the time of the crossing and a truthful high water.
-    #[test]
-    fn private_retained_authority_accepts_exact_boundaries_and_records_plus_one() {
-        let limits = crate::cargo::Limits::standard();
-        let allocation = Allocation::new(&limits);
-
-        allocation
-            .validate_retained(limits.retained_graph_items, limits.retained_graph_bytes)
-            .expect("the exact production retained Graph boundary succeeds");
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation
-            .validate_retained(limits.retained_graph_items + 1, 0)
-            .expect("one item over the production retained target is recorded");
-        let items = axis(&allocation, "retained graph items");
-        assert_eq!(
-            (items.target, items.first_requested, items.high_water),
-            (
-                limits.retained_graph_items as u64,
-                limits.retained_graph_items as u64 + 1,
-                limits.retained_graph_items as u64 + 1
-            )
-        );
-        allocation
-            .validate_retained(0, limits.retained_graph_bytes + 1)
-            .expect("one byte over the production retained target is recorded");
-        let bytes = axis(&allocation, "retained graph bytes");
-        assert_eq!(
-            (bytes.target, bytes.first_requested),
-            (
-                limits.retained_graph_bytes as u64,
-                limits.retained_graph_bytes as u64 + 1
-            )
-        );
-        assert!(!allocation.is_refused());
-
-        let mut allocation = Allocation::new(&limits);
-        allocation.authorize_retained_classification_evidence();
-        allocation
-            .validate_retained(EVIDENCE_RETAINED_ITEMS, EVIDENCE_RETAINED_BYTES)
-            .expect("the exact private retained boundary succeeds");
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation
-            .validate_retained(EVIDENCE_RETAINED_ITEMS + 1, EVIDENCE_RETAINED_BYTES + 1)
-            .expect("one over each private retained target is recorded");
-        let items = axis(&allocation, "retained graph items");
-        assert_eq!(
-            (items.target, items.first_requested),
-            (
-                EVIDENCE_RETAINED_ITEMS as u64,
-                EVIDENCE_RETAINED_ITEMS as u64 + 1
-            )
-        );
-        let bytes = axis(&allocation, "retained graph bytes");
-        assert_eq!(
-            (bytes.target, bytes.first_requested),
-            (
-                EVIDENCE_RETAINED_BYTES as u64,
-                EVIDENCE_RETAINED_BYTES as u64 + 1
-            )
-        );
-        // Terminal only via a genuine cause.
-        allocation.refuse();
-        assert!(matches!(
-            allocation.validate_retained(0, 0),
-            Err(Error::Node { operation, .. }) if operation == super::REFUSED_ACCOUNT_OPERATION
-        ));
-    }
-
-    #[test]
-    fn production_authority_and_scalar_only_entry_point_remain_distinct() {
-        let limits = crate::cargo::Limits::standard();
-        let mut allocation = Allocation::new(&limits);
-        allocation
-            .validate_retained(limits.retained_graph_items, limits.retained_graph_bytes)
-            .expect("production retained Graph authority accepts its exact boundary");
-        allocation.authorize_retained_classification_evidence();
-        allocation
-            .validate_retained(limits.retained_graph_items, 0)
-            .expect("the production item boundary crosses the private target and is recorded");
-        let items = axis(&allocation, "retained graph items");
-        assert_eq!(
-            (items.target, items.first_requested),
-            (
-                EVIDENCE_RETAINED_ITEMS as u64,
-                limits.retained_graph_items as u64
-            )
-        );
-        allocation
-            .validate_retained(0, limits.retained_graph_bytes + 1)
-            .expect("the private byte envelope remains distinct from production");
-        assert!(allocation
-            .exceedances()
-            .axis("retained graph bytes")
-            .is_none());
-
-        let scalar_only: fn(
-            crate::cargo::Request,
-            &crate::process::Native,
-            &crate::cargo::Limits,
-        ) -> crate::Result<()> = super::measure_classification;
-        let _ = scalar_only;
-    }
-}
-
 #[cfg(test)]
 mod policy_bounds {
     use std::cell::Cell;
@@ -7336,11 +6766,9 @@ mod policy_bounds {
         ManifestSpan, Policy, POLICY_BORROWED_PATH_OWNERSHIPS, POLICY_OWNED_PATH_RESERVES,
         POLICY_STRING_OWNERSHIPS,
     };
-    use crate::cargo::Limits;
-    use crate::exceedance::Axis;
 
-    fn span(limits: &Limits) -> ManifestSpan<'static> {
-        ManifestSpan::new("Cargo.toml", 0, 1, 1, 0, 1, 1, limits).expect("fixture span seals")
+    fn span() -> ManifestSpan<'static> {
+        ManifestSpan::new("Cargo.toml", 0, 1, 1, 0, 1, 1).expect("fixture span seals")
     }
 
     fn ownerships() -> usize {
@@ -7355,30 +6783,15 @@ mod policy_bounds {
         POLICY_OWNED_PATH_RESERVES.with(Cell::get)
     }
 
-    fn axis(policy: &Policy, name: &str) -> Axis {
-        *policy
-            .exceedances()
-            .axis(name)
-            .unwrap_or_else(|| panic!("the policy records `{name}`"))
-    }
-
-    /// The exact item peak seals silently; one component more is still
-    /// retained, and the policy account records the peak-items axis with the
-    /// true peak. Ownership follows the retained node, never a refusal.
+    /// The retained exclusion owns each of its strings once and reserves its
+    /// owned path once.
     #[test]
-    fn exclusion_item_target_admits_exact_and_records_plus_one_while_retaining() {
-        let mut limits = Limits::standard();
-        limits.items = 9;
-        let exact = Policy::manifest(&limits)
-            .exclusion("dep", ["one", "two"], "reason", span(&limits))
-            .expect("exact retained plus borrowed peak seals")
-            .seal();
-        assert!(!exact.exceedances().is_exceeded());
+    fn exclusion_owns_each_string_once() {
         let before = ownerships();
         let reserves = owned_path_reserves();
-        let over = Policy::manifest(&limits)
-            .exclusion("dep", ["one", "two", "three"], "reason", span(&limits))
-            .expect("one component over the item target still seals")
+        let policy = Policy::manifest()
+            .exclusion("dep", ["one", "two", "three"], "reason", span())
+            .expect("the exclusion seals")
             .seal();
         assert_eq!(
             ownerships() - before,
@@ -7386,157 +6799,13 @@ mod policy_bounds {
             "alias, three components, reason and span file"
         );
         assert_eq!(owned_path_reserves() - reserves, 1);
-        let peak = axis(&over, "manifest policy peak items");
-        assert_eq!(
-            (peak.target, peak.first_requested, peak.high_water),
-            (9, 11, 11)
-        );
-        assert!(over.exceedances().axis("manifest policy items").is_none());
-        assert_eq!(over.retained_usage().0, 8);
+        assert_eq!(policy.retained_usage().0, 8);
     }
 
+    /// The builder drains a finite path, borrowing and retaining every
+    /// component.
     #[test]
-    fn exclusion_byte_target_admits_exact_and_records_one_below_while_retaining() {
-        let limits = Limits::standard();
-        let usage = Policy::manifest(&limits)
-            .exclusion("dep", ["item"], "reason", span(&limits))
-            .expect("fixture exclusion seals")
-            .seal()
-            .usage;
-        let mut exact = limits;
-        exact.manifest_bytes = usage
-            .bytes
-            .checked_add(std::mem::size_of::<&str>())
-            .expect("fixture peak byte count fits");
-        let sealed = Policy::manifest(&exact)
-            .exclusion("dep", ["item"], "reason", span(&exact))
-            .expect("exact byte target seals")
-            .seal();
-        assert!(!sealed.exceedances().is_exceeded());
-        let mut below = exact;
-        below.manifest_bytes = usage.bytes.saturating_sub(1);
-        let before = ownerships();
-        let reserves = owned_path_reserves();
-        let over = Policy::manifest(&below)
-            .exclusion("dep", ["item"], "reason", span(&below))
-            .expect("one byte below the target still seals")
-            .seal();
-        assert_eq!(
-            ownerships() - before,
-            4,
-            "the retained node owns its strings"
-        );
-        assert_eq!(owned_path_reserves() - reserves, 1);
-        let retained = axis(&over, "manifest policy bytes");
-        assert_eq!(
-            (
-                retained.target,
-                retained.first_requested,
-                retained.high_water
-            ),
-            (
-                usage.bytes as u64 - 1,
-                usage.bytes as u64,
-                usage.bytes as u64
-            )
-        );
-        let peak = axis(&over, "manifest policy peak bytes");
-        assert_eq!(peak.high_water, exact.manifest_bytes as u64);
-        assert_eq!(over.usage.bytes, usage.bytes);
-    }
-
-    #[test]
-    fn multiple_exclusions_charge_full_borrowed_and_final_owned_overlap() {
-        let standard = Limits::standard();
-        let strings_before = ownerships();
-        let reserves_before = owned_path_reserves();
-        let usage = Policy::manifest(&standard)
-            .exclusion("dep", ["one", "two"], "first", span(&standard))
-            .expect("first exclusion seals")
-            .exclusion("dep", ["three", "four"], "second", span(&standard))
-            .expect("second exclusion seals")
-            .seal()
-            .usage;
-        let owned_strings = ownerships() - strings_before;
-        let owned_reserves = owned_path_reserves() - reserves_before;
-        let transient_items = 2;
-        let transient_bytes = 2_usize
-            .checked_mul(std::mem::size_of::<&str>())
-            .expect("fixture pointer capacity fits");
-        let mut exact = standard;
-        exact.items = usage
-            .items
-            .checked_add(transient_items)
-            .expect("fixture peak item count fits");
-        exact.manifest_bytes = usage
-            .bytes
-            .checked_add(transient_bytes)
-            .expect("fixture peak byte count fits");
-        let sealed = Policy::manifest(&exact)
-            .exclusion("dep", ["one", "two"], "first", span(&exact))
-            .expect("first exact exclusion seals")
-            .exclusion("dep", ["three", "four"], "second", span(&exact))
-            .expect("the exact multi-exclusion peak seals")
-            .seal();
-        assert!(!sealed.exceedances().is_exceeded());
-
-        // One item under the final peak retains both exclusions and
-        // records the peak-items axis at the true peak.
-        let before_strings = ownerships();
-        let before_reserves = owned_path_reserves();
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let over = Policy::manifest(&item_floor)
-            .exclusion("dep", ["one", "two"], "first", span(&item_floor))
-            .expect("the first exclusion remains below the final peak")
-            .exclusion("dep", ["three", "four"], "second", span(&item_floor))
-            .expect("the second exclusion crosses the peak target and is retained")
-            .seal();
-        assert_eq!(ownerships() - before_strings, owned_strings);
-        assert_eq!(owned_path_reserves() - before_reserves, owned_reserves);
-        assert_eq!(over.usage.items, usage.items);
-        let peak = axis(&over, "manifest policy peak items");
-        assert_eq!(
-            (peak.target, peak.first_requested, peak.high_water),
-            (
-                item_floor.items as u64,
-                exact.items as u64,
-                exact.items as u64
-            )
-        );
-        assert!(over.exceedances().axis("manifest policy items").is_none());
-
-        let before_strings = ownerships();
-        let before_reserves = owned_path_reserves();
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let over = Policy::manifest(&byte_floor)
-            .exclusion("dep", ["one", "two"], "first", span(&byte_floor))
-            .expect("the first exclusion remains below the final peak")
-            .exclusion("dep", ["three", "four"], "second", span(&byte_floor))
-            .expect("the second exclusion crosses the byte peak and is retained")
-            .seal();
-        assert_eq!(ownerships() - before_strings, owned_strings);
-        assert_eq!(owned_path_reserves() - before_reserves, owned_reserves);
-        assert_eq!(over.usage.bytes, usage.bytes);
-        let peak = axis(&over, "manifest policy peak bytes");
-        assert_eq!(
-            (peak.target, peak.first_requested, peak.high_water),
-            (
-                byte_floor.manifest_bytes as u64,
-                exact.manifest_bytes as u64,
-                exact.manifest_bytes as u64
-            )
-        );
-    }
-
-    /// The item target no longer stops a path; every component is
-    /// borrowed, retained and charged, and the policy account records the
-    /// first crossing at the fourth component with the true final peak.
-    #[test]
-    fn policy_builder_retains_a_path_beyond_the_item_target_and_records_it() {
-        let mut limits = Limits::standard();
-        limits.items = 3;
+    fn policy_builder_retains_every_path_component() {
         let generated = Rc::new(Cell::new(0_usize));
         let counter = Rc::clone(&generated);
         let iterator = std::iter::from_fn(move || {
@@ -7547,9 +6816,9 @@ mod policy_bounds {
         let before = ownerships();
         let borrowed_before = borrowed_ownerships();
         let reserves = owned_path_reserves();
-        let policy = Policy::manifest(&limits)
-            .exclusion("dep", iterator, "reason", span(&limits))
-            .expect("a path beyond the item target is retained")
+        let policy = Policy::manifest()
+            .exclusion("dep", iterator, "reason", span())
+            .expect("the path is retained")
             .seal();
         assert_eq!(generated.get(), 6, "the builder drains the finite path");
         assert_eq!(borrowed_ownerships() - borrowed_before, 5);
@@ -7559,53 +6828,17 @@ mod policy_bounds {
             "alias, reason, span file and five components"
         );
         assert_eq!(owned_path_reserves() - reserves, 1);
-        let peak = axis(&policy, "manifest policy peak items");
-        assert_eq!(
-            (peak.target, peak.first_requested, peak.high_water),
-            (3, 4, 15)
-        );
-        let retained = axis(&policy, "manifest policy items");
-        assert_eq!(
-            (
-                retained.target,
-                retained.first_requested,
-                retained.high_water
-            ),
-            (3, 10, 10)
-        );
-        assert_eq!(
-            policy.exceedances().first().map(|axis| axis.name),
-            Some("manifest policy peak items")
-        );
         assert_eq!(policy.retained_usage().0, 10);
     }
 
-    /// Span sealing is correctness only; the span file's size records on
-    /// the policy account against both the manifest and string targets.
     #[test]
-    fn span_file_size_records_on_the_policy_account_instead_of_refusing() {
-        let mut limits = Limits::standard();
-        limits.string_bytes = 1;
-        limits.manifest_bytes = 1;
-        assert!(ManifestSpan::new("", 0, 1, 1, 0, 1, 1, &limits).is_err());
-        let policy = Policy::manifest(&limits)
-            .exclusion("dep", ["item"], "reason", span(&limits))
-            .expect("tiny targets record rather than refuse")
-            .seal();
-        let file = axis(&policy, "manifest span file bytes");
-        assert_eq!(
-            (file.target, file.first_requested),
-            (1, "Cargo.toml".len() as u64)
-        );
-        let alias = axis(&policy, "exclusion alias");
-        assert_eq!((alias.target, alias.first_requested), (1, 3));
-        assert!(policy.exceedances().axis("manifest span file").is_some());
-        assert!(policy.exceedances().axis("manifest policy bytes").is_some());
+    fn an_empty_span_file_is_refused() {
+        assert!(ManifestSpan::new("", 0, 1, 1, 0, 1, 1).is_err());
     }
 }
 
 #[cfg(test)]
-mod exceedance_targets {
+mod allocation {
     use std::collections::VecDeque;
 
     use serde::Serialize;
@@ -7613,146 +6846,60 @@ mod exceedance_targets {
     use super::{
         enqueue_fixed, raw_pair, Allocation, PolicyUsage, RawBody, REFUSED_ACCOUNT_OPERATION,
     };
-    use crate::exceedance::Axis;
+    use crate::api;
     use crate::Error;
-    use crate::{api, cargo};
-
-    fn axis(allocation: &Allocation, name: &str) -> Axis {
-        *allocation
-            .exceedances()
-            .axis(name)
-            .unwrap_or_else(|| panic!("the canonical account records `{name}`"))
-    }
 
     fn is_refused_account(error: &Error) -> bool {
         matches!(error, Error::Node { operation, .. } if *operation == REFUSED_ACCOUNT_OPERATION)
     }
 
-    /// The canonical item, byte and string targets admit their exact
-    /// amounts silently, record the first crossing and every later high water,
-    /// keep charging, and never latch.
+    /// Charges accumulate, an owned string charges one item and its length,
+    /// and decode admission charges nothing.
     #[test]
-    fn canonical_targets_admit_exact_record_plus_one_and_keep_charging() {
-        let mut allocation = Allocation::with_limits(2, 4);
-        allocation
-            .items(2)
-            .expect("the exact item target is admitted");
-        allocation
-            .bytes(4)
-            .expect("the exact byte target is admitted");
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation
-            .items(1)
-            .expect("one item over the target is charged");
-        allocation.items(4).expect("further items keep charging");
-        let items = axis(&allocation, "canonical allocation items");
-        assert_eq!(
-            (items.target, items.first_requested, items.high_water),
-            (2, 3, 7)
-        );
-        allocation
-            .bytes(1)
-            .expect("one byte over the target is charged");
-        let bytes = axis(&allocation, "canonical allocation bytes");
-        assert_eq!(
-            (bytes.target, bytes.first_requested, bytes.high_water),
-            (4, 5, 5)
-        );
+    fn charges_accumulate_and_decode_admission_charges_nothing() {
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
+        allocation.items(3).unwrap();
+        allocation.items(4).unwrap();
+        allocation.bytes(5).unwrap();
         assert_eq!(allocation.usage(), (7, 5));
-        let owned = allocation
-            .owned("hello")
-            .expect("a string over the string target is still owned");
+        let owned = allocation.owned("hello").unwrap();
         assert_eq!(&*owned, "hello");
-        let string = axis(&allocation, "owned string bytes");
-        assert_eq!((string.target, string.first_requested), (4, 5));
+        assert_eq!(allocation.usage(), (8, 10));
+        allocation.admit_decode().unwrap();
+        allocation.validate_retained().unwrap();
         assert_eq!(allocation.usage(), (8, 10));
         assert!(!allocation.is_refused());
-        assert_eq!(
-            allocation.exceedances().first().map(|axis| axis.name),
-            Some("canonical allocation items")
-        );
     }
 
+    /// Checked-arithmetic overflow is a genuine failure: it latches and stays
+    /// terminal while usage keeps its last truthful value.
+    /// A genuine failure latches the account: every later charge, decode
+    /// admission, retained validation and reservation refuses, and the usage
+    /// spent before the latch is kept. Charges past any figure never latch.
     #[test]
-    fn retained_graph_and_decode_targets_record_without_refusing() {
-        let mut limits = crate::cargo::Limits::standard();
-        limits.retained_graph_items = 10;
-        limits.retained_graph_bytes = 20;
-        let allocation = Allocation::new(&limits);
-        allocation
-            .validate_retained(10, 20)
-            .expect("the exact retained boundaries are admitted");
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation
-            .validate_retained(11, 21)
-            .expect("one over each retained target is recorded, not refused");
-        let items = axis(&allocation, "retained graph items");
-        assert_eq!(
-            (items.target, items.first_requested, items.high_water),
-            (10, 11, 11)
-        );
-        let bytes = axis(&allocation, "retained graph bytes");
-        assert_eq!(
-            (bytes.target, bytes.first_requested, bytes.high_water),
-            (20, 21, 21)
-        );
-        let mut allocation = Allocation::with_limits(1, 1);
-        allocation
-            .admit_decode(1, 1)
-            .expect("exact decode peak admits");
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation
-            .admit_decode(2, 1)
-            .expect("an over-target decode peak is recorded");
-        assert_eq!(
-            axis(&allocation, "canonical allocation items").first_requested,
-            2
-        );
-        assert_eq!(
-            allocation.usage(),
-            (0, 0),
-            "decode admission charges nothing"
-        );
-    }
-
-    /// Terminal only via a genuine cause: a latched account refuses every
-    /// charge first and leaves usage and the record untouched.
-    #[test]
-    fn genuine_failure_latches_and_exceedance_never_does() {
+    fn genuine_failure_latches_and_large_charges_never_do() {
         let mut allocation = Allocation::with_limits(0, 0);
-        allocation
-            .items(1)
-            .expect("crossing a target never latches");
-        allocation
-            .bytes(1)
-            .expect("crossing a target never latches");
+        allocation.items(1).expect("a charge never latches");
+        allocation.bytes(1).expect("a charge never latches");
         assert!(!allocation.is_refused());
-        let record = allocation.exceedances();
         allocation.refuse();
         assert!(allocation.is_refused());
         assert!(is_refused_account(&allocation.items(1).unwrap_err()));
         assert!(is_refused_account(&allocation.bytes(1).unwrap_err()));
         assert!(is_refused_account(&allocation.string("x").unwrap_err()));
         assert!(is_refused_account(&allocation.owned("x").unwrap_err()));
+        assert!(is_refused_account(&allocation.admit_decode().unwrap_err()));
         assert!(is_refused_account(
-            &allocation.admit_decode(0, 0).unwrap_err()
-        ));
-        assert!(is_refused_account(
-            &allocation.validate_retained(0, 0).unwrap_err()
+            &allocation.validate_retained().unwrap_err()
         ));
         assert!(is_refused_account(
             &allocation.reserve(&mut Vec::<u8>::new(), 1).unwrap_err()
         ));
         assert_eq!(allocation.usage(), (1, 1));
-        assert_eq!(allocation.exceedances(), record);
 
-        let refused = Allocation::refused();
-        assert!(refused.is_refused());
-        assert!(!refused.exceedances().is_exceeded());
+        assert!(Allocation::refused().is_refused());
     }
 
-    /// Checked-arithmetic overflow is a genuine failure: it latches and stays
-    /// terminal while usage keeps its last truthful value.
     #[test]
     fn checked_overflow_latches_the_canonical_account() {
         let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
@@ -7774,14 +6921,13 @@ mod exceedance_targets {
         assert!(allocation.is_refused());
         assert_eq!(allocation.usage(), (3, 5));
         assert!(is_refused_account(&allocation.items(1).unwrap_err()));
-        assert!(!allocation.exceedances().is_exceeded());
     }
 
-    /// `items`, `bytes` and decoder admission use checked arithmetic: a
-    /// genuine overflow latches the account instead of saturating, so the
-    /// measured total never freezes at `usize::MAX` on a usable account.
+    /// `items` and `bytes` use checked arithmetic: a genuine overflow latches
+    /// the account instead of saturating, and the latched account refuses
+    /// decoder admission.
     #[test]
-    fn item_byte_and_decode_admission_overflow_latches() {
+    fn item_and_byte_overflow_latches_and_refuses_decode_admission() {
         let mut items = Allocation::with_limits(usize::MAX, usize::MAX);
         items
             .items(usize::MAX)
@@ -7814,46 +6960,11 @@ mod exceedance_targets {
         assert_eq!(bytes.usage(), (0, usize::MAX));
         assert!(is_refused_account(&bytes.bytes(0).unwrap_err()));
 
-        let mut admit = Allocation::with_limits(usize::MAX, usize::MAX);
-        admit.items(3).unwrap();
-        admit.bytes(5).unwrap();
-        admit
-            .admit_decode(usize::MAX - 3, usize::MAX - 5)
-            .expect("the exact peak is admissible");
-        assert!(!admit.is_refused());
-        let error = admit
-            .admit_decode(usize::MAX - 2, 0)
-            .expect_err("an item peak past usize::MAX overflows");
-        assert!(matches!(
-            error,
-            Error::Node {
-                operation: "canonical allocation items",
-                ..
-            }
-        ));
-        assert!(admit.is_refused());
-        assert_eq!(admit.usage(), (3, 5));
-        assert!(is_refused_account(&admit.admit_decode(0, 0).unwrap_err()));
-
-        let mut admit = Allocation::with_limits(usize::MAX, usize::MAX);
-        admit.bytes(5).unwrap();
-        let error = admit
-            .admit_decode(0, usize::MAX - 4)
-            .expect_err("a byte peak past usize::MAX overflows");
-        assert!(matches!(
-            error,
-            Error::Node {
-                operation: "canonical allocation bytes",
-                ..
-            }
-        ));
-        assert!(admit.is_refused());
-        assert_eq!(admit.usage(), (0, 5));
-        assert!(!admit.exceedances().is_exceeded());
+        assert!(is_refused_account(&bytes.admit_decode().unwrap_err()));
     }
 
     /// A path longer than its precharged capacity is charged in full: the
-    /// account measures every byte, records the crossing, and never refuses.
+    /// account measures every byte and never refuses.
     #[test]
     fn long_paths_are_charged_their_full_length() {
         let path = std::path::Path::new("/abcdefgh");
@@ -7861,36 +6972,13 @@ mod exceedance_targets {
         exact.path_capacity(9).unwrap();
         exact.validate_path(path, 9).unwrap();
         assert_eq!(exact.usage(), (1, 9));
-        assert!(!exact.exceedances().is_exceeded());
 
         let mut long = Allocation::with_limits(usize::MAX, usize::MAX);
         long.path_capacity(4).unwrap();
         long.validate_path(path, 4)
-            .expect("a long path is recorded, not refused");
+            .expect("a long path is not refused");
         assert_eq!(long.usage(), (1, 9), "the full path length is charged");
-        let field = axis(&long, "owned path bytes");
-        assert_eq!((field.target, field.first_requested), (4, 9));
         assert!(!long.is_refused());
-    }
-
-    #[test]
-    fn protocol_string_fields_record_their_target_and_stay_nonempty_proofs() {
-        let mut limits = crate::cargo::Limits::standard();
-        limits.string_bytes = 3;
-        let mut allocation = Allocation::new(&limits);
-        let owned = super::boxed("package name", "abcdef", &limits, &mut allocation)
-            .expect("a field over the string target is still owned");
-        assert_eq!(&*owned, "abcdef");
-        let field = axis(&allocation, "package name");
-        assert_eq!((field.target, field.first_requested), (3, 6));
-        assert_eq!(axis(&allocation, "owned string bytes").first_requested, 6);
-        assert!(matches!(
-            super::boxed("package name", "", &limits, &mut allocation),
-            Err(Error::Extraction {
-                code: "empty-protocol-field",
-                ..
-            })
-        ));
     }
 
     #[test]
@@ -7926,14 +7014,7 @@ mod exceedance_targets {
             scalar_predicate_proofs: &proofs,
         };
         let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
-        let (raw, semantic) = raw_pair(
-            &context,
-            &invocations,
-            &body,
-            &cargo::Limits::standard(),
-            &mut allocation,
-        )
-        .unwrap();
+        let (raw, semantic) = raw_pair(&context, &invocations, &body, &mut allocation).unwrap();
         let whole = serde_json::to_vec(&Whole {
             schema: 3,
             context: &context,
@@ -7954,16 +7035,26 @@ mod exceedance_targets {
     }
 
     #[test]
-    fn fixed_queue_records_the_item_target_and_refuses_only_when_latched() {
+    fn protocol_string_fields_are_owned_and_stay_nonempty_proofs() {
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
+        let owned = super::boxed("package name", "abcdef", &mut allocation).unwrap();
+        assert_eq!(&*owned, "abcdef");
+        assert!(matches!(
+            super::boxed("package name", "", &mut allocation),
+            Err(Error::Extraction {
+                code: "empty-protocol-field",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fixed_queue_charges_its_entries_and_refuses_only_when_latched() {
         let mut queue = VecDeque::new();
-        let mut allocation = Allocation::with_limits(0, usize::MAX);
-        enqueue_fixed(&mut queue, 7, &mut allocation).expect("over-target entries are owned");
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
+        enqueue_fixed(&mut queue, 7, &mut allocation).unwrap();
         assert_eq!(queue.len(), 1);
         assert_eq!(allocation.usage().0, 1);
-        assert_eq!(
-            axis(&allocation, "canonical allocation items").first_requested,
-            1
-        );
         let mut queue = VecDeque::new();
         let mut refused = Allocation::refused();
         let before = refused.usage();

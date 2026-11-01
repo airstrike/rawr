@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{content, Comparison};
 use crate::input::membership::{live, observed, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -31,12 +31,10 @@ impl Drop for Fixture {
 fn acquire(path: &Path) -> live::Acquired {
     use std::os::unix::ffi::OsStrExt as _;
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     live::manifest(
         path.as_os_str().as_bytes(),
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

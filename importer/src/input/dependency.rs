@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::cargo::{self, toolchain};
+use crate::cargo::toolchain;
 use crate::input::Allocation;
 use crate::{Error, Result};
 
@@ -29,7 +29,6 @@ impl Dependency {
         cargo_commit: &str,
         path: &Path,
         package_root: &Path,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
         if cargo_commit != toolchain::supported_cargo_commit() {
@@ -43,16 +42,13 @@ impl Dependency {
         let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
         allocation.items(1)?;
         allocation.bytes(length)?;
-        // Dep-info is an artifact-class read bound to the physical capture
-        // bound; its size against the JSON target only records.
-        allocation.exceeded("rustc dep-info", limits.json_bytes, length);
         let bytes = super::read_file("rustc dep-info", path, crate::process::CAPTURE_BYTES)?;
         let text = std::str::from_utf8(&bytes).map_err(|error| Error::Input {
             code: "dep-info-utf8",
             reason: error.to_string().into_boxed_str(),
         })?;
         scan::complete(text).map_err(|error| syntax(error, path))?;
-        let environment = environment(text, limits, allocation)?;
+        let environment = environment(text, allocation)?;
         allocation.items(1)?;
         allocation.bytes(text.len())?;
         let normalized = scan::normalize(text);
@@ -63,11 +59,6 @@ impl Dependency {
         for event in tokens {
             match event.map_err(|error| syntax(error, path))? {
                 scan::Event::Character(character) => {
-                    allocation.exceeded(
-                        "dep-info token bytes",
-                        limits.string_bytes,
-                        token.len().saturating_add(character.len_utf8()),
-                    );
                     allocation.bytes(character.len_utf8())?;
                     token
                         .try_reserve_exact(character.len_utf8())
@@ -78,7 +69,7 @@ impl Dependency {
                     token.push(character);
                 }
                 scan::Event::Boundary => {
-                    append_source(&mut sources, &token, package_root, limits, allocation)?;
+                    append_source(&mut sources, &token, package_root, allocation)?;
                     token.clear();
                 }
             }
@@ -141,7 +132,6 @@ pub(super) fn build_script_path(cargo_commit: &str, output: &Path) -> Result<Opt
 )]
 pub(super) fn environment(
     text: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Box<[(Box<str>, Option<Box<str>>)]>> {
     let mut environment = BTreeMap::new();
@@ -149,11 +139,9 @@ pub(super) fn environment(
         let scan::Record { key, value } = record.map_err(|error| match error {
             scan::Error::Malformed(line) => super::input("malformed-env-dep", line),
         })?;
-        allocation.exceeded("rustc env-dep key", limits.string_bytes, key.len());
         allocation.items(1)?;
         allocation.string(key)?;
         if let Some(value) = value {
-            allocation.exceeded("rustc env-dep value", limits.string_bytes, value.len());
             allocation.string(value)?;
         }
         let value = value.map(Box::from);
@@ -187,14 +175,8 @@ fn append_source(
     sources: &mut Vec<PathBuf>,
     token: &str,
     package_root: &Path,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<()> {
-    allocation.exceeded(
-        "dep-info source paths",
-        limits.items,
-        sources.len().saturating_add(1),
-    );
     let raw = Path::new(token);
     let candidate = if raw.is_absolute() {
         allocation.path(raw)?;

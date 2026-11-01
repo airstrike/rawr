@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::extract::Allocation;
-use crate::node::GraphBudget;
 use crate::{Error, Result};
 
 const COMPILER: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
@@ -19,18 +18,13 @@ pub(super) struct Search {
 }
 
 impl Search {
-    pub(super) fn revalidate(
-        &self,
-        allocation: &mut Allocation,
-        graph: &GraphBudget,
-    ) -> Result<()> {
+    pub(super) fn revalidate(&self, allocation: &mut Allocation) -> Result<()> {
         let current = Self::observe(
             &self.rustc,
             COMPILER,
             crate::cargo::toolchain::HOST,
             crate::cargo::toolchain::HOST,
             allocation,
-            graph,
         )?;
         if &current != self {
             return Err(invalid("compiler search selector changed"));
@@ -44,7 +38,6 @@ impl Search {
         host: &str,
         target: &str,
         allocation: &mut Allocation,
-        graph: &GraphBudget,
     ) -> Result<Self> {
         if compiler != COMPILER || host != crate::cargo::toolchain::HOST || target != host {
             return Err(invalid("compiler search pin differs"));
@@ -56,11 +49,9 @@ impl Search {
         {
             return Err(invalid("compiler path is not absolute and normalized"));
         }
-        let rustc = canonical(rustc, allocation, graph)?;
-        graph.paths(1).map_err(graph_error)?;
-        crate::store::path::input(&rustc, graph).map_err(graph_error)?;
+        let rustc = canonical(rustc, allocation)?;
         let metadata =
-            fs::symlink_metadata(&rustc).map_err(|source| io(&rustc, source, allocation, graph))?;
+            fs::symlink_metadata(&rustc).map_err(|source| io(&rustc, source, allocation))?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(invalid("canonical compiler is not a regular file"));
         }
@@ -70,23 +61,19 @@ impl Search {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| invalid("compiler has no sysroot grandparent"))?;
-        let sysroot = canonical(parent, allocation, graph)?;
-        graph.paths(1).map_err(graph_error)?;
-        crate::store::path::input(&sysroot, graph).map_err(graph_error)?;
-        let metadata = fs::symlink_metadata(&sysroot)
-            .map_err(|source| io(&sysroot, source, allocation, graph))?;
+        let sysroot = canonical(parent, allocation)?;
+        let metadata =
+            fs::symlink_metadata(&sysroot).map_err(|source| io(&sysroot, source, allocation))?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(invalid("canonical sysroot is not a directory"));
         }
-        let selector = join(&sysroot, "lib64/rustlib", allocation, graph)?;
-        graph.paths(1).map_err(graph_error)?;
-        crate::store::path::input(&selector, graph).map_err(graph_error)?;
+        let selector = join(&sysroot, "lib64/rustlib", allocation)?;
         // The pinned compiler uses exists(), not is_dir(). Error cases refuse
         // conservatively rather than becoming evidence of selector absence.
         let lib64 = match fs::metadata(&selector) {
             Ok(_) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(io(&selector, error, allocation, graph)),
+            Err(error) => return Err(io(&selector, error, allocation)),
         };
         let base = join(
             &sysroot,
@@ -96,10 +83,9 @@ impl Search {
                 "lib/rustlib"
             },
             allocation,
-            graph,
         )?;
-        let target = join(&base, target, allocation, graph)?;
-        let library = join(&target, "lib", allocation, graph)?;
+        let target = join(&base, target, allocation)?;
+        let library = join(&target, "lib", allocation)?;
         Ok(Self {
             rustc,
             sysroot,
@@ -109,30 +95,20 @@ impl Search {
     }
 }
 
-fn canonical(path: &Path, allocation: &mut Allocation, graph: &GraphBudget) -> Result<PathBuf> {
-    graph.paths(1).map_err(graph_error)?;
-    crate::store::path::canonical(path, graph).map_err(graph_error)?;
+fn canonical(path: &Path, allocation: &mut Allocation) -> Result<PathBuf> {
     allocation.path_capacity(1024)?;
-    let value = fs::canonicalize(path).map_err(|source| io(path, source, allocation, graph))?;
+    let value = fs::canonicalize(path).map_err(|source| io(path, source, allocation))?;
     allocation.validate_path(&value, 1024)?;
     Ok(value)
 }
 
-fn join(
-    parent: &Path,
-    suffix: &str,
-    allocation: &mut Allocation,
-    graph: &GraphBudget,
-) -> Result<PathBuf> {
+fn join(parent: &Path, suffix: &str, allocation: &mut Allocation) -> Result<PathBuf> {
     let size = parent
         .as_os_str()
         .len()
         .checked_add(1)
         .and_then(|size| size.checked_add(suffix.len()))
         .ok_or_else(|| graph_error(crate::node::Error::Allocation))?;
-    graph
-        .decode(size + std::mem::size_of::<PathBuf>())
-        .map_err(graph_error)?;
     allocation.path_capacity(size)?;
     let mut path = PathBuf::new();
     path.try_reserve_exact(size)
@@ -154,15 +130,7 @@ fn invalid(reason: &'static str) -> Error {
         reason: reason.into(),
     }
 }
-fn io(
-    path: &Path,
-    source: std::io::Error,
-    allocation: &mut Allocation,
-    graph: &GraphBudget,
-) -> Error {
-    if let Err(error) = graph.decode(path.as_os_str().len() + std::mem::size_of::<PathBuf>()) {
-        return graph_error(error);
-    }
+fn io(path: &Path, source: std::io::Error, allocation: &mut Allocation) -> Error {
     match allocation.clone_path(path) {
         Ok(path) => Error::Io {
             operation: "observe compiler search selection",
@@ -191,7 +159,6 @@ mod tests {
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::with_limits(100, 65536),
-                &GraphBudget::new(),
             )
             .unwrap()
         };
@@ -212,47 +179,16 @@ mod tests {
         let present = observe();
         assert!(present.lib64);
         assert_ne!(absent, present);
-        // The graph path target never refuses. A graph already at its
-        // target still observes the same selector and records the path axis
-        // with a high water of exactly target + the observation's own checks.
-        let measured = GraphBudget::new();
-        Search::observe(
-            &rustc,
-            COMPILER,
-            crate::cargo::toolchain::HOST,
-            crate::cargo::toolchain::HOST,
-            &mut Allocation::with_limits(100, 65536),
-            &measured,
-        )
-        .unwrap();
-        let observation_paths = measured.census_usage().unwrap().1;
-        assert!(observation_paths > 0);
-        assert!(!measured.exceedances().is_exceeded());
-        let graph = GraphBudget::new();
-        graph.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         let spent = Search::observe(
             &rustc,
             COMPILER,
             crate::cargo::toolchain::HOST,
             crate::cargo::toolchain::HOST,
             &mut Allocation::with_limits(100, 65536),
-            &graph,
         )
         .unwrap();
         assert_eq!(spent, present);
-        let axis = graph
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            axis.high_water,
-            (crate::node::MAX_PATH_CHECKS_PER_GRAPH + observation_paths) as u64
-        );
-        // The canonical account's targets record and never refuse. A
-        // zero-target account observes the same selector and records both
-        // axes from the first owned path capacity to the truthful high water.
+        // A zero-limit account observes the same selector.
         let mut recorded = Allocation::with_limits(0, 0);
         assert_eq!(
             Search::observe(
@@ -261,7 +197,6 @@ mod tests {
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut recorded,
-                &GraphBudget::new()
             )
             .unwrap(),
             present
@@ -269,19 +204,6 @@ mod tests {
         assert!(!recorded.is_refused());
         let (items, bytes) = recorded.usage();
         assert!(items > 0 && bytes > 0);
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, 1, items as u64)
-        );
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .unwrap();
-        assert_eq!((axis.target, axis.high_water), (0, bytes as u64));
         // Terminal only through a genuine cause: a latched account owns no path.
         assert!(matches!(
             Search::observe(
@@ -290,7 +212,6 @@ mod tests {
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::refused(),
-                &GraphBudget::new()
             ),
             Err(Error::Node { operation, .. })
                 if operation == crate::extract::REFUSED_ACCOUNT_OPERATION
@@ -307,7 +228,6 @@ mod tests {
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut short,
-                &GraphBudget::new()
             ),
             Err(Error::Io {
                 operation: "observe compiler search selection",
@@ -315,14 +235,6 @@ mod tests {
             })
         ));
         assert!(!short.is_refused());
-        let axis = *short
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (1, 2, 2)
-        );
         // A latched account replaces the diagnostic with its own refusal.
         assert!(matches!(
             Search::observe(
@@ -331,7 +243,6 @@ mod tests {
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::refused(),
-                &GraphBudget::new()
             ),
             Err(Error::Node { operation, .. })
                 if operation == crate::extract::REFUSED_ACCOUNT_OPERATION

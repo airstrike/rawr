@@ -164,7 +164,6 @@ impl Fixture {
                 toolchain::supported_cargo_commit(),
                 &artifact.dep_info,
                 &package.root,
-                &limits,
                 &mut allocation,
             )
             .expect("cold dep-info");
@@ -190,7 +189,6 @@ impl Fixture {
                 toolchain::supported_cargo_commit(),
                 &script.package_id,
                 &script.out_dir,
-                &limits,
                 &mut allocation,
             )
             .expect("cold declarations");

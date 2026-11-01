@@ -28,21 +28,17 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
     );
     let checked_fingerprint = checked.profile_fingerprint();
     let payload = checked.profile_payload();
-    // Preserve the callback order: the payload target is recorded before
-    // asking an arbitrary definition for its authority fields again.
-    validate_payload(payload, limits)?;
     let authority = demand_authority(
         definition.identity(),
         definition.version(),
         contract.rules_digest(),
         &checked_fingerprint,
         payload,
-        limits,
         Some(&contract.graph_fingerprint()),
     )?;
     let product = parent
         .direct::<Product>(&authority, || {
-            let demand = crate::profile::demand_direct(definition, contract, checked, limits)
+            let demand = crate::profile::demand_direct(definition, contract, checked)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
             Product::capture(&demand, limits.node_output_bytes())
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
@@ -51,7 +47,7 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
     let chain = parent.child(&product);
     product
         .value()
-        .replay(contract, checked, chain, limits)
+        .replay(contract, checked, chain)
         .map_err(Error::fresh)
 }
 
@@ -81,7 +77,7 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
     )?;
     let product = parent
         .direct::<GeneratedProduct>(&authority, || {
-            let proof = crate::profile::Proof::generate_direct(definition, demand, limits)
+            let proof = crate::profile::Proof::generate_direct(definition, demand)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
             GeneratedProduct::capture(&proof, limits.node_output_bytes())
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
@@ -90,7 +86,7 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
     let chain = parent.child(&product);
     product
         .value()
-        .replay(demand, product_lifecycle, chain, limits)
+        .replay(demand, product_lifecycle, chain)
         .map_err(Error::fresh)
 }
 
@@ -101,10 +97,8 @@ pub(crate) fn demand_authority(
     rules_digest: &[u8; 32],
     checked_fingerprint: &[u8; 32],
     payload: &[u8],
-    limits: &crate::cargo::Limits,
     exact_graph: Option<&crate::api::Fingerprint>,
 ) -> Result<Vec<u8>, Error> {
-    validate_payload(payload, limits)?;
     let mut authority = Vec::new();
     authority
         .try_reserve_exact(
@@ -130,17 +124,6 @@ pub(crate) fn demand_authority(
         authority.extend_from_slice(graph.as_bytes());
     }
     Ok(authority)
-}
-
-/// The payload size is an accounting target recorded on a profile account;
-/// it never refuses. Kept as a `Result` so the callback order stays explicit.
-fn validate_payload(payload: &[u8], limits: &crate::cargo::Limits) -> Result<(), Error> {
-    crate::surface::account::Account::profile().exceeded(
-        "profile checked payload bytes",
-        limits.string_bytes,
-        payload.len(),
-    );
-    Ok(())
 }
 
 /// Encode the existing generated identity without invoking profile callbacks.
@@ -183,14 +166,12 @@ impl Product {
         contract: &Contract,
         checked_fingerprint: [u8; 32],
         checked_payload: &[u8],
-        limits: &crate::cargo::Limits,
     ) -> Result<super::Parts, Error> {
         Demand::decode_owned(
             &self.canonical,
             contract,
             checked_fingerprint,
             checked_payload,
-            limits,
         )
     }
 
@@ -199,9 +180,8 @@ impl Product {
         contract: &Contract,
         checked: &C,
         chain: node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Demand, Error> {
-        Demand::decode(&self.canonical, contract, checked, chain, limits)
+        Demand::decode(&self.canonical, contract, checked, chain)
     }
 }
 
@@ -252,9 +232,8 @@ impl GeneratedProduct {
         &self,
         demand: &Demand,
         product_lifecycle: bool,
-        limits: &crate::cargo::Limits,
     ) -> Result<crate::profile::Parts, Error> {
-        crate::profile::Proof::decode_owned(&self.canonical, demand, product_lifecycle, limits)
+        crate::profile::Proof::decode_owned(&self.canonical, demand, product_lifecycle)
     }
 
     fn replay(
@@ -262,15 +241,8 @@ impl GeneratedProduct {
         demand: &Demand,
         product_lifecycle: bool,
         chain: node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<crate::profile::Proof, Error> {
-        crate::profile::Proof::decode_owner(
-            &self.canonical,
-            demand,
-            product_lifecycle,
-            chain,
-            limits,
-        )
+        crate::profile::Proof::decode_owner(&self.canonical, demand, product_lifecycle, chain)
     }
 }
 
@@ -320,28 +292,19 @@ mod tests {
     fn captured_authorities_separate_semantic_and_exact_graph_inputs() {
         use sha2::{Digest as _, Sha256};
 
-        let limits = crate::cargo::Limits::standard();
         let identity = crate::profile::Identity([1; 32]);
         let version = crate::profile::Version::new(7);
-        let demand =
-            super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", &limits, None)
-                .expect("bounded demand authority");
+        let demand = super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", None)
+            .expect("bounded demand authority");
         assert_eq!(demand.len(), 167);
         assert_eq!(
             format!("{:x}", Sha256::digest(&demand)),
             "887525e1ec00cc72a58391c0983e3fc89b44f9ea7dd4d52f00b4d27280b3ef7d",
         );
         let exact = crate::api::Fingerprint::from_bytes([5; 32]);
-        let conservative = super::demand_authority(
-            identity,
-            version,
-            &[2; 32],
-            &[3; 32],
-            b"abc",
-            &limits,
-            Some(&exact),
-        )
-        .unwrap();
+        let conservative =
+            super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", Some(&exact))
+                .unwrap();
         assert_ne!(demand, conservative);
         assert_ne!(
             conservative,
@@ -351,8 +314,7 @@ mod tests {
                 &[2; 32],
                 &[3; 32],
                 b"abc",
-                &limits,
-                Some(&crate::api::Fingerprint::from_bytes([6; 32]))
+                Some(&crate::api::Fingerprint::from_bytes([6; 32])),
             )
             .unwrap()
         );
@@ -368,35 +330,6 @@ mod tests {
             super::generated_authority(identity, version, &[2; 32], &[3; 32], &[4; 32], false)
                 .expect("generated authority");
         assert_ne!(generated, other_lifecycle);
-    }
-
-    /// The payload string target is accounting. Exactly at the target
-    /// and one over both produce the same authority bytes; nothing refuses.
-    #[test]
-    fn captured_demand_authority_records_payload_target_without_refusal() {
-        let mut limits = crate::cargo::Limits::standard();
-        limits.string_bytes = 3;
-        let identity = crate::profile::Identity([1; 32]);
-        let version = crate::profile::Version::new(7);
-        let exact =
-            super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", &limits, None)
-                .expect("the exact payload target admits");
-        let over = super::demand_authority(
-            identity, version, &[2; 32], &[3; 32], b"abcd", &limits, None,
-        )
-        .expect("a payload past the string target is recorded, not refused");
-        let standard = super::demand_authority(
-            identity,
-            version,
-            &[2; 32],
-            &[3; 32],
-            b"abcd",
-            &crate::cargo::Limits::standard(),
-            None,
-        )
-        .expect("the standard target admits");
-        assert_eq!(over, standard);
-        assert_ne!(over, exact);
     }
 
     #[test]

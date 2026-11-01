@@ -10,7 +10,7 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 enum Fact<'a> {
     Metadata(&'a str, bool, Result<observed::Metadata, i32>),
@@ -82,10 +82,8 @@ fn run(
     refuse: Option<usize>,
 ) -> (Outcome, Vec<Option<PathBuf>>) {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();

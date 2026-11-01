@@ -354,7 +354,7 @@ fn runner_snapshot(
         .file(&entry, &source)
         .expect("the runner transport source is bounded");
     let transport = transport
-        .bind(snapshot, &limits)
+        .bind(snapshot)
         .expect("the runner transport matches its sealed snapshot");
     (snapshot, transport)
 }
@@ -384,7 +384,7 @@ fn lifecycle_snapshot(
         .file(&entry, SOURCE)
         .expect("the lifecycle transport source is bounded");
     let transport = transport
-        .bind(snapshot, &limits)
+        .bind(snapshot)
         .expect("the lifecycle transport matches its snapshot");
     (snapshot, transport)
 }

@@ -172,9 +172,6 @@ pub struct Builder<'graph, P: crate::api::Phase = crate::api::Extracted> {
     abis: Vec<ExtensionAbi>,
     endpoints: Vec<OperationEndpoint>,
     projections: Vec<Projection>,
-    item_limit: usize,
-    byte_limit: usize,
-    account: crate::surface::account::Account,
 }
 
 #[derive(Serialize)]
@@ -878,7 +875,6 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
         identity: Identity,
         version: Version,
         graph: &'graph crate::api::Graph<P>,
-        limits: &crate::cargo::Limits,
     ) -> Self {
         Self {
             identity,
@@ -890,17 +886,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             abis: Vec::new(),
             endpoints: Vec::new(),
             projections: Vec::new(),
-            item_limit: limits.items,
-            byte_limit: limits.json_bytes,
-            account: crate::surface::account::Account::profile(),
         }
-    }
-
-    /// The accounting axes this contract crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
     }
 
     /// Retain one exact definition borrowed from the authoritative graph.
@@ -934,13 +920,6 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
         match self.evidence.binary_search(&evidence) {
             Ok(_) => panic!("a profile classifies each piece of evidence once"),
             Err(position) => {
-                let actual = self.evidence.len().checked_add(1).ok_or(Error::Limit {
-                    resource: "profile evidence items",
-                    limit: self.item_limit,
-                    actual: usize::MAX,
-                })?;
-                self.account
-                    .exceeded("profile evidence items", self.item_limit, actual);
                 self.evidence
                     .try_reserve_exact(1)
                     .map_err(|_| Error::Allocation)?;
@@ -950,7 +929,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
         }
     }
 
-    pub(crate) fn seal_parts(mut self) -> Result<Parts, Error> {
+    pub(crate) fn seal_parts(self) -> Result<Parts, Error> {
         let canonical = serde_json::to_vec(&Canonical {
             schema: 7,
             identity: self.identity.as_bytes(),
@@ -964,10 +943,6 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             projections: &self.projections,
         })
         .expect("a profile contract serializes");
-        // The canonical size is an accounting target recorded on the
-        // profile account; the node content ceiling is the physical bound.
-        self.account
-            .exceeded("profile contract bytes", self.byte_limit, canonical.len());
         Ok(Parts {
             identity: self.identity,
             version: self.version,

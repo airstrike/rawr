@@ -43,7 +43,7 @@ impl Context {
             environment,
             target,
             limits,
-            &crate::node::GraphBudget::with_targets(limits.graph_targets()),
+            &crate::node::GraphBudget::new(),
         )
     }
 
@@ -64,13 +64,6 @@ impl Context {
         assert!(
             !target.is_empty() && !target.contains('\0'),
             "rawr names a target triple"
-        );
-        // The target string's size is an accounting target recorded on
-        // a classification-stage account, never a refusal.
-        crate::classify::Account::new().exceeded(
-            "import context target bytes",
-            limits.string_bytes,
-            target.len(),
         );
         let target: Box<str> = target.into();
         let rawr = crate::location::rawr_directory(&project, &environment);
@@ -124,7 +117,7 @@ impl Context {
             config,
             target,
             limits,
-            &crate::node::GraphBudget::with_targets(limits.graph_targets()),
+            &crate::node::GraphBudget::new(),
         )
     }
 
@@ -174,13 +167,7 @@ impl Context {
         output_limit: usize,
         parents: &[crate::node::Parent],
     ) -> Result<crate::node::Direct<K>, crate::node::Error> {
-        crate::node::Direct::capture(
-            self.digest,
-            semantic_inputs,
-            output_limit,
-            parents,
-            self.limits.edges,
-        )
+        crate::node::Direct::capture(self.digest, semantic_inputs, output_limit, parents)
     }
 
     /// Bind a discoverable recipe whose complete action is learned on a miss.
@@ -199,13 +186,7 @@ impl Context {
         output_limit: usize,
         parents: &[crate::node::Parent],
     ) -> Result<crate::node::Discoverable<K>, crate::node::Error> {
-        crate::node::Discoverable::capture(
-            self.digest,
-            fixed_inputs,
-            output_limit,
-            parents,
-            self.limits.edges,
-        )
+        crate::node::Discoverable::capture(self.digest, fixed_inputs, output_limit, parents)
     }
 
     /// Canonical project root included in every direct action identity.

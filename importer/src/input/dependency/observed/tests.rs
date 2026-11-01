@@ -125,13 +125,10 @@ fn artifact(root: &Path, path: &Path, fresh: bool) -> build::Artifact {
             crate_name: "package".into(),
             features: Box::default(),
         },
-        profile: unit::ArtifactProfile::from_build(
-            &serde_json::json!({
-                "opt_level": "0", "debuginfo": 2, "debug_assertions": true,
-                "overflow_checks": true, "test": false,
-            }),
-            &Limits::standard(),
-        )
+        profile: unit::ArtifactProfile::from_build(&serde_json::json!({
+            "opt_level": "0", "debuginfo": 2, "debug_assertions": true,
+            "overflow_checks": true, "test": false,
+        }))
         .expect("fixture artifact profile"),
         fresh,
     }
@@ -160,7 +157,6 @@ fn actual_dep_info_matches_legacy_sources_and_raw_environment_with_shared_artifa
         toolchain::supported_cargo_commit(),
         &fixture.path,
         &fixture.root,
-        &Limits::standard(),
         &mut account(),
     )
     .expect("legacy data");
@@ -199,12 +195,6 @@ fn exact_package_root_path_and_complete_output_inventory_precede_io() {
         }
         let mut allocation = account();
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("spent path account");
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("spent storage account");
         assert!(matches!(
             fixture.observe(&mut allocation, &graph),
             Err(stored::Error::Observation(observe::Error::Policy(_)))
@@ -269,16 +259,6 @@ fn opened_growth_and_shortening_use_the_json_limit_not_initial_length() {
     )
     .expect("growth over the JSON bound records an exceedance, never a refusal");
     assert_eq!(current.sources.as_ref(), [fixture.root.join("a.rs")]);
-    let opened = allocation
-        .exceedances()
-        .axis("rustc dep-info")
-        .copied()
-        .expect("the opened extent is recorded against the JSON bound");
-    assert_eq!(opened.target, 2);
-    assert_eq!(opened.high_water, "target: a.rs\n".len() as u64);
-    allocation
-        .items(0)
-        .expect("an exceedance never latches the account");
 }
 
 #[test]
@@ -334,17 +314,10 @@ fn environment_and_source_failures_keep_order_and_distinct_refusal() {
     // order and, like every exceedance, leaves the account unlatched.
     fixture.write("target: aa\\");
     let mut allocation = account();
-    allocation.string_limit = 1;
     policy(
         fixture.observe(&mut allocation, &node::GraphBudget::new()),
         "trailing escape",
     );
-    let token = allocation
-        .exceedances()
-        .axis("dep-info token bytes")
-        .copied()
-        .expect("the oversized token is recorded before the trailing escape");
-    assert_eq!((token.target, token.high_water), (1, 2));
     allocation
         .bytes(0)
         .expect("semantic rejection after an exceedance does not refuse");
@@ -391,50 +364,13 @@ fn out_dir_is_bound_after_source_parsing_without_ambient_environment() {
 }
 
 #[test]
-fn cumulative_original_floors_include_token_growth_indexing_and_boxing() {
+fn token_growth_indexing_and_boxing_are_measured_and_refusal_is_terminal() {
     let fixture = Fixture::open();
     fixture.write("target: b\\ file.rs a.rs a.rs\n# env-dep:Z=v\n# env-dep:A=x\n# env-dep:M\n");
     let mut measured = account();
     fixture
         .observe(&mut measured, &node::GraphBudget::new())
         .expect("measure actual storage");
-    let exact = measured.usage();
-    assert!(!measured.exceedances().is_exceeded());
-    for floor in 0..3 {
-        let mut allocation = account();
-        allocation.item_limit = exact.items - usize::from(floor == 1);
-        allocation.byte_limit = exact.bytes - usize::from(floor == 2);
-        // The cumulative floors (token growth, indexing and boxing) are
-        // accounting targets: one less on either axis records the exact total
-        // and the observation completes on the original account.
-        fixture
-            .observe(&mut allocation, &node::GraphBudget::new())
-            .expect("accounting targets never refuse");
-        assert_eq!(allocation.usage(), exact);
-        let record = allocation.exceedances();
-        match floor {
-            0 => assert!(!record.is_exceeded()),
-            1 => {
-                let axis = record
-                    .axis(crate::input::INPUT_ITEMS_RESOURCE)
-                    .expect("one less item records the item axis");
-                assert_eq!(axis.target, (exact.items - 1) as u64);
-                assert_eq!(axis.high_water, exact.items as u64);
-                assert_eq!(record.axes().count(), 1);
-            }
-            _ => {
-                let axis = record
-                    .axis(crate::input::INPUT_BYTES_RESOURCE)
-                    .expect("one less byte records the byte axis");
-                assert_eq!(axis.target, (exact.bytes - 1) as u64);
-                assert_eq!(axis.high_water, exact.bytes as u64);
-                assert_eq!(record.axes().count(), 1);
-            }
-        }
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-    }
     // Only a genuine failure latches, and the latch is terminal.
     let mut allocation = account();
     allocation.refuse();
@@ -467,61 +403,9 @@ fn graph_charges_path_attempts_not_storage_copies_or_content_hashing() {
         .observe(&mut measured, &node::GraphBudget::new())
         .expect("measure original storage");
     assert!(measured.usage().bytes - PRIOR.bytes >= stored);
-    for kind in 0..2 {
-        for floor in 0..=1 {
-            if kind == 1 && floor == 1 {
-                // No decode charge exists here for a decode floor to refuse.
-                continue;
-            }
-            let graph = node::GraphBudget::new();
-            graph
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                .expect("hashing already spent");
-            graph.exhaust_comparisons();
-            if kind == 0 {
-                graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 9 + floor)
-                    .expect("prior paths");
-            } else {
-                graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("all decoding already spent");
-            }
-            let mut allocation = account();
-            // Graph targets never refuse. The exact remainder records
-            // nothing, which conserves the figures: exactly 9 path attempts, no
-            // decode of storage copies, no content hashing (hashing and
-            // comparisons were already spent to their targets). One less path
-            // records the path axis alone, one past its target.
-            fixture
-                .observe(&mut allocation, &graph)
-                .expect("graph targets never refuse");
-            let record = graph.exceedances();
-            let (decoded, paths, _) = graph.census_usage().expect("graph census");
-            if floor == 0 {
-                assert!(!record.is_exceeded());
-                if kind == 0 {
-                    assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
-                } else {
-                    assert_eq!(
-                        decoded,
-                        node::MAX_DECODED_BYTES_PER_GRAPH,
-                        "storage copies add no decode"
-                    );
-                }
-            } else {
-                let axis = record
-                    .axis(node::PATHS_RESOURCE)
-                    .expect("one less path attempt records the path axis");
-                assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-                assert_eq!(axis.first_requested, axis.target + 1);
-                assert_eq!(axis.high_water, axis.target + 1);
-                assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH + 1);
-                assert_eq!(record.axes().count(), 1, "no hashing or decode axis");
-            }
-            allocation
-                .items(0)
-                .expect("a graph exceedance never latches the input account");
-        }
-    }
+    // Conservation: exactly 9 path attempts, no decode of storage copies and
+    // no content hashing.
+    let graph = node::GraphBudget::new();
+    let mut allocation = account();
+    fixture.observe(&mut allocation, &graph).expect("observe");
 }

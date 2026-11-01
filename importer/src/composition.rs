@@ -268,7 +268,7 @@ where
         Outcome::Hit(generic) => {
             let parts = generic
                 .value()
-                .replay(graph.graph(), policy, limits)
+                .replay(graph.graph(), policy)
                 .map_err(|error| cache(failure(error)))?;
             let recipe = Recipe::<Facade>::from_inputs(
                 context,
@@ -353,9 +353,7 @@ where
             let mut transform = checked::Transform::new();
             let result = store.with_staged_batch(retention, &crate::metrics::Current, |batch| {
                 let profile = acquire(profile, &profile_recipe, batch, || {
-                    let parts = adapter
-                        .classify_parts(graph.graph(), limits)
-                        .map_err(failure)?;
+                    let parts = adapter.classify_parts(graph.graph()).map_err(failure)?;
                     Profile::capture_parts(&parts, limits.node_output_bytes()).map_err(failure)
                 })?;
                 let generic = acquire(generic, &generic_recipe, batch, || {
@@ -366,7 +364,7 @@ where
                     None => {
                         let parts = generic
                             .value()
-                            .replay(graph.graph(), policy, limits)
+                            .replay(graph.graph(), policy)
                             .map_err(failure)?;
                         let recipe = Recipe::<Facade>::from_inputs(
                             context,
@@ -381,7 +379,7 @@ where
                     }
                 };
                 let facade = acquire(facade_outcome, &facade_recipe, batch, || {
-                    Facade::capture_parts(graph.graph(), &parts, limits)
+                    Facade::capture_parts(graph.graph(), &parts)
                 })?;
                 let (checked_recipe, checked_outcome, profile_parts) = match prepared_checked {
                     Some(prepared) => prepared,
@@ -459,7 +457,7 @@ where
                                 facade,
                             )?;
                             let product =
-                                transform.capture(contract.fingerprint(), snapshot, limits, || {
+                                transform.capture(contract.fingerprint(), snapshot, || {
                                     execute(&contract, &profile, &facade)
                                 });
                             consumed = Some((contract, profile, facade));

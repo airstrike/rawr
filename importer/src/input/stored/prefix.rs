@@ -38,11 +38,9 @@ pub(in crate::input) fn require(
     if toolchain.cargo_commit() != crate::cargo::toolchain::supported_cargo_commit() {
         return Err(Error::Encoding("cargo-commit-skew"));
     }
-    let limits = budget.limits;
     scalar::config(
         config.projection(),
         config.digest().as_bytes(),
-        &limits,
         budget,
         |value, budget| scalar(recipes, entries, value, budget),
     )?;
@@ -51,29 +49,19 @@ pub(in crate::input) fn require(
     })?;
     for input in authority {
         if let Some(expected) = input.digest() {
-            limited_file(
+            owned_file(
                 recipes,
                 entries,
                 Role::Authority,
                 input.path(),
                 expected,
                 base,
-                "Cargo authority input",
-                limits.json_bytes,
                 budget,
             )?;
         } else {
             path(recipes, Role::Authority, None, input.path(), true, budget)?;
             entries.reserve(budget)?;
-            let entry = observe::limited_optional_file(
-                Role::Authority,
-                None,
-                input.path(),
-                base,
-                "Cargo authority input",
-                limits.json_bytes,
-                budget,
-            )?;
+            let entry = observe::optional_file(Role::Authority, None, input.path(), base, budget)?;
             if !matches!(entry, Entry::Missing { .. }) {
                 return Err(Error::Encoding("absent Cargo authority input appeared"));
             }
@@ -82,15 +70,13 @@ pub(in crate::input) fn require(
     }
     workspace(recipes, entries, authority, metadata, budget)?;
     for (path, digest) in probe.input_artifacts() {
-        limited_file(
+        owned_file(
             recipes,
             entries,
             Role::BuiltOutput,
             path,
             digest,
             base,
-            "metadata probe artifact",
-            limits.json_bytes,
             budget,
         )?;
     }
@@ -98,15 +84,7 @@ pub(in crate::input) fn require(
         file(recipes, entries, Role::Harness, None, path, base, budget)?;
     }
     for (path, digest) in config.input_candidates() {
-        optional_file(
-            recipes,
-            entries,
-            path,
-            digest,
-            base,
-            limits.manifest_bytes,
-            budget,
-        )?;
+        optional_file(recipes, entries, path, digest, base, budget)?;
     }
     scalar::toolchain(toolchain, budget, |value, budget| {
         scalar(recipes, entries, value, budget)
@@ -330,11 +308,7 @@ fn scalar(
 }
 
 fn text(value: &str, budget: &mut Budget<'_>) -> Result<Box<str>> {
-    budget.limited(
-        "input owned string bytes",
-        budget.limits.string_bytes,
-        value.len(),
-    )?;
+    budget.check()?;
     budget.owned_text(value)
 }
 
@@ -401,26 +375,19 @@ fn file(
     entries.push(entry, budget)
 }
 
-/// An artifact-class owner file measured against the configurable `target`,
-/// which only records.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the file joins exact owner identity and its target"
-)]
-fn limited_file(
+/// An artifact-class owner file whose digest must equal the owner's.
+fn owned_file(
     recipes: &mut slice::Iter<'_, Recipe>,
     entries: &mut Slots<Entry>,
     role: Role,
     source: &Path,
     expected: &[u8; 32],
     base: &Path,
-    resource: &'static str,
-    target: usize,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     path(recipes, role, None, source, false, budget)?;
     entries.reserve(budget)?;
-    let entry = observe::limited_file(role, None, source, base, resource, target, budget)?;
+    let entry = observe::file(role, None, source, base, budget)?;
     if !matches!(&entry, Entry::File { digest, .. } if digest == expected) {
         return Err(Error::Encoding(
             "stored prefix file digest differs from owner",
@@ -429,32 +396,18 @@ fn limited_file(
     entries.push(entry, budget)
 }
 
-/// A Cargo config candidate measured against the configurable manifest
-/// `target`.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the candidate joins exact owner identity and its target"
-)]
+/// A Cargo config candidate, absent or equal to the owner's file.
 fn optional_file(
     recipes: &mut slice::Iter<'_, Recipe>,
     entries: &mut Slots<Entry>,
     source: &Path,
     expected: Option<&[u8; 32]>,
     base: &Path,
-    target: usize,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     path(recipes, Role::Config, None, source, true, budget)?;
     entries.reserve(budget)?;
-    let entry = observe::limited_optional_file(
-        Role::Config,
-        None,
-        source,
-        base,
-        "Cargo config provenance",
-        target,
-        budget,
-    )?;
+    let entry = observe::optional_file(Role::Config, None, source, base, budget)?;
     let equal = match (&entry, expected) {
         (Entry::Missing { .. }, None) => true,
         (Entry::File { digest, .. }, Some(expected)) => digest == expected,

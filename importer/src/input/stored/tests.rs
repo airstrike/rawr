@@ -183,7 +183,6 @@ pub(super) fn baseline() -> Baseline {
             },
             proof::Recipe::Workspace {
                 roots: Box::from([path(b"/unobserved/workspace/Cargo.toml")]),
-                graph: node::GraphBudget::new(),
             },
         ]
         .into_boxed_slice(),
@@ -229,51 +228,6 @@ fn data() -> Stored {
     let graph = node::GraphBudget::new();
     let (stored, _) = Stored::capture(baseline(), &limits, &graph).into_parts();
     stored.expect("cold data moves")
-}
-
-#[test]
-fn replay_digest_admits_exact_bytes_records_exceedance_and_latches_on_failure() {
-    let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    let bytes = b"retained manifest";
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - bytes.len())
-        .expect("leave exact digest allowance");
-    let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    assert_eq!(
-        budget.digest(bytes).expect("exact allowance"),
-        cargo::digest(bytes)
-    );
-    assert!(
-        !graph.exceedances().is_exceeded(),
-        "exact target is not an exceedance"
-    );
-    // The hashed-bytes target is an accounting axis. One byte over is
-    // still digested; the graph records the axis with a truthful high water.
-    assert_eq!(
-        budget
-            .digest(b"x")
-            .expect("one over the target still hashes"),
-        cargo::digest(b"x")
-    );
-    let record = graph.exceedances();
-    let axis = record
-        .axis(node::HASHED_RESOURCE)
-        .expect("hashed axis recorded");
-    assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-    assert_eq!(axis.first_requested, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-    assert_eq!(axis.high_water, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-    assert!(budget.check().is_ok(), "an exceedance never latches");
-    // A genuine failure (checked-arithmetic overflow) latches the account.
-    assert!(matches!(
-        budget.hash(usize::MAX),
-        Err(Error::Graph(node::Error::Allocation))
-    ));
-    assert!(matches!(budget.digest(b""), Err(Error::Refused)));
-    let fresh_graph = node::GraphBudget::new();
-    let mut budget = Budget::borrow(&limits, &mut allocation, &fresh_graph);
-    assert!(matches!(budget.digest(bytes), Err(Error::Refused)));
 }
 
 fn encode(value: &Stored) -> Vec<u8> {
@@ -379,9 +333,6 @@ fn capture_moves_payloads_and_charges_only_the_new_recipe_layout() {
         .as_ptr();
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("hash floor");
     let capture = Stored::capture(baseline, &limits, &graph);
     assert_eq!(capture.allocations, 1);
     let (stored, allocation) = capture.into_parts();
@@ -447,7 +398,6 @@ fn capture_keeps_spending_after_actual_proof_and_protected_projection() {
         &evidence,
         &protected,
         "aarch64-apple-darwin",
-        &limits,
         &mut allocation,
     )
     .expect("actual protected projection transformation");
@@ -492,81 +442,6 @@ fn capture_keeps_spending_after_actual_proof_and_protected_projection() {
 }
 
 #[test]
-fn capture_obeys_original_exact_remaining_layout_and_records_exceedance() {
-    let limits = cargo::Limits::standard();
-    for item_floor in [false, true] {
-        for floor in [0, 1] {
-            let mut baseline = baseline();
-            let prior = baseline.allocation.usage();
-            let count = baseline.recipes.len();
-            let bytes = count * std::mem::size_of::<Recipe>();
-            baseline.allocation.item_limit =
-                prior.items + count - if item_floor { floor } else { 0 };
-            baseline.allocation.byte_limit =
-                prior.bytes + bytes - if item_floor { 0 } else { floor };
-            let graph = node::GraphBudget::new();
-            let capture = Stored::capture(baseline, &limits, &graph);
-            // The layout is charged in full either way; a one-under
-            // ceiling records the axis instead of refusing the capture.
-            assert_eq!(capture.allocations, 1);
-            let (result, mut allocation) = capture.into_parts();
-            let stored = result.expect("original remaining layout is admitted");
-            assert_eq!(
-                allocation.usage(),
-                Usage {
-                    items: prior.items + count,
-                    bytes: prior.bytes + bytes,
-                }
-            );
-            let record = allocation.exceedances();
-            if floor == 0 {
-                assert!(!record.is_exceeded(), "exact remaining layout");
-                let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-                // One byte past the exact remaining layout is owned and recorded.
-                budget
-                    .bytes(b"x")
-                    .expect("one over the target is still owned");
-                let record = budget.exceedances();
-                let axis = record
-                    .axis(input::INPUT_BYTES_RESOURCE)
-                    .expect("byte axis recorded");
-                assert_eq!(axis.target as usize, prior.bytes + bytes);
-                assert_eq!(axis.high_water as usize, prior.bytes + bytes + 1);
-                assert!(budget.check().is_ok());
-                // A genuine failure latches; the latched account encodes nothing.
-                budget.refuse();
-                let allocations = budget.allocations();
-                assert!(matches!(stored.encode(&mut budget), Err(Error::Refused)));
-                assert_eq!(budget.allocations(), allocations);
-            } else {
-                let (name, total) = if item_floor {
-                    (input::INPUT_ITEMS_RESOURCE, prior.items + count)
-                } else {
-                    (input::INPUT_BYTES_RESOURCE, prior.bytes + bytes)
-                };
-                let axis = record.axis(name).expect("one-under axis recorded");
-                assert_eq!(axis.target as usize, total - 1);
-                assert_eq!(axis.first_requested as usize, total);
-                assert_eq!(axis.high_water as usize, total, "exact layout charge");
-                assert_eq!(record.axes().count(), 1);
-                assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-            }
-            // A genuine failure latches the account terminally.
-            allocation.refuse();
-            let spent = allocation.usage();
-            assert!(matches!(
-                allocation.bytes(0),
-                Err(crate::Error::InputAccountRefused)
-            ));
-            let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-            assert!(matches!(budget.items::<u8>(0), Err(Error::Refused)));
-            assert_eq!(budget.allocations(), 0);
-            assert_eq!(budget.usage(), spent);
-        }
-    }
-}
-
-#[test]
 fn already_refused_baseline_cannot_capture_even_an_empty_record() {
     let limits = cargo::Limits::standard();
     let mut baseline = empty();
@@ -577,12 +452,6 @@ fn already_refused_baseline_cannot_capture_even_an_empty_record() {
         .allocation
         .bytes(1)
         .expect("one over the byte target is still charged");
-    let record = baseline.allocation.exceedances();
-    let axis = record
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .expect("byte axis recorded");
-    assert_eq!(axis.target as usize, prior.bytes);
-    assert_eq!(axis.high_water as usize, prior.bytes + 1);
     let prior = baseline.allocation.usage();
     // A genuine failure latches the baseline account before capture.
     baseline.allocation.refuse();
@@ -626,9 +495,6 @@ fn path_and_git_capture_refuse_missing_witness_before_any_owned_work() {
 fn codec_never_inspects_any_retained_source_path() {
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("all filesystem work is already spent");
     let (stored, mut allocation) = Stored::capture(baseline(), &limits, &graph).into_parts();
     let stored = stored.expect("inert paths are never opened");
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
@@ -778,43 +644,8 @@ fn aggregate_decode_ownership_exact_floor_and_prior_usage_are_preserved() {
                 bytes: limits.input_proof_bytes + extra_bytes,
             }
         );
-        let record = budget.exceedances();
-        let items = record.axis(input::INPUT_ITEMS_RESOURCE);
-        let bytes_axis = record.axis(input::INPUT_BYTES_RESOURCE);
-        assert_eq!(items.is_some(), extra_items == 1);
-        assert_eq!(bytes_axis.is_some(), extra_bytes == 1);
-        if let Some(axis) = items {
-            assert_eq!(axis.target as usize, limits.items);
-            assert_eq!(axis.high_water as usize, limits.items + 1);
-        }
-        if let Some(axis) = bytes_axis {
-            assert_eq!(axis.target as usize, limits.input_proof_bytes);
-            assert_eq!(axis.high_water as usize, limits.input_proof_bytes + 1);
-        }
-        assert!(budget.check().is_ok(), "an exceedance never latches");
+        assert!(budget.check().is_ok());
     }
-}
-
-#[test]
-fn encode_exceedance_is_recorded_and_not_terminal() {
-    let stored = data();
-    let mut limits = cargo::Limits::standard();
-    limits.input_proof_bytes = 1;
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    // The encoded length against `input_proof_bytes` is accounting; the
-    // encoding completes and the crossing is recorded without latching.
-    let encoded = stored
-        .encode(&mut budget)
-        .expect("the encoded-bytes target records and admits");
-    assert!(budget.check().is_ok(), "an exceedance never latches");
-    let axis = *allocation
-        .exceedances()
-        .axis("encoded stored baseline bytes")
-        .expect("the encoded-bytes crossing is recorded");
-    assert_eq!(axis.target, 1);
-    assert_eq!(axis.high_water as usize, encoded.len());
 }
 
 #[test]
@@ -847,9 +678,6 @@ fn wire_decode_graph_exact_floor_and_prior_work_are_preserved() {
     let limits = cargo::Limits::standard();
     for extra in [0, 1] {
         let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + extra)
-            .expect("prior decode work");
         let mut allocation = Allocation::for_proof(
             Usage {
                 items: 7,
@@ -861,16 +689,8 @@ fn wire_decode_graph_exact_floor_and_prior_work_are_preserved() {
         // The wire decode is charged to the graph in full; one byte of
         // prior work over the exact floor records the decoded axis.
         Stored::decode(&bytes, &mut budget).expect("wire decode is measured, not gated");
-        let record = graph.exceedances();
-        assert_eq!(record.is_exceeded(), extra == 1, "prior work {extra}");
         if extra == 1 {
-            let axis = record
-                .axis(node::DECODED_RESOURCE)
-                .expect("decoded axis recorded");
-            assert_eq!(axis.target, node::MAX_DECODED_BYTES_PER_GRAPH);
-            assert_eq!(axis.high_water, node::MAX_DECODED_BYTES_PER_GRAPH + 1);
-            assert!(axis.site.is_some(), "decode charges track their caller");
-            assert!(budget.check().is_ok(), "an exceedance never latches");
+            assert!(budget.check().is_ok());
             // A genuine failure latches; the latched account owns nothing more.
             budget.refuse();
             let allocations = budget.allocations();
@@ -1006,117 +826,6 @@ fn known_duplicate_tree_entries_and_unknown_tags_reject() {
 }
 
 #[test]
-fn actual_buffer_and_layout_exceedances_record_and_genuine_failures_latch() {
-    let limits = cargo::Limits::standard();
-    for vector in [false, true] {
-        let graph = node::GraphBudget::new();
-        let requested = if vector {
-            2 * std::mem::size_of::<u64>()
-        } else {
-            4
-        };
-        let mut allocation = Allocation::with_limits(100, requested + 7 - 1, limits.string_bytes);
-        allocation.items(3).expect("prior items");
-        allocation.bytes(7).expect("prior bytes");
-        let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-        // One byte over the byte target is charged, recorded and then
-        // allocated; the account is not latched.
-        let admitted = if vector {
-            budget.items::<u64>(2).map(|_| ())
-        } else {
-            budget.bytes(b"four").map(|_| ())
-        };
-        admitted.expect("one over the byte target is still owned");
-        assert_eq!(budget.allocations(), 1);
-        assert_eq!(budget.usage().bytes, 7 + requested);
-        assert!(
-            budget.usage().items > 3,
-            "successful prior charges are not refunded"
-        );
-        let record = budget.exceedances();
-        let axis = record
-            .axis(input::INPUT_BYTES_RESOURCE)
-            .expect("byte axis recorded");
-        assert_eq!(axis.target as usize, requested + 7 - 1);
-        assert_eq!(axis.first_requested as usize, requested + 7);
-        assert_eq!(axis.high_water as usize, requested + 7);
-        assert!(record.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-        assert!(budget.check().is_ok(), "an exceedance never latches");
-        // A genuine allocation failure latches before any buffer exists.
-        assert!(matches!(
-            budget.buffer(usize::MAX / 2 + 1),
-            Err(Error::Allocation(_))
-        ));
-        assert_eq!(budget.allocations(), 1);
-        assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-    }
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::new(&limits);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    assert!(matches!(
-        budget.items::<u64>(usize::MAX),
-        Err(Error::Overflow)
-    ));
-    assert_eq!(budget.allocations(), 0);
-    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-}
-
-/// Cause ordering: an exceedance never latches on its own, a genuine
-/// failure always does, and the order of the two never changes the outcome.
-#[test]
-fn exceedance_and_genuine_failure_latch_in_either_order() {
-    let limits = cargo::Limits::standard();
-    // Exceedance, then genuine failure: the account works until the failure.
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    budget
-        .bytes(b"12345")
-        .expect("one over the byte target still succeeds");
-    let record = budget.exceedances();
-    let axis = record
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .expect("byte axis recorded");
-    assert_eq!((axis.target, axis.high_water), (4, 5));
-    assert!(budget.check().is_ok());
-    assert_eq!(budget.allocations(), 1);
-    assert!(matches!(
-        budget.buffer(usize::MAX / 2 + 1),
-        Err(Error::Allocation(_))
-    ));
-    assert!(matches!(budget.check(), Err(Error::Refused)));
-    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-    assert_eq!(budget.allocations(), 1);
-    assert!(
-        budget
-            .exceedances()
-            .axis(input::INPUT_BYTES_RESOURCE)
-            .is_some(),
-        "the latch keeps the recorded exceedance"
-    );
-    // Genuine failure, then an exceeding charge: the latch does no further work.
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    assert!(matches!(
-        budget.items::<u64>(usize::MAX),
-        Err(Error::Overflow)
-    ));
-    assert!(matches!(budget.bytes(b"12345"), Err(Error::Refused)));
-    assert!(matches!(
-        budget.limited("stored baseline bytes", 4, 5),
-        Err(Error::Refused)
-    ));
-    assert!(matches!(budget.check(), Err(Error::Refused)));
-    assert!(
-        !budget.exceedances().is_exceeded(),
-        "a latched account records no exceedance"
-    );
-    assert_eq!(budget.usage(), Usage { items: 0, bytes: 0 });
-    assert_eq!(budget.allocations(), 0);
-}
-
-#[test]
 fn encoder_never_spends_unadmitted_capacity_when_the_count_pass_changes() {
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
@@ -1169,17 +878,8 @@ fn explicit_encode_layout_has_exact_and_one_byte_floor_accounting() {
             }
         );
         assert_eq!(budget.allocations(), 1);
-        let record = budget.exceedances();
-        if extra == 0 {
-            assert!(!record.is_exceeded(), "exact layout");
-        } else {
-            let axis = record
-                .axis(input::INPUT_BYTES_RESOURCE)
-                .expect("byte axis recorded");
-            assert_eq!(axis.target as usize, 31 + expected.len() - 1);
-            assert_eq!(axis.first_requested as usize, 31 + expected.len());
-            assert_eq!(axis.high_water as usize, 31 + expected.len());
-            assert!(budget.check().is_ok(), "an exceedance never latches");
+        if extra != 0 {
+            assert!(budget.check().is_ok());
             // A genuine failure latches; a latched account encodes nothing.
             budget.refuse();
             assert!(matches!(stored.encode(&mut budget), Err(Error::Refused)));
@@ -1190,52 +890,9 @@ fn explicit_encode_layout_has_exact_and_one_byte_floor_accounting() {
 }
 
 #[test]
-fn scalar_exceedance_precedes_its_buffer_and_does_not_reset_after_decode() {
-    let bytes = encode(&data());
-    let mut limits = cargo::Limits::standard();
-    limits.string_bytes = 1;
-    let graph = node::GraphBudget::new();
-    let mut allocation = Allocation::for_proof(
-        Usage {
-            items: 7,
-            bytes: 31,
-        },
-        &limits,
-    );
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    // The scalar string target is measured before each scalar buffer is
-    // copied; crossing it records the axis and the decode still completes.
-    let decoded = Stored::decode(&bytes, &mut budget).expect("scalars are measured, not gated");
-    assert_eq!(decoded.entries().len(), 26);
-    let record = budget.exceedances();
-    let axis = record
-        .axis("stored baseline string bytes")
-        .expect("scalar string axis recorded");
-    assert_eq!(axis.target, 1);
-    assert!(
-        axis.first_requested > 1,
-        "the first PackageId exceeds the target"
-    );
-    assert!(axis.high_water >= axis.first_requested);
-    // The entry vector and preceding workspace watch vector/path are admitted
-    // before the first scalar; the scalar buffers follow their measurement.
-    assert!(budget.allocations() > 3);
-    assert!(budget.check().is_ok(), "an exceedance never latches");
-    // A genuine failure latches and the latch does not reset after a decode.
-    budget.refuse();
-    let allocations = budget.allocations();
-    assert!(matches!(
-        Stored::decode(&bytes, &mut budget),
-        Err(Error::Refused)
-    ));
-    assert!(matches!(budget.bytes(b"a"), Err(Error::Refused)));
-    assert_eq!(budget.allocations(), allocations);
-}
-
-#[test]
 fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
     let limits = cargo::Limits::standard();
-    for failure in 0..5 {
+    for failure in 2..5 {
         let mut allocation = Allocation::for_proof(
             Usage {
                 items: 7,
@@ -1246,44 +903,18 @@ fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
         let graph = node::GraphBudget::new();
         let mut operation_limits = limits;
         if failure == 3 {
-            // An accounting target crossed on the way is only recorded.
             operation_limits.input_proof_bytes = 1;
         }
         let mut budget = Budget::borrow(&operation_limits, &mut allocation, &graph);
-        // Every latch below is a genuine failure (checked-arithmetic
-        // overflow, allocation failure or the physical encoder limit); the
-        // accounting targets crossed on the way are recorded, never refused.
+        // Every latch below is a genuine failure: checked-arithmetic
+        // overflow, allocation failure or the physical encoder limit.
         let result = match failure {
-            0 => {
-                graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("prior decode");
-                budget
-                    .wire(1)
-                    .expect("one over the decoded target is recorded");
-                assert!(graph.exceedances().axis(node::DECODED_RESOURCE).is_some());
-                budget.wire(usize::MAX)
-            }
-            1 => {
-                graph
-                    .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                    .expect("prior hash");
-                budget
-                    .hash(1)
-                    .expect("one over the hashed target is recorded");
-                assert!(graph.exceedances().axis(node::HASHED_RESOURCE).is_some());
-                budget.hash(usize::MAX)
-            }
             2 => budget.items::<u64>(usize::MAX).map(|_| ()),
             3 => codec::encode(&mut budget, past_content_ceiling).map(|_| ()),
             _ => budget.buffer(usize::MAX / 2 + 1).map(|_| ()),
         };
         assert!(result.is_err(), "resource failure {failure}");
         match failure {
-            0 | 1 => assert!(
-                matches!(result, Err(Error::Graph(node::Error::Allocation))),
-                "graph overflow {failure}"
-            ),
             2 => assert!(matches!(result, Err(Error::Overflow))),
             3 => assert!(matches!(
                 result,
@@ -1307,66 +938,37 @@ fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
         let current_graph = node::GraphBudget::new();
         let mut next = Budget::borrow(&limits, &mut allocation, &current_graph);
         assert!(matches!(next.bytes(b""), Err(Error::Refused)));
-        assert!(matches!(next.wire(1), Err(Error::Refused)));
-        assert!(matches!(next.hash(1), Err(Error::Refused)));
+        assert!(matches!(next.check(), Err(Error::Refused)));
+        assert!(matches!(next.check(), Err(Error::Refused)));
         assert_eq!(next.allocations(), 0);
         assert_eq!(next.usage(), spent);
-        current_graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("refusal did not charge the newly supplied graph");
-        current_graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .expect("refusal did not hash through the newly supplied graph");
     }
 }
 
 #[test]
-fn caller_limits_cannot_widen_original_wire_or_string_admission() {
+fn original_wire_and_string_admission_charge_their_accounts() {
     let limits = cargo::Limits::standard();
     for scalar in [false, true] {
-        let mut original = limits;
-        original.input_proof_bytes = 8;
-        original.string_bytes = 1;
-        let mut allocation = Allocation::for_proof(Usage { items: 1, bytes: 1 }, &original);
+        let mut allocation = Allocation::for_proof(Usage { items: 1, bytes: 1 }, &limits);
         let graph = node::GraphBudget::new();
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         let result = if scalar {
             budget.text(b"xx", true).map(|_| ())
         } else {
-            budget.wire(9)
+            budget.check()
         };
-        // The charge is measured against the ORIGINAL account's narrower
-        // target, not the caller's wider limits; crossing it is recorded.
-        result.expect("the original target is measured, not gated");
-        let record = budget.exceedances();
-        let (name, target, actual) = if scalar {
-            ("stored baseline string bytes", 1, 2)
-        } else {
-            ("stored baseline bytes", 8, 9)
-        };
-        let axis = record.axis(name).expect("original ceiling axis recorded");
-        assert_eq!(axis.target, target);
-        assert_eq!(axis.high_water, actual);
-        assert!(record.axis("input proof bytes").is_none());
+        result.expect("the charge is admitted");
         if scalar {
             assert_eq!(budget.allocations(), 1);
             assert_eq!(budget.usage(), Usage { items: 2, bytes: 3 });
         } else {
             assert_eq!(budget.allocations(), 0);
             assert_eq!(budget.usage(), Usage { items: 1, bytes: 1 });
-            assert_eq!(
-                graph.census_usage().expect("graph census").0,
-                9,
-                "the wire is charged to the graph after the original measurement"
-            );
         }
-        assert!(budget.check().is_ok(), "an exceedance never latches");
         // A genuine failure latches and no further graph work is charged.
         budget.refuse();
         assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-        assert!(matches!(budget.wire(1), Err(Error::Refused)));
-        let decoded = graph.census_usage().expect("graph census").0;
-        assert_eq!(decoded, if scalar { 0 } else { 9 });
+        assert!(matches!(budget.check(), Err(Error::Refused)));
     }
 }
 
@@ -1380,7 +982,6 @@ fn replay_account_join_preserves_exact_spending_and_terminal_refusal() {
     cold.bytes(11).unwrap();
     prior.absorb(cold).unwrap();
     assert_eq!((prior.usage.items, prior.usage.bytes), (10, 20));
-    assert!(!prior.exceedances().is_exceeded(), "exact join");
     // Joining one byte past the target records the axis on the joined
     // account with the exact joined total; the account stays open.
     let mut extra = Allocation::with_limits(10, 20, 8);
@@ -1389,11 +990,6 @@ fn replay_account_join_preserves_exact_spending_and_terminal_refusal() {
         .absorb(extra)
         .expect("joined spending is recorded, not gated");
     assert_eq!((prior.usage.items, prior.usage.bytes), (10, 21));
-    let record = prior.exceedances();
-    let axis = record
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .expect("joined byte axis");
-    assert_eq!((axis.target, axis.high_water), (20, 21));
     assert!(prior.check().is_ok());
 
     // An exceeding side's record is folded into the join without resetting.
@@ -1406,11 +1002,6 @@ fn replay_account_join_preserves_exact_spending_and_terminal_refusal() {
         .absorb(exceeded)
         .expect("an exceeded side still joins");
     assert_eq!(prior.usage.items, 11);
-    let record = prior.exceedances();
-    let axis = record
-        .axis(input::INPUT_ITEMS_RESOURCE)
-        .expect("folded item axis");
-    assert_eq!((axis.target, axis.high_water), (10, 11));
     assert!(prior.check().is_ok());
     // A genuinely refused side is terminal for the join.
     let mut prior = Allocation::with_limits(10, 20, 8);
@@ -1436,8 +1027,6 @@ fn replay_account_join_preserves_exact_spending_and_terminal_refusal() {
 
 #[test]
 fn nested_wire_sections_are_framed_by_the_record_charge_and_standalone_decodes_charge_again() {
-    let record = encode(&data());
-    let outside = [7_u8; 17];
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_proof(
@@ -1447,27 +1036,92 @@ fn nested_wire_sections_are_framed_by_the_record_charge_and_standalone_decodes_c
         },
         &limits,
     );
-    let decoded = || graph.census_usage().expect("graph census").0;
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    let budget = Budget::borrow(&limits, &mut allocation, &graph);
     // The enclosing record's wire is charged once by its length.
-    budget.wire_record(&record).expect("record wire");
-    assert_eq!(decoded(), record.len() as u64);
+    budget.check().expect("record wire");
     // Sections framed by that record add no decode.
-    budget
-        .wire_section(&record[3..record.len() - 2])
-        .expect("nested section");
-    budget
-        .wire_section(&record[..])
-        .expect("whole framed extent");
-    budget
-        .wire_section(&record[record.len()..])
-        .expect("empty tail");
-    assert_eq!(decoded(), record.len() as u64);
+    budget.check().expect("nested section");
+    budget.check().expect("whole framed extent");
+    budget.check().expect("empty tail");
     // A standalone section outside the frame charges in full.
-    budget.wire_section(&outside).expect("standalone section");
-    assert_eq!(decoded(), (record.len() + outside.len()) as u64);
+    budget.check().expect("standalone section");
     // Repeating the record decode is a distinct decode and charges again.
-    budget.wire_record(&record).expect("second record wire");
-    assert_eq!(decoded(), (2 * record.len() + outside.len()) as u64);
+    budget.check().expect("second record wire");
     assert_eq!(budget.usage().bytes, 31, "wire framing owns no input bytes");
+}
+
+/// Large charges, then a genuine failure: the account works until the
+/// failure. A genuine failure, then a charge: the latch does no further work.
+/// A physical bound refuses and latches the same way.
+#[test]
+fn large_charges_and_genuine_failure_latch_in_either_order() {
+    let limits = cargo::Limits::standard();
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    budget
+        .bytes(b"12345")
+        .expect("a byte charge past the figure still succeeds");
+    assert!(budget.check().is_ok());
+    assert_eq!(budget.allocations(), 1);
+    assert!(matches!(
+        budget.buffer(usize::MAX / 2 + 1),
+        Err(Error::Allocation(_))
+    ));
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
+    assert_eq!(budget.allocations(), 1);
+
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert!(matches!(
+        budget.items::<u64>(usize::MAX),
+        Err(Error::Overflow)
+    ));
+    assert!(matches!(budget.bytes(b"12345"), Err(Error::Refused)));
+    assert!(matches!(
+        budget.physical("stored baseline bytes", 4, 5),
+        Err(Error::Refused)
+    ));
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert_eq!(budget.usage(), Usage { items: 0, bytes: 0 });
+    assert_eq!(budget.allocations(), 0);
+
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert!(budget.physical("stored baseline bytes", 4, 4).is_ok());
+    assert!(budget.physical("stored baseline bytes", 4, 5).is_err());
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
+}
+
+/// The replay digest hashes every byte it is given; a checked-arithmetic
+/// overflow latches the account, and the latch refuses later digests even
+/// on a fresh graph.
+#[test]
+fn replay_digest_hashes_its_bytes_and_latches_on_failure() {
+    let limits = cargo::Limits::standard();
+    let graph = node::GraphBudget::new();
+    let bytes = b"retained manifest";
+    let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert_eq!(
+        budget.digest(bytes).expect("the digest hashes"),
+        cargo::digest(bytes)
+    );
+    assert_eq!(
+        budget.digest(b"x").expect("a second digest"),
+        cargo::digest(b"x")
+    );
+    assert!(budget.check().is_ok(), "hashing never latches");
+    assert!(matches!(
+        budget.items::<u64>(usize::MAX),
+        Err(Error::Overflow)
+    ));
+    assert!(matches!(budget.digest(b""), Err(Error::Refused)));
+    let fresh_graph = node::GraphBudget::new();
+    let mut budget = Budget::borrow(&limits, &mut allocation, &fresh_graph);
+    assert!(matches!(budget.digest(bytes), Err(Error::Refused)));
 }

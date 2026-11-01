@@ -2,18 +2,16 @@ use std::ffi::OsStr;
 
 use super::*;
 use crate::cargo;
+use crate::input;
 use crate::input::membership::manifest::{schema, storage, Error, Stop};
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 
 mod resources;
 
 fn image(records: Vec<(&[u8], observed::Value)>) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = records
@@ -49,22 +47,13 @@ fn metadata(kind: observed::Kind) -> observed::Value {
 
 fn check(
     image: &stored::Stored,
-    paths: usize,
     operation: impl FnOnce(&mut Session<'_, host::Host<'_, '_>>) -> Step<()>,
 ) {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - paths)
-        .unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -90,7 +79,7 @@ fn absent_build_uses_the_exact_followed_native_probe_and_all_file_outcomes() {
         (observed::Value::Error(13), false),
     ] {
         let image = image(vec![(b"/native/\xff/./build.rs", value)]);
-        check(&image, 1, |session| {
+        check(&image, |session| {
             let root = Path::new(OsStr::from_bytes(b"/native/\xff/."));
             match build(None, root, session)? {
                 Build::Single(Text::Borrowed(text)) if selected => {
@@ -107,7 +96,7 @@ fn absent_build_uses_the_exact_followed_native_probe_and_all_file_outcomes() {
 #[test]
 fn explicit_build_variants_preserve_normalized_or_unchanged_values_without_probes() {
     let image = image(vec![]);
-    check(&image, 0, |session| {
+    check(&image, |session| {
         let root = Path::new("/not-observed");
         assert!(matches!(
             build(Some(&primitive::Build::Auto(false)), root, session)?,
@@ -180,7 +169,7 @@ fn readme_defaults_probe_in_order_stop_at_the_first_file_and_preserve_absence() 
             })
             .collect();
         let image = image(records);
-        check(&image, count, |session| {
+        check(&image, |session| {
             let output = readme(Path::new("/package"), None, session)?;
             assert_eq!(
                 output.as_ref().map(Text::as_str),
@@ -197,7 +186,7 @@ fn readme_defaults_probe_in_order_stop_at_the_first_file_and_preserve_absence() 
 #[test]
 fn explicit_readme_is_borrowed_verbatim_without_path_or_file_checks() {
     let image = image(vec![]);
-    check(&image, 0, |session| {
+    check(&image, |session| {
         let root = Path::new(OsStr::from_bytes(b"/unobserved/\xff"));
         assert!(readme(
             root,
@@ -235,7 +224,7 @@ fn actual_document_and_complete_original_feed_both_helpers_without_reinterpretat
         bytes: b"[package]\nname='example'\nbuild='src/../custom//build.rs'\nreadme=\"docs/../read\\u006de.md\"\n".to_vec(),
         end: observed::End::Eof,
     })]);
-    check(&image, 1, |session| {
+    check(&image, |session| {
         let document = session
             .document(b"/Cargo.toml", &cargo::Limits::standard())?
             .unwrap();

@@ -42,7 +42,6 @@ pub(crate) struct Metadata {
 pub(crate) struct BuildGraph {
     raw: RawDocument,
     _allocation: JsonAllocation,
-    limits: Limits,
     canonical: Digest,
     artifacts: Box<[Output]>,
     scripts: Box<[BuildScript]>,
@@ -409,10 +408,6 @@ impl Metadata {
         self.packages.iter()
     }
 
-    pub(super) fn package_count(&self) -> usize {
-        self.packages.len()
-    }
-
     #[cfg(test)]
     pub(crate) fn fixture_packages(packages: impl IntoIterator<Item = Package>) -> Self {
         let packages = packages
@@ -440,18 +435,10 @@ impl Metadata {
     ) -> Result<Self> {
         allocation.require(limits);
         let mut next = allocation.retained;
-        // The document size is an accounting target recorded on the
-        // JSON epoch; refusal is reserved for the physical capture bound.
-        next.exceeded("Cargo lock bytes", limits.json_bytes, bytes.len());
         // A byte is a conservative upper bound for every TOML-owned node and
         // byte.  Charge the complete DOM before `DocumentMut` can own it.
-        next.nodes("Cargo lock TOML nodes", bytes.len(), limits)?;
-        next.retained_bytes(
-            "Cargo lock TOML bytes",
-            bytes.len(),
-            limits.json_bytes,
-            limits,
-        )?;
+        next.nodes("Cargo lock TOML nodes", bytes.len())?;
+        next.retained_bytes(bytes.len())?;
         let text = std::str::from_utf8(bytes).map_err(|error| Error::Schema {
             document: "Cargo lock",
             reason: error.to_string().into_boxed_str(),
@@ -642,7 +629,6 @@ impl Metadata {
         validate_command_directory_pair(object, command_target, command_build)?;
 
         let packages = array(object, "packages", "Cargo metadata")?;
-        allocation.exceeded("Cargo packages", limits.packages, packages.len());
         let resolve = object
             .get("resolve")
             .and_then(Value::as_object)
@@ -666,7 +652,6 @@ impl Metadata {
         allocation.nodes(
             "Cargo metadata dependency group nodes",
             dependencies.len().saturating_mul(2),
-            limits,
         )?;
         let mut groups = Vec::<Vec<&Selected>>::new();
         groups
@@ -707,15 +692,13 @@ impl Metadata {
             });
         }
         let nodes = array(resolve, "nodes", "Cargo metadata")?;
-        allocation.exceeded("Cargo resolve nodes", limits.packages, nodes.len());
-        let resolve_edges = nodes.iter().try_fold(0_usize, |edges, node| {
+        nodes.iter().try_fold(0_usize, |edges, node| {
             let dependencies = node
                 .get("deps")
                 .and_then(Value::as_array)
                 .ok_or_else(|| schema("Cargo metadata", "resolve-node dependencies are absent"))?;
             Ok::<_, Error>(edges.saturating_add(dependencies.len()))
         })?;
-        allocation.exceeded("Cargo resolve edges", limits.edges, resolve_edges);
         let root_node = nodes
             .iter()
             .find(|node| value_string(node, "id") == Some(root_value))
@@ -735,7 +718,7 @@ impl Metadata {
         // before canonicalization changes any spelling or array order.
         for group in &groups {
             let dependency = group[0];
-            validate_declaration(dependency, declarations, &mut allocation, limits)?;
+            validate_declaration(dependency, declarations, &mut allocation)?;
             let mut matches = node_dependencies
                 .iter()
                 .filter(|candidate| value_string(candidate, "name") == Some(dependency.alias()));
@@ -764,14 +747,10 @@ impl Metadata {
         }
 
         let mut document = Budgeted::from_retained(value, document_ownership);
-        let canonical = canonical_metadata_bytes_budgeted(&mut document, &mut allocation, limits)?;
+        let canonical = canonical_metadata_bytes_budgeted(&mut document, &mut allocation)?;
         let (canonical, _) = canonical.into_parts();
-        let records = compact_metadata_packages(
-            &mut document,
-            definition.is_some(),
-            &mut allocation,
-            limits,
-        )?;
+        let records =
+            compact_metadata_packages(&mut document, definition.is_some(), &mut allocation)?;
         let object = document
             .value()
             .as_object()
@@ -799,7 +778,7 @@ impl Metadata {
             .iter()
             .filter(|dependency| dependency.roles().contains(config::Role::Library))
             .count();
-        allocation.member_nodes("Cargo metadata library nodes", library_count, limits)?;
+        allocation.member_nodes("Cargo metadata library nodes", library_count)?;
         let mut libraries = BTreeSet::new();
         for dependency in dependencies
             .iter()
@@ -808,14 +787,13 @@ impl Metadata {
             allocation.retained_string(
                 "Cargo metadata retained string bytes",
                 dependency.alias().len(),
-                limits,
             )?;
             libraries.insert(Box::<str>::from(dependency.alias()));
         }
-        allocation.member_nodes("Cargo metadata package-map nodes", packages.len(), limits)?;
+        allocation.member_nodes("Cargo metadata package-map nodes", packages.len())?;
         let mut all_packages = BTreeMap::new();
         for package in packages {
-            let (package_id, package) = parse_package_budgeted(package, &mut allocation, limits)?;
+            let (package_id, package) = parse_package_budgeted(package, &mut allocation)?;
             if all_packages.insert(package_id, package).is_some() {
                 return Err(schema("Cargo metadata", "duplicate Cargo PackageId"));
             }
@@ -830,7 +808,7 @@ impl Metadata {
                 .get("features")
                 .and_then(Value::as_array)
                 .ok_or_else(|| schema("Cargo metadata", "resolved features are absent"))?;
-            allocation.nodes("Cargo metadata feature nodes", feature_values.len(), limits)?;
+            allocation.nodes("Cargo metadata feature nodes", feature_values.len())?;
             let mut features = Vec::new();
             features
                 .try_reserve_exact(feature_values.len())
@@ -842,11 +820,8 @@ impl Metadata {
                 let feature = feature
                     .as_str()
                     .ok_or_else(|| schema("Cargo metadata", "resolved feature is not a string"))?;
-                allocation.retained_string(
-                    "Cargo metadata retained string bytes",
-                    feature.len(),
-                    limits,
-                )?;
+                allocation
+                    .retained_string("Cargo metadata retained string bytes", feature.len())?;
                 features.push(Box::from(feature));
             }
             features.sort_unstable();
@@ -908,11 +883,10 @@ impl Metadata {
             if declared
                 .insert(
                     {
-                        allocation.member_nodes("Cargo metadata declared-map nodes", 1, limits)?;
+                        allocation.member_nodes("Cargo metadata declared-map nodes", 1)?;
                         allocation.retained_string(
                             "Cargo metadata retained string bytes",
                             dependency.alias().len(),
-                            limits,
                         )?;
                         dependency.alias().into()
                     },
@@ -922,7 +896,7 @@ impl Metadata {
             {
                 return Err(schema("Cargo metadata", "duplicate declared alias"));
             }
-            allocation.nodes("Cargo metadata alias-group nodes", group.len(), limits)?;
+            allocation.nodes("Cargo metadata alias-group nodes", group.len())?;
             let mut group_aliases = Vec::new();
             group_aliases
                 .try_reserve_exact(group.len())
@@ -931,11 +905,10 @@ impl Metadata {
                     source,
                 })?;
             for selected_dependency in group {
-                allocation.member_nodes("Cargo metadata selected-map nodes", 1, limits)?;
+                allocation.member_nodes("Cargo metadata selected-map nodes", 1)?;
                 allocation.retained_string(
                     "Cargo metadata retained string bytes",
                     selected_dependency.alias().len(),
-                    limits,
                 )?;
                 if selected
                     .insert(selected_dependency.alias().into(), package_ordinal)
@@ -946,15 +919,13 @@ impl Metadata {
                 allocation.retained_string(
                     "Cargo metadata retained string bytes",
                     selected_dependency.alias().len(),
-                    limits,
                 )?;
                 group_aliases.push(selected_dependency.alias().into());
             }
-            allocation.member_nodes("Cargo metadata alias-map nodes", 1, limits)?;
+            allocation.member_nodes("Cargo metadata alias-map nodes", 1)?;
             allocation.retained_string(
                 "Cargo metadata retained string bytes",
                 dependency.alias().len(),
-                limits,
             )?;
             aliases.insert(dependency.alias().into(), group_aliases.into_boxed_slice());
         }
@@ -1001,7 +972,7 @@ impl Metadata {
     ) -> Result<Box<[Selection]>> {
         epoch.require(&self.limits);
         let mut allocation = epoch.retained;
-        allocation.nodes("Cargo selection nodes", dependencies.len(), &self.limits)?;
+        allocation.nodes("Cargo selection nodes", dependencies.len())?;
         let mut selections = Vec::new();
         selections
             .try_reserve_exact(dependencies.len())
@@ -1015,16 +986,8 @@ impl Metadata {
                 .get(dependency.alias())
                 .ok_or_else(|| schema("Cargo metadata", "selected alias proof is absent"))?;
             let package_id = self.package_id(*package_id)?;
-            allocation.retained_string(
-                "Cargo selection string bytes",
-                dependency.alias().len(),
-                &self.limits,
-            )?;
-            allocation.retained_string(
-                "Cargo selection string bytes",
-                package_id.len(),
-                &self.limits,
-            )?;
+            allocation.retained_string("Cargo selection string bytes", dependency.alias().len())?;
+            allocation.retained_string("Cargo selection string bytes", package_id.len())?;
             selections.push(Selection {
                 alias: dependency.alias().into(),
                 package_id: package_id.into(),
@@ -1138,7 +1101,6 @@ impl BuildGraph {
             .ok_or_else(|| schema("Cargo unit graph", "root is not an object"))?;
         exact_schema(object, "Cargo unit graph", schema_version)?;
         let units = array(object, "units", "Cargo unit graph")?;
-        allocation.exceeded("Cargo units", limits.units, units.len());
         let roots = array(object, "roots", "Cargo unit graph")?;
         if roots.is_empty() {
             return Err(schema("Cargo unit graph", "has no command roots"));
@@ -1152,7 +1114,6 @@ impl BuildGraph {
                 .and_then(Value::as_array)
                 .ok_or_else(|| schema("Cargo unit graph", "unit dependencies are absent"))?;
             edges = edges.saturating_add(dependencies.len());
-            allocation.exceeded("Cargo unit edges", limits.edges, edges);
             for dependency in dependencies {
                 let index = dependency
                     .get("index")
@@ -1266,12 +1227,12 @@ impl BuildGraph {
                     .ok_or_else(|| {
                         schema("Cargo unit graph", "selected unit features are absent")
                     })?;
-                validate_unit_features(feature_values, expected_features, &mut allocation, limits)?;
+                validate_unit_features(feature_values, expected_features, &mut allocation)?;
                 for selected_alias in selected_aliases {
                     if !root_selected.contains_key(selected_alias.as_ref()) {
-                        allocation.member_nodes("Cargo unit root-selected map nodes", 1, limits)?;
+                        allocation.member_nodes("Cargo unit root-selected map nodes", 1)?;
                     }
-                    allocation.nodes("Cargo unit root-selected set nodes", 1, limits)?;
+                    allocation.nodes("Cargo unit root-selected set nodes", 1)?;
                     if !root_selected
                         .entry(selected_alias)
                         .or_default()
@@ -1293,11 +1254,7 @@ impl BuildGraph {
                             }
                             Some(_) => {}
                             None => {
-                                allocation.member_nodes(
-                                    "Cargo unit extraction-index nodes",
-                                    1,
-                                    limits,
-                                )?;
+                                allocation.member_nodes("Cargo unit extraction-index nodes", 1)?;
                                 extraction_indices.insert(selected_alias, index);
                             }
                         }
@@ -1310,7 +1267,7 @@ impl BuildGraph {
                     .get(alias)
                     .ok_or_else(|| schema("Cargo metadata", "selected alias proof is absent"))?;
                 let package = metadata.package_id(*package)?;
-                allocation.member_nodes("Cargo unit selected-map nodes", 1, limits)?;
+                allocation.member_nodes("Cargo unit selected-map nodes", 1)?;
                 if selected
                     .insert(alias, package)
                     .is_some_and(|previous| previous != package)
@@ -1343,13 +1300,7 @@ impl BuildGraph {
         let canonical =
             canonical_unit_digest_budgeted(&value, no_build_std, &mut allocation, limits)?;
         let digests = unit_key_digests(&value, no_build_std, &mut allocation, limits)?;
-        let masks = unit_masks(
-            &value,
-            &extraction_indices,
-            no_build_std,
-            &mut allocation,
-            limits,
-        )?;
+        let masks = unit_masks(&value, &extraction_indices, no_build_std, &mut allocation)?;
         let document =
             serde_json::from_value::<OwnedUnitDocument>(value).map_err(|error| Error::Schema {
                 document: "Cargo unit graph",
@@ -1364,31 +1315,17 @@ impl BuildGraph {
                 .checked_mul(std::mem::size_of::<usize>())
                 .ok_or_else(|| schema("Cargo unit graph", "script index storage overflow"))?,
         );
-        allocation.acquire(script_indices, limits)?;
-        let prepared = prepare_owned_graph(
-            document,
-            masks.value(),
-            selected_target,
-            no_build_std,
-            limits,
-            &mut allocation,
-        )?;
-        let graph_ownership = prepared_graph_ownership(
-            &prepared,
-            masks.value(),
-            &extraction_indices,
-            metadata,
-            limits,
-            &mut allocation,
-        )?;
-        allocation.replace_owned(document_ownership, graph_ownership, limits)?;
+        allocation.acquire(script_indices)?;
+        let prepared = prepare_owned_graph(document, masks.value(), selected_target, no_build_std)?;
+        let graph_ownership =
+            prepared_graph_ownership(&prepared, masks.value(), &extraction_indices, metadata)?;
+        allocation.replace_owned(document_ownership, graph_ownership)?;
         let finished = finish_prepared_graph(
             prepared,
             digests.value(),
             masks.value(),
             &extraction_indices,
             metadata,
-            limits,
             &mut allocation,
         )?;
         allocation.release(script_indices)?;
@@ -1401,7 +1338,6 @@ impl BuildGraph {
             raw,
             canonical,
             _allocation: allocation,
-            limits: *limits,
             artifacts: finished.artifacts,
             scripts: finished.scripts,
             #[cfg(feature = "rustc-driver")]
@@ -1473,7 +1409,6 @@ impl BuildGraph {
         Self {
             raw: RawDocument::from_bytes(&[]),
             _allocation: JsonAllocation::empty(),
-            limits: super::Limits::standard(),
             canonical: digest(&[]),
             artifacts,
             scripts: Box::default(),
@@ -1501,7 +1436,6 @@ fn validate_unit_features(
     feature_values: &[Value],
     expected_features: &[Box<str>],
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<()> {
     let pointer_bytes = feature_values
         .len()
@@ -1510,7 +1444,7 @@ fn validate_unit_features(
     let scratch = JsonOwnership::collection()
         .checked_add(JsonOwnership::nodes(feature_values.len()))?
         .checked_add(JsonOwnership::buffer(pointer_bytes))?;
-    let authorized = allocation.with_scratch(scratch, limits, || {
+    let authorized = allocation.with_scratch(scratch, || {
         let mut actual_features = Vec::<&str>::new();
         actual_features
             .try_reserve_exact(feature_values.len())
@@ -1577,74 +1511,16 @@ mod feature_authority_tests {
     }
 
     #[test]
-    fn borrowed_feature_scratch_has_exact_pointer_item_container_and_byte_caps() {
+    fn borrowed_feature_scratch_owns_nothing_after_validation() {
         let value = json!(["advanced", "std"]);
         let features = value.as_array().expect("feature fixture is an array");
         let expected = [Box::<str>::from("advanced"), Box::<str>::from("std")];
-        let standard = crate::cargo::Limits::standard();
         let mut allocation = super::JsonAllocation::empty();
-        super::validate_unit_features(features, &expected, &mut allocation, &standard)
-            .expect("standard borrowed scratch validates");
+        super::validate_unit_features(features, &expected, &mut allocation)
+            .expect("borrowed scratch validates");
         assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
         let peak = allocation.peak_usage();
         assert_eq!(peak.2, 0, "borrowed scratch owns no string bytes");
-
-        let mut exact = standard;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = 0;
-        exact.containers = peak.3;
-        let exercise = |limits: &crate::cargo::Limits| {
-            let mut allocation = super::JsonAllocation::empty();
-            let result =
-                super::validate_unit_features(features, &expected, &mut allocation, limits);
-            (result, allocation)
-        };
-        let (result, allocation) = exercise(&exact);
-        result.expect("exact borrowed scratch caps validate");
-        assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each exact scratch cap still validates and releases
-        // the borrowed scratch; the crossed axis records the exact scratch peak
-        // and the record outlives the release.
-        let exceeded = |limits: &crate::cargo::Limits, axis: &str, high_water: usize| {
-            let (result, allocation) = exercise(limits);
-            result.expect("the scratch floor admits and validates");
-            assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
-            let record = allocation.exceedances();
-            let found = record
-                .axis(axis)
-                .unwrap_or_else(|| panic!("`{axis}` records an exceedance: {record:?}"));
-            assert_eq!(found.high_water, high_water as u64, "`{axis}` high water");
-            found.target
-        };
-        let mut pointer_floor = exact;
-        pointer_floor.json_bytes = pointer_floor
-            .json_bytes
-            .saturating_sub(std::mem::size_of::<&str>());
-        assert_eq!(
-            exceeded(&pointer_floor, super::AGGREGATE_BYTES, peak.1),
-            pointer_floor.json_bytes as u64
-        );
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        assert_eq!(
-            exceeded(&item_floor, super::AGGREGATE_ITEMS, peak.0),
-            item_floor.items as u64
-        );
-        let mut container_floor = exact;
-        container_floor.containers = container_floor.containers.saturating_sub(1);
-        assert_eq!(
-            exceeded(&container_floor, super::RETAINED_CONTAINERS, peak.3),
-            container_floor.containers as u64
-        );
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        assert_eq!(
-            exceeded(&byte_floor, super::AGGREGATE_BYTES, peak.1),
-            byte_floor.json_bytes as u64
-        );
     }
 
     #[test]
@@ -1660,21 +1536,17 @@ mod feature_authority_tests {
         let limits = crate::cargo::Limits::standard();
         let mut allocation = super::JsonAllocation::empty();
         let live = allocation
-            .retain_with(
-                super::JsonOwnership::string(limits.string_bytes),
-                &limits,
-                || {
-                    String::from_utf8(vec![b'l'; limits.string_bytes])
-                        .map(String::into_boxed_str)
-                        .map_err(|error| crate::Error::Schema {
-                            document: "live string-cap fixture",
-                            reason: error.to_string().into_boxed_str(),
-                        })
-                },
-            )
+            .retain_with(super::JsonOwnership::string(limits.string_bytes), || {
+                String::from_utf8(vec![b'l'; limits.string_bytes])
+                    .map(String::into_boxed_str)
+                    .map_err(|error| crate::Error::Schema {
+                        document: "live string-cap fixture",
+                        reason: error.to_string().into_boxed_str(),
+                    })
+            })
             .expect("the exact existing string cap is live");
         let before = allocation.full_usage();
-        super::validate_unit_features(features, &expected, &mut allocation, &limits)
+        super::validate_unit_features(features, &expected, &mut allocation)
             .expect("borrowed features add no string ownership at the exact cap");
         assert_eq!(allocation.full_usage(), before);
         assert_eq!(allocation.strings, limits.string_bytes);
@@ -1685,16 +1557,12 @@ mod feature_authority_tests {
 
     #[test]
     fn borrowed_feature_scratch_releases_on_duplicate_and_unauthorized_errors() {
-        let limits = crate::cargo::Limits::standard();
         let expected = [Box::<str>::from("advanced"), Box::<str>::from("std")];
         for value in [json!(["std", "std"]), json!(["forged"])] {
             let features = value.as_array().expect("feature fixture is an array");
             let mut allocation = super::JsonAllocation::empty();
             let before = allocation.full_usage();
-            assert!(
-                super::validate_unit_features(features, &expected, &mut allocation, &limits)
-                    .is_err()
-            );
+            assert!(super::validate_unit_features(features, &expected, &mut allocation).is_err());
             assert_eq!(
                 allocation.full_usage(),
                 before,
@@ -1797,14 +1665,9 @@ impl Output {
 }
 
 impl ArtifactProfile {
-    /// Parse a Cargo build-message profile. Its string sizes are accounting
-    /// targets recorded on `account`, the account that owns the message;
-    /// the schema check is the only refusal.
-    pub(crate) fn from_build_measured(
-        value: &Value,
-        limits: &Limits,
-        account: &mut dyn Measure,
-    ) -> Result<Self> {
+    /// Parse a Cargo build-message profile; the schema check is the only
+    /// refusal.
+    pub(crate) fn from_build(value: &Value) -> Result<Self> {
         let object = value
             .as_object()
             .ok_or_else(|| schema("Cargo build JSON", "artifact profile is absent"))?;
@@ -1828,31 +1691,12 @@ impl ArtifactProfile {
             object.get("debug_assertions"),
             object.get("overflow_checks"),
             object.get("test"),
-            limits,
             None,
-            account,
         )
     }
 
-    /// Fixture parse with no owning account; the string targets are measured
-    /// into a record that is discarded.
-    #[cfg(test)]
-    pub(crate) fn from_build(value: &Value, limits: &Limits) -> Result<Self> {
-        Self::from_build_measured(value, limits, &mut crate::exceedance::Record::new())
-    }
-
-    fn from_owned(
-        profile: &OwnedProfile,
-        mode: &str,
-        limits: &Limits,
-        account: &mut dyn Measure,
-    ) -> Result<Self> {
-        account.measured(
-            "artifact opt_level",
-            limits.string_bytes,
-            profile.opt_level.len(),
-        );
-        Self::validate_debuginfo("Cargo unit graph", &profile.debuginfo, limits, account)?;
+    fn from_owned(profile: &OwnedProfile, mode: &str) -> Result<Self> {
+        Self::validate_debuginfo("Cargo unit graph", &profile.debuginfo)?;
         Self::encode(
             "Cargo unit graph",
             profile.opt_level.as_str(),
@@ -1860,24 +1704,12 @@ impl ArtifactProfile {
             profile.debug_assertions,
             profile.overflow_checks,
             matches!(mode, "test" | "bench"),
-            limits,
             None,
-            account,
         )
     }
 
-    fn owned_size(
-        profile: &OwnedProfile,
-        mode: &str,
-        limits: &Limits,
-        account: &mut dyn Measure,
-    ) -> Result<usize> {
-        account.measured(
-            "artifact opt_level",
-            limits.string_bytes,
-            profile.opt_level.len(),
-        );
-        Self::validate_debuginfo("Cargo unit graph", &profile.debuginfo, limits, account)?;
+    fn owned_size(profile: &OwnedProfile, mode: &str) -> Result<usize> {
+        Self::validate_debuginfo("Cargo unit graph", &profile.debuginfo)?;
         Self::encoded_size(
             "Cargo unit graph",
             profile.opt_level.as_str(),
@@ -1885,15 +1717,9 @@ impl ArtifactProfile {
             profile.debug_assertions,
             profile.overflow_checks,
             matches!(mode, "test" | "bench"),
-            limits,
-            account,
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the profile constructor validates the complete fixed Cargo profile schema in one transformation"
-    )]
     fn from_fields(
         document: &'static str,
         opt_level: Option<&Value>,
@@ -1901,17 +1727,14 @@ impl ArtifactProfile {
         debug_assertions: Option<&Value>,
         overflow_checks: Option<&Value>,
         test: Option<&Value>,
-        limits: &Limits,
         allocation: Option<&mut JsonAllocation>,
-        account: &mut dyn Measure,
     ) -> Result<Self> {
         let opt_level = opt_level
             .and_then(Value::as_str)
             .ok_or_else(|| schema(document, "artifact opt_level is not a string"))?;
-        account.measured("artifact opt_level", limits.string_bytes, opt_level.len());
         let debuginfo =
             debuginfo.ok_or_else(|| schema(document, "artifact debuginfo is absent"))?;
-        Self::validate_debuginfo(document, debuginfo, limits, account)?;
+        Self::validate_debuginfo(document, debuginfo)?;
         let debug_assertions = debug_assertions
             .and_then(Value::as_bool)
             .ok_or_else(|| schema(document, "artifact debug_assertions is not a boolean"))?;
@@ -1928,24 +1751,15 @@ impl ArtifactProfile {
             debug_assertions,
             overflow_checks,
             test,
-            limits,
             allocation,
-            account,
         )
     }
 
-    fn validate_debuginfo(
-        document: &'static str,
-        debuginfo: &Value,
-        limits: &Limits,
-        account: &mut dyn Measure,
-    ) -> Result<()> {
+    fn validate_debuginfo(document: &'static str, debuginfo: &Value) -> Result<()> {
         match debuginfo {
             Value::Null => {}
             Value::Number(number) if number.as_u64().is_some_and(|value| value <= 2) => {}
-            Value::String(value) => {
-                account.measured("artifact debuginfo", limits.string_bytes, value.len());
-            }
+            Value::String(_) => {}
             _ => return Err(schema(document, "artifact debuginfo is invalid")),
         }
         Ok(())
@@ -1959,8 +1773,6 @@ impl ArtifactProfile {
         debug_assertions: bool,
         overflow_checks: bool,
         test: bool,
-        limits: &Limits,
-        account: &mut dyn Measure,
     ) -> Result<usize> {
         #[derive(serde::Serialize)]
         struct Projection<'value> {
@@ -1995,14 +1807,9 @@ impl ArtifactProfile {
             document,
             reason: error.to_string().into_boxed_str(),
         })?;
-        account.measured("artifact profile bytes", limits.string_bytes, counter.0);
         Ok(counter.0)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the canonical Cargo profile is a fixed five-field projection"
-    )]
     fn encode(
         document: &'static str,
         opt_level: &str,
@@ -2010,9 +1817,7 @@ impl ArtifactProfile {
         debug_assertions: bool,
         overflow_checks: bool,
         test: bool,
-        limits: &Limits,
         allocation: Option<&mut JsonAllocation>,
-        account: &mut dyn Measure,
     ) -> Result<Self> {
         #[derive(serde::Serialize)]
         struct Projection<'value> {
@@ -2036,16 +1841,9 @@ impl ArtifactProfile {
             debug_assertions,
             overflow_checks,
             test,
-            limits,
-            account,
         )?;
         if let Some(allocation) = allocation {
-            allocation.retained_bytes(
-                "Cargo artifact profile retained bytes",
-                size,
-                limits.string_bytes,
-                limits,
-            )?;
+            allocation.retained_bytes(size)?;
         }
         let mut bytes = Vec::new();
         bytes
@@ -2113,7 +1911,6 @@ impl BuildGraph {
         allocation.member_nodes(
             "Cargo reachability artifact-index nodes",
             self.artifacts.len(),
-            &self.limits,
         )?;
         let mut artifacts = BTreeMap::new();
         for artifact in &self.artifacts {
@@ -2121,11 +1918,7 @@ impl BuildGraph {
             #[cfg(test)]
             OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
         }
-        allocation.nodes(
-            "Cargo reachability pending nodes",
-            roots.len(),
-            &self.limits,
-        )?;
+        allocation.nodes("Cargo reachability pending nodes", roots.len())?;
         let mut pending = Vec::new();
         pending
             .try_reserve_exact(roots.len())
@@ -2146,13 +1939,13 @@ impl BuildGraph {
             if visited.contains(key) {
                 continue;
             }
-            allocation.member_nodes("Cargo reachability visited nodes", 1, &self.limits)?;
+            allocation.member_nodes("Cargo reachability visited nodes", 1)?;
             visited.insert(key);
             #[cfg(test)]
             OWNED_REACHABILITY_NODES.with(|owned| owned.set(owned.get().saturating_add(1)));
             if let Some(artifact) = artifacts.get(key) {
                 for dependency in artifact.dependency_keys() {
-                    allocation.nodes("Cargo reachability pending nodes", 1, &self.limits)?;
+                    allocation.nodes("Cargo reachability pending nodes", 1)?;
                     pending.try_reserve(1).map_err(|source| Error::Allocation {
                         operation: "Cargo artifact reachability",
                         source,
@@ -2183,11 +1976,7 @@ impl BuildGraph {
         for extraction in &self.extraction {
             let key = extraction.semantic_key();
             if !roots.contains(key) {
-                allocation.member_nodes(
-                    "Cargo reachability selected-root nodes",
-                    1,
-                    &self.limits,
-                )?;
+                allocation.member_nodes("Cargo reachability selected-root nodes", 1)?;
                 roots.insert(key);
             }
         }
@@ -2274,7 +2063,6 @@ fn unit_masks(
     extraction_indices: &BTreeMap<&str, usize>,
     no_build_std: config::NoBuildStd,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Budgeted<UnitMasks>> {
     let units = value
         .get("units")
@@ -2283,7 +2071,7 @@ fn unit_masks(
     let ownership = JsonOwnership::collection()
         .checked_add(JsonOwnership::nodes(units.len()))?
         .checked_add(JsonOwnership::buffer(units.len()))?;
-    allocation.retain_with(ownership, limits, || {
+    allocation.retain_with(ownership, || {
         let mut flags = vec![0_u8; units.len()];
         for (index, unit) in units.iter().enumerate() {
             let mode = value_string(unit, "mode")
@@ -2368,8 +2156,6 @@ fn prepare_owned_graph(
     masks: &UnitMasks,
     selected_target: &str,
     no_build_std: config::NoBuildStd,
-    limits: &Limits,
-    allocation: &mut JsonAllocation,
 ) -> Result<PreparedGraph> {
     let OwnedUnitDocument {
         mut units,
@@ -2399,12 +2185,6 @@ fn prepare_owned_graph(
             continue;
         }
         let compiler = script_compiler(&units, unit)?;
-        // The unit target is an accounting target recorded on the epoch.
-        allocation.exceeded(
-            "normal Build script units",
-            limits.units,
-            scripts.len().saturating_add(1),
-        );
         let unit = &mut units[index];
         scripts.push(Run {
             unit: index,
@@ -2448,11 +2228,6 @@ fn prepare_owned_graph(
                         field: "selected target normal-library unit",
                     });
                 }
-                allocation.exceeded(
-                    "Build compiler artifact units",
-                    limits.units,
-                    outputs.len().saturating_add(1),
-                );
                 let target = canonical_file(
                     "Build target source",
                     Path::new(unit.target.src_path.as_str()),
@@ -2512,12 +2287,7 @@ fn own_slice(ownership: &mut JsonOwnership, len: usize) -> Result<()> {
     add_ownership(ownership, JsonOwnership::nodes(len))
 }
 
-fn prepared_output_ownership(
-    output: &PreparedOutput,
-    ownership: &mut JsonOwnership,
-    limits: &Limits,
-    account: &mut dyn Measure,
-) -> Result<()> {
+fn prepared_output_ownership(output: &PreparedOutput, ownership: &mut JsonOwnership) -> Result<()> {
     add_ownership(ownership, JsonOwnership::nodes(1))?;
     for value in [
         output.package_id.as_str(),
@@ -2551,8 +2321,6 @@ fn prepared_output_ownership(
         JsonOwnership::buffer(ArtifactProfile::owned_size(
             &output.profile,
             output.mode.as_str(),
-            limits,
-            account,
         )?),
     )
 }
@@ -2562,8 +2330,6 @@ fn prepared_graph_ownership(
     masks: &UnitMasks,
     extraction_indices: &BTreeMap<&str, usize>,
     metadata: &Metadata,
-    limits: &Limits,
-    account: &mut dyn Measure,
 ) -> Result<JsonOwnership> {
     #[cfg(not(feature = "rustc-driver"))]
     let _ = (extraction_indices, metadata);
@@ -2597,7 +2363,7 @@ fn prepared_graph_ownership(
     #[cfg(feature = "rustc-driver")]
     own_slice(&mut ownership, masks.extraction_count())?;
     for output in &prepared.outputs {
-        prepared_output_ownership(output, &mut ownership, limits, account)?;
+        prepared_output_ownership(output, &mut ownership)?;
     }
     for script in &prepared.scripts {
         add_ownership(&mut ownership, JsonOwnership::nodes(1))?;
@@ -2744,7 +2510,7 @@ fn unit_key_digests(
         .checked_add(JsonOwnership::nodes(units.len()))?
         .checked_add(JsonOwnership::buffer(buffer_bytes))?;
     allocation.transform_owned(JsonOwnership::empty(), |allocation| {
-        allocation.acquire(ownership, limits)?;
+        allocation.acquire(ownership)?;
         let mut digests = Vec::new();
         digests
             .try_reserve_exact(units.len())
@@ -2778,7 +2544,6 @@ fn finish_prepared_graph(
     masks: &UnitMasks,
     extraction_indices: &BTreeMap<&str, usize>,
     metadata: &Metadata,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
 ) -> Result<FinishedGraph> {
     #[cfg(not(feature = "rustc-driver"))]
@@ -2790,11 +2555,7 @@ fn finish_prepared_graph(
                 .checked_mul(digests.len())
                 .ok_or_else(|| overflow("Cargo semantic unit index bytes"))?,
         ))?;
-    // The epoch is borrowed by the scratch transaction below, so the profile
-    // string targets measured inside it accumulate in a detached record that
-    // is folded into the epoch once the transaction returns.
-    let mut measured = crate::exceedance::Record::new();
-    let finished = allocation.with_scratch(scratch, limits, || {
+    allocation.with_scratch(scratch, || {
         let mut keys = vec![None; digests.len()];
         for index in (0..digests.len()).filter(|index| masks.retained(*index)) {
             let slot = keys
@@ -2938,8 +2699,6 @@ fn finish_prepared_graph(
                 artifact_profile: ArtifactProfile::from_owned(
                     &output.profile,
                     output.mode.as_str(),
-                    limits,
-                    &mut measured,
                 )?,
                 platform: output.platform.map(String::into_boxed_str),
                 mode: output.mode.into_boxed_str(),
@@ -3001,9 +2760,7 @@ fn finish_prepared_graph(
             #[cfg(feature = "rustc-driver")]
             extraction: extraction.into_boxed_slice(),
         })
-    });
-    allocation.record(&measured);
-    finished
+    })
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -3108,7 +2865,7 @@ fn validate_profile(unit: &Value, expected: &str, command: &'static str) -> Resu
 
 #[cfg(test)]
 fn parse_package(package: &Value) -> Result<(Arc<str>, Package)> {
-    parse_package_budgeted(package, &mut JsonAllocation::empty(), &Limits::standard())
+    parse_package_budgeted(package, &mut JsonAllocation::empty())
 }
 
 /// Transient complete package records, never a persisted format or authority.
@@ -3118,7 +2875,6 @@ pub(super) fn compact_metadata_packages(
     document: &mut Budgeted<Value>,
     retain_records: bool,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Option<MetadataRecords>> {
     document.transform(|value, document_ownership| {
         let packages = value
@@ -3135,7 +2891,7 @@ pub(super) fn compact_metadata_packages(
             retained = JsonOwnership::collection()
                 .checked_add(JsonOwnership::nodes(packages.len()))?
                 .checked_add(JsonOwnership::buffer(bytes))?;
-            allocation.acquire(retained, limits)?;
+            allocation.acquire(retained)?;
             records
                 .try_reserve_exact(packages.len())
                 .map_err(|source| Error::Allocation {
@@ -3151,7 +2907,6 @@ pub(super) fn compact_metadata_packages(
                     "Cargo metadata package record",
                     package,
                     allocation,
-                    limits,
                 )?;
                 retained = retained.checked_add(record.ownership())?;
                 records.push(record);
@@ -3180,7 +2935,6 @@ pub(super) fn compact_metadata_packages(
 fn parse_package_budgeted(
     package: &Value,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<(Arc<str>, Package)> {
     let package_id = value_string(package, "id")
         .ok_or_else(|| schema("Cargo metadata", "package ID is absent"))?;
@@ -3190,14 +2944,14 @@ fn parse_package_budgeted(
         .ok_or_else(|| schema("Cargo metadata", "package version is absent"))?;
     let manifest_value = value_string(package, "manifest_path")
         .ok_or_else(|| schema("Cargo metadata", "package manifest path is absent"))?;
-    allocation.nodes("Cargo metadata package nodes", 1, limits)?;
+    allocation.nodes("Cargo metadata package nodes", 1)?;
     for bytes in [
         package_id.len(),
         package_name.len(),
         package_version.len(),
         manifest_value.len().saturating_mul(2),
     ] {
-        allocation.retained_string("Cargo metadata retained string bytes", bytes, limits)?;
+        allocation.retained_string("Cargo metadata retained string bytes", bytes)?;
     }
     let manifest = canonical_file("Cargo metadata package manifest", Path::new(manifest_value))?;
     let root = manifest
@@ -3219,24 +2973,15 @@ fn parse_package_budgeted(
                 package_version,
                 &root,
                 allocation,
-                limits,
             )?;
-            allocation.retained_string(
-                "Cargo metadata retained string bytes",
-                cargo_id.len(),
-                limits,
-            )?;
+            allocation.retained_string("Cargo metadata retained string bytes", cargo_id.len())?;
             PackageSource::Path {
                 cargo_id: cargo_id.into(),
             }
         }
         Some(Value::String(source)) if source.starts_with("registry+") => {
             checked_nonpath_package_id(package_id, source, package_name, package_version)?;
-            allocation.retained_string(
-                "Cargo metadata retained string bytes",
-                source.len(),
-                limits,
-            )?;
+            allocation.retained_string("Cargo metadata retained string bytes", source.len())?;
             let checksum = match checksum {
                 Value::Null => None,
                 Value::String(checksum) => Some(decode_checksum(checksum)?),
@@ -3276,7 +3021,6 @@ fn parse_package_budgeted(
             allocation.retained_string(
                 "Cargo metadata retained string bytes",
                 source.len().saturating_add(oid.len()),
-                limits,
             )?;
             PackageSource::Git {
                 cargo_id: source.as_str().into(),
@@ -3347,7 +3091,6 @@ fn checked_path_package_id<'package>(
     version: &str,
     root: &Path,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<&'package str> {
     let (source_base, suffix) = package_id
         .rsplit_once('#')
@@ -3377,7 +3120,7 @@ fn checked_path_package_id<'package>(
             "path PackageId file URL is not an absolute local path",
         ));
     }
-    let decoded = decode_file_url_path(encoded, allocation, limits)?;
+    let decoded = decode_file_url_path(encoded, allocation)?;
     if decoded != root.as_os_str() {
         return Err(schema(
             "Cargo metadata",
@@ -3390,9 +3133,8 @@ fn checked_path_package_id<'package>(
 fn decode_file_url_path(
     value: &str,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<std::ffi::OsString> {
-    allocation.nodes("Cargo file-URL decoder bytes", value.len(), limits)?;
+    allocation.nodes("Cargo file-URL decoder bytes", value.len())?;
     let mut decoded = Vec::new();
     decoded
         .try_reserve_exact(value.len())
@@ -3457,7 +3199,6 @@ fn validate_declaration(
     dependency: &Selected,
     declarations: &[Value],
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<()> {
     let mut matches = declarations.iter().filter(|declaration| {
         let name = value_string(declaration, "name");
@@ -3498,7 +3239,6 @@ fn validate_declaration(
     allocation.nodes(
         "Cargo metadata declaration-feature nodes",
         feature_values.len(),
-        limits,
     )?;
     let mut features = Vec::new();
     features
@@ -3642,9 +3382,6 @@ pub(super) struct JsonAllocation {
     strings: usize,
     containers: usize,
     bytes: usize,
-    /// Process-unique account identity for exceedance reporting.
-    id: u64,
-    exceeded: crate::exceedance::Record,
     #[cfg(test)]
     peak: JsonPeak,
 }
@@ -3657,33 +3394,6 @@ const RETAINED_ELEMENTS: &str = "Cargo JSON retained elements";
 const RETAINED_STRINGS: &str = "Cargo JSON retained string bytes";
 const RETAINED_CONTAINERS: &str = "Cargo JSON retained containers";
 const RETAINED_BUFFER: &str = "Cargo cumulative retained buffer bytes";
-const JSON_DOCUMENT_BYTES: &str = "Cargo JSON bytes";
-
-/// An account that records accounting-target crossings measured on its
-/// behalf. Cargo document parsers compare a string or count against a target
-/// and hand the measurement to the account that owns the parsed work instead
-/// of refusing it.
-pub(crate) trait Measure {
-    /// Record `actual` against `target` for `resource` when it crosses. The
-    /// work was already admitted and continues; nothing refuses or latches.
-    fn measured(&mut self, resource: &'static str, target: usize, actual: usize);
-}
-
-impl Measure for JsonAllocation {
-    fn measured(&mut self, resource: &'static str, target: usize, actual: usize) {
-        self.exceeded(resource, target, actual);
-    }
-}
-
-/// A detached record for a measuring site that cannot borrow the owning
-/// account; the owner folds it in afterwards (`JsonAllocation::record`).
-impl Measure for crate::exceedance::Record {
-    fn measured(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target {
-            self.exceeded(resource, target as u64, actual as u64, None);
-        }
-    }
-}
 
 /// Exact logical ownership transferred into or out of one JSON allocation epoch.
 ///
@@ -3718,8 +3428,7 @@ struct JsonPeak {
 impl Allocation {
     /// Admit transferred transport ownership separately from the parsed JSON tree.
     pub(super) fn retain_transport(&mut self, bytes: Box<[u8]>) -> Result<Transport> {
-        self.retained
-            .acquire(JsonOwnership::buffer(bytes.len()), &self.limits)?;
+        self.retained.acquire(JsonOwnership::buffer(bytes.len()))?;
         Ok(Transport(bytes))
     }
 
@@ -3806,7 +3515,6 @@ struct JsonSeed<'limits> {
 
 struct JsonStringSeed<'limits> {
     allocation: &'limits mut JsonAllocation,
-    limits: &'limits Limits,
 }
 
 #[cfg(test)]
@@ -3825,8 +3533,6 @@ fn preflight_from(
     mut allocation: JsonAllocation,
 ) -> Result<JsonAllocation> {
     let result = (|| {
-        allocation.exceeded(JSON_DOCUMENT_BYTES, limits.json_bytes, bytes.len());
-        preflight_raw_string_bytes(bytes, limits, &mut allocation)?;
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
         JsonSeed {
             allocation: &mut allocation,
@@ -3908,7 +3614,7 @@ pub(super) fn canonical_leaf_metadata(
     )?;
     let value = parse_owned_json("locked leaf Cargo metadata", bytes)?;
     validate_leaf_metadata(&value, manifest, project)?;
-    canonicalize_owned_metadata(value, preflight, limits)
+    canonicalize_owned_metadata(value, preflight)
 }
 
 /// Revalidate bytes already emitted by [`canonical_leaf_metadata`] without
@@ -3922,14 +3628,14 @@ pub(super) fn canonical_metadata_replay(bytes: &[u8], limits: &Limits) -> Result
         JsonAllocation::empty(),
     )?;
     let value = parse_owned_json("stored canonical Cargo metadata", bytes)?;
-    canonicalize_owned_metadata(value, preflight, limits)
+    canonicalize_owned_metadata(value, preflight)
 }
 
 /// Extract the exact package-manifest paths read by one Cargo metadata result.
 /// The returned paths are evidence inputs for the path-bound cached resolution
 /// node; the ordinary semantic parser still validates the document afterward.
 pub(super) fn metadata_manifest_paths(bytes: &[u8], limits: &Limits) -> Result<Box<[PathBuf]>> {
-    let mut preflight = preflight_from(
+    preflight_from(
         "cached locked Cargo metadata",
         bytes,
         limits,
@@ -3940,11 +3646,6 @@ pub(super) fn metadata_manifest_paths(bytes: &[u8], limits: &Limits) -> Result<B
         .as_object()
         .ok_or_else(|| schema("cached locked Cargo metadata", "root is not an object"))?;
     let packages = array(object, "packages", "cached locked Cargo metadata")?;
-    preflight.exceeded(
-        "cached Cargo metadata packages",
-        limits.packages,
-        packages.len(),
-    );
     let mut paths = Vec::new();
     paths
         .try_reserve_exact(packages.len())
@@ -3963,11 +3664,6 @@ pub(super) fn metadata_manifest_paths(bytes: &[u8], limits: &Limits) -> Result<B
             path.len(),
             "cached Cargo metadata manifest-path bytes",
         )?;
-        preflight.exceeded(
-            "cached Cargo metadata manifest-path bytes",
-            limits.string_bytes,
-            path_bytes,
-        );
         let path = PathBuf::from(path);
         if !path.is_absolute() {
             return Err(schema(
@@ -3991,7 +3687,7 @@ pub(super) fn metadata_manifest_paths(bytes: &[u8], limits: &Limits) -> Result<B
 /// shared store. The existing metadata-bound parser still proves all semantic
 /// unit, feature, role, and target facts after lookup.
 pub(super) fn validate_unit_graph_transport(bytes: &[u8], limits: &Limits) -> Result<()> {
-    let mut preflight = preflight_from(
+    preflight_from(
         "cached Cargo unit graph",
         bytes,
         limits,
@@ -4001,8 +3697,7 @@ pub(super) fn validate_unit_graph_transport(bytes: &[u8], limits: &Limits) -> Re
     let object = value
         .as_object()
         .ok_or_else(|| schema("cached Cargo unit graph", "root is not an object"))?;
-    let units = array(object, "units", "cached Cargo unit graph")?;
-    preflight.exceeded("cached Cargo unit graph units", limits.units, units.len());
+    array(object, "units", "cached Cargo unit graph")?;
     let roots = array(object, "roots", "cached Cargo unit graph")?;
     if roots.is_empty() {
         return Err(schema("cached Cargo unit graph", "has no command roots"));
@@ -4010,15 +3705,11 @@ pub(super) fn validate_unit_graph_transport(bytes: &[u8], limits: &Limits) -> Re
     Ok(())
 }
 
-fn canonicalize_owned_metadata(
-    value: Value,
-    preflight: JsonAllocation,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
+fn canonicalize_owned_metadata(value: Value, preflight: JsonAllocation) -> Result<Box<[u8]>> {
     let ownership = JsonOwnership::tree(&value)?;
     let mut allocation = preflight;
     let mut value = Budgeted::from_retained(value, ownership);
-    let canonical = canonical_metadata_bytes_budgeted(&mut value, &mut allocation, limits)?;
+    let canonical = canonical_metadata_bytes_budgeted(&mut value, &mut allocation)?;
     value.drop_from(&mut allocation)?;
     Ok(canonical.into_parts().0)
 }
@@ -4105,56 +3796,6 @@ fn validate_leaf_metadata(value: &Value, manifest: &Path, project: &Path) -> Res
     Ok(())
 }
 
-fn preflight_raw_string_bytes(
-    bytes: &[u8],
-    limits: &Limits,
-    allocation: &mut JsonAllocation,
-) -> Result<()> {
-    const RESOURCE: &str = "Cargo JSON preflight string bytes";
-    let mut index = 0_usize;
-    let mut strings = 0_usize;
-    while index < bytes.len() {
-        if bytes[index] != b'"' {
-            index = index.saturating_add(1);
-            continue;
-        }
-        index = index.saturating_add(1);
-        while index < bytes.len() {
-            match bytes[index] {
-                b'"' => {
-                    index = index.saturating_add(1);
-                    break;
-                }
-                b'\\' => {
-                    strings = owned_add(strings, 1, RESOURCE)?;
-                    allocation.exceeded(RESOURCE, limits.string_bytes, strings);
-                    index = index.saturating_add(1);
-                    if index >= bytes.len() {
-                        break;
-                    }
-                    let escaped = bytes[index];
-                    strings = owned_add(strings, 1, RESOURCE)?;
-                    allocation.exceeded(RESOURCE, limits.string_bytes, strings);
-                    index = index.saturating_add(1);
-                    if escaped == b'u' {
-                        let remaining = bytes.len().saturating_sub(index);
-                        let hexadecimal = remaining.min(4);
-                        strings = owned_add(strings, hexadecimal, RESOURCE)?;
-                        allocation.exceeded(RESOURCE, limits.string_bytes, strings);
-                        index = index.saturating_add(hexadecimal);
-                    }
-                }
-                _ => {
-                    strings = owned_add(strings, 1, RESOURCE)?;
-                    allocation.exceeded(RESOURCE, limits.string_bytes, strings);
-                    index = index.saturating_add(1);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 impl JsonAllocation {
     pub(super) fn empty() -> Self {
         Self {
@@ -4166,51 +3807,8 @@ impl JsonAllocation {
             strings: 0,
             containers: 0,
             bytes: 0,
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
             #[cfg(test)]
             peak: JsonPeak::default(),
-        }
-    }
-
-    /// The axes of this epoch that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
-    /// Process-unique identity of this JSON allocation epoch.
-    #[cfg(test)]
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// Crossing an accounting target is recorded and published, never
-    /// refused. The charge has already been added to this epoch.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            crate::exceedance::publish(
-                crate::exceedance::Account::CargoJson,
-                self.id,
-                &self.exceeded,
-            );
-        }
-    }
-
-    /// Fold a detached record of this epoch's own work into the epoch and
-    /// publish it. Nothing is reset or refunded.
-    fn record(&mut self, record: &crate::exceedance::Record) {
-        if record.is_exceeded() {
-            self.exceeded.absorb(record);
-            crate::exceedance::publish(
-                crate::exceedance::Account::CargoJson,
-                self.id,
-                &self.exceeded,
-            );
         }
     }
 
@@ -4226,10 +3824,9 @@ impl JsonAllocation {
     pub(super) fn retain_with<T>(
         &mut self,
         ownership: JsonOwnership,
-        limits: &Limits,
         build: impl FnOnce() -> Result<T>,
     ) -> Result<Budgeted<T>> {
-        self.acquire(ownership, limits)?;
+        self.acquire(ownership)?;
         match build() {
             Ok(value) => Ok(Budgeted { value, ownership }),
             Err(error) => {
@@ -4239,12 +3836,12 @@ impl JsonAllocation {
         }
     }
 
-    pub(super) fn clone_tree(&mut self, value: &Value, limits: &Limits) -> Result<Budgeted<Value>> {
+    pub(super) fn clone_tree(&mut self, value: &Value) -> Result<Budgeted<Value>> {
         let ownership = JsonOwnership::tree(value)?;
-        self.retain_with(ownership, limits, || Ok(value.clone()))
+        self.retain_with(ownership, || Ok(value.clone()))
     }
 
-    pub(super) fn acquire(&mut self, ownership: JsonOwnership, limits: &Limits) -> Result<()> {
+    pub(super) fn acquire(&mut self, ownership: JsonOwnership) -> Result<()> {
         let next = Self {
             items: owned_add(self.items, ownership.items, AGGREGATE_ITEMS)?,
             total_bytes: owned_add(self.total_bytes, ownership.total_bytes, AGGREGATE_BYTES)?,
@@ -4254,8 +3851,6 @@ impl JsonAllocation {
             strings: owned_add(self.strings, ownership.strings, RETAINED_STRINGS)?,
             containers: owned_add(self.containers, ownership.containers, RETAINED_CONTAINERS)?,
             bytes: owned_add(self.bytes, ownership.bytes, RETAINED_BUFFER)?,
-            id: self.id,
-            exceeded: self.exceeded,
             #[cfg(test)]
             peak: JsonPeak {
                 items: self
@@ -4279,14 +3874,6 @@ impl JsonAllocation {
         *self = next;
         #[cfg(test)]
         self.record_peak();
-        self.exceeded(AGGREGATE_ITEMS, limits.items, self.items);
-        self.exceeded(AGGREGATE_BYTES, limits.json_bytes, self.total_bytes);
-        self.exceeded(RETAINED_VALUES, limits.items, self.values);
-        self.exceeded(RETAINED_MEMBERS, limits.items, self.members);
-        self.exceeded(RETAINED_ELEMENTS, limits.items, self.elements);
-        self.exceeded(RETAINED_STRINGS, limits.string_bytes, self.strings);
-        self.exceeded(RETAINED_CONTAINERS, limits.containers, self.containers);
-        self.exceeded(RETAINED_BUFFER, limits.json_bytes, self.bytes);
         Ok(())
     }
 
@@ -4305,12 +3892,7 @@ impl JsonAllocation {
     /// Replace one consumed representation with its pre-measured output in
     /// this same epoch. This is an ownership transfer, not a reset: prior
     /// evidence and the historical high-water marks remain intact.
-    fn replace_owned(
-        &mut self,
-        consumed: JsonOwnership,
-        replacement: JsonOwnership,
-        limits: &Limits,
-    ) -> Result<()> {
+    fn replace_owned(&mut self, consumed: JsonOwnership, replacement: JsonOwnership) -> Result<()> {
         let external = self.retained_ownership().checked_sub(consumed)?;
         let mut next = Self {
             items: external.items,
@@ -4321,12 +3903,10 @@ impl JsonAllocation {
             strings: external.strings,
             containers: external.containers,
             bytes: external.bytes,
-            id: self.id,
-            exceeded: self.exceeded,
             #[cfg(test)]
             peak: self.peak,
         };
-        next.acquire(replacement, limits)?;
+        next.acquire(replacement)?;
         *self = next;
         Ok(())
     }
@@ -4334,10 +3914,9 @@ impl JsonAllocation {
     pub(super) fn with_scratch<T>(
         &mut self,
         ownership: JsonOwnership,
-        limits: &Limits,
         work: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        self.acquire(ownership, limits)?;
+        self.acquire(ownership)?;
         let outcome = work();
         self.release(ownership)?;
         outcome
@@ -4401,7 +3980,7 @@ impl JsonAllocation {
         }
     }
 
-    fn value<E: serde::de::Error>(&mut self, limits: &Limits) -> std::result::Result<(), E> {
+    fn value<E: serde::de::Error>(&mut self) -> std::result::Result<(), E> {
         let values = self
             .values
             .checked_add(1)
@@ -4412,16 +3991,10 @@ impl JsonAllocation {
             .ok_or_else(|| E::custom("JSON aggregate item count overflow"))?;
         self.values = values;
         self.items = items;
-        self.exceeded(RETAINED_VALUES, limits.items, values);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         Ok(())
     }
 
-    fn string<E: serde::de::Error>(
-        &mut self,
-        limits: &Limits,
-        bytes: usize,
-    ) -> std::result::Result<(), E> {
+    fn string<E: serde::de::Error>(&mut self, bytes: usize) -> std::result::Result<(), E> {
         let strings = self
             .strings
             .checked_add(bytes)
@@ -4432,8 +4005,6 @@ impl JsonAllocation {
             .ok_or_else(|| E::custom("JSON aggregate bytes overflow"))?;
         self.strings = strings;
         self.total_bytes = total_bytes;
-        self.exceeded(RETAINED_STRINGS, limits.string_bytes, bytes.max(strings));
-        self.exceeded(AGGREGATE_BYTES, limits.json_bytes, total_bytes);
         Ok(())
     }
 
@@ -4458,12 +4029,10 @@ impl JsonAllocation {
         }
         self.containers = containers;
         self.items = items;
-        self.exceeded(RETAINED_CONTAINERS, limits.containers, containers);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         Ok(())
     }
 
-    fn member<E: serde::de::Error>(&mut self, limits: &Limits) -> std::result::Result<(), E> {
+    fn member<E: serde::de::Error>(&mut self) -> std::result::Result<(), E> {
         let members = self
             .members
             .checked_add(1)
@@ -4474,12 +4043,10 @@ impl JsonAllocation {
             .ok_or_else(|| E::custom("JSON aggregate item count overflow"))?;
         self.members = members;
         self.items = items;
-        self.exceeded(RETAINED_MEMBERS, limits.items, members);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         Ok(())
     }
 
-    fn element<E: serde::de::Error>(&mut self, limits: &Limits) -> std::result::Result<(), E> {
+    fn element<E: serde::de::Error>(&mut self) -> std::result::Result<(), E> {
         let elements = self
             .elements
             .checked_add(1)
@@ -4490,13 +4057,11 @@ impl JsonAllocation {
             .ok_or_else(|| E::custom("JSON aggregate item count overflow"))?;
         self.elements = elements;
         self.items = items;
-        self.exceeded(RETAINED_ELEMENTS, limits.items, elements);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         Ok(())
     }
 
     #[cfg(test)]
-    pub(super) fn charge_tree(&mut self, value: &Value, limits: &Limits) -> Result<()> {
+    pub(super) fn charge_tree(&mut self, value: &Value) -> Result<()> {
         let values = self
             .values
             .checked_add(1)
@@ -4505,8 +4070,6 @@ impl JsonAllocation {
             .items
             .checked_add(1)
             .ok_or_else(|| overflow("Cargo JSON aggregate retained items"))?;
-        self.exceeded("Cargo JSON retained values", limits.items, values);
-        self.exceeded("Cargo JSON aggregate retained items", limits.items, items);
         self.values = values;
         self.items = items;
         match value {
@@ -4519,16 +4082,6 @@ impl JsonAllocation {
                     .total_bytes
                     .checked_add(string.len())
                     .ok_or_else(|| overflow("Cargo JSON aggregate retained bytes"))?;
-                self.exceeded(
-                    "Cargo JSON retained string bytes",
-                    limits.string_bytes,
-                    strings,
-                );
-                self.exceeded(
-                    "Cargo JSON aggregate retained bytes",
-                    limits.json_bytes,
-                    total_bytes,
-                );
                 self.strings = strings;
                 self.total_bytes = total_bytes;
             }
@@ -4545,22 +4098,11 @@ impl JsonAllocation {
                     .items
                     .checked_add(1_usize.saturating_add(values.len()))
                     .ok_or_else(|| overflow("Cargo JSON aggregate retained items"))?;
-                self.exceeded(
-                    "Cargo JSON retained containers",
-                    limits.containers,
-                    containers,
-                );
-                self.exceeded("Cargo JSON retained elements", limits.items, elements);
-                self.exceeded(
-                    "Cargo JSON aggregate retained items",
-                    limits.items,
-                    aggregate,
-                );
                 self.containers = containers;
                 self.elements = elements;
                 self.items = aggregate;
                 for child in values {
-                    self.charge_tree(child, limits)?;
+                    self.charge_tree(child)?;
                 }
             }
             Value::Object(object) => {
@@ -4576,17 +4118,6 @@ impl JsonAllocation {
                     .items
                     .checked_add(1_usize.saturating_add(object.len()))
                     .ok_or_else(|| overflow("Cargo JSON aggregate retained items"))?;
-                self.exceeded(
-                    "Cargo JSON retained containers",
-                    limits.containers,
-                    containers,
-                );
-                self.exceeded("Cargo JSON retained members", limits.items, members);
-                self.exceeded(
-                    "Cargo JSON aggregate retained items",
-                    limits.items,
-                    aggregate,
-                );
                 self.containers = containers;
                 self.members = members;
                 self.items = aggregate;
@@ -4599,19 +4130,9 @@ impl JsonAllocation {
                         .total_bytes
                         .checked_add(key.len())
                         .ok_or_else(|| overflow("Cargo JSON aggregate retained bytes"))?;
-                    self.exceeded(
-                        "Cargo JSON retained string bytes",
-                        limits.string_bytes,
-                        strings,
-                    );
-                    self.exceeded(
-                        "Cargo JSON aggregate retained bytes",
-                        limits.json_bytes,
-                        total_bytes,
-                    );
                     self.strings = strings;
                     self.total_bytes = total_bytes;
-                    self.charge_tree(child, limits)?;
+                    self.charge_tree(child)?;
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) => {}
@@ -4636,72 +4157,45 @@ impl JsonAllocation {
         (self.items, self.total_bytes, self.strings, self.containers)
     }
 
-    fn nodes(&mut self, resource: &'static str, count: usize, limits: &Limits) -> Result<()> {
+    fn nodes(&mut self, resource: &'static str, count: usize) -> Result<()> {
         let elements = owned_add(self.elements, count, resource)?;
         let items = owned_add(self.items, count, AGGREGATE_ITEMS)?;
         self.elements = elements;
         self.items = items;
-        self.exceeded(resource, limits.items, elements);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         #[cfg(test)]
         self.record_peak();
         Ok(())
     }
 
-    fn member_nodes(
-        &mut self,
-        resource: &'static str,
-        count: usize,
-        limits: &Limits,
-    ) -> Result<()> {
+    fn member_nodes(&mut self, resource: &'static str, count: usize) -> Result<()> {
         let members = owned_add(self.members, count, resource)?;
         let items = owned_add(self.items, count, AGGREGATE_ITEMS)?;
         self.members = members;
         self.items = items;
-        self.exceeded(resource, limits.items, members);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
         #[cfg(test)]
         self.record_peak();
         Ok(())
     }
 
-    fn retained_string(
-        &mut self,
-        resource: &'static str,
-        bytes: usize,
-        limits: &Limits,
-    ) -> Result<()> {
+    fn retained_string(&mut self, resource: &'static str, bytes: usize) -> Result<()> {
         let strings = owned_add(self.strings, bytes, resource)?;
         let items = owned_add(self.items, 1, AGGREGATE_ITEMS)?;
         let total_bytes = owned_add(self.total_bytes, bytes, AGGREGATE_BYTES)?;
         self.strings = strings;
         self.items = items;
         self.total_bytes = total_bytes;
-        self.exceeded(resource, limits.string_bytes, strings);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
-        self.exceeded(AGGREGATE_BYTES, limits.json_bytes, total_bytes);
         #[cfg(test)]
         self.record_peak();
         Ok(())
     }
 
-    fn retained_bytes(
-        &mut self,
-        resource: &'static str,
-        bytes: usize,
-        limit: usize,
-        limits: &Limits,
-    ) -> Result<()> {
+    fn retained_bytes(&mut self, bytes: usize) -> Result<()> {
         let retained_bytes = owned_add(self.bytes, bytes, RETAINED_BUFFER)?;
         let items = owned_add(self.items, 1, AGGREGATE_ITEMS)?;
         let total_bytes = owned_add(self.total_bytes, bytes, AGGREGATE_BYTES)?;
         self.bytes = retained_bytes;
         self.items = items;
         self.total_bytes = total_bytes;
-        self.exceeded(resource, limit, bytes);
-        self.exceeded(RETAINED_BUFFER, limits.json_bytes, retained_bytes);
-        self.exceeded(AGGREGATE_ITEMS, limits.items, items);
-        self.exceeded(AGGREGATE_BYTES, limits.json_bytes, total_bytes);
         #[cfg(test)]
         self.record_peak();
         Ok(())
@@ -4902,8 +4396,8 @@ impl<T> Budgeted<T> {
     }
 }
 
-/// Checked-arithmetic overflow is a terminal arithmetic failure, never an
-/// accounting exceedance and never `Error::Limit`.
+/// Checked-arithmetic overflow is a terminal arithmetic failure, never
+/// `Error::Limit`.
 fn overflow(operation: &'static str) -> Error {
     Error::Node {
         operation,
@@ -4950,7 +4444,7 @@ impl<'de> DeserializeSeed<'de> for JsonSeed<'_> {
         self,
         deserializer: D,
     ) -> std::result::Result<(), D::Error> {
-        self.allocation.value::<D::Error>(self.limits)?;
+        self.allocation.value::<D::Error>()?;
         deserializer.deserialize_any(self)
     }
 }
@@ -4985,15 +4479,15 @@ impl<'de> Visitor<'de> for JsonSeed<'_> {
         self,
         value: &'de str,
     ) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 
     fn visit_string<E: serde::de::Error>(self, value: String) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> std::result::Result<(), A::Error> {
@@ -5009,7 +4503,7 @@ impl<'de> Visitor<'de> for JsonSeed<'_> {
                 depth,
             };
             match sequence.next_element_seed(seed)? {
-                Some(()) => self.allocation.element::<A::Error>(self.limits)?,
+                Some(()) => self.allocation.element::<A::Error>()?,
                 None => return Ok(()),
             }
         }
@@ -5024,12 +4518,11 @@ impl<'de> Visitor<'de> for JsonSeed<'_> {
         loop {
             let key = JsonStringSeed {
                 allocation: self.allocation,
-                limits: self.limits,
             };
             if object.next_key_seed(key)?.is_none() {
                 return Ok(());
             }
-            self.allocation.member::<A::Error>(self.limits)?;
+            self.allocation.member::<A::Error>()?;
             object.next_value_seed(JsonSeed {
                 allocation: self.allocation,
                 limits: self.limits,
@@ -5058,15 +4551,15 @@ impl Visitor<'_> for JsonStringSeed<'_> {
     }
 
     fn visit_borrowed_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 
     fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 
     fn visit_string<E: serde::de::Error>(self, value: String) -> std::result::Result<(), E> {
-        self.allocation.string::<E>(self.limits, value.len())
+        self.allocation.string::<E>(value.len())
     }
 }
 
@@ -5084,20 +4577,18 @@ fn git_source_matches(
 fn canonical_metadata_bytes_budgeted(
     value: &mut Budgeted<Value>,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Budgeted<Box<[u8]>>> {
     value.transform(|value, ownership| {
-        normalize_metadata(value, ownership, allocation, limits)?;
-        canonicalize_metadata_objects(value, allocation, limits)
+        normalize_metadata(value, ownership, allocation)?;
+        canonicalize_metadata_objects(value, allocation)
     })?;
-    canonical_json_bytes_budgeted("canonical Cargo JSON", value.value(), allocation, limits)
+    canonical_json_bytes_budgeted("canonical Cargo JSON", value.value(), allocation)
 }
 
 fn canonical_json_bytes_budgeted(
     document: &'static str,
     value: &Value,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Budgeted<Box<[u8]>>> {
     struct Counter(usize);
     impl std::io::Write for Counter {
@@ -5119,8 +4610,7 @@ fn canonical_json_bytes_budgeted(
         document,
         reason: error.to_string().into_boxed_str(),
     })?;
-    allocation.exceeded("canonical Cargo JSON bytes", limits.json_bytes, counter.0);
-    allocation.retain_with(JsonOwnership::buffer(counter.0), limits, || {
+    allocation.retain_with(JsonOwnership::buffer(counter.0), || {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(counter.0)
@@ -5161,7 +4651,6 @@ fn write_json(
 fn buffered_canonical(
     document: &'static str,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
     write: impl Fn(&mut dyn std::io::Write, &mut JsonAllocation) -> Result<()>,
 ) -> Result<Budgeted<Box<[u8]>>> {
     struct Counter(usize);
@@ -5181,9 +4670,8 @@ fn buffered_canonical(
 
     let mut counter = Counter(0);
     write(&mut counter, allocation)?;
-    allocation.exceeded("canonical Cargo unit bytes", limits.json_bytes, counter.0);
     let ownership = JsonOwnership::buffer(counter.0);
-    allocation.acquire(ownership, limits)?;
+    allocation.acquire(ownership)?;
     let result = (|| {
         let mut bytes = Vec::new();
         bytes
@@ -5224,7 +4712,7 @@ fn write_sorted_canonical<'value>(
         .checked_add(JsonOwnership::nodes(count))?
         .checked_add(JsonOwnership::buffer(buffer_bytes))?;
     allocation.transform_owned(JsonOwnership::empty(), |allocation| {
-        allocation.acquire(scratch, limits)?;
+        allocation.acquire(scratch)?;
         let mut encoded = Vec::new();
         encoded
             .try_reserve_exact(count)
@@ -5236,7 +4724,6 @@ fn write_sorted_canonical<'value>(
             encoded.push(buffered_canonical(
                 "canonical Cargo unit value",
                 allocation,
-                limits,
                 |writer, allocation| write_canonical_value(writer, value, allocation, limits),
             )?);
         }
@@ -5493,7 +4980,6 @@ fn canonical_unit_key_buffer(
     buffered_canonical(
         "canonical Cargo unit key",
         allocation,
-        limits,
         |writer, allocation| {
             writer
                 .write_all(b"{\"dependencies\":[")
@@ -5582,7 +5068,7 @@ fn write_normalized_dependencies(
                 .ok_or_else(|| overflow("canonical Cargo dependency sort buffer bytes"))?,
         ))?;
     allocation.transform_owned(JsonOwnership::empty(), |allocation| {
-        allocation.acquire(scratch, limits)?;
+        allocation.acquire(scratch)?;
         let mut encoded = Vec::new();
         encoded
             .try_reserve_exact(count)
@@ -5594,7 +5080,6 @@ fn write_normalized_dependencies(
             encoded.push(buffered_canonical(
                 "canonical Cargo dependency",
                 allocation,
-                limits,
                 |writer, allocation| {
                     write_normalized_dependency(writer, dependency, keys, allocation, limits)
                 },
@@ -5639,30 +5124,25 @@ fn canonical_normalized_unit_buffer(
         .and_then(Value::as_array)
         .ok_or_else(|| schema("Cargo unit graph", "unit dependencies are absent"))?;
     let compiler_shipped = is_std(unit, no_build_std)?;
-    buffered_canonical(
-        "canonical Cargo unit",
-        allocation,
-        limits,
-        |writer, allocation| {
-            write_merged_object(
-                writer,
-                object,
-                &[
-                    (
-                        "dependencies",
-                        "dependencies",
-                        CanonicalPart::Dependencies {
-                            values: dependencies,
-                            keys,
-                        },
-                    ),
-                    ("is_std", "is_std", CanonicalPart::Bool(compiler_shipped)),
-                ],
-                allocation,
-                limits,
-            )
-        },
-    )
+    buffered_canonical("canonical Cargo unit", allocation, |writer, allocation| {
+        write_merged_object(
+            writer,
+            object,
+            &[
+                (
+                    "dependencies",
+                    "dependencies",
+                    CanonicalPart::Dependencies {
+                        values: dependencies,
+                        keys,
+                    },
+                ),
+                ("is_std", "is_std", CanonicalPart::Bool(compiler_shipped)),
+            ],
+            allocation,
+            limits,
+        )
+    })
 }
 
 fn canonical_unit_write(
@@ -5696,7 +5176,7 @@ fn canonical_unit_write(
             .checked_add(JsonOwnership::collection())?
             .checked_add(JsonOwnership::nodes(roots.len()))?
             .checked_add(JsonOwnership::buffer(vector_bytes))?;
-        allocation.acquire(scratch, limits)?;
+        allocation.acquire(scratch)?;
         let mut keys = Vec::new();
         let mut normalized = Vec::new();
         keys.try_reserve_exact(units.len())
@@ -5821,11 +5301,6 @@ fn canonical_unit_digest_budgeted(
         bytes: 0,
     };
     canonical_unit_write(&mut hashing, value, no_build_std, allocation, limits)?;
-    allocation.exceeded(
-        "canonical Cargo unit bytes",
-        limits.json_bytes,
-        hashing.bytes,
-    );
     Ok(Digest(hashing.digest.finalize().into()))
 }
 
@@ -5834,7 +5309,6 @@ fn canonical_unit_bytes_clone_reference(
     value: Budgeted<Value>,
     no_build_std: config::NoBuildStd,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Budgeted<Box<[u8]>>> {
     let consumed = value.ownership();
     allocation.transform_owned_retaining(consumed, |allocation| {
@@ -5844,7 +5318,7 @@ fn canonical_unit_bytes_clone_reference(
             .ok_or_else(|| schema("Cargo unit graph", "root is not an object"))?;
         let units = array(object, "units", "Cargo unit graph")?;
         let mut keys = Vec::new();
-        allocation.nodes("canonical Cargo unit key nodes", units.len(), limits)?;
+        allocation.nodes("canonical Cargo unit key nodes", units.len())?;
         keys.try_reserve_exact(units.len())
             .map_err(|source| Error::Allocation {
                 operation: "canonical Cargo unit graph",
@@ -5852,7 +5326,7 @@ fn canonical_unit_bytes_clone_reference(
             })?;
         let mut ordered: Vec<Option<(Value, Digest)>> = (0..units.len()).map(|_| None).collect();
         for index in dependency_order(units)? {
-            let mut key = unit_key_budgeted(&units[index], no_build_std, allocation, limits)?;
+            let mut key = unit_key_budgeted(&units[index], no_build_std, allocation)?;
             let mut dependencies = unit_dependency_indices(&units[index], units.len())?
                 .into_iter()
                 .filter_map(|dependency| ordered[dependency].as_ref().map(|(_, digest)| *digest))
@@ -5873,8 +5347,8 @@ fn canonical_unit_bytes_clone_reference(
             key.as_object_mut()
                 .ok_or_else(|| schema("Cargo unit graph", "unit key is not an object"))?
                 .insert("dependencies".to_owned(), Value::Array(hex));
-            canonicalize(&mut key, allocation, limits)?;
-            let bytes = json_sort_key(&key, allocation, limits)?;
+            canonicalize(&mut key, allocation)?;
+            let bytes = json_sort_key(&key, allocation)?;
             ordered[index] = Some((key, digest(&bytes)));
         }
         keys.extend(
@@ -5883,9 +5357,9 @@ fn canonical_unit_bytes_clone_reference(
                 .map(|key| key.expect("every unit is ordered").0),
         );
         let mut unique = BTreeMap::new();
-        allocation.member_nodes("canonical Cargo unit uniqueness nodes", keys.len(), limits)?;
+        allocation.member_nodes("canonical Cargo unit uniqueness nodes", keys.len())?;
         for key in &keys {
-            let bytes = json_sort_key(key, allocation, limits)?;
+            let bytes = json_sort_key(key, allocation)?;
             if unique.insert(bytes, ()).is_some() {
                 return Err(schema(
                     "Cargo unit graph",
@@ -5895,7 +5369,7 @@ fn canonical_unit_bytes_clone_reference(
         }
 
         let mut normalized_units = Vec::new();
-        allocation.nodes("canonical Cargo normalized-unit nodes", units.len(), limits)?;
+        allocation.nodes("canonical Cargo normalized-unit nodes", units.len())?;
         normalized_units
             .try_reserve_exact(units.len())
             .map_err(|source| Error::Allocation {
@@ -5903,14 +5377,13 @@ fn canonical_unit_bytes_clone_reference(
                 source,
             })?;
         for unit in units {
-            allocation.charge_tree(unit, limits)?;
+            allocation.charge_tree(unit)?;
             let mut unit = unit.clone();
             let compiler_shipped = is_std(&unit, no_build_std)?;
-            allocation.member_nodes("canonical Cargo normalized-unit members", 1, limits)?;
+            allocation.member_nodes("canonical Cargo normalized-unit members", 1)?;
             allocation.retained_string(
                 "canonical Cargo normalized-unit field bytes",
                 "is_std".len(),
-                limits,
             )?;
             unit.as_object_mut()
                 .ok_or_else(|| schema("Cargo unit graph", "unit is not an object"))?
@@ -5929,20 +5402,17 @@ fn canonical_unit_bytes_clone_reference(
                     .and_then(|index| usize::try_from(index).ok())
                     .filter(|index| *index < keys.len())
                     .ok_or_else(|| schema("Cargo unit graph", "dependency index is invalid"))?;
-                allocation.charge_tree(&keys[index], limits)?;
-                allocation.member_nodes("canonical Cargo dependency members", 1, limits)?;
-                allocation.retained_string(
-                    "canonical Cargo dependency field bytes",
-                    "unit".len(),
-                    limits,
-                )?;
+                allocation.charge_tree(&keys[index])?;
+                allocation.member_nodes("canonical Cargo dependency members", 1)?;
+                allocation
+                    .retained_string("canonical Cargo dependency field bytes", "unit".len())?;
                 dependency.insert("unit".to_owned(), keys[index].clone());
             }
             normalized_units.push(unit);
         }
         let root_indices = array(object, "roots", "Cargo unit graph")?;
         let mut roots = Vec::new();
-        allocation.nodes("canonical Cargo root nodes", root_indices.len(), limits)?;
+        allocation.nodes("canonical Cargo root nodes", root_indices.len())?;
         roots
             .try_reserve_exact(root_indices.len())
             .map_err(|source| Error::Allocation {
@@ -5955,38 +5425,31 @@ fn canonical_unit_bytes_clone_reference(
                 .and_then(|index| usize::try_from(index).ok())
                 .filter(|index| *index < keys.len())
                 .ok_or_else(|| schema("Cargo unit graph", "root index is invalid"))?;
-            allocation.charge_tree(&keys[index], limits)?;
+            allocation.charge_tree(&keys[index])?;
             roots.push(keys[index].clone());
         }
-        allocation.member_nodes("canonical Cargo graph object nodes", 3, limits)?;
+        allocation.member_nodes("canonical Cargo graph object nodes", 3)?;
         allocation.retained_string(
             "canonical Cargo graph field bytes",
             "version".len() + "units".len() + "roots".len(),
-            limits,
         )?;
         let mut normalized = serde_json::json!({
             "version": object.get("version").cloned(),
             "units": normalized_units,
             "roots": roots,
         });
-        canonicalize(&mut normalized, allocation, limits)?;
-        canonical_json_bytes_budgeted(
-            "canonical Cargo unit graph",
-            &normalized,
-            allocation,
-            limits,
-        )
+        canonicalize(&mut normalized, allocation)?;
+        canonical_json_bytes_budgeted("canonical Cargo unit graph", &normalized, allocation)
     })
 }
 
 #[cfg(test)]
 fn canonical_metadata_bytes(value: Value) -> Result<Box<[u8]>> {
-    let limits = Limits::standard();
     let mut allocation = JsonAllocation::empty();
     let ownership = JsonOwnership::tree(&value)?;
-    allocation.acquire(ownership, &limits)?;
+    allocation.acquire(ownership)?;
     let mut value = Budgeted::from_retained(value, ownership);
-    let bytes = canonical_metadata_bytes_budgeted(&mut value, &mut allocation, &limits)?;
+    let bytes = canonical_metadata_bytes_budgeted(&mut value, &mut allocation)?;
     value.drop_from(&mut allocation)?;
     Ok(bytes.into_parts().0)
 }
@@ -5996,7 +5459,7 @@ fn canonical_unit_bytes(value: Value, no_build_std: config::NoBuildStd) -> Resul
     let limits = Limits::standard();
     let mut allocation = JsonAllocation::empty();
     let ownership = JsonOwnership::tree(&value)?;
-    allocation.acquire(ownership, &limits)?;
+    allocation.acquire(ownership)?;
     let mut bytes = Vec::new();
     canonical_unit_write(&mut bytes, &value, no_build_std, &mut allocation, &limits)?;
     allocation.release(ownership)?;
@@ -6008,7 +5471,6 @@ fn unit_key_budgeted(
     unit: &Value,
     no_build_std: config::NoBuildStd,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Value> {
     let object = unit
         .as_object()
@@ -6017,7 +5479,7 @@ fn unit_key_budgeted(
     let fields = [
         "pkg_id", "target", "profile", "platform", "mode", "features",
     ];
-    allocation.member_nodes("canonical Cargo unit-key members", fields.len() + 1, limits)?;
+    allocation.member_nodes("canonical Cargo unit-key members", fields.len() + 1)?;
     allocation.retained_string(
         "canonical Cargo unit-key field bytes",
         fields
@@ -6025,13 +5487,12 @@ fn unit_key_budgeted(
             .map(|field| field.len())
             .sum::<usize>()
             .saturating_add("is_std".len()),
-        limits,
     )?;
     for field in fields {
         let value = object
             .get(field)
             .ok_or_else(|| schema("Cargo unit graph", &format!("unit lacks `{field}`")))?;
-        allocation.charge_tree(value, limits)?;
+        allocation.charge_tree(value)?;
         key.insert(field.to_owned(), value.clone());
     }
     key.insert(
@@ -6039,18 +5500,13 @@ fn unit_key_budgeted(
         Value::Bool(is_std(unit, no_build_std)?),
     );
     let mut key = Value::Object(key);
-    canonicalize(&mut key, allocation, limits)?;
+    canonicalize(&mut key, allocation)?;
     Ok(key)
 }
 
 #[cfg(test)]
 fn unit_key(unit: &Value, no_build_std: config::NoBuildStd) -> Result<Value> {
-    unit_key_budgeted(
-        unit,
-        no_build_std,
-        &mut JsonAllocation::empty(),
-        &Limits::standard(),
-    )
+    unit_key_budgeted(unit, no_build_std, &mut JsonAllocation::empty())
 }
 
 #[cfg(test)]
@@ -6183,143 +5639,14 @@ mod allocation_tests {
 
     use super::{
         canonical_metadata_bytes_budgeted, canonicalize, parse_owned_json, preflight,
-        preflight_from, sort_values, Allocation, JsonAllocation, AGGREGATE_BYTES, AGGREGATE_ITEMS,
-        OWNED_JSON_VALUES, RETAINED_BUFFER, RETAINED_CONTAINERS, RETAINED_ELEMENTS,
-        RETAINED_MEMBERS, RETAINED_STRINGS,
+        preflight_from, sort_values, Allocation, JsonAllocation, OWNED_JSON_VALUES,
     };
     #[cfg(feature = "rustc-driver")]
     use super::{BuildGraph, Output, OWNED_REACHABILITY_NODES};
     use crate::cargo::Limits;
 
-    /// The named accounting axis of this epoch recorded its target and
-    /// a truthful high water; the charge itself was admitted.
-    fn exceeded(allocation: &JsonAllocation, axis: &str, target: usize, high_water: usize) {
-        let record = allocation.exceedances();
-        let found = record
-            .axis(axis)
-            .unwrap_or_else(|| panic!("`{axis}` records an exceedance: {record:?}"));
-        assert_eq!(
-            (found.target, found.high_water),
-            (target as u64, high_water as u64),
-            "`{axis}` target and high water",
-        );
-    }
-
-    /// Every recorded axis whose target is `target` reached exactly
-    /// `high_water`; at least one such axis exists. Used where the exceeding
-    /// charge site names its own resource.
-    fn exceeded_at_target(allocation: &JsonAllocation, target: usize, high_water: usize) {
-        let record = allocation.exceedances();
-        let mut matched = 0_usize;
-        for axis in record.axes().filter(|axis| axis.target == target as u64) {
-            assert_eq!(
-                axis.high_water, high_water as u64,
-                "`{}` high water",
-                axis.name
-            );
-            matched += 1;
-        }
-        assert!(
-            matched > 0,
-            "an axis with target {target} records an exceedance: {record:?}"
-        );
-    }
-
-    /// The canonical JSON and unit byte sizes are accounting targets
-    /// recorded on the epoch; exact admits silently, one over admits and
-    /// records the truthful size, nothing refuses.
     #[test]
-    fn canonical_json_bytes_record_the_json_target_without_refusal() {
-        let value = json!({"packages": [], "version": 1});
-        let length = serde_json::to_vec(&value).unwrap().len();
-        let exercise = |json_bytes: usize| {
-            let mut limits = Limits::standard();
-            limits.json_bytes = json_bytes;
-            let mut allocation = JsonAllocation::empty();
-            let bytes = super::canonical_json_bytes_budgeted(
-                "canonical fixture",
-                &value,
-                &mut allocation,
-                &limits,
-            )
-            .expect("the canonical document is produced")
-            .into_parts()
-            .0;
-            assert_eq!(bytes.len(), length);
-            allocation
-        };
-        assert!(exercise(length)
-            .exceedances()
-            .axis("canonical Cargo JSON bytes")
-            .is_none());
-        exceeded(
-            &exercise(length - 1),
-            "canonical Cargo JSON bytes",
-            length - 1,
-            length,
-        );
-    }
-
-    /// The artifact profile string sizes are accounting targets measured
-    /// on the account that owns the message. Exact admits silently; under the
-    /// target the same profile is produced and each crossing axis records its
-    /// truthful size; a detached record folds into the epoch unchanged.
-    #[test]
-    fn artifact_profile_string_targets_record_without_refusal() {
-        let value = json!({
-            "opt_level": "3",
-            "debuginfo": "line-tables-only",
-            "debug_assertions": true,
-            "overflow_checks": true,
-            "test": false
-        });
-        let encoded = super::ArtifactProfile::from_build(&value, &Limits::standard())
-            .expect("the fixture profile parses")
-            .as_bytes()
-            .len();
-        let exercise = |string_bytes: usize| {
-            let mut limits = Limits::standard();
-            limits.string_bytes = string_bytes;
-            let mut record = crate::exceedance::Record::new();
-            let profile = super::ArtifactProfile::from_build_measured(&value, &limits, &mut record)
-                .expect("the profile parses regardless of its string targets");
-            assert_eq!(profile.as_bytes().len(), encoded);
-            record
-        };
-        assert!(!exercise(encoded).is_exceeded());
-        let one_under = exercise(encoded - 1);
-        let axis = one_under
-            .axis("artifact profile bytes")
-            .expect("the encoded profile size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((encoded - 1) as u64, encoded as u64, encoded as u64)
-        );
-        assert_eq!(one_under.axes().count(), 1);
-        let zero = exercise(0);
-        for (name, actual) in [
-            ("artifact opt_level", 1),
-            ("artifact debuginfo", "line-tables-only".len()),
-            ("artifact profile bytes", encoded),
-        ] {
-            let axis = zero
-                .axis(name)
-                .unwrap_or_else(|| panic!("`{name}` records"));
-            assert_eq!((axis.target, axis.high_water), (0, actual as u64));
-        }
-        let mut allocation = JsonAllocation::empty();
-        allocation.record(&zero);
-        exceeded(&allocation, "artifact profile bytes", 0, encoded);
-        exceeded(&allocation, "artifact opt_level", 0, 1);
-        assert_eq!(allocation.exceedances().axes().count(), 3);
-    }
-
-    /// The script and compiler-artifact unit counts of a prepared unit
-    /// graph are accounting targets on the JSON epoch. The exact count admits
-    /// silently; under it the graph is still prepared and each crossing axis
-    /// records its truthful count.
-    #[test]
-    fn prepared_graph_unit_targets_record_without_refusal() {
+    fn prepared_graph_separates_outputs_from_build_scripts() {
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cargo/unit.rs");
         let source = source.to_str().expect("the fixture source path is UTF-8");
         let profile = json!({
@@ -6374,70 +5701,42 @@ mod allocation_tests {
                 }
             ]
         });
-        let exercise = |units: usize| {
-            let mut limits = Limits::standard();
-            limits.units = units;
-            let owned = serde_json::from_value::<super::OwnedUnitDocument>(document.clone())
-                .expect("the fixture unit graph deserializes");
-            let masks = super::UnitMasks {
-                flags: Box::from([super::RETAINED_UNIT; 3]),
-            };
-            let mut allocation = JsonAllocation::empty();
-            let prepared = super::prepare_owned_graph(
-                owned,
-                &masks,
-                "aarch64-apple-darwin",
-                crate::cargo::config::NoBuildStd::fixture(),
-                &limits,
-                &mut allocation,
-            )
-            .expect("the unit graph is prepared regardless of the unit target");
-            assert_eq!((prepared.outputs.len(), prepared.scripts.len()), (2, 1));
-            allocation
+        let owned = serde_json::from_value::<super::OwnedUnitDocument>(document)
+            .expect("the fixture unit graph deserializes");
+        let masks = super::UnitMasks {
+            flags: Box::from([super::RETAINED_UNIT; 3]),
         };
-        assert!(!exercise(2).exceedances().is_exceeded());
-        let one_under = exercise(1);
-        exceeded(&one_under, "Build compiler artifact units", 1, 2);
-        assert_eq!(one_under.exceedances().axes().count(), 1);
-        let zero = exercise(0);
-        exceeded(&zero, "normal Build script units", 0, 1);
-        exceeded(&zero, "Build compiler artifact units", 0, 2);
+        let prepared = super::prepare_owned_graph(
+            owned,
+            &masks,
+            "aarch64-apple-darwin",
+            crate::cargo::config::NoBuildStd::fixture(),
+        )
+        .expect("the unit graph is prepared");
+        assert_eq!((prepared.outputs.len(), prepared.scripts.len()), (2, 1));
     }
 
     #[test]
-    fn retained_transport_moves_buffer_and_keeps_prior_exact_floor_account() {
-        for floor in [0, 1] {
-            let mut limits = Limits::standard();
-            limits.json_bytes = 17 - floor;
-            let mut epoch = Allocation::begin(&limits);
-            let prior = epoch
-                .retain_transport(vec![b'p'; 5].into_boxed_slice())
-                .expect("prior ownership fits the original epoch");
-            let bytes = vec![b'x'; 12].into_boxed_slice();
-            let pointer = bytes.as_ptr();
-            let result = epoch.retain_transport(bytes);
-            let retained = result.expect("the transport buffer moves under either floor");
-            assert_eq!(retained.bytes().as_ptr(), pointer);
-            assert_eq!(epoch.retained.bytes, 17);
-            assert_eq!(epoch.retained.total_bytes, 17);
-            assert_eq!(epoch.retained.items, 2);
-            if floor == 0 {
-                assert!(!epoch.retained.exceedances().is_exceeded());
-            } else {
-                // The one-byte floor admits the move and records the
-                // prior floor account plus this buffer as the truthful high water.
-                exceeded(&epoch.retained, RETAINED_BUFFER, 16, 17);
-                exceeded(&epoch.retained, AGGREGATE_BYTES, 16, 17);
-                assert_eq!(epoch.retained.exceedances().axes().count(), 2);
-            }
-            assert_eq!(prior.bytes(), b"ppppp");
-        }
+    fn retained_transport_moves_buffer_and_keeps_prior_ownership() {
+        let mut epoch = Allocation::begin(&Limits::standard());
+        let prior = epoch
+            .retain_transport(vec![b'p'; 5].into_boxed_slice())
+            .expect("prior ownership fits the epoch");
+        let bytes = vec![b'x'; 12].into_boxed_slice();
+        let pointer = bytes.as_ptr();
+        let retained = epoch
+            .retain_transport(bytes)
+            .expect("the transport buffer moves");
+        assert_eq!(retained.bytes().as_ptr(), pointer);
+        assert_eq!(epoch.retained.bytes, 17);
+        assert_eq!(epoch.retained.total_bytes, 17);
+        assert_eq!(epoch.retained.items, 2);
+        assert_eq!(prior.bytes(), b"ppppp");
     }
 
     #[test]
-    fn retained_transport_and_parsed_tree_share_one_exact_epoch() {
-        let mut limits = Limits::standard();
-        limits.json_bytes = 15;
+    fn retained_transport_and_parsed_tree_share_one_epoch() {
+        let limits = Limits::standard();
         let mut epoch = Allocation::begin(&limits);
         let prior = epoch
             .retain_transport(vec![b'p'; 7].into_boxed_slice())
@@ -6451,86 +5750,38 @@ mod allocation_tests {
             &limits,
             epoch.retained,
         )
-        .expect("three decoded string bytes reach the exact total");
+        .expect("three decoded string bytes join the epoch");
         assert_eq!(epoch.retained.bytes, 12);
         assert_eq!(epoch.retained.strings, 3);
         assert_eq!(epoch.retained.total_bytes, 15);
-        assert!(!epoch.retained.exceedances().is_exceeded());
-        // One more transport byte is admitted; the shared aggregate axis
-        // records the exact epoch total as its high water while the buffer
-        // axis (13 of 15) stays within target.
-        let _over = epoch
+        let _more = epoch
             .retain_transport(vec![0].into_boxed_slice())
-            .expect("the shared epoch admits one byte past its target");
+            .expect("one more transport byte joins the epoch");
         assert_eq!(epoch.retained.total_bytes, 16);
         assert_eq!(epoch.retained.bytes, 13);
-        exceeded(&epoch.retained, AGGREGATE_BYTES, 15, 16);
-        assert!(epoch.retained.exceedances().axis(RETAINED_BUFFER).is_none());
         assert_eq!(prior.bytes().len(), 7);
     }
 
     #[test]
-    fn json_value_member_and_element_limits_accept_exact_and_reject_plus_one() {
-        let mut limits = Limits::standard();
-        limits.items = 6;
-        let exact = preflight("fixture", br#"[1,2]"#, &limits).expect("exact scalar array seals");
-        assert!(!exact.exceedances().is_exceeded());
-        // One more element is admitted; only the shared aggregate item
-        // axis crosses (values 4, elements 3 stay within the target of 6).
-        let over = preflight("fixture", br#"[1,2,3]"#, &limits)
-            .expect("one extra element is admitted and recorded");
-        assert_eq!((over.values, over.elements, over.items), (4, 3, 8));
-        exceeded(&over, AGGREGATE_ITEMS, 6, 8);
-        assert_eq!(over.exceedances().axes().count(), 1);
-        let exact = preflight("fixture", br#"{"a":1,"b":2}"#, &limits)
-            .expect("exact object member count seals");
-        assert!(!exact.exceedances().is_exceeded());
-        let over = preflight("fixture", br#"{"a":1,"b":2,"c":3}"#, &limits)
-            .expect("one extra member is admitted and recorded");
-        assert_eq!((over.values, over.members, over.items), (4, 3, 8));
-        exceeded(&over, AGGREGATE_ITEMS, 6, 8);
-        assert_eq!(over.exceedances().axes().count(), 1);
-        // The per-category axes cross when they are the binding target.
-        limits.items = 2;
-        let over = preflight("fixture", br#"[1,2,3]"#, &limits)
-            .expect("element and value targets admit and record");
-        exceeded(&over, RETAINED_ELEMENTS, 2, 3);
-        exceeded(&over, super::RETAINED_VALUES, 2, 4);
-        exceeded(&over, AGGREGATE_ITEMS, 2, 8);
-        let over = preflight("fixture", br#"{"a":1,"b":2,"c":3}"#, &limits)
-            .expect("member and value targets admit and record");
-        exceeded(&over, RETAINED_MEMBERS, 2, 3);
-        exceeded(&over, super::RETAINED_VALUES, 2, 4);
-        exceeded(&over, AGGREGATE_ITEMS, 2, 8);
+    fn json_preflight_counts_values_members_and_elements() {
+        let limits = Limits::standard();
+        let array = preflight("fixture", br#"[1,2,3]"#, &limits).expect("the array preflights");
+        assert_eq!((array.values, array.elements, array.items), (4, 3, 8));
+        let object = preflight("fixture", br#"{"a":1,"b":2,"c":3}"#, &limits)
+            .expect("the object preflights");
+        assert_eq!((object.values, object.members, object.items), (4, 3, 8));
     }
 
     #[test]
-    fn json_aggregate_string_and_depth_limits_accept_exact_and_reject_plus_one() {
+    fn json_preflight_counts_decoded_string_bytes_and_refuses_depth() {
         let mut limits = Limits::standard();
-        limits.string_bytes = 4;
-        let exact =
-            preflight("fixture", br#"["aa","bb"]"#, &limits).expect("exact aggregate strings seal");
-        assert!(!exact.exceedances().is_exceeded());
-        // One more string byte is admitted; both the raw preflight count
-        // and the decoded retained string axis record the exact total of 5.
-        let over = preflight("fixture", br#"["aa","bbb"]"#, &limits)
-            .expect("one extra string byte is admitted and recorded");
-        assert_eq!(over.strings, 5);
-        exceeded(&over, RETAINED_STRINGS, 4, 5);
-        exceeded(&over, "Cargo JSON preflight string bytes", 4, 5);
-        limits.string_bytes = 6;
-        let exact = preflight("fixture", br#""\u0061""#, &limits)
-            .expect("an escaped string fits its exact zero-copy raw boundary");
-        assert!(!exact.exceedances().is_exceeded());
-        limits.string_bytes = 5;
-        // The six raw escape bytes cross the target; the one decoded byte does not.
-        let over = preflight("fixture", br#""\u0061""#, &limits)
-            .expect("the raw escape boundary is admitted and recorded");
-        assert_eq!(over.strings, 1);
-        exceeded(&over, "Cargo JSON preflight string bytes", 5, 6);
-        assert!(over.exceedances().axis(RETAINED_STRINGS).is_none());
+        let strings =
+            preflight("fixture", br#"["aa","bbb"]"#, &limits).expect("the strings preflight");
+        assert_eq!(strings.strings, 5);
+        let escaped =
+            preflight("fixture", br#""a""#, &limits).expect("an escaped string preflights");
+        assert_eq!(escaped.strings, 1, "only the decoded byte is owned");
         // `depth` bounds serde recursion and stays a physical refusal.
-        limits.string_bytes = Limits::standard().string_bytes;
         limits.depth = 2;
         preflight("fixture", br#"[[0]]"#, &limits).expect("exact JSON depth seals");
         assert!(matches!(
@@ -6543,61 +5794,19 @@ mod allocation_tests {
     }
 
     #[test]
-    fn retained_buffer_local_and_cumulative_caps_are_distinct_and_atomic() {
-        let limits = Limits::standard();
-        let mut local = JsonAllocation::empty();
-        local
-            .retained_bytes("local retained buffer", 4, 4, &limits)
-            .expect("the exact local buffer cap seals");
-        assert!(!local.exceedances().is_exceeded());
-        let retained = local;
-        // The over-cap local buffer is admitted; every counter advances
-        // together by exactly the charge, and only the local axis records.
-        local
-            .retained_bytes("local retained buffer", 5, 4, &limits)
-            .expect("the local buffer target admits and records");
+    fn retained_buffers_advance_every_counter_by_the_charge() {
+        let mut allocation = JsonAllocation::empty();
+        allocation
+            .retained_bytes(4)
+            .expect("the first buffer is retained");
+        let before = allocation;
+        allocation
+            .retained_bytes(5)
+            .expect("the second buffer is retained");
         assert_eq!(
-            (local.items, local.bytes, local.total_bytes),
-            (
-                retained.items + 1,
-                retained.bytes + 5,
-                retained.total_bytes + 5
-            ),
+            (allocation.items, allocation.bytes, allocation.total_bytes),
+            (before.items + 1, before.bytes + 5, before.total_bytes + 5),
         );
-        exceeded(&local, "local retained buffer", 4, 5);
-        assert_eq!(local.exceedances().axes().count(), 1);
-
-        let mut aggregate_limits = limits;
-        aggregate_limits.json_bytes = 8;
-        let mut cumulative = JsonAllocation::empty();
-        cumulative
-            .retained_bytes("first retained buffer", 4, 8, &aggregate_limits)
-            .expect("the first cumulative buffer seals");
-        cumulative
-            .retained_bytes("second retained buffer", 4, 8, &aggregate_limits)
-            .expect("the exact cumulative buffer cap seals");
-        assert!(!cumulative.exceedances().is_exceeded());
-        let retained = cumulative;
-        // The one-byte third buffer is within its local cap; only the cumulative
-        // buffer and aggregate byte axes record the exact epoch total of 9.
-        cumulative
-            .retained_bytes("third retained buffer", 1, 8, &aggregate_limits)
-            .expect("the cumulative buffer target admits and records");
-        assert_eq!(
-            (cumulative.items, cumulative.bytes, cumulative.total_bytes),
-            (
-                retained.items + 1,
-                retained.bytes + 1,
-                retained.total_bytes + 1
-            ),
-        );
-        exceeded(&cumulative, RETAINED_BUFFER, 8, 9);
-        exceeded(&cumulative, AGGREGATE_BYTES, 8, 9);
-        assert!(cumulative
-            .exceedances()
-            .axis("third retained buffer")
-            .is_none());
-        assert_eq!(cumulative.exceedances().axes().count(), 2);
     }
 
     #[test]
@@ -6610,7 +5819,7 @@ mod allocation_tests {
         let value = json!({"a": 1});
         let ownership = super::JsonOwnership::tree(&value).expect("fixture ownership measures");
         let mut value = super::Budgeted::from_retained(value, ownership);
-        assert!(canonical_metadata_bytes_budgeted(&mut value, &mut allocation, &limits).is_err());
+        assert!(canonical_metadata_bytes_budgeted(&mut value, &mut allocation).is_err());
     }
 
     #[test]
@@ -6637,7 +5846,7 @@ mod allocation_tests {
         let ownership = super::JsonOwnership::tree(&value).expect("source ownership measures");
         let mut allocation = JsonAllocation::empty();
         allocation
-            .acquire(ownership, &limits)
+            .acquire(ownership)
             .expect("source ownership fits");
         let expected = super::canonical_unit_bytes_clone_reference(
             super::Budgeted::from_retained(value.clone(), ownership),
@@ -6645,11 +5854,10 @@ mod allocation_tests {
             &mut {
                 let mut reference = JsonAllocation::empty();
                 reference
-                    .acquire(ownership, &limits)
+                    .acquire(ownership)
                     .expect("reference source ownership fits");
                 reference
             },
-            &limits,
         )
         .expect("clone-shaped reference canonicalization seals");
         let actual = super::canonical_unit_digest_budgeted(
@@ -6692,14 +5900,13 @@ mod allocation_tests {
             ]
         });
         let extraction = std::collections::BTreeMap::from([("rawr_iced", 0)]);
-        let exercise = |limits: &Limits| {
+        let exercise = || {
             let mut allocation = JsonAllocation::empty();
             let masks = super::unit_masks(
                 &value,
                 &extraction,
                 crate::cargo::config::NoBuildStd::fixture(),
                 &mut allocation,
-                limits,
             )?;
             assert!(masks.value().retained(0));
             assert!(masks.value().retained(1));
@@ -6712,44 +5919,11 @@ mod allocation_tests {
                 allocation.full_usage(),
                 JsonAllocation::empty().full_usage()
             );
-            Ok::<_, crate::Error>((owned, allocation))
+            Ok::<_, crate::Error>(owned)
         };
 
-        let standard = Limits::standard();
-        let (owned, allocation) = exercise(&standard).expect("one exact unit mask seals");
-        assert!(!allocation.exceedances().is_exceeded());
-        let mut exact = standard;
-        exact.items = owned.items;
-        exact.json_bytes = owned.total_bytes;
-        exact.containers = owned.containers;
-        let (_, allocation) = exercise(&exact).expect("the exact unit-mask caps seal");
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each exact cap still builds and releases the mask;
-        // the crossed axis records the exact precharge as its high water, and
-        // the record outlives the release.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (_, allocation) = exercise(&item_floor).expect("the item floor admits");
-        exceeded(&allocation, AGGREGATE_ITEMS, item_floor.items, owned.items);
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (_, allocation) = exercise(&byte_floor).expect("the byte floor admits");
-        exceeded(
-            &allocation,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            owned.total_bytes,
-        );
-        let mut container_floor = exact;
-        container_floor.containers = container_floor.containers.saturating_sub(1);
-        let (_, allocation) = exercise(&container_floor).expect("the container floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_CONTAINERS,
-            container_floor.containers,
-            owned.containers,
-        );
+        let owned = exercise().expect("one unit mask seals and releases");
+        assert!(owned.items > 0, "the mask precharges one buffer");
     }
 
     #[test]
@@ -6757,7 +5931,7 @@ mod allocation_tests {
         let limits = Limits::standard();
         let mut allocation = JsonAllocation::empty();
         let prior = allocation
-            .retain_with(super::JsonOwnership::string(5), &limits, || {
+            .retain_with(super::JsonOwnership::string(5), || {
                 Ok::<_, crate::Error>(Box::<str>::from("prior"))
             })
             .expect("prior ownership fits");
@@ -6778,7 +5952,7 @@ mod allocation_tests {
         });
         let ownership = super::JsonOwnership::tree(&value).expect("source ownership measures");
         allocation
-            .acquire(ownership, &limits)
+            .acquire(ownership)
             .expect("source ownership fits");
         assert!(super::canonical_unit_digest_budgeted(
             &value,
@@ -6795,82 +5969,44 @@ mod allocation_tests {
     }
 
     #[test]
-    fn metadata_and_build_graph_fanout_share_exact_owned_counters() {
-        let exercise = |limits: &Limits| {
-            let mut allocation = JsonAllocation::empty();
-            allocation.member_nodes("metadata package-map nodes", 2, limits)?;
-            allocation.nodes("metadata feature nodes", 3, limits)?;
-            allocation.retained_string("metadata retained strings", 5, limits)?;
-            allocation.member_nodes("Build artifact-map nodes", 2, limits)?;
-            allocation.nodes("Build output/cfg nodes", 3, limits)?;
-            allocation.retained_string("Build retained strings", 7, limits)?;
-            Ok::<_, crate::Error>(allocation)
-        };
-        let mut exact = Limits::standard();
-        exact.items = 12;
-        exact.string_bytes = 12;
-        let allocation = exercise(&exact).expect("exact Metadata/BuildGraph fanout seals");
+    fn metadata_and_build_graph_fanout_share_owned_counters() {
+        let mut allocation = JsonAllocation::empty();
+        allocation
+            .member_nodes("metadata package-map nodes", 2)
+            .and_then(|()| allocation.nodes("metadata feature nodes", 3))
+            .and_then(|()| allocation.retained_string("metadata retained strings", 5))
+            .and_then(|()| allocation.member_nodes("Build artifact-map nodes", 2))
+            .and_then(|()| allocation.nodes("Build output/cfg nodes", 3))
+            .and_then(|()| allocation.retained_string("Build retained strings", 7))
+            .expect("the Metadata/BuildGraph fanout is charged");
         assert_eq!(allocation.members + allocation.elements, 10);
         assert_eq!(allocation.items, 12);
         assert_eq!(allocation.strings, 12);
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each exact counter admits the whole fanout and records
-        // exactly one axis whose high water is the exact shared total.
-        let mut item_floor = exact;
-        item_floor.items = 11;
-        let allocation = exercise(&item_floor).expect("the item floor admits");
-        exceeded(&allocation, AGGREGATE_ITEMS, 11, 12);
-        assert_eq!(allocation.exceedances().axes().count(), 1);
-        let mut string_floor = exact;
-        string_floor.string_bytes = 11;
-        let allocation = exercise(&string_floor).expect("the string floor admits");
-        exceeded(&allocation, "Build retained strings", 11, 12);
-        assert_eq!(allocation.exceedances().axes().count(), 1);
     }
 
     #[test]
-    fn metadata_and_unit_raw_and_domain_ownership_share_one_aggregate_cap() {
+    fn metadata_and_unit_raw_and_domain_ownership_share_one_allocation() {
         const METADATA: &[u8] = br#"{"metadata":"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm"}"#;
         const UNIT: &[u8] = br#"[{"unit":"uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"}]"#;
-        let exercise = |limits: &Limits| {
-            OWNED_JSON_VALUES.with(|owned| owned.set(0));
-            let mut allocation = preflight("Cargo metadata", METADATA, limits)?;
-            let _metadata = parse_owned_json("Cargo metadata", METADATA)?;
-            allocation.member_nodes("Metadata domain map", 1, limits)?;
-            allocation.retained_string("Metadata domain identity", 8, limits)?;
-            allocation = preflight_from("Cargo unit graph", UNIT, limits, allocation)?;
-            let _unit = parse_owned_json("Cargo unit graph", UNIT)?;
-            Ok::<_, crate::Error>((allocation, OWNED_JSON_VALUES.with(std::cell::Cell::get)))
-        };
-
-        let standard = Limits::standard();
-        let (usage, owned) = exercise(&standard).expect("standard combined ownership measures");
-        assert_eq!(owned, 2);
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.json_bytes = usage.total_bytes;
-        let (allocation, owned) = exercise(&exact).expect("exact combined aggregate caps seal");
-        assert_eq!(owned, 2);
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each shared cap still parses both DOMs; the shared
-        // aggregate axis records the exact combined total as its high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (allocation, owned) = exercise(&item_floor).expect("the item floor admits");
-        assert_eq!(owned, 2);
-        exceeded(&allocation, AGGREGATE_ITEMS, item_floor.items, usage.items);
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (allocation, owned) = exercise(&byte_floor).expect("the byte floor admits");
-        assert_eq!(owned, 2);
-        exceeded(
-            &allocation,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            usage.total_bytes,
-        );
+        let limits = Limits::standard();
+        OWNED_JSON_VALUES.with(|owned| owned.set(0));
+        let metadata = preflight("Cargo metadata", METADATA, &limits).expect("metadata preflights");
+        let _metadata = parse_owned_json("Cargo metadata", METADATA).expect("metadata parses");
+        let mut allocation = metadata;
+        allocation
+            .member_nodes("Metadata domain map", 1)
+            .expect("the domain map is charged");
+        allocation
+            .retained_string("Metadata domain identity", 8)
+            .expect("the domain identity is charged");
+        let domain = allocation;
+        let allocation = preflight_from("Cargo unit graph", UNIT, &limits, allocation)
+            .expect("the unit graph preflights into the same allocation");
+        let _unit = parse_owned_json("Cargo unit graph", UNIT).expect("the unit graph parses");
+        assert_eq!(OWNED_JSON_VALUES.with(std::cell::Cell::get), 2);
+        assert!(domain.total_bytes > metadata.total_bytes);
+        assert!(allocation.total_bytes > domain.total_bytes);
+        assert!(allocation.items > domain.items);
     }
 
     #[test]
@@ -6879,7 +6015,7 @@ mod allocation_tests {
         let mut epoch = Allocation::begin(&limits);
         let prior = epoch
             .retained
-            .retain_with(super::JsonOwnership::string(5), &limits, || {
+            .retain_with(super::JsonOwnership::string(5), || {
                 Ok::<_, crate::Error>(Box::<str>::from("prior"))
             })
             .expect("prior ownership fits");
@@ -6889,7 +6025,7 @@ mod allocation_tests {
             .expect("one provisional scope opens");
         let temporary = epoch
             .retained
-            .retain_with(super::JsonOwnership::string(9), &limits, || {
+            .retain_with(super::JsonOwnership::string(9), || {
                 Ok::<_, crate::Error>(Box::<str>::from("temporary"))
             })
             .expect("temporary ownership fits");
@@ -6940,7 +6076,7 @@ mod allocation_tests {
             .expect("the error-path scope opens");
         let partial = epoch
             .retained
-            .retain_with(super::JsonOwnership::string(7), &limits, || {
+            .retain_with(super::JsonOwnership::string(7), || {
                 Ok::<_, crate::Error>(Box::<str>::from("partial"))
             })
             .expect("partial provisional value fits");
@@ -7085,7 +6221,7 @@ mod allocation_tests {
         let unit_bytes = UNIT_TEMPLATE.replace("/work/rawr", root_text).into_bytes();
         let target = root.join("target");
         let standard = Limits::standard();
-        let definition = crate::cargo::universe::Definition::fixture_authenticated(SEED, &standard);
+        let definition = crate::cargo::universe::Definition::fixture_authenticated(SEED);
         // Two large unknown fields fit the original DOM, but leave less space
         // than the first typed package needs. Preserve them in both canonical
         // output and the optional observation without a second whole DOM.
@@ -7106,27 +6242,20 @@ mod allocation_tests {
             let mut epoch = Allocation::begin(&standard);
             let prior = epoch
                 .retained
-                .retain_with(super::JsonOwnership::string(PRIOR), &standard, || {
-                    Ok("p".repeat(PRIOR))
-                })
+                .retain_with(
+                    super::JsonOwnership::string(PRIOR),
+                    || Ok("p".repeat(PRIOR)),
+                )
                 .unwrap();
             let before = epoch.retained.retained_ownership();
             let mut legacy =
                 preflight_from("Cargo metadata", &bytes, &standard, epoch.retained).unwrap();
-            assert!(!legacy.exceedances().is_exceeded());
-            // The legacy whole-DOM path admits the first typed package and
-            // records the string axis it crosses; the compacting path below
-            // stays within target without a second whole DOM.
-            super::parse_package_budgeted(&padded["packages"][0], &mut legacy, &standard)
-                .expect("the legacy whole-DOM path admits the typed package and records");
+            // The legacy whole-DOM path owns more strings than the standard
+            // figure; the compacting path below stays well under it without a
+            // second whole DOM.
+            super::parse_package_budgeted(&padded["packages"][0], &mut legacy)
+                .expect("the legacy whole-DOM path admits the typed package");
             assert!(legacy.strings > standard.string_bytes);
-            let axis = legacy
-                .exceedances()
-                .axis("Cargo metadata retained string bytes")
-                .copied()
-                .expect("the legacy retained string axis records");
-            assert_eq!(axis.target, standard.string_bytes as u64);
-            assert_eq!(axis.high_water, legacy.strings as u64);
             let mut scope = epoch.begin_provisional().unwrap();
             let (metadata, observation) = super::Metadata::parse_observed(
                 &bytes,
@@ -7142,7 +6271,6 @@ mod allocation_tests {
             assert_eq!(metadata.canonical.as_ref(), expected.as_ref());
             assert_eq!(observation.is_some(), observed);
             assert!(epoch.retained.strings < standard.string_bytes / 2);
-            assert!(!epoch.retained.exceedances().is_exceeded());
             drop(metadata);
             drop(observation);
             epoch.release_provisional(&mut scope).unwrap();
@@ -7157,7 +6285,7 @@ mod allocation_tests {
                 .map(|bytes| {
                     epoch
                         .retained
-                        .retain_with(super::JsonOwnership::string(bytes), limits, || {
+                        .retain_with(super::JsonOwnership::string(bytes), || {
                             String::from_utf8(vec![b'p'; bytes])
                                 .map(String::into_boxed_str)
                                 .map_err(|error| crate::Error::Schema {
@@ -7205,48 +6333,6 @@ mod allocation_tests {
             "three source documents, two saved packages, and one streamed package/resolve row pair parse"
         );
         let peak = usage.peak_usage();
-        let mut exact = standard;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = peak.2;
-        exact.containers = peak.3;
-        let (exact_usage, owned) =
-            exercise(&exact, None).expect("the shared aggregate caps seal exactly");
-        assert_eq!(owned, 7);
-        assert!(!exact_usage.exceedances().is_exceeded());
-
-        // One below each exact shared cap still completes the whole epoch
-        // (every DOM parses); the crossed axis records the exact shared peak as
-        // its truthful high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (floor_usage, owned) =
-            exercise(&item_floor, None).expect("the item floor admits the epoch");
-        assert_eq!(owned, 7);
-        exceeded(&floor_usage, AGGREGATE_ITEMS, item_floor.items, peak.0);
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (floor_usage, owned) =
-            exercise(&byte_floor, None).expect("the byte floor admits the epoch");
-        assert_eq!(owned, 7);
-        exceeded(&floor_usage, AGGREGATE_BYTES, byte_floor.json_bytes, peak.1);
-        let mut string_floor = exact;
-        string_floor.string_bytes = string_floor.string_bytes.saturating_sub(1);
-        let (floor_usage, owned) =
-            exercise(&string_floor, None).expect("the string floor admits the epoch");
-        assert_eq!(owned, 7);
-        exceeded_at_target(&floor_usage, string_floor.string_bytes, peak.2);
-        let mut container_floor = exact;
-        container_floor.containers = container_floor.containers.saturating_sub(1);
-        let (floor_usage, owned) =
-            exercise(&container_floor, None).expect("the container floor admits the epoch");
-        assert_eq!(owned, 7);
-        exceeded(
-            &floor_usage,
-            RETAINED_CONTAINERS,
-            container_floor.containers,
-            peak.3,
-        );
 
         let prior_bytes = standard
             .string_bytes
@@ -7256,74 +6342,41 @@ mod allocation_tests {
             .expect("prior live ownership plus released provisional and final proof fit");
         assert_eq!(owned, 7);
         assert_eq!(near_cap.peak_usage().2, standard.string_bytes);
-        assert!(!near_cap.exceedances().is_exceeded());
-        let mut one_byte_floor = standard;
-        one_byte_floor.string_bytes = one_byte_floor.string_bytes.saturating_sub(1);
-        let (near_cap, owned) = exercise(&one_byte_floor, Some(prior_bytes))
-            .expect("one string byte below the near-cap epoch admits");
-        assert_eq!(owned, 7);
-        exceeded_at_target(
-            &near_cap,
-            one_byte_floor.string_bytes,
-            standard.string_bytes,
-        );
     }
 
     #[test]
-    fn initial_post_and_publication_json_advance_one_exact_epoch() {
+    fn initial_post_and_publication_json_advance_one_epoch() {
         const INITIAL: &[u8] = br#"{"initial":"aaaaaaaa"}"#;
         const POST: &[u8] = br#"{"post":"bbbbbbbb"}"#;
         const PUBLICATION: &[u8] = br#"{"publication":"cccccccc"}"#;
-        let exercise = |limits: &Limits| {
-            OWNED_JSON_VALUES.with(|owned| owned.set(0));
-            let mut epoch = Allocation::begin(limits);
-            for (document, bytes) in [
-                ("initial metadata", INITIAL),
-                ("post metadata", POST),
-                ("publication metadata", PUBLICATION),
-            ] {
-                let next = preflight_from(document, bytes, limits, epoch.retained)?;
-                let _owned = parse_owned_json(document, bytes)?;
-                epoch.retained = next;
-            }
-            epoch
-                .retained
-                .member_nodes("root selection map nodes", 2, limits)?;
-            epoch
-                .retained
-                .nodes("alias group vector nodes", 3, limits)?;
-            Ok::<_, crate::Error>((epoch.usage(), OWNED_JSON_VALUES.with(std::cell::Cell::get)))
-        };
-
-        let standard = Limits::standard();
-        let (usage, owned) = exercise(&standard).expect("the complete epoch measures");
-        assert_eq!(owned, 3);
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.json_bytes = usage.total_bytes;
-        exact.string_bytes = usage.strings;
-        let (allocation, owned) = exercise(&exact).expect("the exact epoch caps seal");
-        assert_eq!(owned, 3);
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each exact cap still advances the whole epoch (all
-        // three DOMs and the helper nodes); the crossed shared axis records the
-        // exact epoch total as its high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (allocation, owned) = exercise(&item_floor).expect("the item floor admits");
-        assert_eq!(owned, 3);
-        exceeded(&allocation, AGGREGATE_ITEMS, item_floor.items, usage.items);
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (allocation, owned) = exercise(&byte_floor).expect("the byte floor admits");
-        assert_eq!(owned, 3);
-        exceeded(
-            &allocation,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            usage.total_bytes,
-        );
+        let limits = Limits::standard();
+        OWNED_JSON_VALUES.with(|owned| owned.set(0));
+        let mut epoch = Allocation::begin(&limits);
+        for (document, bytes) in [
+            ("initial metadata", INITIAL),
+            ("post metadata", POST),
+            ("publication metadata", PUBLICATION),
+        ] {
+            let before = epoch.usage().full_usage();
+            let next = preflight_from(document, bytes, &limits, epoch.retained)
+                .expect("each document preflights into the epoch");
+            let _owned = parse_owned_json(document, bytes).expect("each document parses");
+            epoch.retained = next;
+            assert_ne!(
+                epoch.usage().full_usage(),
+                before,
+                "each document advances the epoch"
+            );
+        }
+        epoch
+            .retained
+            .member_nodes("root selection map nodes", 2)
+            .expect("the selection map is charged");
+        epoch
+            .retained
+            .nodes("alias group vector nodes", 3)
+            .expect("the alias groups are charged");
+        assert_eq!(OWNED_JSON_VALUES.with(std::cell::Cell::get), 3);
     }
 
     #[test]
@@ -7336,12 +6389,7 @@ mod allocation_tests {
             let _first = parse_owned_json("first document", FIRST)?;
             let mut allocation = preflight_from("second document", SECOND, limits, first)?;
             let _second = parse_owned_json("second document", SECOND)?;
-            allocation.retained_bytes(
-                "two-document canonical buffer",
-                6,
-                limits.json_bytes,
-                limits,
-            )?;
+            allocation.retained_bytes(6)?;
             Ok::<_, crate::Error>((allocation, OWNED_JSON_VALUES.with(std::cell::Cell::get)))
         };
 
@@ -7354,68 +6402,6 @@ mod allocation_tests {
         assert_eq!(usage.strings, 10);
         assert_eq!(usage.containers, 4);
         assert_eq!(usage.bytes, 6);
-
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.json_bytes = usage.total_bytes;
-        exact.string_bytes = usage.strings;
-        exact.containers = usage.containers;
-        let (allocation, owned) = exercise(&exact).expect("two-document exact live caps seal");
-        assert_eq!(owned, 2);
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each cumulative cap still owns both documents; the
-        // crossed category axis records the exact cumulative total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (allocation, owned) = exercise(&item_floor).expect("the item floor admits");
-        assert_eq!(owned, 2);
-        exceeded(&allocation, AGGREGATE_ITEMS, item_floor.items, usage.items);
-        let mut string_floor = exact;
-        string_floor.string_bytes = string_floor.string_bytes.saturating_sub(1);
-        let (allocation, _) = exercise(&string_floor).expect("the string floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_STRINGS,
-            string_floor.string_bytes,
-            usage.strings,
-        );
-        let mut container_floor = exact;
-        container_floor.containers = container_floor.containers.saturating_sub(1);
-        let (allocation, _) = exercise(&container_floor).expect("the container floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_CONTAINERS,
-            container_floor.containers,
-            usage.containers,
-        );
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (allocation, _) = exercise(&byte_floor).expect("the byte floor admits");
-        exceeded(
-            &allocation,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            usage.total_bytes,
-        );
-        let mut member_floor = exact;
-        member_floor.items = usage.members.saturating_sub(1);
-        let (allocation, _) = exercise(&member_floor).expect("the member floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_MEMBERS,
-            member_floor.items,
-            usage.members,
-        );
-        let mut element_floor = exact;
-        element_floor.items = usage.elements.saturating_sub(1);
-        let (allocation, _) = exercise(&element_floor).expect("the element floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_ELEMENTS,
-            element_floor.items,
-            usage.elements,
-        );
     }
 
     #[test]
@@ -7433,12 +6419,7 @@ mod allocation_tests {
                 allocation = preflight_from(document, bytes, limits, allocation)?;
                 owned_documents.push(parse_owned_json(document, bytes)?);
             }
-            allocation.retained_bytes(
-                "three-document canonical buffer",
-                9,
-                limits.json_bytes,
-                limits,
-            )?;
+            allocation.retained_bytes(9)?;
             assert_eq!(owned_documents.len(), DOCUMENTS.len());
             Ok::<_, crate::Error>((allocation, OWNED_JSON_VALUES.with(std::cell::Cell::get)))
         };
@@ -7452,67 +6433,6 @@ mod allocation_tests {
         assert_eq!(usage.strings, 15);
         assert_eq!(usage.containers, 6);
         assert_eq!(usage.bytes, 9);
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.json_bytes = usage.total_bytes;
-        exact.string_bytes = usage.strings;
-        exact.containers = usage.containers;
-        let (allocation, owned) = exercise(&exact).expect("exact cumulative caps seal");
-        assert_eq!(owned, 3);
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below each cumulative cap still owns all three documents;
-        // the crossed category axis records the exact cumulative total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (allocation, owned) = exercise(&item_floor).expect("the item floor admits");
-        assert_eq!(owned, 3);
-        exceeded(&allocation, AGGREGATE_ITEMS, item_floor.items, usage.items);
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (allocation, _) = exercise(&byte_floor).expect("the byte floor admits");
-        exceeded(
-            &allocation,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            usage.total_bytes,
-        );
-        let mut string_floor = exact;
-        string_floor.string_bytes = string_floor.string_bytes.saturating_sub(1);
-        let (allocation, _) = exercise(&string_floor).expect("the string floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_STRINGS,
-            string_floor.string_bytes,
-            usage.strings,
-        );
-        let mut container_floor = exact;
-        container_floor.containers = container_floor.containers.saturating_sub(1);
-        let (allocation, _) = exercise(&container_floor).expect("the container floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_CONTAINERS,
-            container_floor.containers,
-            usage.containers,
-        );
-        let mut member_floor = exact;
-        member_floor.items = usage.members.saturating_sub(1);
-        let (allocation, _) = exercise(&member_floor).expect("the member floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_MEMBERS,
-            member_floor.items,
-            usage.members,
-        );
-        let mut element_floor = exact;
-        element_floor.items = usage.elements.saturating_sub(1);
-        let (allocation, _) = exercise(&element_floor).expect("the element floor admits");
-        exceeded(
-            &allocation,
-            RETAINED_ELEMENTS,
-            element_floor.items,
-            usage.elements,
-        );
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -7540,34 +6460,13 @@ mod allocation_tests {
             .artifact_reachable_allocation(&roots, "absent")
             .expect("standard high-fanout traversal measures");
 
-        assert!(!usage.exceedances().is_exceeded());
-        let mut exact_graph = graph.clone();
-        exact_graph.limits.items = usage.items;
-        exact_graph
+        assert!(!graph
             .artifact_reachable(&roots, "absent")
-            .expect("exact transient aggregate cap seals");
-        assert!(!exact_graph
+            .expect("the high-fanout traversal completes"));
+        let traversed_usage = graph
             .artifact_reachable_allocation(&roots, "absent")
-            .expect("the exact traversal measures")
-            .exceedances()
-            .is_exceeded());
-        // One below the exact transient cap still traverses every node;
-        // the aggregate item axis records the exact transient total.
-        let mut floor_graph = graph;
-        floor_graph.limits.items = usage.items.saturating_sub(1);
-        assert!(!floor_graph
-            .artifact_reachable(&roots, "absent")
-            .expect("the item floor admits the traversal"));
-        let floor_usage = floor_graph
-            .artifact_reachable_allocation(&roots, "absent")
-            .expect("the item-floor traversal measures");
-        assert_eq!(floor_usage.items, usage.items);
-        exceeded(
-            &floor_usage,
-            AGGREGATE_ITEMS,
-            floor_graph.limits.items,
-            usage.items,
-        );
+            .expect("the repeated traversal measures");
+        assert_eq!(traversed_usage.items, usage.items);
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -7605,7 +6504,6 @@ mod allocation_tests {
             .with_fixture_semantic_key("root")
             .with_fixture_dependencies(dependencies.into_boxed_slice());
             let mut graph = BuildGraph::fixture_artifacts(Box::from([root]));
-            graph.limits = *limits;
             graph.bind_reachability(&epoch, limits)?;
             let roots = BTreeSet::from(["root"]);
             let usage = graph.artifact_reachable_allocation(&roots, "absent")?;
@@ -7617,86 +6515,28 @@ mod allocation_tests {
         };
 
         let standard = Limits::standard();
-        let (usage, json_owned, reachability_owned) =
+        let (_, json_owned, reachability_owned) =
             exercise(&standard).expect("the full live sequence measures");
         assert_eq!(json_owned, 3);
         assert!(reachability_owned > 128);
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.json_bytes = usage.total_bytes;
-        let (exact_usage, exact_json_owned, exact_reachability_owned) =
-            exercise(&exact).expect("the exact live sequence seals");
-        assert_eq!(exact_json_owned, 3);
-        assert_eq!(exact_reachability_owned, reachability_owned);
-        assert!(!exact_usage.exceedances().is_exceeded());
-
-        // One below the exact shared cap still owns every DOM and every
-        // transient reachability node; the shared axis bound to the epoch
-        // records the exact live total as its high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (floor_usage, json_owned, floor_reachability_owned) =
-            exercise(&item_floor).expect("the item floor admits the live sequence");
-        assert_eq!(json_owned, 3);
-        assert_eq!(floor_reachability_owned, reachability_owned);
-        exceeded(&floor_usage, AGGREGATE_ITEMS, item_floor.items, usage.items);
-
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (floor_usage, json_owned, floor_reachability_owned) =
-            exercise(&byte_floor).expect("the byte floor admits the live sequence");
-        assert_eq!(json_owned, 3);
-        assert_eq!(floor_reachability_owned, reachability_owned);
-        exceeded(
-            &floor_usage,
-            AGGREGATE_BYTES,
-            byte_floor.json_bytes,
-            usage.total_bytes,
-        );
     }
 
     #[test]
-    fn sortable_array_destination_accepts_exact_and_rejects_plus_one() {
-        let mut exact = Limits::standard();
-        exact.items = 3;
+    fn sortable_array_destination_sorts_in_place() {
         let mut value = json!([1]);
         let mut allocation = JsonAllocation::empty();
-        sort_values(&mut value, &mut allocation, &exact)
-            .expect("temporary and destination array nodes fit exactly");
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below the exact cap still sorts; the aggregate item axis
-        // records the exact temporary-plus-destination total of 3.
-        let mut over = Limits::standard();
-        over.items = 2;
-        let mut value = json!([1]);
-        let mut allocation = JsonAllocation::empty();
-        sort_values(&mut value, &mut allocation, &over)
-            .expect("the item floor admits the sort and records");
+        sort_values(&mut value, &mut allocation)
+            .expect("temporary and destination array nodes are charged");
         assert_eq!(value, json!([1]));
-        exceeded(&allocation, AGGREGATE_ITEMS, 2, 3);
     }
 
     #[test]
-    fn recursive_array_destination_accepts_exact_and_rejects_plus_one() {
-        let mut exact = Limits::standard();
-        exact.items = 3;
+    fn recursive_array_destination_canonicalizes_in_place() {
         let mut value = json!([1]);
         let mut allocation = JsonAllocation::empty();
-        canonicalize(&mut value, &mut allocation, &exact)
-            .expect("recursive temporary and destination nodes fit exactly");
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One below the exact cap still canonicalizes; the aggregate item
-        // axis records the exact temporary-plus-destination total of 3.
-        let mut over = Limits::standard();
-        over.items = 2;
-        let mut value = json!([1]);
-        let mut allocation = JsonAllocation::empty();
-        canonicalize(&mut value, &mut allocation, &over)
-            .expect("the item floor admits the canonicalization and records");
+        canonicalize(&mut value, &mut allocation)
+            .expect("recursive temporary and destination nodes are charged");
         assert_eq!(value, json!([1]));
-        exceeded(&allocation, AGGREGATE_ITEMS, 2, 3);
     }
 }
 
@@ -7704,7 +6544,6 @@ fn normalize_metadata(
     value: &mut Value,
     ownership: &mut JsonOwnership,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<()> {
     let object = value
         .as_object_mut()
@@ -7718,28 +6557,28 @@ fn normalize_metadata(
             .ok_or_else(|| schema("Cargo metadata", &format!("`{field}` is not a string")))?;
         let released = JsonOwnership::string_bytes(previous.len());
         let acquired = JsonOwnership::string_bytes("$CARGO_COMMAND_TARGET".len());
-        allocation.acquire(acquired, limits)?;
+        allocation.acquire(acquired)?;
         let previous = std::mem::replace(slot, Value::String("$CARGO_COMMAND_TARGET".to_owned()));
         drop(previous);
         allocation.release(released)?;
         *ownership = ownership.checked_sub(released)?.checked_add(acquired)?;
     }
-    sort_metadata_field(object, "workspace_members", allocation, limits)?;
-    sort_metadata_field(object, "workspace_default_members", allocation, limits)?;
+    sort_metadata_field(object, "workspace_members", allocation)?;
+    sort_metadata_field(object, "workspace_default_members", allocation)?;
     if let Some(packages) = object.get_mut("packages").and_then(Value::as_array_mut) {
         for package in packages {
             let package = package
                 .as_object_mut()
                 .ok_or_else(|| schema("Cargo metadata", "package is not an object"))?;
-            sort_metadata_field(package, "dependencies", allocation, limits)?;
-            sort_metadata_field(package, "targets", allocation, limits)?;
+            sort_metadata_field(package, "dependencies", allocation)?;
+            sort_metadata_field(package, "targets", allocation)?;
             if let Some(dependencies) = package
                 .get_mut("dependencies")
                 .and_then(Value::as_array_mut)
             {
                 for dependency in dependencies {
                     if let Some(dependency) = dependency.as_object_mut() {
-                        sort_metadata_field(dependency, "features", allocation, limits)?;
+                        sort_metadata_field(dependency, "features", allocation)?;
                     }
                 }
             }
@@ -7747,39 +6586,39 @@ fn normalize_metadata(
                 for target in targets {
                     if let Some(target) = target.as_object_mut() {
                         for field in ["kind", "crate_types", "required_features"] {
-                            sort_metadata_field(target, field, allocation, limits)?;
+                            sort_metadata_field(target, field, allocation)?;
                         }
                     }
                 }
             }
             if let Some(features) = package.get_mut("features").and_then(Value::as_object_mut) {
                 for members in features.values_mut() {
-                    sort_metadata_values(members, allocation, limits)?;
+                    sort_metadata_values(members, allocation)?;
                 }
             }
         }
-        sort_metadata_field(object, "packages", allocation, limits)?;
+        sort_metadata_field(object, "packages", allocation)?;
     }
     if let Some(resolve) = object.get_mut("resolve").and_then(Value::as_object_mut) {
-        sort_metadata_field(resolve, "nodes", allocation, limits)?;
+        sort_metadata_field(resolve, "nodes", allocation)?;
         if let Some(nodes) = resolve.get_mut("nodes").and_then(Value::as_array_mut) {
             for node in nodes {
                 let node = node
                     .as_object_mut()
                     .ok_or_else(|| schema("Cargo metadata", "resolve node is not an object"))?;
                 for field in ["deps", "dependencies", "features"] {
-                    sort_metadata_field(node, field, allocation, limits)?;
+                    sort_metadata_field(node, field, allocation)?;
                 }
                 if let Some(dependencies) = node.get_mut("deps").and_then(Value::as_array_mut) {
                     for dependency in dependencies {
                         if let Some(dependency) = dependency.as_object_mut() {
-                            sort_metadata_field(dependency, "dep_kinds", allocation, limits)?;
+                            sort_metadata_field(dependency, "dep_kinds", allocation)?;
                         }
                     }
                 }
             }
         }
-        sort_metadata_field(resolve, "nodes", allocation, limits)?;
+        sort_metadata_field(resolve, "nodes", allocation)?;
     }
     Ok(())
 }
@@ -7788,24 +6627,19 @@ fn sort_metadata_field(
     object: &mut Map<String, Value>,
     field: &str,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<()> {
     if let Some(value) = object.get_mut(field) {
-        sort_metadata_values(value, allocation, limits)?;
+        sort_metadata_values(value, allocation)?;
     }
     Ok(())
 }
 
-fn sort_metadata_values(
-    value: &mut Value,
-    allocation: &mut JsonAllocation,
-    limits: &Limits,
-) -> Result<()> {
+fn sort_metadata_values(value: &mut Value, allocation: &mut JsonAllocation) -> Result<()> {
     let Some(values) = value.as_array_mut() else {
         return Ok(());
     };
     for value in values.iter_mut() {
-        canonicalize_metadata_objects(value, allocation, limits)?;
+        canonicalize_metadata_objects(value, allocation)?;
     }
     let scratch = values.iter().try_fold(
         JsonOwnership::collection()
@@ -7819,7 +6653,7 @@ fn sort_metadata_values(
             )?))
         },
     )?;
-    let sorted = allocation.with_scratch(scratch, limits, || {
+    let sorted = allocation.with_scratch(scratch, || {
         let mut keyed = Vec::new();
         keyed
             .try_reserve_exact(values.len())
@@ -7845,26 +6679,22 @@ fn sort_metadata_values(
     Ok(())
 }
 
-fn canonicalize_metadata_objects(
-    value: &mut Value,
-    allocation: &mut JsonAllocation,
-    limits: &Limits,
-) -> Result<()> {
+fn canonicalize_metadata_objects(value: &mut Value, allocation: &mut JsonAllocation) -> Result<()> {
     match value {
         Value::Array(values) => {
             for value in values {
-                canonicalize_metadata_objects(value, allocation, limits)?;
+                canonicalize_metadata_objects(value, allocation)?;
             }
         }
         Value::Object(object) => {
             for value in object.values_mut() {
-                canonicalize_metadata_objects(value, allocation, limits)?;
+                canonicalize_metadata_objects(value, allocation)?;
             }
             let scratch = JsonOwnership::collection()
                 .checked_add(JsonOwnership::nodes(object.len()))?
                 .checked_add(JsonOwnership::collection())?
                 .checked_add(JsonOwnership::members(object.len()))?;
-            let sorted = allocation.with_scratch(scratch, limits, || {
+            let sorted = allocation.with_scratch(scratch, || {
                 let retained = std::mem::take(object);
                 let mut keyed = Vec::new();
                 keyed
@@ -7927,12 +6757,12 @@ fn canonical_json_key(document: &'static str, value: &Value) -> Result<Vec<u8>> 
 }
 
 #[cfg(test)]
-fn sort_values(value: &mut Value, allocation: &mut JsonAllocation, limits: &Limits) -> Result<()> {
+fn sort_values(value: &mut Value, allocation: &mut JsonAllocation) -> Result<()> {
     let Some(values) = value.as_array_mut() else {
         return Ok(());
     };
     let mut keyed = Vec::new();
-    allocation.nodes("canonical Cargo sort nodes", values.len(), limits)?;
+    allocation.nodes("canonical Cargo sort nodes", values.len())?;
     keyed
         .try_reserve_exact(values.len())
         .map_err(|source| Error::Allocation {
@@ -7940,15 +6770,14 @@ fn sort_values(value: &mut Value, allocation: &mut JsonAllocation, limits: &Limi
             source,
         })?;
     for mut value in std::mem::take(values) {
-        canonicalize_objects(&mut value, allocation, limits)?;
-        let key = json_sort_key(&value, allocation, limits)?;
+        canonicalize_objects(&mut value, allocation)?;
+        let key = json_sort_key(&value, allocation)?;
         keyed.push((key, value));
     }
     keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     allocation.nodes(
         "canonical Cargo sorted array destination nodes",
         keyed.len(),
-        limits,
     )?;
     values
         .try_reserve_exact(keyed.len())
@@ -7961,21 +6790,17 @@ fn sort_values(value: &mut Value, allocation: &mut JsonAllocation, limits: &Limi
 }
 
 #[cfg(test)]
-fn canonicalize_objects(
-    value: &mut Value,
-    allocation: &mut JsonAllocation,
-    limits: &Limits,
-) -> Result<()> {
+fn canonicalize_objects(value: &mut Value, allocation: &mut JsonAllocation) -> Result<()> {
     match value {
         Value::Array(values) => {
             for value in values {
-                canonicalize_objects(value, allocation, limits)?;
+                canonicalize_objects(value, allocation)?;
             }
         }
         Value::Object(object) => {
             let retained = std::mem::take(object);
             let mut keyed = Vec::new();
-            allocation.nodes("canonical Cargo object sort nodes", retained.len(), limits)?;
+            allocation.nodes("canonical Cargo object sort nodes", retained.len())?;
             keyed
                 .try_reserve_exact(retained.len())
                 .map_err(|source| Error::Allocation {
@@ -7984,15 +6809,11 @@ fn canonicalize_objects(
                 })?;
             keyed.extend(retained);
             for (_, value) in &mut keyed {
-                canonicalize_objects(value, allocation, limits)?;
+                canonicalize_objects(value, allocation)?;
             }
             keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
             let mut sorted = Map::new();
-            allocation.member_nodes(
-                "canonical Cargo reordered object nodes",
-                keyed.len(),
-                limits,
-            )?;
+            allocation.member_nodes("canonical Cargo reordered object nodes", keyed.len())?;
             for (key, value) in keyed {
                 sorted.insert(key, value);
             }
@@ -8004,11 +6825,11 @@ fn canonicalize_objects(
 }
 
 #[cfg(test)]
-fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation, limits: &Limits) -> Result<()> {
+fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation) -> Result<()> {
     match value {
         Value::Array(values) => {
             let mut keyed = Vec::new();
-            allocation.nodes("canonical Cargo recursive sort nodes", values.len(), limits)?;
+            allocation.nodes("canonical Cargo recursive sort nodes", values.len())?;
             keyed
                 .try_reserve_exact(values.len())
                 .map_err(|source| Error::Allocation {
@@ -8016,15 +6837,14 @@ fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation, limits: &Lim
                     source,
                 })?;
             for mut value in std::mem::take(values) {
-                canonicalize(&mut value, allocation, limits)?;
-                let key = json_sort_key(&value, allocation, limits)?;
+                canonicalize(&mut value, allocation)?;
+                let key = json_sort_key(&value, allocation)?;
                 keyed.push((key, value));
             }
             keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
             allocation.nodes(
                 "canonical Cargo recursive array destination nodes",
                 keyed.len(),
-                limits,
             )?;
             values
                 .try_reserve_exact(keyed.len())
@@ -8037,11 +6857,7 @@ fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation, limits: &Lim
         Value::Object(object) => {
             let retained = std::mem::take(object);
             let mut keyed = Vec::new();
-            allocation.nodes(
-                "canonical Cargo recursive object nodes",
-                retained.len(),
-                limits,
-            )?;
+            allocation.nodes("canonical Cargo recursive object nodes", retained.len())?;
             keyed
                 .try_reserve_exact(retained.len())
                 .map_err(|source| Error::Allocation {
@@ -8050,15 +6866,11 @@ fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation, limits: &Lim
                 })?;
             keyed.extend(retained);
             for (_, value) in &mut keyed {
-                canonicalize(value, allocation, limits)?;
+                canonicalize(value, allocation)?;
             }
             keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0));
             let mut sorted = Map::new();
-            allocation.member_nodes(
-                "canonical Cargo recursive reordered nodes",
-                keyed.len(),
-                limits,
-            )?;
+            allocation.member_nodes("canonical Cargo recursive reordered nodes", keyed.len())?;
             for (key, value) in keyed {
                 sorted.insert(key, value);
             }
@@ -8070,11 +6882,7 @@ fn canonicalize(value: &mut Value, allocation: &mut JsonAllocation, limits: &Lim
 }
 
 #[cfg(test)]
-fn json_sort_key(
-    value: &Value,
-    allocation: &mut JsonAllocation,
-    limits: &Limits,
-) -> Result<Vec<u8>> {
+fn json_sort_key(value: &Value, allocation: &mut JsonAllocation) -> Result<Vec<u8>> {
     struct Counter(usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -8093,12 +6901,7 @@ fn json_sort_key(
         document: "canonical Cargo JSON",
         reason: error.to_string().into_boxed_str(),
     })?;
-    allocation.retained_bytes(
-        "canonical Cargo sort-key bytes",
-        counter.0,
-        limits.json_bytes,
-        limits,
-    )?;
+    allocation.retained_bytes(counter.0)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(counter.0)
@@ -8445,7 +7248,7 @@ mod tests {
     }
 
     #[test]
-    fn lock_dom_is_charged_before_ownership_at_exact_epoch_caps() {
+    fn lock_dom_is_owned_once_while_binding() {
         let fixture = Fixture::new("registry-lock-budget");
         let source = "registry+https://one.invalid/index";
         let id = format!("{source}#same@1.0.0");
@@ -8453,73 +7256,23 @@ mod tests {
             "version = 4\n\n[[package]]\nname = \"same\"\nversion = \"1.0.0\"\nsource = \"{source}\"\nchecksum = \"{}\"\n",
             "11".repeat(32),
         );
-        let exercise = |limits: &super::Limits| {
-            OWNED_LOCK_DOCUMENTS.with(|owned| owned.set(0));
-            let package = Package::fixture(
-                &id,
-                "same",
-                "1.0.0",
-                fixture.0.clone(),
-                PackageSource::Registry {
-                    cargo_id: source.into(),
-                    checksum: None,
-                },
-            );
-            let mut allocation = super::Allocation::begin(limits);
-            let bound = metadata([package]).bind_lock(lock.as_bytes(), limits, &mut allocation);
-            (bound, allocation)
-        };
-
-        let mut exact = super::Limits::standard();
-        exact.items = lock.len().saturating_add(1);
-        exact.json_bytes = lock.len();
-        exact.manifest_bytes = lock.len();
-        let (bound, allocation) = exercise(&exact);
-        bound.expect("the exact lock DOM allocation seals");
-        assert_eq!(OWNED_LOCK_DOCUMENTS.with(std::cell::Cell::get), 1);
-        assert!(!allocation.usage().exceedances().is_exceeded());
-
-        // One item below the exact DOM precharge still binds the lock and
-        // owns the DOM; the aggregate item axis records the exact precharge
-        // (every TOML byte as a node plus the retained buffer) as high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (bound, allocation) = exercise(&item_floor);
-        bound.expect("the item floor admits the lock DOM");
-        assert_eq!(OWNED_LOCK_DOCUMENTS.with(std::cell::Cell::get), 1);
-        let axis = allocation
-            .usage()
-            .exceedances()
-            .axis(super::AGGREGATE_ITEMS)
-            .copied()
-            .expect("the aggregate item axis records the lock DOM precharge");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (lock.len() as u64, exact.items as u64, exact.items as u64)
+        OWNED_LOCK_DOCUMENTS.with(|owned| owned.set(0));
+        let package = Package::fixture(
+            &id,
+            "same",
+            "1.0.0",
+            fixture.0.clone(),
+            PackageSource::Registry {
+                cargo_id: source.into(),
+                checksum: None,
+            },
         );
-        // The whole-document byte target is recorded on the epoch before
-        // any DOM ownership and never refuses; the lock still binds and the
-        // DOM is owned exactly once. The physical bound is the capture that
-        // read the lock, not this target.
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (bound, allocation) = exercise(&byte_floor);
-        bound.expect("one byte under the lock size still binds the lock");
+        let limits = super::Limits::standard();
+        let mut allocation = super::Allocation::begin(&limits);
+        metadata([package])
+            .bind_lock(lock.as_bytes(), &limits, &mut allocation)
+            .expect("the lock binds");
         assert_eq!(OWNED_LOCK_DOCUMENTS.with(std::cell::Cell::get), 1);
-        let axis = allocation
-            .usage()
-            .exceedances()
-            .axis("Cargo lock bytes")
-            .copied()
-            .expect("the lock document size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (lock.len() - 1) as u64,
-                lock.len() as u64,
-                lock.len() as u64
-            )
-        );
     }
 
     #[test]
@@ -8894,7 +7647,6 @@ mod tests {
         let initial = BuildGraph {
             raw: super::RawDocument::from_bytes(b"a"),
             _allocation: super::JsonAllocation::empty(),
-            limits: super::Limits::standard(),
             canonical: super::digest(b"a"),
             artifacts: Box::default(),
             scripts: Box::default(),
@@ -8904,7 +7656,6 @@ mod tests {
         let drifted = BuildGraph {
             raw: super::RawDocument::from_bytes(b"b"),
             _allocation: super::JsonAllocation::empty(),
-            limits: super::Limits::standard(),
             canonical: super::digest(b"b"),
             artifacts: Box::default(),
             scripts: Box::default(),

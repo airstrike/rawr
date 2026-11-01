@@ -184,43 +184,22 @@ fn every_refusal_latches_and_prevents_even_borrowed_followup() {
 }
 
 #[test]
-fn original_account_retains_prior_usage_and_exact_expansion_floor() {
+fn original_account_retains_prior_usage_across_an_expansion() {
     use crate::cargo;
     use crate::input;
     use crate::input::membership;
-    use crate::input::membership::manifest::tests::one_short;
-    use crate::node;
 
-    for extra in [3, 4] {
-        let limits = cargo::Limits::default();
-        let mut allocation = input::Allocation::new(&limits);
-        allocation.bytes(7).unwrap();
-        allocation.byte_limit = 7 + extra;
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        let mut budget = membership::Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let result = parse("rev=%FF", &mut session);
-        let result = session.finish(result);
-        // The four-byte expansion past a three-byte remainder is admitted
-        // and recorded at the exact total; nothing latches.
-        assert_eq!(result.unwrap().value(), "\u{fffd}");
-        assert_eq!(allocation.usage().bytes, 7 + 4);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        let exceeded = allocation.exceedances();
-        if extra == 3 {
-            assert!(one_short(&exceeded, input::INPUT_BYTES_RESOURCE, 7 + 4));
-        } else {
-            assert!(!exceeded.is_exceeded());
-        }
-    }
+    let limits = cargo::Limits::default();
+    let mut allocation = input::Allocation::new(&limits);
+    allocation.bytes(7).unwrap();
+    let mut budget = membership::Budget {
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let result = parse("rev=%FF", &mut session);
+    let result = session.finish(result);
+    // The four-byte expansion is charged after the prior seven bytes.
+    assert_eq!(result.unwrap().value(), "\u{fffd}");
+    assert_eq!(allocation.usage().bytes, 7 + 4);
+    assert!(allocation.check().is_ok());
 }

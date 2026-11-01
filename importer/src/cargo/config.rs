@@ -1120,16 +1120,6 @@ impl Provenance {
                 }
             }
         }
-        // The present-config count is an accounting target recorded on
-        // the request account; every candidate was already charged above.
-        allocation.exceeded(
-            "Cargo config files",
-            limits.packages,
-            candidates
-                .iter()
-                .filter(|candidate| matches!(&candidate.state, State::Present(_)))
-                .count(),
-        );
         #[cfg(test)]
         OWNED_PROVENANCE.with(|owned| owned.set(owned.get().saturating_add(1)));
         Ok(Self {
@@ -1561,7 +1551,6 @@ mod tests {
     use std::cell::Cell;
     use std::fs;
     use std::path::Path;
-    use std::rc::Rc;
 
     use super::projection::Projection;
     use super::{
@@ -1591,24 +1580,6 @@ mod tests {
                 .expect_err("an unusable CARGO_HOME is refused");
             assert_eq!(error.to_string(), expected);
         }
-    }
-
-    /// A target one unit under an exact total refuses nothing; the
-    /// account records the axis with that target and a high water equal to
-    /// the exact total the exercise charged.
-    fn assert_exceeded(
-        record: crate::exceedance::Record,
-        name: &str,
-        target: usize,
-        high_water: usize,
-    ) {
-        let axis = record
-            .axis(name)
-            .unwrap_or_else(|| panic!("{name} records the lowered target"));
-        assert_eq!(axis.target, target as u64);
-        assert_eq!(axis.high_water, high_water as u64);
-        assert!(axis.first_requested > axis.target);
-        assert!(axis.first_requested <= axis.high_water);
     }
 
     fn input_config_provenance(path: &Path, state: State) -> Provenance {
@@ -1661,7 +1632,7 @@ mod tests {
     }
 
     #[test]
-    fn input_config_accounted_keeps_prior_usage_and_exact_remaining_capacity() {
+    fn input_config_accounted_keeps_prior_usage() {
         let path = std::env::temp_dir().join(format!(
             "rawr-input-config-account-{}-{:?}.toml",
             std::process::id(),
@@ -1701,87 +1672,7 @@ mod tests {
                 .as_encoded_bytes()
                 .as_ptr()
         );
-        // The exact remaining capacity records nothing; one unit less
-        // still admits the config, charges the same totals, and records the
-        // lowered axis with the measured total as its high water.
-        for (item_floor, byte_floor, axis) in [
-            (0, 0, None),
-            (1, 0, Some(crate::cargo::REQUEST_ITEMS_RESOURCE)),
-            (0, 1, Some(crate::cargo::REQUEST_BYTES_RESOURCE)),
-        ] {
-            let mut limits = standard;
-            limits.items = measured.items - item_floor;
-            limits.manifest_bytes = measured.bytes - byte_floor;
-            let mut allocation = RequestAllocation::new(&limits);
-            allocation
-                .retained(prior.items, prior.bytes)
-                .expect("same earlier request work");
-            let config = provenance
-                .input_config_accounted(&mut allocation)
-                .expect("the exact and lowered targets both admit the config");
-            assert_eq!(
-                (allocation.items, allocation.bytes),
-                (measured.items, measured.bytes)
-            );
-            assert_eq!(config._allocation, allocation);
-            match axis {
-                None => assert!(!allocation.exceedances().is_exceeded()),
-                Some(name) if name == crate::cargo::REQUEST_ITEMS_RESOURCE => {
-                    assert_exceeded(allocation.exceedances(), name, limits.items, measured.items);
-                }
-                Some(name) => {
-                    assert_exceeded(
-                        allocation.exceedances(),
-                        name,
-                        limits.manifest_bytes,
-                        measured.bytes,
-                    );
-                }
-            }
-        }
         fs::remove_file(path).expect("present config retires");
-    }
-
-    #[test]
-    fn input_config_accounted_records_exceedance_before_candidate_ownership() {
-        let path = Path::new("/unobserved/config.toml");
-        let provenance = input_config_provenance(path, State::Absent);
-        for bytes in [false, true] {
-            let mut limits = Limits::standard();
-            if bytes {
-                limits.manifest_bytes = 31 + path.as_os_str().len() - 1;
-            } else {
-                limits.items = 8;
-            }
-            let mut allocation = RequestAllocation::new(&limits);
-            allocation.retained(7, 31).expect("earlier request work");
-            OWNED_INPUT_CONFIG_CANDIDATES.with(|owned| owned.set(0));
-            // The candidate path charge crosses the target before the
-            // candidates are owned; the account records that first exceeding
-            // charge, keeps charging, and ownership still proceeds.
-            let config = provenance
-                .input_config_accounted(&mut allocation)
-                .expect("the exceeded target still admits the candidates");
-            assert_eq!(OWNED_INPUT_CONFIG_CANDIDATES.with(Cell::get), 1);
-            assert_eq!(config._allocation, allocation);
-            let (name, first_requested, total) = if bytes {
-                (
-                    crate::cargo::REQUEST_BYTES_RESOURCE,
-                    31 + path.as_os_str().len(),
-                    allocation.bytes,
-                )
-            } else {
-                (crate::cargo::REQUEST_ITEMS_RESOURCE, 9, allocation.items)
-            };
-            let axis = allocation
-                .exceedances()
-                .axis(name)
-                .copied()
-                .expect("the candidate path charge records its axis");
-            assert_eq!(axis.first_requested, first_requested as u64);
-            assert_eq!(axis.high_water, total as u64);
-            assert!(allocation.items > 8 && allocation.bytes > 31);
-        }
     }
 
     #[test]
@@ -1810,48 +1701,6 @@ mod tests {
             assert_eq!(OWNED_INPUT_CONFIG_CANDIDATES.with(Cell::get), 0);
         }
         fs::remove_file(path).expect("invalid config retires");
-    }
-
-    #[test]
-    fn feature_iterator_records_exceedance_past_the_retained_item_target() {
-        const EXTRA: usize = 6;
-        let mut limits = Limits::standard();
-        limits.items = 4;
-        let exact = Dependency::registry("dep", "1", &limits)
-            .expect("dependency occupies three retained items")
-            .features(["feature"], true)
-            .expect("one feature reaches the exact retained-item target");
-        assert!(!exact.allocation().exceedances().is_exceeded());
-
-        // A finite feature list past the item target is retained in
-        // full; the account records the items axis from the fifth item up to
-        // the truthful high water of every retained feature.
-        let generated = Rc::new(Cell::new(0_usize));
-        let counter = Rc::clone(&generated);
-        let features = std::iter::from_fn(move || {
-            let next = counter.get();
-            if next == EXTRA {
-                return None;
-            }
-            counter.set(next + 1);
-            Some(format!("feature-{next}"))
-        });
-        let dependency = Dependency::registry("dep", "1", &limits)
-            .expect("dependency occupies three retained items")
-            .features(features, true)
-            .expect("every feature past the target is still retained");
-        assert_eq!(generated.get(), EXTRA, "the whole finite list is consumed");
-        assert_eq!(dependency.features.len(), EXTRA);
-        let items = dependency
-            .allocation()
-            .exceedances()
-            .axis(crate::cargo::REQUEST_ITEMS_RESOURCE)
-            .copied()
-            .expect("the feature list records the items axis");
-        assert_eq!(
-            (items.target, items.first_requested, items.high_water),
-            (4, 5, 3 + EXTRA as u64)
-        );
     }
 
     #[test]
@@ -2177,7 +2026,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_config_hierarchy_uses_one_exact_prospective_request_ledger() {
+    fn deep_config_hierarchy_charges_one_request_ledger() {
         let fixture = std::env::temp_dir().join(format!(
             "rawr-config-ledger-{}-{:?}",
             std::process::id(),
@@ -2210,38 +2059,9 @@ mod tests {
             )?;
             Ok::<_, crate::Error>((allocation, provenance))
         };
-        let standard = Limits::standard();
-        let (usage, _) = exercise(&standard).expect("standard deep hierarchy measures");
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, _) = exercise(&exact).expect("exact deep hierarchy ledger succeeds");
+        let (usage, _) = exercise(&Limits::standard()).expect("the deep hierarchy discovers");
+        assert!(usage.items > 0 && usage.bytes > 0);
         assert_eq!(OWNED_PROVENANCE.with(Cell::get), 1);
-        assert!(!exact_usage.exceedances().is_exceeded());
-        // One unit under the exact ledger refuses nothing and still owns
-        // the provenance; the account records the lowered axis at the exact total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, _) =
-            exercise(&item_floor).expect("one item under the deep ledger still discovers");
-        assert_eq!(OWNED_PROVENANCE.with(Cell::get), 1);
-        assert_exceeded(
-            item_usage.exceedances(),
-            crate::cargo::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, _) =
-            exercise(&byte_floor).expect("one byte under the deep ledger still discovers");
-        assert_eq!(OWNED_PROVENANCE.with(Cell::get), 1);
-        assert_exceeded(
-            byte_usage.exceedances(),
-            crate::cargo::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
         fs::remove_dir_all(fixture).expect("deep config fixture is removed");
     }
 

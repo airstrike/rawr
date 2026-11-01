@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::cargo::{universe, Limits};
+use crate::cargo::universe;
 use crate::input::build::Evidence;
 use crate::input::proof::{ProtectedEntry, TreeDirectory, TreeFile};
 use crate::input::{stored, Allocation};
@@ -10,10 +10,7 @@ mod current;
 pub(super) mod index;
 mod legacy;
 
-pub(super) struct Legacy<'a>(
-    pub(super) &'a mut Allocation,
-    pub(super) &'a crate::node::GraphBudget,
-);
+pub(super) struct Legacy<'a>(pub(super) &'a mut Allocation);
 pub(super) struct Current<'a, 'b>(pub(super) &'a mut stored::Budget<'b>);
 
 pub(super) struct Buffer<T> {
@@ -37,15 +34,7 @@ pub(super) trait Account: sealed::Sealed + Sized {
     type Index<K: Ord, V: Copy>: index::Index<K, V, Self>;
 
     fn check(&mut self) -> Result<(), Self::Error>;
-    fn comparison(&mut self, bytes: usize) -> Result<(), Self::Error>;
-    fn hash_work(&mut self, bytes: usize) -> Result<(), Self::Error>;
     fn policy(&mut self, code: &'static str, reason: impl fmt::Display) -> Self::Error;
-    fn limited(
-        &mut self,
-        resource: &'static str,
-        limit: usize,
-        actual: usize,
-    ) -> Result<(), Self::Error>;
     fn join(&mut self) -> Result<(), Self::Error>;
     fn roots<T>(&mut self, count: usize) -> Result<Vec<T>, Self::Error>;
     fn push(
@@ -76,7 +65,6 @@ pub(super) trait Account: sealed::Sealed + Sized {
     fn canonical(
         &mut self,
         entries: &[ProtectedEntry],
-        limits: &Limits,
     ) -> Result<universe::BuildProjection, Self::Error>;
 }
 

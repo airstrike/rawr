@@ -16,16 +16,6 @@ pub(in crate::input) fn bind(
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     budget.check()?;
-    budget.limited(
-        "script association units",
-        budget.limits.units,
-        graph.scripts().len(),
-    )?;
-    budget.limited(
-        "script association observations",
-        budget.limits.units,
-        scripts.len(),
-    )?;
     budget.storage(graph.scripts().len(), graph.scripts().len())?;
     let mut used = Vec::new();
     used.try_reserve_exact(graph.scripts().len())

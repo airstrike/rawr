@@ -17,10 +17,8 @@ fn records(present: bool) -> [observed::Record; 2] {
 fn prefix_presence_survives_codec_and_is_distinct_from_exact_absence() {
     for present in [false, true] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let image = stored::Stored::from_records(&records(present), &mut budget).unwrap();
@@ -50,10 +48,8 @@ fn prefix_presence_survives_codec_and_is_distinct_from_exact_absence() {
 #[test]
 fn unobserved_prefix_is_terminal_and_does_not_consume_a_different_spelling() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&records(true)[1..], &mut budget).unwrap();
@@ -101,12 +97,10 @@ fn prefix_observations_reject_invalid_keys_and_cross_typed_answers() {
 #[test]
 fn prefix_query_records_the_original_string_target_and_still_answers() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let image = stored::Stored::from_records(
         &records(true)[1..],
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -116,7 +110,6 @@ fn prefix_query_records_the_original_string_target_and_still_answers() {
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -127,37 +120,16 @@ fn prefix_query_records_the_original_string_target_and_still_answers() {
     assert!(session.environment_prefix(prefix).unwrap());
     session.finish(Ok(())).unwrap();
     host.finish().unwrap();
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    let exceeded = allocation.exceedances();
-    let mut axes = exceeded.axes();
-    let (Some(axis), None) = (axes.next(), axes.next()) else {
-        panic!("only the owned string axis is recorded: {exceeded:?}");
-    };
-    assert_eq!(
-        (
-            axis.name,
-            axis.target,
-            axis.first_requested,
-            axis.high_water
-        ),
-        (
-            "membership owned string bytes",
-            (prefix.len() - 1) as u64,
-            prefix.len() as u64,
-            prefix.len() as u64
-        )
-    );
+    assert!(allocation.check().is_ok());
 }
 
 #[test]
 fn refused_original_account_latches_every_later_prefix_query() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let image = stored::Stored::from_records(
         &records(true)[1..],
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -165,7 +137,6 @@ fn refused_original_account_latches_every_later_prefix_query() {
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

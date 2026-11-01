@@ -137,9 +137,6 @@ pub(super) struct Record {
 
 impl Path {
     pub(super) fn from_bytes(bytes: &[u8], budget: &mut Budget<'_>) -> Result<Self> {
-        budget
-            .allocation
-            .string_exceeded("membership native path bytes", bytes.len());
         if !bytes.starts_with(b"/") || bytes.contains(&0) {
             return Err(Error::Encoding("expected absolute native path"));
         }

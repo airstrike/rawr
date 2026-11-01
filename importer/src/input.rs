@@ -87,14 +87,10 @@ pub(super) struct Allocation {
     /// Set only by genuine allocation failure, checked-arithmetic overflow,
     /// observation allocation failure or a physical `Error::Limit`.
     refused: bool,
-    /// Process-unique account identity for exceedance reporting.
-    id: u64,
-    exceeded: crate::exceedance::Record,
 }
 
 pub(crate) const INPUT_ITEMS_RESOURCE: &str = "input aggregate owned items";
 pub(crate) const INPUT_BYTES_RESOURCE: &str = "input aggregate owned bytes";
-pub(crate) const INPUT_STRING_RESOURCE: &str = "input owned string bytes";
 
 impl Allocation {
     /// Start one current stored-input validation account before any bytes decode.
@@ -127,12 +123,6 @@ impl Allocation {
             return Err(Error::InputAccountRefused);
         };
         self.usage = Usage { items, bytes };
-        if other.exceeded.is_exceeded() {
-            self.exceeded.absorb(&other.exceeded);
-            self.publish();
-        }
-        self.exceeded(INPUT_ITEMS_RESOURCE, self.item_limit, items);
-        self.exceeded(INPUT_BYTES_RESOURCE, self.byte_limit, bytes);
         Ok(())
     }
 
@@ -161,41 +151,7 @@ impl Allocation {
             byte_limit,
             string_limit,
             refused: false,
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
         }
-    }
-
-    /// The axes of this account that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
-    fn publish(&self) {
-        crate::exceedance::publish(crate::exceedance::Account::Input, self.id, &self.exceeded);
-    }
-
-    /// Crossing an accounting target is recorded and published, never
-    /// refused; the charge has already been added to the original account.
-    pub(super) fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            self.publish();
-        }
-    }
-
-    /// Compare one string against the string target, recording an exceedance.
-    pub(super) fn string_exceeded(&mut self, resource: &'static str, bytes: usize) {
-        self.exceeded(resource, self.string_limit, bytes);
-    }
-
-    /// Compare one count against the item target, recording an exceedance.
-    pub(super) fn items_exceeded(&mut self, resource: &'static str, count: usize) {
-        self.exceeded(resource, self.item_limit, count);
     }
 
     /// The latched error for a checked-arithmetic overflow in this account.
@@ -218,7 +174,6 @@ impl Allocation {
             .checked_add(amount)
             .ok_or_else(|| self.overflow(INPUT_ITEMS_RESOURCE))?;
         self.usage.items = actual;
-        self.exceeded(INPUT_ITEMS_RESOURCE, self.item_limit, actual);
         Ok(())
     }
 
@@ -231,13 +186,11 @@ impl Allocation {
             .checked_add(amount)
             .ok_or_else(|| self.overflow(INPUT_BYTES_RESOURCE))?;
         self.usage.bytes = actual;
-        self.exceeded(INPUT_BYTES_RESOURCE, self.byte_limit, actual);
         Ok(())
     }
 
     pub(super) fn string(&mut self, value: &str) -> Result<()> {
         self.check()?;
-        self.exceeded(INPUT_STRING_RESOURCE, self.string_limit, value.len());
         self.items(1)?;
         self.bytes(value.len())
     }
@@ -301,14 +254,6 @@ impl Allocation {
     }
 }
 
-/// Cargo document parsers measure their string targets against the input
-/// account that owns the parsed message.
-impl cargo::unit::Measure for Allocation {
-    fn measured(&mut self, resource: &'static str, target: usize, actual: usize) {
-        self.exceeded(resource, target, actual);
-    }
-}
-
 #[cfg(feature = "rustc-driver")]
 #[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ArtifactAuthority {
@@ -356,7 +301,6 @@ impl Evidence {
     pub(crate) fn probe_directories(
         &self,
         graph: &cargo::unit::BuildGraph,
-        limits: &cargo::Limits,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[PathBuf]>> {
         let mut directories = Vec::new();
@@ -372,11 +316,6 @@ impl Evidence {
                 let parent = output
                     .parent()
                     .ok_or_else(|| input("probe-output-parent", output.display()))?;
-                allocation.exceeded(
-                    "metadata probe dependency directories",
-                    limits.units,
-                    directories.len().saturating_add(1),
-                );
                 allocation.reserve(&mut directories, 1)?;
                 directories.push(allocation.clone_path(parent)?);
             }
@@ -390,16 +329,10 @@ impl Evidence {
     pub(crate) fn selected_artifacts(
         &self,
         graph: &cargo::unit::BuildGraph,
-        limits: &cargo::Limits,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[SelectedArtifact]>> {
         let mut selected = Vec::new();
         for unit in graph.extraction() {
-            allocation.exceeded(
-                "selected rmeta artifacts",
-                limits.packages,
-                selected.len().saturating_add(1),
-            );
             let mut unit_matches = graph
                 .artifacts()
                 .iter()
@@ -595,26 +528,6 @@ impl Evidence {
         cargo_commit: &str,
         limits: &cargo::Limits,
     ) -> Result<Self> {
-        Self::parse_accounted(
-            bytes,
-            environment,
-            cargo_commit,
-            limits,
-            Allocation::new(limits),
-        )
-        .map(|(evidence, _)| evidence)
-    }
-
-    /// Parse under the supplied fresh input account and hand it back with the
-    /// evidence, so a caller can inspect the account's own exceedance record
-    /// instead of the process registry.
-    fn parse_accounted(
-        bytes: &[u8],
-        environment: Box<[(OsString, OsString)]>,
-        cargo_commit: &str,
-        limits: &cargo::Limits,
-        allocation: Allocation,
-    ) -> Result<(Self, Allocation)> {
         if cargo_commit != toolchain::supported_cargo_commit() {
             return Err(input("cargo-commit-skew", cargo_commit));
         }
@@ -624,10 +537,7 @@ impl Evidence {
                 "Cargo build JSON does not end at a line boundary",
             ));
         }
-        let mut allocation = allocation;
-        // The document size is an accounting target recorded on the
-        // input account.
-        allocation.exceeded("Cargo build JSON bytes", limits.json_bytes, bytes.len());
+        let mut allocation = Allocation::new(limits);
         allocation.bytes(bytes.len())?;
         allocation.items(environment.len())?;
         for (name, value) in &environment {
@@ -640,23 +550,12 @@ impl Evidence {
         let mut artifacts = Vec::new();
         let mut finished = None;
         let mut aggregate_items = 0_usize;
-        for (index, line) in bytes
+        for line in bytes
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty())
-            .enumerate()
         {
-            allocation.exceeded(
-                "Cargo build JSON lines",
-                limits.items,
-                index.saturating_add(1),
-            );
-            allocation.exceeded(
-                "Cargo build JSON line bytes",
-                limits.string_bytes,
-                line.len(),
-            );
             let previous_items = aggregate_items;
-            aggregate_items = preflight_json(line, aggregate_items, limits, &mut allocation)?;
+            aggregate_items = preflight_json(line, aggregate_items, limits)?;
             allocation.items(aggregate_items.saturating_sub(previous_items))?;
             let value: Value = serde_json::from_slice(line).map_err(|error| Error::Schema {
                 document: "Cargo build JSON",
@@ -720,11 +619,7 @@ impl Evidence {
                         .get("profile")
                         .ok_or_else(|| schema("artifact profile is absent"))?;
                     charge_serialized_value(profile_value, &mut allocation)?;
-                    let profile = cargo::unit::ArtifactProfile::from_build_measured(
-                        profile_value,
-                        limits,
-                        &mut allocation,
-                    )?;
+                    let profile = cargo::unit::ArtifactProfile::from_build(profile_value)?;
                     let fresh = object
                         .get("fresh")
                         .and_then(Value::as_bool)
@@ -754,11 +649,6 @@ impl Evidence {
                         }
                         Some(_) => return Err(input("package-manifest-mismatch", package_id)),
                         None => {
-                            allocation.exceeded(
-                                "Cargo build packages",
-                                limits.packages,
-                                packages.len().saturating_add(1),
-                            );
                             allocation.items(1)?;
                             allocation.string(package_id)?;
                             packages.insert(
@@ -826,11 +716,6 @@ impl Evidence {
                     let dep_info = dep_info
                         .pop()
                         .ok_or_else(|| input("missing-dep-info", package_id))?;
-                    allocation.exceeded(
-                        "Cargo build artifacts",
-                        limits.units,
-                        artifacts.len().saturating_add(1),
-                    );
                     allocation.items(1)?;
                     allocation.string(package_id)?;
                     artifacts
@@ -864,11 +749,6 @@ impl Evidence {
                         return Err(input("duplicate-build-script-cfg", package_id));
                     }
                     let environment = pairs(object.get("env"), &mut allocation)?;
-                    allocation.exceeded(
-                        "Cargo build-script messages",
-                        limits.units,
-                        scripts.len().saturating_add(1),
-                    );
                     scripts.try_reserve(1).map_err(|source| Error::Allocation {
                         operation: "build scripts",
                         source,
@@ -940,14 +820,13 @@ impl Evidence {
                 .then_with(|| left.fresh.cmp(&right.fresh))
         });
         artifacts.dedup_by(|left, right| left.same_public_message(right));
-        let evidence = Self {
+        Ok(Self {
             usage: allocation.usage(),
             packages: build::packages::Table::from_cold(packages),
             scripts: scripts.into_boxed_slice(),
             artifacts: artifacts.into_boxed_slice(),
             environment,
-        };
-        Ok((evidence, allocation))
+        })
     }
 
     pub(crate) fn fallback_packages(
@@ -962,7 +841,6 @@ impl Evidence {
                 cargo_commit,
                 &script.package_id,
                 &script.out_dir,
-                limits,
                 &mut allocation,
             )?;
             if declarations.paths.is_empty() && declarations.environment.is_empty() {
@@ -976,11 +854,6 @@ impl Evidence {
                     .iter()
                     .any(|(package_id, _)| package_id == &script.package_id)
                 {
-                    allocation.exceeded(
-                        "default package file sets",
-                        limits.packages,
-                        packages.len().saturating_add(1),
-                    );
                     allocation.items(1)?;
                     allocation.string(&script.package_id)?;
                     allocation.path(&package.manifest)?;
@@ -1004,20 +877,18 @@ impl Build {
     pub(crate) fn selected_artifacts(
         &self,
         graph: &cargo::unit::BuildGraph,
-        limits: &cargo::Limits,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[SelectedArtifact]>> {
-        self.evidence.selected_artifacts(graph, limits, allocation)
+        self.evidence.selected_artifacts(graph, allocation)
     }
 
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn probe_directories(
         &self,
         graph: &cargo::unit::BuildGraph,
-        limits: &cargo::Limits,
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[PathBuf]>> {
-        self.evidence.probe_directories(graph, limits, allocation)
+        self.evidence.probe_directories(graph, allocation)
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -1111,18 +982,8 @@ impl Build {
         target: &str,
     ) -> Result<Complete> {
         let mut allocation = Allocation::from_usage(self.evidence.usage, limits);
-        correlate_artifacts(
-            graph.artifacts(),
-            &self.evidence.artifacts,
-            limits,
-            &mut allocation,
-        )?;
-        correlate_scripts(
-            graph.scripts(),
-            &self.evidence.scripts,
-            limits,
-            &mut allocation,
-        )?;
+        correlate_artifacts(graph.artifacts(), &self.evidence.artifacts)?;
+        correlate_scripts(graph.scripts(), &self.evidence.scripts)?;
         build::scripts::bind(
             graph,
             &mut self.evidence.scripts,
@@ -1168,20 +1029,7 @@ fn artifact_authority(
     })
 }
 
-fn correlate_artifacts(
-    expected: &[cargo::unit::Output],
-    artifacts: &[Artifact],
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<()> {
-    // The unit counts are accounting targets recorded on the input
-    // account; only the bijection below refuses.
-    allocation.exceeded(
-        "Build compiler artifact units",
-        limits.units,
-        expected.len(),
-    );
-    allocation.exceeded("Cargo compiler artifacts", limits.units, artifacts.len());
+fn correlate_artifacts(expected: &[cargo::unit::Output], artifacts: &[Artifact]) -> Result<()> {
     // Cargo's public message profile omits the full unit context. A package profile override can
     // therefore produce multiple distinct artifacts with the same public projection. Prove total
     // coverage here; selected artifact authority is joined later by its path to a full PackageId,
@@ -1208,26 +1056,10 @@ fn correlate_artifacts(
     Ok(())
 }
 
-fn correlate_scripts(
-    expected: &[cargo::unit::BuildScript],
-    messages: &[Script],
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<()> {
-    // The script counts are accounting targets recorded on the input
-    // account that owns the messages. The stored replay route reaches
-    // `correlate_scripts_with` directly; its graph and message counts were
-    // recorded by the accounts that parsed them.
-    allocation.exceeded("normal Build script units", limits.units, expected.len());
-    allocation.exceeded(
-        "Cargo build-script executions",
-        limits.units,
-        messages.len(),
-    );
+fn correlate_scripts(expected: &[cargo::unit::BuildScript], messages: &[Script]) -> Result<()> {
     correlate_scripts_with(
         expected,
         messages,
-        limits,
         |code, reason| input(code, reason),
         |source| Error::Allocation {
             operation: "build script correlation",
@@ -1236,14 +1068,11 @@ fn correlate_scripts(
     )
 }
 
-/// Prove the script bijection. `_limits` is retained for the stored replay
-/// caller; the counts it once gated are accounting targets measured by the
-/// owning accounts, and the only refusals here are correctness and
+/// Prove the script bijection. The only refusals here are correctness and
 /// genuine allocation failure.
 fn correlate_scripts_with<E: From<Error>>(
     expected: &[cargo::unit::BuildScript],
     messages: &[Script],
-    _limits: &cargo::Limits,
     error: impl Fn(&'static str, &str) -> E,
     allocation_error: impl Fn(std::collections::TryReserveError) -> E,
 ) -> std::result::Result<(), E> {
@@ -1370,11 +1199,6 @@ impl Baseline {
                     recipe!($value, allocation)
                 };
                 ($value:expr, $account:ident) => {{
-                    $account.exceeded(
-                        "input proof recipes",
-                        limits.items,
-                        recipes.len().saturating_add(1),
-                    );
                     $account.items(1)?;
                     recipes.try_reserve(1).map_err(|source| Error::Allocation {
                         operation: "input recipes",
@@ -1386,7 +1210,6 @@ impl Baseline {
             scalar::config(
                 &config.projection,
                 &config.provenance,
-                limits,
                 &mut allocation,
                 |value, allocation| {
                     recipe!(value.retain(allocation)?, allocation);
@@ -1413,11 +1236,7 @@ impl Baseline {
                     Recipe::path(Role::Authority, retained.path(), &mut allocation)?
                 });
             }
-            workspace.require(&mut workspace::Account::borrow(
-                &mut allocation,
-                context.graph_budget(),
-                limits,
-            ))?;
+            workspace.require(&mut workspace::Account::borrow(&mut allocation, limits))?;
             let workspace_expected = workspace.entry;
             allocation.items(workspace.roots.len())?;
             allocation.bytes(
@@ -1431,7 +1250,6 @@ impl Baseline {
             }
             recipe!(Recipe::Workspace {
                 roots: workspace.roots,
-                graph: context.graph_budget().clone(),
             });
             for (path, expected) in probe_artifacts {
                 let actual = file_digest_accounted(path, &mut allocation)?;
@@ -1534,7 +1352,6 @@ impl Baseline {
                     proof.cargo_commit(),
                     &artifact.dep_info,
                     &package.root,
-                    limits,
                     &mut allocation,
                 )?;
                 native
@@ -1571,7 +1388,6 @@ impl Baseline {
                     proof.cargo_commit(),
                     package_id,
                     &script.out_dir,
-                    limits,
                     &mut allocation,
                 )?;
                 let execution = script::declarations(
@@ -1588,11 +1404,6 @@ impl Baseline {
                 )?;
                 if script::fallback(&declarations) && !fallback_bound.contains(package_id.as_ref())
                 {
-                    allocation.exceeded(
-                        "default package file sets",
-                        limits.packages,
-                        fallback_bound.len().saturating_add(1),
-                    );
                     fallback_bound.insert(package_id);
                     let files = build
                         .package_files
@@ -1611,7 +1422,6 @@ impl Baseline {
                     "fallback package proof was not transformed into a recipe",
                 ));
             }
-            allocation.exceeded("input proof recipes", limits.items, recipes.len());
             let recipe_allocation = allocation.usage();
             let mut proof = proof::evaluate(&recipes, false, limits, &mut allocation)?;
             if !proof.contains_workspace(&workspace_expected) {
@@ -1664,9 +1474,7 @@ impl Baseline {
                         &build.evidence,
                         protected,
                         target,
-                        limits,
                         &mut allocation,
-                        context.graph_budget(),
                     )
                 })
                 .transpose()?;
@@ -1768,9 +1576,6 @@ fn pairs(
     let values = value
         .and_then(Value::as_array)
         .ok_or_else(|| schema("build-script environment is absent"))?;
-    // Entry and string sizes are accounting targets recorded on the
-    // input account; the charges below are the checked admission.
-    allocation.items_exceeded("build-script environment entries", values.len());
     allocation.items(values.len())?;
     let mut pairs = Vec::new();
     pairs
@@ -1790,8 +1595,6 @@ fn pairs(
         let value = pair[1]
             .as_str()
             .ok_or_else(|| schema("build-script environment value is not a string"))?;
-        allocation.string_exceeded("build-script environment", key.len());
-        allocation.string_exceeded("build-script environment", value.len());
         allocation.string(key)?;
         allocation.string(value)?;
         pairs.push((key.into(), value.into()));
@@ -1814,9 +1617,6 @@ fn strings(
     let values = value
         .and_then(Value::as_array)
         .ok_or_else(|| schema(&format!("{document} are absent")))?;
-    // The entry count and each string size are accounting targets
-    // recorded on the input account; the charges below are the admission.
-    allocation.items_exceeded(document, values.len());
     allocation.items(values.len())?;
     let mut owned = Vec::new();
     owned
@@ -1829,7 +1629,6 @@ fn strings(
         let value = value
             .as_str()
             .ok_or_else(|| schema(&format!("{document} entry is not a string")))?;
-        allocation.string_exceeded(document, value.len());
         allocation.string(value)?;
         owned.push(value.into());
     }
@@ -1879,15 +1678,9 @@ fn value_string<'a>(object: &'a serde_json::Map<String, Value>, key: &str) -> Re
         .ok_or_else(|| schema(&format!("{key} is absent or not a string")))
 }
 
-/// Scan one Cargo build JSON line before serde owns it. Containers, items
-/// and string bytes are accounting targets recorded on `allocation`;
-/// `depth` bounds the container stack and stays a physical refusal.
-fn preflight_json(
-    bytes: &[u8],
-    mut items: usize,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<usize> {
+/// Scan one Cargo build JSON line before serde owns it. `depth` bounds the
+/// container stack and stays a physical refusal.
+fn preflight_json(bytes: &[u8], mut items: usize, limits: &cargo::Limits) -> Result<usize> {
     let mut in_string = false;
     let mut escaped = false;
     let mut string_bytes = 0_usize;
@@ -1900,11 +1693,6 @@ fn preflight_json(
             } else if *byte == b'\\' {
                 escaped = true;
             } else if *byte == b'"' {
-                allocation.exceeded(
-                    "Cargo build JSON string bytes",
-                    limits.string_bytes,
-                    string_bytes,
-                );
                 string_bytes = 0;
                 in_string = false;
             } else {
@@ -1913,12 +1701,11 @@ fn preflight_json(
             continue;
         }
         if *byte == b'"' {
-            begin_array_value(&mut stack, &mut items, limits, allocation)?;
+            begin_array_value(&mut stack, &mut items)?;
             in_string = true;
         } else if matches!(*byte, b'[' | b'{') {
-            begin_array_value(&mut stack, &mut items, limits, allocation)?;
+            begin_array_value(&mut stack, &mut items)?;
             containers = containers.saturating_add(1);
-            allocation.exceeded("Cargo build JSON containers", limits.containers, containers);
             limited(
                 "Cargo build JSON depth",
                 limits.depth,
@@ -1942,7 +1729,7 @@ fn preflight_json(
                 None => {}
             }
         } else if !byte.is_ascii_whitespace() && *byte != b':' {
-            begin_array_value(&mut stack, &mut items, limits, allocation)?;
+            begin_array_value(&mut stack, &mut items)?;
         }
     }
     if in_string || escaped || !stack.is_empty() {
@@ -1951,12 +1738,7 @@ fn preflight_json(
     Ok(items)
 }
 
-fn begin_array_value(
-    stack: &mut [JsonContainer],
-    items: &mut usize,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<()> {
+fn begin_array_value(stack: &mut [JsonContainer], items: &mut usize) -> Result<()> {
     let expected = match stack.last_mut() {
         Some(JsonContainer::Array { expects_value }) if *expects_value => {
             *expects_value = false;
@@ -1970,7 +1752,6 @@ fn begin_array_value(
     };
     if expected {
         *items = items.saturating_add(1);
-        allocation.exceeded("Cargo build JSON items", limits.items, *items);
     }
     Ok(())
 }
@@ -2322,8 +2103,7 @@ fn bounded_path_text(value: &str) -> Result<()> {
 /// Retained for `declaration.rs`, which compares a declared string against
 /// the string target outside any input account.
 /// A physical bound (path text, a file read that outgrew its admitted
-/// buffer, JSON depth) refuses. Accounting targets are recorded on their
-/// account instead.
+/// buffer, JSON depth) refuses.
 fn limited(resource: &'static str, limit: usize, actual: usize) -> Result<()> {
     if actual > limit {
         Err(Error::Limit {
@@ -2359,9 +2139,8 @@ mod build_message_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        charge_serialized_value, correlate_artifacts, correlate_scripts, dependency, pairs,
-        preflight_json, proof, read_file, read_file_budgeted, strings, Allocation, Artifact, Key,
-        Script, Usage, INPUT_BYTES_RESOURCE, INPUT_ITEMS_RESOURCE, OWNED_ACCOUNTED_READS,
+        correlate_artifacts, correlate_scripts, dependency, preflight_json, proof, read_file,
+        read_file_budgeted, Allocation, Artifact, Key, Script, Usage, OWNED_ACCOUNTED_READS,
     };
     #[cfg(feature = "rustc-driver")]
     use super::{Build, Evidence};
@@ -2370,66 +2149,20 @@ mod build_message_tests {
 
     static READ_ID: AtomicU64 = AtomicU64::new(1);
 
-    /// The Cargo build JSON document size is an accounting target on the
-    /// input account; exact records nothing, one under parses the same
-    /// document and the account's own record carries the axis with the
-    /// truthful size and no latch.
+    /// A charge past every figure is spent and never latches; a
+    /// checked-arithmetic overflow latches the account, which then refuses
+    /// every further charge while the spent usage stands.
     #[test]
-    fn build_json_bytes_record_the_json_target_without_refusal() {
-        let bytes = b"{\"reason\":\"build-finished\",\"success\":true}\n";
-        let parse = |json_bytes: usize| {
-            let mut limits = Limits::standard();
-            limits.json_bytes = json_bytes;
-            super::Evidence::parse_accounted(
-                bytes,
-                Box::default(),
-                crate::cargo::toolchain::supported_cargo_commit(),
-                &limits,
-                Allocation::new(&limits),
-            )
-            .map(|(_, allocation)| allocation)
-        };
-        let exact = parse(bytes.len()).expect("a document at the JSON target parses");
-        assert!(!exact.exceedances().is_exceeded());
-        let mut one_under =
-            parse(bytes.len() - 1).expect("a document one byte over the JSON target parses");
-        let axis = *one_under
-            .exceedances()
-            .axis("Cargo build JSON bytes")
-            .expect("the input account records the document axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (bytes.len() - 1) as u64,
-                bytes.len() as u64,
-                bytes.len() as u64
-            )
-        );
-        assert!(one_under.items(0).is_ok(), "an exceedance never latches");
-    }
-
-    /// Cause ordering: an exceedance never latches, a later genuine
-    /// checked-arithmetic overflow does, and the latch then refuses every
-    /// further charge while the recorded exceedance and spent usage stand.
-    #[test]
-    fn checked_overflow_latches_the_input_account_after_an_exceedance() {
+    fn checked_overflow_latches_the_input_account_after_large_charges() {
         let mut allocation = Allocation::with_limits(usize::MAX, 4, usize::MAX);
         allocation
             .bytes(5)
-            .expect("one byte over the target is charged");
-        assert_eq!(
-            allocation
-                .exceedances()
-                .axis(INPUT_BYTES_RESOURCE)
-                .unwrap()
-                .high_water,
-            5
-        );
-        assert!(allocation.items(0).is_ok(), "an exceedance never latches");
+            .expect("a byte charge past the figure is spent");
+        assert!(allocation.items(0).is_ok(), "a large charge never latches");
         assert!(matches!(
             allocation.bytes(usize::MAX),
             Err(crate::Error::Node {
-                operation: INPUT_BYTES_RESOURCE,
+                operation: super::INPUT_BYTES_RESOURCE,
                 ..
             })
         ));
@@ -2438,111 +2171,29 @@ mod build_message_tests {
             Err(crate::Error::InputAccountRefused)
         ));
         assert_eq!(allocation.usage(), Usage { items: 0, bytes: 5 });
-        assert_eq!(allocation.exceedances().axes().count(), 1);
-    }
-
-    #[test]
-    fn input_proof_byte_authority_is_exact_and_isolated_from_shared_input() {
-        let limits = Limits::standard();
-        assert_eq!(limits.byte_limit(), 33_554_432);
-        assert_eq!(limits.canonical_bytes, 1_207_959_552);
-        assert_eq!(limits.input_proof_bytes, 536_870_912);
-
-        // The byte target is an accounting target. The exact boundary
-        // records nothing; one byte over is still charged, returns `Ok`,
-        // records the axis with a truthful high water and latches nothing.
-        let mut shared = Allocation::new(&limits);
-        shared
-            .bytes(33_554_432)
-            .expect("the exact shared input boundary is accepted");
-        assert!(!shared.exceedances().is_exceeded());
-        shared
-            .bytes(1)
-            .expect("one byte over the shared target is charged, not refused");
-        assert_eq!(
-            shared.usage(),
-            Usage {
-                items: 0,
-                bytes: 33_554_433
-            }
-        );
-        let shared_axis = *shared
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the shared account records its byte axis");
-        assert_eq!(
-            (
-                shared_axis.target,
-                shared_axis.first_requested,
-                shared_axis.high_water
-            ),
-            (33_554_432, 33_554_433, 33_554_433)
-        );
-        assert!(shared.items(0).is_ok(), "an exceedance never latches");
-
-        let mut proof = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
-        proof
-            .bytes(536_870_912)
-            .expect("the exact input-proof boundary is accepted");
-        assert!(!proof.exceedances().is_exceeded());
-        proof
-            .bytes(1)
-            .expect("one byte over the input-proof target is charged, not refused");
-        assert_eq!(
-            proof.usage(),
-            Usage {
-                items: 0,
-                bytes: 536_870_913
-            }
-        );
-        let proof_axis = *proof
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the proof account records its byte axis");
-        assert_eq!(
-            (
-                proof_axis.target,
-                proof_axis.first_requested,
-                proof_axis.high_water
-            ),
-            (536_870_912, 536_870_913, 536_870_913)
-        );
-        assert!(proof.items(0).is_ok(), "an exceedance never latches");
-        // The shared account's exceedance is isolated from the proof account.
-        assert_eq!(shared.exceedances().axes().count(), 1);
-        assert_eq!(proof.exceedances().axes().count(), 1);
     }
 
     #[test]
     fn removing_an_ordinary_compiler_artifact_rejects_completeness() {
-        let limits = Limits::standard();
-        let mut allocation = Allocation::new(&limits);
         let output = output("dependency", "lib", "lib");
         let artifact = artifact(&output);
         correlate_artifacts(
             std::slice::from_ref(&output),
             std::slice::from_ref(&artifact),
-            &limits,
-            &mut allocation,
         )
         .expect("the complete ordinary artifact correlates");
-        let error =
-            correlate_artifacts(std::slice::from_ref(&output), &[], &limits, &mut allocation)
-                .expect_err("removing the compiler-artifact line rejects");
+        let error = correlate_artifacts(std::slice::from_ref(&output), &[])
+            .expect_err("removing the compiler-artifact line rejects");
         assert!(format!("{error}").contains("missing-build-artifact"));
     }
 
     #[test]
     fn harness_and_every_unexpected_artifact_class_are_bijective() {
-        let limits = Limits::standard();
-        let mut allocation = Allocation::new(&limits);
         let harness = output("rawr-resolution-harness", "lib", "lib");
         let harness_artifact = artifact(&harness);
         correlate_artifacts(
             std::slice::from_ref(&harness),
             std::slice::from_ref(&harness_artifact),
-            &limits,
-            &mut allocation,
         )
         .expect("the synthetic root harness is explicitly matched");
 
@@ -2551,7 +2202,7 @@ mod build_message_tests {
             artifact(&output("unexpected-proc-macro", "proc-macro", "proc-macro")),
             artifact(&output("unexpected-custom-build", "custom-build", "bin")),
         ] {
-            let error = correlate_artifacts(&[], &[artifact], &limits, &mut allocation)
+            let error = correlate_artifacts(&[], &[artifact])
                 .expect_err("an unplanned compiler artifact rejects the bijection");
             assert!(format!("{error}").contains("unexpected-build-artifact"));
         }
@@ -2559,8 +2210,6 @@ mod build_message_tests {
 
     #[test]
     fn same_package_build_script_executions_retain_distinct_out_directories() {
-        let limits = Limits::standard();
-        let mut allocation = Allocation::new(&limits);
         let package_id = "path+file:///fixture#0.1.0";
         let expected = [
             unit::BuildScript::fixture(package_id, "host"),
@@ -2568,113 +2217,22 @@ mod build_message_tests {
         ];
         let actual = [script(package_id, "host"), script(package_id, "target")];
         assert_ne!(actual[0].out_dir, actual[1].out_dir);
-        correlate_scripts(&expected, &actual, &limits, &mut allocation)
+        correlate_scripts(&expected, &actual)
             .expect("two same-PackageId executions satisfy the exact package multiset");
-        let error = correlate_scripts(&expected, &actual[..1], &limits, &mut allocation)
+        let error = correlate_scripts(&expected, &actual[..1])
             .expect_err("omitting one same-PackageId execution rejects");
         assert!(format!("{error}").contains("build-script-unit-cardinality"));
     }
 
-    /// The unit counts correlated against the Cargo graph are accounting
-    /// targets on the input account. The exact count records nothing; one
-    /// under still proves the bijection, records each crossing axis with the
-    /// truthful count and latches nothing.
+    /// `depth` bounds the container stack of a Cargo build JSON line and
+    /// is a physical refusal.
     #[test]
-    fn correlated_unit_counts_record_the_unit_target_without_refusal() {
-        let outputs = [
-            output("dependency", "lib", "lib"),
-            output("other", "lib", "lib"),
-        ];
-        let artifacts = [artifact(&outputs[0]), artifact(&outputs[1])];
-        let correlate = |units: usize| {
-            let mut limits = Limits::standard();
-            limits.units = units;
-            let mut allocation = Allocation::new(&limits);
-            correlate_artifacts(&outputs, &artifacts, &limits, &mut allocation)
-                .expect("the complete bijection correlates regardless of the unit target");
-            allocation
-        };
-        assert!(!correlate(2).exceedances().is_exceeded());
-        let mut one_under = correlate(1);
-        for name in ["Build compiler artifact units", "Cargo compiler artifacts"] {
-            let axis = *one_under
-                .exceedances()
-                .axis(name)
-                .unwrap_or_else(|| panic!("`{name}` records its axis"));
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (1, 2, 2)
-            );
-        }
-        assert!(one_under.items(0).is_ok(), "an exceedance never latches");
-
-        let package_id = "path+file:///fixture#0.1.0";
-        let expected = [
-            unit::BuildScript::fixture(package_id, "host"),
-            unit::BuildScript::fixture(package_id, "target"),
-        ];
-        let actual = [script(package_id, "host"), script(package_id, "target")];
-        let mut limits = Limits::standard();
-        limits.units = 1;
-        let mut allocation = Allocation::new(&limits);
-        correlate_scripts(&expected, &actual, &limits, &mut allocation)
-            .expect("the exact script multiset correlates regardless of the unit target");
-        for name in ["normal Build script units", "Cargo build-script executions"] {
-            let axis = *allocation
-                .exceedances()
-                .axis(name)
-                .unwrap_or_else(|| panic!("`{name}` records its axis"));
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (1, 2, 2)
-            );
-        }
-        assert!(allocation.items(0).is_ok(), "an exceedance never latches");
-    }
-
-    /// The preflight item, container and string-byte counts of a Cargo
-    /// build JSON line are accounting targets on the input account. Exact
-    /// records nothing; under the targets the line still scans to the same
-    /// item total and each axis records its truthful figure. `depth` bounds
-    /// the container stack and stays a physical refusal.
-    #[test]
-    fn preflight_counts_record_their_targets_and_depth_stays_physical() {
-        let line = br#"{"first":1,"second":2,"third":3}"#;
-        let scan = |items: usize, containers: usize, string_bytes: usize| {
-            let mut limits = Limits::standard();
-            limits.items = items;
-            limits.containers = containers;
-            limits.string_bytes = string_bytes;
-            let mut allocation = Allocation::new(&limits);
-            let counted = preflight_json(line, 0, &limits, &mut allocation)
-                .expect("the line scans regardless of its accounting targets");
-            assert_eq!(counted, 3);
-            allocation
-        };
-        assert!(!scan(3, 1, 6).exceedances().is_exceeded());
-        let mut under = scan(2, 0, 5);
-        for (name, expected) in [
-            ("Cargo build JSON items", (2, 3, 3)),
-            ("Cargo build JSON containers", (0, 1, 1)),
-            ("Cargo build JSON string bytes", (5, 6, 6)),
-        ] {
-            let axis = *under
-                .exceedances()
-                .axis(name)
-                .unwrap_or_else(|| panic!("`{name}` records its axis"));
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                expected
-            );
-        }
-        assert!(under.items(0).is_ok(), "an exceedance never latches");
-
+    fn preflight_depth_is_a_physical_refusal() {
         let mut limits = Limits::standard();
         limits.depth = 1;
-        let mut allocation = Allocation::new(&limits);
-        preflight_json(br#"[1]"#, 0, &limits, &mut allocation).expect("exact depth scans");
+        preflight_json(br#"[1]"#, 0, &limits).expect("exact depth scans");
         assert!(matches!(
-            preflight_json(br#"[[1]]"#, 0, &limits, &mut allocation),
+            preflight_json(br#"[[1]]"#, 0, &limits),
             Err(crate::Error::Limit {
                 resource: "Cargo build JSON depth",
                 limit: 1,
@@ -2686,9 +2244,8 @@ mod build_message_tests {
     #[test]
     fn retained_recipes_and_simultaneous_entries_share_one_item_budget() {
         let recipes = [("a", "b"), ("c", "d"), ("e", "f")];
-        let evaluate = |item_limit| {
-            let mut limits = Limits::standard();
-            limits.items = item_limit;
+        let evaluate = || {
+            let limits = Limits::standard();
             let mut allocation = Allocation::new(&limits);
             let mut retained = Vec::new();
             for (name, value) in recipes {
@@ -2710,33 +2267,17 @@ mod build_message_tests {
             Ok::<_, crate::Error>(allocation)
         };
 
-        // The exact retained Recipe plus Entry item total is 18. At the
-        // exact target nothing is recorded; one item less records the item
-        // axis with a high water of exactly 18 — the simultaneous Entry fanout
-        // did not reset usage — and the work still completes unlatched.
-        let exact =
-            evaluate(18).expect("the exact retained Recipe plus Entry item boundary admits");
-        assert!(!exact.exceedances().is_exceeded());
-        assert_eq!(exact.usage().items, 18);
-        let mut one_under =
-            evaluate(17).expect("one item under the target is charged, not refused");
-        let axis = *one_under
-            .exceedances()
-            .axis(INPUT_ITEMS_RESOURCE)
-            .expect("the simultaneous Entry fanout must not reset usage");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (17, 18, 18)
-        );
-        assert!(one_under.items(0).is_ok(), "an exceedance never latches");
+        // The retained Recipe plus Entry item total is 18: the simultaneous
+        // Entry fanout did not reset usage.
+        let spent = evaluate().expect("the retained Recipes evaluate");
+        assert_eq!(spent.usage().items, 18);
     }
 
     #[test]
     fn retained_recipe_and_entry_string_bytes_are_cumulative() {
-        let evaluate = |byte_limit| {
+        let evaluate = || {
             let limits = Limits::standard();
-            let mut allocation =
-                Allocation::with_limits(limits.items, byte_limit, limits.string_bytes);
+            let mut allocation = Allocation::new(&limits);
             allocation.items(1)?;
             let retained = [Recipe::fact(
                 Role::BuildMessage,
@@ -2748,93 +2289,10 @@ mod build_message_tests {
             Ok::<_, crate::Error>(allocation)
         };
 
-        // The exact retained Recipe plus Entry byte total is 66. At the
-        // exact target nothing is recorded; one byte less records the byte
-        // axis with a high water of exactly 66 — the Entry clone retained the
-        // prior Recipe bytes — and the work still completes unlatched.
-        let exact =
-            evaluate(66).expect("the exact retained Recipe plus Entry byte boundary admits");
-        assert!(!exact.exceedances().is_exceeded());
-        assert_eq!(exact.usage().bytes, 66);
-        let mut one_under =
-            evaluate(65).expect("one byte under the target is charged, not refused");
-        let axis = *one_under
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the Entry clone must retain prior Recipe bytes");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (65, 66, 66)
-        );
-        assert!(one_under.bytes(0).is_ok(), "an exceedance never latches");
-    }
-
-    #[test]
-    fn build_artifact_cfg_env_paths_share_exact_owned_allocation_boundaries() {
-        let limits = Limits::standard();
-        let exercise = |items, bytes| -> crate::Result<_> {
-            let mut allocation = Allocation::with_limits(items, bytes, limits.string_bytes);
-            let retained = strings(
-                Some(&serde_json::json!(["a", "bb"])),
-                "artifact filenames",
-                &mut allocation,
-            )?;
-            let environment = pairs(Some(&serde_json::json!([["k", "v"]])), &mut allocation)?;
-            allocation.path(Path::new("xy"))?;
-            charge_serialized_value(&serde_json::json!({"x": 1}), &mut allocation)?;
-            Ok((allocation, retained, environment))
-        };
-
-        let (unbounded, retained, environment) = exercise(usize::MAX, usize::MAX)
-            .expect("unbounded fixture reveals the exact retained counters");
-        let usage = unbounded.usage();
-        let (exact, exact_retained, exact_environment) = exercise(usage.items, usage.bytes)
-            .expect("exact Build artifact/cfg/env/path counters seal");
-        assert_eq!(
-            (exact.usage().items, exact.usage().bytes),
-            (usage.items, usage.bytes)
-        );
-        assert!(!exact.exceedances().is_exceeded());
-        assert_eq!(retained, exact_retained);
-        assert_eq!(environment, exact_environment);
-        // One item (or byte) under the exact total is charged, not
-        // refused; the account records the axis with a high water equal to the
-        // exact counter, which proves the counter without a refusal.
-        let (mut under_items, retained_under, environment_under) =
-            exercise(usage.items.saturating_sub(1), usage.bytes)
-                .expect("one item under the exact total still completes");
-        let items_axis = *under_items
-            .exceedances()
-            .axis(INPUT_ITEMS_RESOURCE)
-            .expect("the item axis records the exact total");
-        assert_eq!(
-            (items_axis.target, items_axis.high_water),
-            ((usage.items - 1) as u64, usage.items as u64)
-        );
-        assert!(under_items
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .is_none());
-        assert!(under_items.items(0).is_ok(), "an exceedance never latches");
-        assert_eq!(
-            (retained_under, environment_under),
-            (retained.clone(), environment.clone())
-        );
-        let (mut under_bytes, _, _) = exercise(usage.items, usage.bytes.saturating_sub(1))
-            .expect("one byte under the exact total still completes");
-        let bytes_axis = *under_bytes
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the byte axis records the exact total");
-        assert_eq!(
-            (bytes_axis.target, bytes_axis.high_water),
-            ((usage.bytes - 1) as u64, usage.bytes as u64)
-        );
-        assert!(under_bytes
-            .exceedances()
-            .axis(INPUT_ITEMS_RESOURCE)
-            .is_none());
-        assert!(under_bytes.bytes(0).is_ok(), "an exceedance never latches");
+        // The retained Recipe plus Entry byte total is 66: the Entry clone
+        // retained the prior Recipe bytes.
+        let spent = evaluate().expect("the retained Recipe evaluates");
+        assert_eq!(spent.usage().bytes, 66);
     }
 
     #[test]
@@ -2875,10 +2333,10 @@ mod build_message_tests {
             fs::write(root.join(name), bytes).expect("the accounted input is written");
         }
         let total_bytes = files.iter().map(|(_, bytes)| bytes.len()).sum::<usize>();
-        let exercise = |items, bytes| -> crate::Result<_> {
+        let exercise = || -> crate::Result<_> {
             OWNED_ACCOUNTED_READS.with(|owned| owned.set(0));
             let limits = Limits::standard();
-            let mut allocation = Allocation::with_limits(items, bytes, limits.string_bytes);
+            let mut allocation = Allocation::new(&limits);
             for (name, _) in files {
                 let _ = read_file_budgeted(
                     "combined fallback/baseline input",
@@ -2890,75 +2348,15 @@ mod build_message_tests {
             Ok(allocation)
         };
 
-        let exact = exercise(files.len(), total_bytes)
-            .expect("registry and every Baseline file class fit exact caps");
+        let spent = exercise().expect("registry and every Baseline file class are read");
         assert_eq!(
-            (exact.usage().items, exact.usage().bytes),
+            (spent.usage().items, spent.usage().bytes),
             (files.len(), total_bytes)
         );
-        assert!(!exact.exceedances().is_exceeded());
         assert_eq!(
             OWNED_ACCOUNTED_READS.with(std::cell::Cell::get),
             files.len()
         );
-        // One item (or byte) under the exact total is an accounting
-        // exceedance, not a refusal: every accounted read still happens through
-        // the owned lineage and the account records the axis with a high water
-        // equal to the exact total.
-        let mut under_items = exercise(files.len().saturating_sub(1), total_bytes)
-            .expect("one item under the exact total still reads every file");
-        assert_eq!(
-            OWNED_ACCOUNTED_READS.with(std::cell::Cell::get),
-            files.len()
-        );
-        let items_axis = *under_items
-            .exceedances()
-            .axis(INPUT_ITEMS_RESOURCE)
-            .expect("the item axis records the exact read count");
-        assert_eq!(
-            (
-                items_axis.target,
-                items_axis.first_requested,
-                items_axis.high_water
-            ),
-            (
-                files.len().saturating_sub(1) as u64,
-                files.len() as u64,
-                files.len() as u64
-            )
-        );
-        assert!(under_items
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .is_none());
-        assert!(under_items.items(0).is_ok(), "an exceedance never latches");
-        let mut under_bytes = exercise(files.len(), total_bytes.saturating_sub(1))
-            .expect("one byte under the exact total still reads every file");
-        assert_eq!(
-            OWNED_ACCOUNTED_READS.with(std::cell::Cell::get),
-            files.len()
-        );
-        let bytes_axis = *under_bytes
-            .exceedances()
-            .axis(INPUT_BYTES_RESOURCE)
-            .expect("the byte axis records the exact read total");
-        assert_eq!(
-            (
-                bytes_axis.target,
-                bytes_axis.first_requested,
-                bytes_axis.high_water
-            ),
-            (
-                total_bytes.saturating_sub(1) as u64,
-                total_bytes as u64,
-                total_bytes as u64
-            )
-        );
-        assert!(under_bytes
-            .exceedances()
-            .axis(INPUT_ITEMS_RESOURCE)
-            .is_none());
-        assert!(under_bytes.bytes(0).is_ok(), "an exceedance never latches");
         fs::remove_dir_all(root).expect("the accounted reader root is retired");
     }
 
@@ -2966,7 +2364,6 @@ mod build_message_tests {
     fn pinned_env_dep_records_preserve_set_empty_and_unset_values() {
         let environment = dependency::environment(
             "target: source.rs\n# env-dep:SET=value=with=equals\n# env-dep:EMPTY=\n# env-dep:UNSET\n",
-            &Limits::standard(),
             &mut Allocation::new(&Limits::standard()),
         )
         .expect("the pinned rustc env-dep grammar decodes");
@@ -2988,7 +2385,7 @@ mod build_message_tests {
             "target: source.rs\n# env-dep:DUP=first\n# env-dep:DUP=second\n",
         ] {
             let limits = Limits::standard();
-            let error = dependency::environment(text, &limits, &mut Allocation::new(&limits))
+            let error = dependency::environment(text, &mut Allocation::new(&limits))
                 .expect_err("malformed or duplicate env-dep records reject");
             assert!(
                 format!("{error}").contains("env-dep"),
@@ -3000,7 +2397,6 @@ mod build_message_tests {
             "unsupported-cargo-commit",
             Path::new("/not/read/when/skewed.d"),
             Path::new("/not/read/when/skewed"),
-            &limits,
             &mut Allocation::new(&limits),
         )
         .err()

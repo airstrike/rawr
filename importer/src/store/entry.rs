@@ -111,22 +111,17 @@ fn ensure_directory_with(
 }
 
 pub(crate) fn existing_directory(root: &Path, relative: &Path) -> Result<Option<PathBuf>, Error> {
-    existing_directory_with_budget(root, relative, None)
+    existing_directory_with_budget(root, relative)
 }
 
 pub(crate) fn existing_directory_budgeted(
     root: &Path,
     relative: &Path,
-    budget: &crate::node::GraphBudget,
 ) -> Result<Option<PathBuf>, Error> {
-    existing_directory_with_budget(root, relative, Some(budget))
+    existing_directory_with_budget(root, relative)
 }
 
-fn existing_directory_with_budget(
-    root: &Path,
-    relative: &Path,
-    budget: Option<&crate::node::GraphBudget>,
-) -> Result<Option<PathBuf>, Error> {
+fn existing_directory_with_budget(root: &Path, relative: &Path) -> Result<Option<PathBuf>, Error> {
     if relative.is_absolute() {
         return Err(Error::OutsideRoot(relative.to_path_buf()));
     }
@@ -137,9 +132,6 @@ fn existing_directory_with_budget(
         .checked_add(relative.as_os_str().as_encoded_bytes().len())
         .and_then(|size| size.checked_add(1))
         .ok_or(Error::Allocation)?;
-    if let Some(budget) = budget {
-        budget.decode(std::mem::size_of::<PathBuf>() + length)?;
-    }
     let mut current = PathBuf::new();
     current
         .try_reserve_exact(length)
@@ -150,10 +142,6 @@ fn existing_directory_with_budget(
             return Err(Error::OutsideRoot(relative.to_path_buf()));
         };
         current.push(component);
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            super::path::input(&current, budget)?;
-        }
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -169,10 +157,6 @@ fn existing_directory_with_budget(
             return Err(Error::Shape(current));
         }
     }
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        super::path::canonical(&current, budget)?;
-    }
     let canonical = fs::canonicalize(&current).map_err(|source| Error::Io {
         operation: "canonicalize typed store directory",
         path: current,
@@ -185,15 +169,11 @@ fn existing_directory_with_budget(
 }
 
 pub(crate) fn read_file(path: &Path, limit: usize) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(path, limit, None, None, |actual| file_limit(limit, actual))
+    read_file_with_budget(path, limit, None, |actual| file_limit(limit, actual))
 }
 
-pub(crate) fn read_file_budgeted(
-    path: &Path,
-    limit: usize,
-    budget: &crate::node::GraphBudget,
-) -> Result<Box<[u8]>, Error> {
-    read_file_budgeted_with(path, limit, budget, |actual| file_limit(limit, actual))
+pub(crate) fn read_file_budgeted(path: &Path, limit: usize) -> Result<Box<[u8]>, Error> {
+    read_file_budgeted_with(path, limit, |actual| file_limit(limit, actual))
 }
 
 /// Only this reader's observed file extent may use the supplied rejection.
@@ -201,18 +181,13 @@ pub(crate) fn read_file_budgeted(
 pub(super) fn read_file_budgeted_with(
     path: &Path,
     limit: usize,
-    budget: &crate::node::GraphBudget,
     oversized: impl FnOnce(usize) -> Error,
 ) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(path, limit, Some(budget), None, oversized)
+    read_file_with_budget(path, limit, None, oversized)
 }
 
-pub(super) fn read_candidate_file_budgeted(
-    path: &Path,
-    limit: usize,
-    budget: &crate::node::GraphBudget,
-) -> Result<Box<[u8]>, Error> {
-    read_file_budgeted_with(path, limit, budget, |_| Error::Corrupt {
+pub(super) fn read_candidate_file_budgeted(path: &Path, limit: usize) -> Result<Box<[u8]>, Error> {
+    read_file_budgeted_with(path, limit, |_| Error::Corrupt {
         path: path.to_path_buf(),
         reason: "candidate stored file exceeds its extent bound",
     })
@@ -224,15 +199,10 @@ pub(crate) fn read_payload_budgeted(
     path: &Path,
     content_length: usize,
     output_limit: usize,
-    budget: &crate::node::GraphBudget,
 ) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(
-        path,
-        output_limit,
-        Some(budget),
-        Some(content_length),
-        |actual| file_limit(output_limit, actual),
-    )
+    read_file_with_budget(path, output_limit, Some(content_length), |actual| {
+        file_limit(output_limit, actual)
+    })
 }
 
 /// The shape and extent checks `read_payload_budgeted` applies before reading,
@@ -242,10 +212,7 @@ pub(crate) fn inspect_payload_budgeted(
     path: &Path,
     content_length: usize,
     output_limit: usize,
-    budget: &crate::node::GraphBudget,
 ) -> Result<fs::Metadata, Error> {
-    budget.paths(1)?;
-    super::path::input(path, budget)?;
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store file",
         path: path.to_path_buf(),
@@ -271,18 +238,13 @@ pub(super) fn read_candidate_payload_budgeted(
     path: &Path,
     content_length: usize,
     output_limit: usize,
-    budget: &crate::node::GraphBudget,
 ) -> Result<Box<[u8]>, Error> {
-    read_file_with_budget(
-        path,
-        output_limit,
-        Some(budget),
-        Some(content_length),
-        |_| Error::Corrupt {
+    read_file_with_budget(path, output_limit, Some(content_length), |_| {
+        Error::Corrupt {
             path: path.to_path_buf(),
             reason: "candidate typed payload exceeds its extent bound",
-        },
-    )
+        }
+    })
 }
 
 fn file_limit(limit: usize, actual: usize) -> Error {
@@ -296,14 +258,9 @@ fn file_limit(limit: usize, actual: usize) -> Error {
 fn read_file_with_budget(
     path: &Path,
     limit: usize,
-    budget: Option<&crate::node::GraphBudget>,
     content_length: Option<usize>,
     oversized: impl FnOnce(usize) -> Error,
 ) -> Result<Box<[u8]>, Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        super::path::input(path, budget)?;
-    }
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect typed store file",
         path: path.to_path_buf(),
@@ -324,13 +281,6 @@ fn read_file_with_budget(
             path: path.to_path_buf(),
             reason: "typed payload length differs from its envelope",
         });
-    }
-    if let Some(budget) = budget {
-        if content_length.is_none() {
-            budget.decode(length)?;
-        }
-        budget.paths(1)?;
-        super::path::input(path, budget)?;
     }
     let mut bytes = Vec::new();
     bytes

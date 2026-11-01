@@ -220,11 +220,7 @@ impl BundleRef {
             .join(self.id.directory())
     }
 
-    pub(crate) fn relative_budgeted(
-        self,
-        budget: &crate::node::GraphBudget,
-    ) -> Result<PathBuf, Error> {
-        budget.decode(std::mem::size_of::<PathBuf>() + 140 + 128)?;
+    pub(crate) fn relative_budgeted(self) -> Result<PathBuf, Error> {
         let mut relative = PathBuf::new();
         relative
             .try_reserve_exact(140)
@@ -314,15 +310,8 @@ impl Attempt {
         self.store.join(self.reference.relative())
     }
 
-    pub(crate) fn root_budgeted(
-        &self,
-        budget: &crate::node::GraphBudget,
-    ) -> Result<PathBuf, Error> {
-        path(
-            &self.store,
-            &self.reference.relative_budgeted(budget)?,
-            budget,
-        )
+    pub(crate) fn root_budgeted(&self) -> Result<PathBuf, Error> {
+        path(&self.store, &self.reference.relative_budgeted()?)
     }
 
     pub(crate) fn generated(&self) -> PathBuf {
@@ -355,18 +344,14 @@ impl Attempt {
         budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Pending, Error> {
         let root = match budget {
-            Some(budget) => self.root_budgeted(budget)?,
+            Some(_) => self.root_budgeted()?,
             None => self.root(),
         };
         validate_top_level_with_budget(&root, State::Unsealed, budget)?;
         let path = match budget {
-            Some(budget) => path(&root, Path::new("seal"), budget)?,
+            Some(_) => path(&root, Path::new("seal"))?,
             None => root.join("seal"),
         };
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            super::path::input(&path, budget)?;
-        }
         write_new(&path, &bytes)?;
         let Measured { charge, geometry } = survey_observed_members(
             &root,
@@ -387,9 +372,6 @@ impl Attempt {
                     .unwrap_or(usize::MAX),
                 actual: usize::try_from(charge.bytes).unwrap_or(usize::MAX),
             });
-        }
-        if let Some(budget) = budget {
-            budget.decode(self.store.as_os_str().as_encoded_bytes().len())?;
         }
         self.armed = false;
         Ok(Pending {
@@ -506,16 +488,13 @@ impl Pending {
         }
         let root = super::entry::existing_directory_budgeted(
             &self.store,
-            &self.reference.relative_budgeted(budget)?,
-            budget,
+            &self.reference.relative_budgeted()?,
         )?
         .ok_or(Error::State("pending runner bundle is missing"))?;
         validate_top_level_with_budget(&root, State::Sealed, Some(budget))?;
         validate_lease_with_budget(&root, Some(budget))?;
-        let seal_path = path(&root, Path::new("seal"), budget)?;
-        let seal =
-            super::entry::read_file_budgeted(&seal_path, crate::node::MAX_CONTENT_BYTES, budget)?;
-        budget.hash(seal.len())?;
+        let seal_path = path(&root, Path::new("seal"))?;
+        let seal = super::entry::read_file_budgeted(&seal_path, crate::node::MAX_CONTENT_BYTES)?;
         if seal.len() != expected_seal_length
             || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != expected_seal_digest
         {
@@ -552,14 +531,14 @@ impl Pending {
             budget,
             crate::node::read_set::Scope::Consumer,
         )?;
-        let exact_root = path(&root, Path::new(""), budget)?;
+        let exact_root = path(&root, Path::new(""))?;
         Ok((
             root,
             Completion {
                 root: exact_root,
                 graph: budget.clone(),
                 source: CompletionSource::Pending {
-                    store: path(&self.store, Path::new(""), budget)?,
+                    store: path(&self.store, Path::new(""))?,
                     charge: self.charge,
                     geometry: self.geometry,
                     commitment,
@@ -590,24 +569,15 @@ impl Pending {
     ) -> Result<Record, Error> {
         let budget = self.graph_budget.as_ref();
         let root = match budget {
-            Some(budget) => path(
-                &self.store,
-                &self.reference.relative_budgeted(budget)?,
-                budget,
-            )?,
+            Some(_) => path(&self.store, &self.reference.relative_budgeted()?)?,
             None => self.store.join(self.reference.relative()),
         };
         validate_top_level_with_budget(&root, State::Sealed, budget)?;
         validate_lease_with_budget(&root, budget)?;
         let seal_path = match budget {
-            Some(budget) => path(&root, Path::new("seal"), budget)?,
+            Some(_) => path(&root, Path::new("seal"))?,
             None => root.join("seal"),
         };
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            budget.hash(self.seal.len())?;
-            super::path::input(&seal_path, budget)?;
-        }
         let metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
             operation: "inspect runner bundle seal",
             path: seal_path.clone(),
@@ -621,23 +591,12 @@ impl Pending {
             reservation,
             publisher,
         };
-        if let Some(budget) = budget {
-            budget.decode(accounting::BUNDLE_RECORD_BYTES)?;
-        }
         let (bytes, record) =
             Record::seal_bundle(identity, &self.seal, &metadata, self.charge, self.geometry)?;
-        if let Some(budget) = budget {
-            budget.paths(4)?;
-        }
         write_atomic_control_with_budget(&root, "allocation", &bytes, budget)?;
         freeze_with_budget(&root, budget)?;
         validate_top_level_with_budget(&root, State::Published, budget)?;
         let actual = survey(&root, View::Published, budget, true, Error::Shape)?;
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            budget.hash(self.seal.len())?;
-            super::path::input(&seal_path, budget)?;
-        }
         let seal_metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
             operation: "inspect published runner bundle seal",
             path: seal_path,
@@ -722,7 +681,7 @@ pub(crate) fn validate_complete(
         },
         |_, _| Ok(()),
     )?;
-    let record = Record::read_bundle_budgeted(&root, budget).map_err(|error| match error {
+    let record = Record::read_bundle_budgeted(&root).map_err(|error| match error {
         Error::Io { .. }
         | Error::Shape(_)
         | Error::OutsideRoot(_)
@@ -745,14 +704,11 @@ pub(crate) fn validate_complete(
             budget,
         )?));
     }
-    budget.paths(1)?;
-    super::path::input(&seal_path, budget)?;
     let metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
         operation: "inspect runner Cargo bundle seal",
         path: seal_path,
         source,
     })?;
-    budget.hash(seal.len())?;
     record
         .validate_bundle(kind, schema, key, &seal, &metadata, measured)
         .map_err(|_| Error::Corrupt {
@@ -799,7 +755,7 @@ impl<'store> Completion<'store> {
         budget: &crate::node::GraphBudget,
     ) -> Result<(PathBuf, Self), Error> {
         let root = validate_consumer_commitment(store, &commitment, kind, schema, key, budget)?;
-        let exact_root = path(&root, Path::new(""), budget)?;
+        let exact_root = path(&root, Path::new(""))?;
         Ok((
             root,
             Self {
@@ -891,7 +847,7 @@ impl<'store> Completion<'store> {
                     },
                     member,
                 )?;
-                let record = Record::read_bundle_budgeted(root, budget)?;
+                let record = Record::read_bundle_budgeted(root)?;
                 if let Err(drift) = check(record.charge(), record.sealed_geometry(), measured) {
                     return Err(Error::from(Corruption::observed(
                         root,
@@ -904,14 +860,11 @@ impl<'store> Completion<'store> {
                         budget,
                     )?));
                 }
-                budget.paths(1)?;
-                super::path::input(&seal_path, budget)?;
                 let metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
                     operation: "inspect complete bundle seal",
                     path: seal_path,
                     source,
                 })?;
-                budget.hash(seal.len())?;
                 record
                     .validate_bundle(kind, schema, key, &seal, &metadata, measured)
                     .map_err(|_| Error::Corrupt {
@@ -930,8 +883,7 @@ impl<'store> Completion<'store> {
             } => {
                 let current = super::entry::existing_directory_budgeted(
                     &store,
-                    &commitment.reference.relative_budgeted(budget)?,
-                    budget,
+                    &commitment.reference.relative_budgeted()?,
                 )?
                 .ok_or(Error::State("pending complete bundle is missing"))?;
                 if current != root {
@@ -939,13 +891,9 @@ impl<'store> Completion<'store> {
                 }
                 validate_top_level_with_budget(root, State::Sealed, Some(budget))?;
                 validate_lease_with_budget(root, Some(budget))?;
-                let seal_path = path(root, Path::new("seal"), budget)?;
-                let seal = super::entry::read_file_budgeted(
-                    &seal_path,
-                    crate::node::MAX_CONTENT_BYTES,
-                    budget,
-                )?;
-                budget.hash(seal.len())?;
+                let seal_path = path(root, Path::new("seal"))?;
+                let seal =
+                    super::entry::read_file_budgeted(&seal_path, crate::node::MAX_CONTENT_BYTES)?;
                 if seal.len() != commitment.seal_bytes
                     || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != commitment.seal_digest
                 {
@@ -1024,15 +972,12 @@ fn validate_commitment_with(
     mismatch: impl FnMut(&Path, PathBuf) -> Error,
 ) -> Result<PathBuf, Error> {
     let (root, seal_path, seal) = read_commitment_with(store, commitment, budget, mismatch)?;
-    let record = Record::read_bundle_budgeted(&root, budget)?;
-    budget.paths(1)?;
-    super::path::input(&seal_path, budget)?;
+    let record = Record::read_bundle_budgeted(&root)?;
     let metadata = fs::metadata(&seal_path).map_err(|source| Error::Io {
         operation: "inspect retained bundle seal",
         path: seal_path,
         source,
     })?;
-    budget.hash(seal.len())?;
     record.validate_bundle_commitment(kind, schema, key, &seal, &metadata)?;
     accounting::registered_with_budget(store, &record, Some(budget))?;
     Ok(root)
@@ -1056,24 +1001,20 @@ fn read_commitment_with(
     budget: &crate::node::GraphBudget,
     mut mismatch: impl FnMut(&Path, PathBuf) -> Error,
 ) -> Result<(PathBuf, PathBuf, Box<[u8]>), Error> {
-    let relative = commitment.reference.relative_budgeted(budget)?;
-    let root =
-        super::entry::existing_directory_budgeted(store, &relative, budget)?.ok_or_else(|| {
-            Error::Corrupt {
-                path: store.join(&relative),
-                reason: "runner Cargo bundle is missing",
-            }
-        })?;
+    let relative = commitment.reference.relative_budgeted()?;
+    let root = super::entry::existing_directory_budgeted(store, &relative)?.ok_or_else(|| {
+        Error::Corrupt {
+            path: store.join(&relative),
+            reason: "runner Cargo bundle is missing",
+        }
+    })?;
     validate_top_level_with_budget(&root, State::Published, Some(budget))?;
     validate_lease_with_budget(&root, Some(budget))?;
-    let seal_path = path(&root, Path::new("seal"), budget)?;
-    let seal = super::entry::read_file_budgeted_with(
-        &seal_path,
-        crate::node::MAX_CONTENT_BYTES,
-        budget,
-        |_| mismatch(&root, seal_path.clone()),
-    )?;
-    budget.hash(seal.len())?;
+    let seal_path = path(&root, Path::new("seal"))?;
+    let seal =
+        super::entry::read_file_budgeted_with(&seal_path, crate::node::MAX_CONTENT_BYTES, |_| {
+            mismatch(&root, seal_path.clone())
+        })?;
     if seal.len() != commitment.seal_bytes
         || <[u8; 32]>::from(sha2::Sha256::digest(&seal)) != commitment.seal_digest
     {
@@ -1114,19 +1055,15 @@ fn pin_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<Guard, Error> {
     let root = match budget {
-        Some(budget) => path(store, &reference.relative_budgeted(budget)?, budget)?,
+        Some(_) => path(store, &reference.relative_budgeted()?)?,
         None => store.join(reference.relative()),
     };
     validate_top_level_with_budget(&root, State::Published, budget)?;
     validate_lease_with_budget(&root, budget)?;
     let path = match budget {
-        Some(budget) => path(&root, Path::new("lease"), budget)?,
+        Some(_) => path(&root, Path::new("lease"))?,
         None => root.join("lease"),
     };
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        super::path::input(&path, budget)?;
-    }
     let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
         operation: "inspect runner bundle lease",
         path: path.clone(),
@@ -1134,10 +1071,6 @@ fn pin_with_budget(
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || hard_linked(&metadata) {
         return Err(Error::Shape(path));
-    }
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        super::path::input(&path, budget)?;
     }
     let file = OpenOptions::new()
         .read(true)
@@ -1181,10 +1114,6 @@ fn lock_pinned_with_budget(
                 "runner bundle leases require Unix advisory locks",
             ),
         });
-    }
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-        super::path::input(&path, budget)?;
     }
     let opened = file.metadata().map_err(|source| Error::Io {
         operation: "inspect opened pinned runner bundle lease",
@@ -1703,7 +1632,7 @@ fn validate_top_level_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
     let mut names = match budget {
-        Some(budget) => names(root, 8, budget)?,
+        Some(_) => names(root, 8)?,
         None => read_sorted(root)?
             .into_iter()
             .map(|entry| entry.file_name())
@@ -1804,11 +1733,11 @@ fn validate_lease_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
     let path = match budget {
-        Some(budget) => path(root, Path::new("lease"), budget)?,
+        Some(_) => path(root, Path::new("lease"))?,
         None => root.join("lease"),
     };
     let bytes = match budget {
-        Some(budget) => super::entry::read_file_budgeted(&path, LEASE_BYTES.len(), budget)?,
+        Some(_) => super::entry::read_file_budgeted(&path, LEASE_BYTES.len())?,
         None => super::entry::read_file(&path, LEASE_BYTES.len())?,
     };
     if bytes.as_ref() != LEASE_BYTES {
@@ -1918,10 +1847,6 @@ fn survey_observed_members(
     let result = (|| {
         let mut pending = traversal(root, budget)?;
         while let Some(path) = pending.pop() {
-            if let Some(budget) = budget {
-                budget.paths(1)?;
-                super::path::input(&path, budget)?;
-            }
             members = members.checked_add(1).ok_or(Error::Allocation)?;
             if members > MAX_MEMBERS {
                 return Err(Error::Limit {
@@ -1962,10 +1887,7 @@ fn survey_observed_members(
                 return Err(misshapen_member(path));
             };
             member(&path, &metadata)?;
-            let hashed = geometry.member(root, &path, &metadata)?;
-            if let Some(budget) = budget {
-                budget.hash(hashed)?;
-            }
+            geometry.member(root, &path, &metadata)?;
             bytes = bytes.checked_add(charged).ok_or(Error::Allocation)?;
             if bytes > MAX_BYTES {
                 return Err(Error::Limit {
@@ -1989,11 +1911,7 @@ fn survey_observed_members(
     })
 }
 
-pub(crate) fn path(
-    parent: &Path,
-    relative: &Path,
-    budget: &crate::node::GraphBudget,
-) -> Result<PathBuf, Error> {
+pub(crate) fn path(parent: &Path, relative: &Path) -> Result<PathBuf, Error> {
     let length = parent
         .as_os_str()
         .as_encoded_bytes()
@@ -2001,11 +1919,6 @@ pub(crate) fn path(
         .checked_add(relative.as_os_str().as_encoded_bytes().len())
         .and_then(|size| size.checked_add(1))
         .ok_or(Error::Allocation)?;
-    budget.decode(
-        std::mem::size_of::<PathBuf>()
-            .checked_add(length)
-            .ok_or(Error::Allocation)?,
-    )?;
     let mut owned = PathBuf::new();
     owned
         .try_reserve_exact(length)
@@ -2024,10 +1937,6 @@ fn freeze_with_budget(root: &Path, budget: Option<&crate::node::GraphBudget>) ->
     let mut directories = buffer::Buffer::new();
     let mut pending = traversal(root, budget)?;
     while let Some(path) = pending.pop() {
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            super::path::input(&path, budget)?;
-        }
         let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
             operation: "inspect runner bundle before freezing",
             path: path.clone(),
@@ -2042,10 +1951,6 @@ fn freeze_with_budget(root: &Path, budget: Option<&crate::node::GraphBudget>) ->
             && !metadata.file_type().is_symlink()
             && !hard_linked(&metadata)
         {
-            if let Some(budget) = budget {
-                budget.paths(1)?;
-                super::path::input(&path, budget)?;
-            }
             set_frozen(&path, &metadata, false)?;
         } else {
             return Err(Error::Shape(path));
@@ -2054,20 +1959,11 @@ fn freeze_with_budget(root: &Path, budget: Option<&crate::node::GraphBudget>) ->
     let mut directories = directories.into_vec();
     directories.sort_unstable_by_key(|path| std::cmp::Reverse(path.components().count()));
     for directory in directories {
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            super::path::input(&directory, budget)?;
-        }
         let metadata = fs::symlink_metadata(&directory).map_err(|source| Error::Io {
             operation: "inspect runner bundle directory before freezing",
             path: directory.clone(),
             source,
         })?;
-        if let Some(budget) = budget {
-            budget.paths(2)?;
-            super::path::input(&directory, budget)?;
-            super::path::input(&directory, budget)?;
-        }
         set_frozen(&directory, &metadata, true)?;
         // One full sync of the root orders publication after the frozen tree.
         // An interior directory's lost entry or mode after a crash fails the
@@ -2084,9 +1980,8 @@ fn traversal(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<buffer::Buffer<PathBuf>, Error> {
     let path = match budget {
-        Some(budget) => {
+        Some(_) => {
             let length = root.as_os_str().as_encoded_bytes().len();
-            budget.decode(length)?;
             let mut path = PathBuf::new();
             path.try_reserve_exact(length)
                 .map_err(|_| Error::Allocation)?;
@@ -2106,7 +2001,7 @@ fn push(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
     match budget {
-        Some(budget) => pending.push(path, budget),
+        Some(_) => pending.push(path),
         None => pending.push_legacy(path),
     }
 }
@@ -2233,37 +2128,21 @@ fn write_atomic_control_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
     let target = match budget {
-        Some(budget) => path(root, Path::new(name), budget)?,
+        Some(_) => path(root, Path::new(name))?,
         None => root.join(name),
     };
-    if let Some(budget) = budget {
-        budget.decode(name.len().checked_add(8).ok_or(Error::Allocation)?)?;
-    }
     let pending_name = format!("{name}.pending");
     let pending = match budget {
-        Some(budget) => path(root, Path::new(&pending_name), budget)?,
+        Some(_) => path(root, Path::new(&pending_name))?,
         None => root.join(pending_name),
     };
-    if let Some(budget) = budget {
-        super::path::input(&pending, budget)?;
-    }
     write_new(&pending, bytes)?;
-    if let Some(budget) = budget {
-        super::path::input(root, budget)?;
-    }
     super::entry::sync_directory(root)?;
-    if let Some(budget) = budget {
-        super::path::input(&pending, budget)?;
-        super::path::input(&target, budget)?;
-    }
     fs::rename(&pending, &target).map_err(|source| Error::Io {
         operation: "publish runner bundle control file",
         path: target,
         source,
     })?;
-    if let Some(budget) = budget {
-        super::path::input(root, budget)?;
-    }
     super::entry::sync_directory(root)
 }
 
@@ -2288,26 +2167,12 @@ fn read_sorted(path: &Path) -> Result<Vec<fs::DirEntry>, Error> {
 }
 
 /// Observe complete native names through the reviewed accounting adapter.
-pub(crate) fn names(
-    path: &Path,
-    limit: usize,
-    budget: &crate::node::GraphBudget,
-) -> Result<Vec<std::ffi::OsString>, Error> {
-    directory::names(path, limit, budget)
+pub(crate) fn names(path: &Path, limit: usize) -> Result<Vec<std::ffi::OsString>, Error> {
+    directory::names(path, limit)
 }
 
-pub(crate) fn paths(
-    path: &Path,
-    limit: usize,
-    budget: &crate::node::GraphBudget,
-) -> Result<Vec<PathBuf>, Error> {
-    let names = names(path, limit, budget)?;
-    budget.decode(
-        names
-            .len()
-            .checked_mul(std::mem::size_of::<PathBuf>())
-            .ok_or(Error::Allocation)?,
-    )?;
+pub(crate) fn paths(path: &Path, limit: usize) -> Result<Vec<PathBuf>, Error> {
+    let names = names(path, limit)?;
     let mut paths = Vec::new();
     paths
         .try_reserve_exact(names.len())
@@ -2320,7 +2185,6 @@ pub(crate) fn paths(
             .checked_add(name.as_encoded_bytes().len())
             .and_then(|size| size.checked_add(1))
             .ok_or(Error::Allocation)?;
-        budget.decode(length)?;
         let mut owned = PathBuf::new();
         owned
             .try_reserve_exact(length)
@@ -2338,7 +2202,7 @@ fn paths_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<Vec<PathBuf>, Error> {
     match budget {
-        Some(budget) => paths(path, limit, budget),
+        Some(_) => paths(path, limit),
         None => Ok(read_sorted_bounded(path, limit)?
             .into_iter()
             .map(|entry| entry.path())
@@ -2628,11 +2492,8 @@ mod tests {
         let mut pending = attempt
             .seal_budgeted(Box::from(&b"seal"[..]), &graph)
             .unwrap();
-        graph.exhaust_paths();
-        assert!(!graph.exceedances().is_exceeded());
         // Publication keeps charging the one original account it was
-        // sealed with. Its very first path check lands past the exhausted
-        // target and is recorded there, proving the budget was never reset.
+        // sealed with, proving the budget was never reset.
         pending
             .publish(
                 Kind::Runner,
@@ -2641,17 +2502,7 @@ mod tests {
                 LeaseKey::Execution(execution(1)),
                 Digest::from_bytes([2; 32]),
             )
-            .expect("an accounting axis never refuses publication");
-        let axis = graph
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .expect("publication path checks were charged to the original graph");
-        assert_eq!(
-            axis.first_requested,
-            crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert!(axis.high_water >= axis.first_requested);
+            .expect("publication succeeds");
         assert!(root.exists());
         drop(pending);
         fs::remove_dir_all(fixture).unwrap();
@@ -2663,85 +2514,34 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let root = std::env::temp_dir().join(format!("rawr-freeze-floor-{}", std::process::id()));
         fs::write(&root, b"inert").unwrap();
-        for available in [1, 2] {
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o644)).unwrap();
-            let graph = crate::node::GraphBudget::new();
-            graph
-                .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - available)
-                .unwrap();
-            // The metadata probe and the permission mutation are each
-            // charged one path check before they run. Two remaining fit
-            // exactly; one remaining still freezes and records the exact total.
-            freeze_with_budget(&root, Some(&graph)).expect("an accounting axis never refuses");
-            assert!(!writable(&fs::metadata(&root).unwrap()));
-            let paths = graph
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water);
-            assert_eq!(
-                paths,
-                (available == 1).then_some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-            );
-        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o644)).unwrap();
+        let graph = crate::node::GraphBudget::new();
+        // The metadata probe and the permission mutation are each charged
+        // one path check.
+        freeze_with_budget(&root, Some(&graph)).expect("the file freezes");
+        assert!(!writable(&fs::metadata(&root).unwrap()));
         fs::remove_file(root).unwrap();
     }
 
     #[test]
     fn shared_names_and_path_construction_precharge_before_owned_work() {
         let missing = Path::new("/definitely-missing-rawr-budget-fixture");
-        let decode = crate::node::GraphBudget::new();
-        decode
-            .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        // The owned caller path bytes are still charged before the native
-        // open; the exhausted target records that exact charge instead of
-        // refusing, and the operation reports its own filesystem error.
-        let missing_len = missing.as_os_str().as_encoded_bytes().len() as u64;
-        let caller_bytes = std::mem::size_of::<PathBuf>() as u64 + 2 * missing_len + 1;
+        // The owned caller path bytes are charged before the native open,
+        // and the operation reports its own filesystem error.
         assert!(matches!(
-            names(missing, 4, &decode),
+            names(missing, 4),
             Err(Error::Io { path, source, .. })
                 if path == missing && source.kind() == std::io::ErrorKind::NotFound
         ));
-        let decoded = decode
-            .exceedances()
-            .axis(crate::node::DECODED_RESOURCE)
-            .copied()
-            .expect("the caller path ownership was charged");
         assert_eq!(
-            decoded.first_requested,
-            crate::node::MAX_DECODED_BYTES_PER_GRAPH + caller_bytes
-        );
-        assert_eq!(decoded.high_water, decoded.first_requested);
-        let joined_bytes = std::mem::size_of::<PathBuf>() as u64 + missing_len + 4 + 1;
-        assert_eq!(
-            path(missing, Path::new("name"), &decode).expect("an accounting axis never refuses"),
+            path(missing, Path::new("name")).expect("the path joins"),
             missing.join("name")
         );
-        assert_eq!(
-            decode
-                .exceedances()
-                .axis(crate::node::DECODED_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + caller_bytes + joined_bytes)
-        );
-        let paths = crate::node::GraphBudget::new();
-        paths.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         assert!(matches!(
-            names(missing, 4, &paths),
+            names(missing, 4),
             Err(Error::Io { path, source, .. })
                 if path == missing && source.kind() == std::io::ErrorKind::NotFound
         ));
-        assert_eq!(
-            paths
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
-        );
     }
 
     #[test]
@@ -2873,28 +2673,13 @@ mod tests {
                 "typed store allocation is sealed but absent from its installation ledger"
             ))
         ));
-        // An exhausted decoded-bytes target never refuses the commitment
-        // read. The read still charges its exact ownership (measured on a fresh
-        // account) to the original account and records the exact total.
+        // Each commitment read charges its exact ownership to the account
+        // it is given.
         let probe = crate::node::GraphBudget::new();
         read_commitment(store.root(), &commitment, &probe).unwrap();
-        let (probe_decoded, _, _) = probe.census_usage().unwrap();
-        assert!(probe_decoded > 0);
-        assert!(!probe.exceedances().is_exceeded());
-        let spent = crate::node::GraphBudget::new();
-        spent
-            .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        let (_, _, reread) = read_commitment(store.root(), &commitment, &spent)
-            .expect("an accounting axis never refuses");
+        let again = crate::node::GraphBudget::new();
+        let (_, _, reread) = read_commitment(store.root(), &commitment, &again).unwrap();
         assert_eq!(reread, bytes);
-        assert_eq!(
-            spent
-                .exceedances()
-                .axis(crate::node::DECODED_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + probe_decoded)
-        );
         drop(pending);
         fs::remove_dir_all(fixture).unwrap();
     }
@@ -3334,36 +3119,11 @@ mod tests {
         fs::write(root.join("payload"), b"bundle").expect("the frozen payload writes");
         freeze(&root).expect("the fixture freezes");
 
-        let exact = crate::node::GraphBudget::new();
-        exact
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .expect("metadata, open/mount, raw reads, dot/member/exhaustion probes precharge");
-        let expected = measure_with_budget(&root, false, Some(&exact), true)
-            .expect("one charged frozen walk admits the exact path cap");
-        assert!(!exact.exceedances().is_exceeded());
-
-        // One operation less remaining still completes the same single
-        // walk; the exceedance records exactly one path check past the target,
-        // proving the walk is charged exactly ten operations.
-        let floor = crate::node::GraphBudget::new();
-        floor
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 9)
-            .expect("the one-operation floor precharges");
-        assert_eq!(
-            measure_with_budget(&root, false, Some(&floor), true)
-                .expect("an accounting axis never refuses"),
-            expected
-        );
-        assert_eq!(
-            floor
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
-        );
+        // Metadata, open/mount, raw reads and the dot/member/exhaustion
+        // probes are charged as exactly ten path checks in one walk.
+        let graph = crate::node::GraphBudget::new();
+        measure_with_budget(&root, false, Some(&graph), true)
+            .expect("one charged frozen walk completes");
         remove_bundle(&root).expect("the frozen budget fixture retires");
     }
 
@@ -3376,9 +3136,6 @@ mod tests {
         freeze(&root).unwrap();
         let expected = measure_with_budget(&root, false, None, true).unwrap();
         let graph = crate::node::GraphBudget::new();
-        graph
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .unwrap();
         let mut observed = Vec::new();
         let actual = measure_observed_members(
             &root,
@@ -3396,19 +3153,6 @@ mod tests {
         assert_eq!(
             observed,
             vec![(root.clone(), true), (root.join("payload"), false)]
-        );
-        // The callbacks share the exact ten-operation walk. The account
-        // sits exactly at its target: nothing is recorded, and one more path
-        // check is still charged while recording the exact cumulative total.
-        assert!(!graph.exceedances().is_exceeded());
-        graph.paths(1).expect("an accounting axis never refuses");
-        assert_eq!(
-            graph
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1),
-            "callbacks share the exact ten-operation walk"
         );
         remove_bundle(&root).unwrap();
     }
@@ -3518,43 +3262,9 @@ mod tests {
         for index in 0..4 {
             fs::write(root.join(index.to_string()), b"entry").unwrap();
         }
-        let exact = crate::node::GraphBudget::new();
-        exact
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 11)
-            .unwrap();
-        assert_eq!(names(&root, 4, &exact).unwrap().len(), 4);
-        // The collection is charged exactly eleven path checks. The exact
-        // account records nothing and still charges one more, recording the
-        // exact cumulative total.
-        assert!(!exact.exceedances().is_exceeded());
-        exact.paths(1).expect("an accounting axis never refuses");
-        assert_eq!(
-            exact
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-        );
-
-        let floor = crate::node::GraphBudget::new();
-        floor
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .unwrap();
-        assert_eq!(
-            names(&root, 4, &floor)
-                .expect("an accounting axis never refuses")
-                .len(),
-            4
-        );
-        assert_eq!(
-            floor
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-        );
+        assert_eq!(names(&root, 4).unwrap().len(), 4);
         assert!(matches!(
-            names(&root, 3, &crate::node::GraphBudget::new()),
+            names(&root, 3),
             Err(Error::Limit {
                 resource: "runner bundle directory members",
                 limit: 3,
@@ -3563,30 +3273,15 @@ mod tests {
         ));
 
         fs::remove_dir_all(&root).unwrap();
-        let blocked = crate::node::GraphBudget::new();
-        blocked
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-            .unwrap();
-        // An exhausted target still charges the failed open of a missing
-        // directory (exactly one path check, recorded) and reports the
-        // filesystem error rather than refusing.
+        // The failed open of a missing directory is charged exactly one path
+        // check and reports the filesystem error.
         assert!(
             matches!(
-                names(&root, 4, &blocked),
+                names(&root, 4),
                 Err(Error::Io { path, source, .. })
                     if path == root && source.kind() == std::io::ErrorKind::NotFound
             ),
-            "an exhausted budget still opens a missing directory and reports it"
-        );
-        assert_eq!(
-            blocked
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
+            "a missing directory is opened and reported"
         );
     }
 

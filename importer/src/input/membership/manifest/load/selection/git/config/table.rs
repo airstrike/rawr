@@ -171,16 +171,14 @@ fn growth<K, V>(required: usize) -> Option<(usize, Layout)> {
 mod tests {
     use super::*;
     use crate::input::membership::Budget;
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
     use std::hash::Hasher;
 
     #[test]
     fn fixed_collisions_occupied_entry_and_removal_keep_table_history() {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut session = Session::new(&mut budget);

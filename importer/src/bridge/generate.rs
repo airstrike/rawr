@@ -2732,7 +2732,6 @@ mod native_arena_tests {
                 requested: Some(5),
                 limit: 4,
             }),
-            exceeded: Default::default(),
         };
         let request = [7; 48];
         let bytes = account_payload(3, &request, [None, Some(failed)]).expect("reached constructor failure");
@@ -5001,11 +5000,10 @@ struct Product {
 
 pub(crate) fn materialize<B: crate::surface::Runner>(
     key: super::GenerationRequestKey<B>,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error> {
     let product = render(&key.request, &key.native, key.profile.value())?;
     let actual = expected(&key.request, &product)?;
-    assemble(key, product, actual, None, limits)
+    assemble(key, product, actual, None)
 }
 
 pub(crate) fn semantic_digest<B: crate::surface::Runner>(
@@ -5040,43 +5038,11 @@ pub(crate) fn semantic_digest<B: crate::surface::Runner>(
 }
 
 fn assemble<B: crate::surface::Runner>(
-    key: super::GenerationRequestKey<B>,
-    product: Product,
-    actual: Expected,
-    chain: Option<crate::node::Chain>,
-    limits: &crate::cargo::Limits,
-) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error> {
-    // The generated size is an accounting target recorded on a bridge
-    // account for this generation; checked-arithmetic overflow and the
-    // reservations are the physical bounds.
-    let mut account = crate::surface::account::Account::bridge();
-    assemble_accounted(key, product, actual, chain, limits, &mut account)
-}
-
-/// The bridge account axis charging generated files and inventory together.
-const GENERATED_COMBINED_RESOURCE: &str = "generated and inventory retained bytes";
-
-fn assemble_accounted<B: crate::surface::Runner>(
     mut key: super::GenerationRequestKey<B>,
     product: Product,
     actual: Expected,
     chain: Option<crate::node::Chain>,
-    limits: &crate::cargo::Limits,
-    account: &mut crate::surface::account::Account,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, request::Error> {
-    let total = product
-        .manifest
-        .len()
-        .checked_add(product.lock.len())
-        .and_then(|bytes| bytes.checked_add(BUILD_SCRIPT.len()))
-        .and_then(|bytes| bytes.checked_add(product.source.len()))
-        .and_then(|bytes| bytes.checked_add(product.source_map.len()))
-        .ok_or(request::Error::Limit {
-            resource: "generated retained bytes",
-            limit: limits.json_bytes,
-            actual: usize::MAX,
-        })?;
-    account.exceeded("generated retained bytes", limits.json_bytes, total);
     let mut contents = vec![
         (LOCK_PATH, product.lock.as_slice()),
         (MANIFEST_PATH, product.manifest.as_slice()),
@@ -5120,17 +5086,7 @@ fn assemble_accounted<B: crate::surface::Runner>(
         &mut key.request,
         &entries,
         key.profile.value(),
-        limits.json_bytes,
-        account,
     )?;
-    // The files and the inventory share the one JSON target (previously the
-    // inventory received only the remainder after `total`). Each side can
-    // stay under it while together they pass it, so the combined retained
-    // total is charged on the same bridge account and its crossing recorded.
-    let combined = total
-        .checked_add(coverage.retained_usage().1)
-        .ok_or(request::Error::Allocation)?;
-    account.exceeded(GENERATED_COMBINED_RESOURCE, limits.json_bytes, combined);
     // Each variant's matcher, after the entries the inventory pairs with
     // plans one to one.
     for plan in &key.request.plans {
@@ -5640,7 +5596,7 @@ fn render_source(
     }
     let facade = facade_plan
         .map(|bytes| {
-            crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard())
+            crate::surface::facade::Plan::decode(bytes)
                 .map_err(|_| request::drift("generated profile bindings plan"))
         })
         .transpose()?;
@@ -15287,153 +15243,6 @@ mod tests {
         );
         assert_eq!(ancestry(&missing_facade).as_deref(), Some(expected));
 
-        // The classified Contract limits are accounting targets. One
-        // short on either axis still selects the trusted runner, charging the
-        // exact facade retention; the crossing is recorded, never refused.
-        let mut short = limits;
-        short.classified_contract_bytes = before.1 + facade.bytes().len() - 1;
-        let bounded = contract
-            .compiler((), Snapshot::from_rawr_digest([0x35; 32]), &short)
-            .expect("bounded compiler")
-            .seal()
-            .expect("bounded demand")
-            .with_trusted_runner(true, &facade, &contract)
-            .expect("the byte target records and admits");
-        assert_eq!(
-            bounded.cached_retained_usage(),
-            (before.0 + 1, before.1 + facade.bytes().len())
-        );
-        let mut item_short = limits;
-        item_short.classified_contract_items = before.0;
-        let bounded = contract
-            .compiler((), Snapshot::from_rawr_digest([0x35; 32]), &item_short)
-            .expect("item bounded compiler")
-            .seal()
-            .expect("item bounded demand")
-            .with_trusted_runner(true, &facade, &contract)
-            .expect("the item target records and admits");
-        assert_eq!(
-            bounded.cached_retained_usage(),
-            (before.0 + 1, before.1 + facade.bytes().len())
-        );
-        std::fs::remove_dir_all(root).expect("remove fixture");
-    }
-
-    /// The generated retained bytes are an accounting target recorded on
-    /// the bridge account. One byte under the generated size still assembles
-    /// the manifest and records the truthful figure. The files and inventory
-    /// together are charged too: a target that each passes alone but their
-    /// sum crosses records the combined axis; exactly at the sum is silent.
-    #[test]
-    fn generated_retained_bytes_past_the_json_target_assemble_and_record() {
-        use crate::surface::Snapshot;
-
-        let root =
-            std::env::temp_dir().join(format!("rawr-generated-target-{}", std::process::id()));
-        std::fs::create_dir(&root).expect("exclusive generated-target fixture");
-        let root = std::fs::canonicalize(root).expect("canonical fixture root");
-        let home = root.join("cargo-home");
-        std::fs::create_dir(&home).expect("fixture Cargo home");
-        let standard = crate::cargo::Limits::standard();
-        let context = crate::context::Context::capture(
-            &root,
-            crate::cargo::config::Environment::from_pairs([(
-                "CARGO_HOME",
-                home.to_str().expect("Unicode fixture path"),
-            )])
-            .expect("fixture environment"),
-            "aarch64-apple-darwin",
-            &standard,
-        )
-        .expect("fixture context");
-        let parent = crate::node::Chain::fixture(context).expect("fixture parent");
-        let contract = crate::test_fixture::graph()
-            .with_node_chain_for_test(parent)
-            .classify(&crate::classify::Policy::standard(), &standard)
-            .expect("fixture contract");
-        let harness = crate::input::proof::Proof::fixture_runner_harness_manifest(&root)
-            .expect("fixture harness manifest");
-        std::fs::write(
-            harness.with_file_name("Cargo.lock"),
-            b"version = 4\n\n[[package]]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\n",
-        )
-        .expect("fixture harness lock");
-        let chain = contract.node_chain().expect("contract chain").clone();
-        let mut owner = crate::supervisor::Owner::new();
-        let mut assemble = |json_bytes: Option<usize>| {
-            let profile = crate::profile::Proof::neutral_with_chain(chain.clone());
-            let request = contract
-                .compiler((), Snapshot::from_rawr_digest([0x36; 32]), &standard)
-                .expect("fixture compiler")
-                .seal()
-                .expect("fixture demand")
-                .into_request();
-            let native = crate::input::proof::Proof::fixture_runner_harness(&root)
-                .expect("real fixture harness");
-            let product = super::render(&request, &native, &profile).expect("rendering");
-            let total = product.manifest.len()
-                + product.lock.len()
-                + super::BUILD_SCRIPT.len()
-                + product.source.len()
-                + product.source_map.len();
-            let actual = super::expected(&request, &product).expect("expected digests");
-            let build =
-                super::super::build_request_key(&request, &native, &profile).expect("build key");
-            let key = super::super::GenerationRequestKey {
-                request,
-                native,
-                profile: profile.into(),
-                revision: owner.revision().expect("revision"),
-                build,
-            };
-            let mut limits = standard;
-            limits.json_bytes = json_bytes.unwrap_or(total);
-            let mut account = crate::surface::account::Account::bridge();
-            let manifest =
-                super::assemble_accounted(key, product, actual, None, &limits, &mut account)
-                    .expect("the generated manifest assembles under every JSON target");
-            assert!(
-                manifest.files.len() >= 4,
-                "src/main.rs and any adapter modules"
-            );
-            (total, account.exceedances())
-        };
-        let (total, tiny) = assemble(Some(1));
-        let combined = tiny
-            .axis(super::GENERATED_COMBINED_RESOURCE)
-            .expect("the combined axis records")
-            .high_water as usize;
-        let inventory = tiny
-            .axis("resident inventory retained bytes")
-            .expect("the inventory axis records")
-            .high_water as usize;
-        assert_eq!(combined, total + inventory);
-        let (_, exact) = assemble(Some(combined));
-        assert!(
-            !exact.is_exceeded(),
-            "exactly at the combined total is silent"
-        );
-        // Neither the files nor the inventory alone pass this target; only
-        // their sum does, and that crossing is recorded.
-        let (_, together) = assemble(Some(combined - 1));
-        assert!(together.axis("generated retained bytes").is_none());
-        assert!(together.axis("resident inventory retained bytes").is_none());
-        let axis = *together
-            .axis(super::GENERATED_COMBINED_RESOURCE)
-            .expect("the combined crossing records");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((combined - 1) as u64, combined as u64, combined as u64)
-        );
-        assert_eq!(together.axes().count(), 1);
-        let (_, record) = assemble(Some(total - 1));
-        let axis = *record
-            .axis("generated retained bytes")
-            .expect("the generated byte target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((total - 1) as u64, total as u64, total as u64)
-        );
         std::fs::remove_dir_all(root).expect("remove fixture");
     }
 

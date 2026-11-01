@@ -1,4 +1,5 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::load::{
     features::{self, Features},
     Warnings,
@@ -10,15 +11,12 @@ use crate::input::membership::observed::discovery::{
     After, Attempt, Exists, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 use rawr_toml::document;
 
 fn budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -139,12 +137,10 @@ macro_rules! fixture {
     ($records:expr, |$owner:ident, $session:ident, $limits:ident| $body:block) => {{
         let image = image($records);
         let $limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&$limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -532,11 +528,10 @@ fn unrelated_credential_keys_fall_through_to_ordinary_without_copying_it() {
 }
 
 #[test]
-fn repeated_owner_operations_and_original_budget_floors() {
-    use crate::input::membership::manifest::tests::admits_one_short;
+fn repeated_owner_operations_charge_the_original_budget() {
     // 0: absent credentials, 1: loaded credentials, 2: failed consuming CLI
     // merge, 3: complete CLI then credentials. Compare whole original accounts.
-    let run = |mode, repeats, items, bytes| {
+    let run = |mode, repeats| {
         let mut records = if mode == 0 {
             Vec::new()
         } else {
@@ -556,19 +551,17 @@ fn repeated_owner_operations_and_original_budget_floors() {
         }
         let image = image(records);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
             Ok(host) => host,
-            Err(_) => return (false, allocation.usage(), allocation.exceedances()),
+            Err(_) => return (false, allocation.usage()),
         };
         let mut paths = slots::Slots::new();
         let mut documents = slots::Slots::new();
@@ -607,39 +600,15 @@ fn repeated_owner_operations_and_original_budget_floors() {
         let _ = session.finish(result);
         drop(owner);
         drop(host);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (success, allocation.usage(), allocation.exceedances())
+        assert!(allocation.check().is_ok());
+        (success, allocation.usage())
     };
-    let once = run(0, 0, usize::MAX, usize::MAX).1;
-    let repeated = run(0, 1, usize::MAX, usize::MAX).1;
+    let once = run(0, 0).1;
+    let repeated = run(0, 1).1;
     assert!(repeated.items > once.items && repeated.bytes > once.bytes);
-    assert_eq!(
-        run(1, 0, usize::MAX, usize::MAX),
-        run(1, 2, usize::MAX, usize::MAX)
-    );
-    assert_eq!(
-        run(2, 0, usize::MAX, usize::MAX),
-        run(2, 3, usize::MAX, usize::MAX)
-    );
-    let (success, usage, _) = run(3, 1, usize::MAX, usize::MAX);
-    assert!(success);
-    assert_eq!(
-        run(3, 1, usage.items, usage.bytes),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(3, 1, usage.items - 1, usage.bytes),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(3, 1, usage.items, usage.bytes - 1),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
+    assert_eq!(run(1, 0), run(1, 2));
+    assert_eq!(run(2, 0), run(2, 3));
+    assert!(run(3, 1).0);
 }
 
 #[test]
@@ -717,12 +686,10 @@ fn crates_io_memo_retains_incumbent_and_is_bound_to_source_history() {
         assert_eq!(sources.get(first, &mut session).unwrap().label(), None);
         // A successful memo hit needs neither any observation nor any positive
         // admission. An empty image and zero-capacity account make that exact.
-        let graph = node::GraphBudget::new();
         let mut zero = input::Allocation::with_limits(0, 0, 0);
         let mut empty_host = host::Host::from_image(
             &empty_image,
             Budget {
-                graph: &graph,
                 allocation: &mut zero,
             },
         )

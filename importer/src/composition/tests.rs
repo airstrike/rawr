@@ -55,10 +55,7 @@ impl profile::Checked for Checked {
 struct Definition(Arc<AtomicUsize>);
 impl profile::Definition<Checked> for Definition {
     fn identity(&self) -> profile::Identity {
-        profile::Identity::new(
-            "rawr.composition.fixture",
-            &crate::cargo::Limits::standard(),
-        )
+        profile::Identity::new("rawr.composition.fixture")
     }
     fn version(&self) -> profile::Version {
         profile::Version::new(1)
@@ -193,7 +190,7 @@ pub(super) fn demand(
     compiler
         .require(
             identity,
-            crate::surface::Origin::checked("/fixture/main.rs", 0, 4, limits).expect("origin"),
+            crate::surface::Origin::checked("/fixture/main.rs", 0, 4).expect("origin"),
         )
         .expect("require");
     compiler.seal().expect("demand")

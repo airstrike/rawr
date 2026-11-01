@@ -166,14 +166,7 @@ impl Set {
             .ok_or_else(|| super::input("package-root", manifest.display()))?;
         allocation.string(package_id)?;
         allocation.path(root)?;
-        let files = parse(
-            cargo_commit,
-            package_id,
-            root,
-            bytes,
-            limits,
-            &mut allocation,
-        )?;
+        let files = parse(cargo_commit, package_id, root, bytes, &mut allocation)?;
         #[cfg(test)]
         OWNED_PATH_SETS.with(|owned| owned.set(owned.get().saturating_add(1)));
         Ok(Self::Path(Listed {
@@ -288,7 +281,7 @@ impl Set {
             "Cargo completed registry extraction marker",
             &marker_candidate,
         )?;
-        let marker_digest = validate_registry_marker(&marker, limits, &mut allocation)?;
+        let marker_digest = validate_registry_marker(&marker, &mut allocation)?;
         allocation.string(package.id())?;
         allocation.string(cargo_id)?;
         allocation.path(&root)?;
@@ -309,16 +302,11 @@ impl Set {
         }))
     }
 
-    pub(super) fn entry(
-        &self,
-        replay: bool,
-        allocation: &mut Allocation,
-        limits: &cargo::Limits,
-    ) -> Result<Entry> {
+    pub(super) fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
         match self {
-            Self::Path(listed) => listed.entry(replay, allocation, limits),
-            Self::Registry(registry) => registry.entry(allocation, limits),
-            Self::Git(git) => git.entry(replay, allocation, limits),
+            Self::Path(listed) => listed.entry(replay, allocation),
+            Self::Registry(registry) => registry.entry(allocation),
+            Self::Git(git) => git.entry(replay, allocation),
         }
     }
 
@@ -356,18 +344,13 @@ fn registry_relative_shape(relative: &Path, name: &str, version: &str) -> bool {
 }
 
 impl Listed {
-    fn entry(
-        &self,
-        replay: bool,
-        allocation: &mut Allocation,
-        limits: &cargo::Limits,
-    ) -> Result<Entry> {
+    fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
         let replayed;
         let files = if replay {
             let bytes = self
                 .cargo
                 // The child capture is physical (`CAPTURE_BYTES` stdout,
-                // `TAIL_BYTES` stderr), never sized from the JSON accounting target.
+                // `TAIL_BYTES` stderr).
                 .run(&self.command, process::Limits::capture())?
                 .checked(Program::Cargo)?;
             allocation.items(1)?;
@@ -377,7 +360,6 @@ impl Listed {
                 &self.package_id,
                 &self.root,
                 &bytes,
-                limits,
                 allocation,
             )?;
             if current != self.files {
@@ -394,11 +376,6 @@ impl Listed {
 
         let mut entries = Vec::new();
         for path in files {
-            allocation.exceeded(
-                "input proof filesystem items",
-                limits.items,
-                allocation.usage.items.saturating_add(1),
-            );
             allocation.items(1)?;
             entries.try_reserve(1).map_err(|error| Error::Input {
                 code: "package-file-set-allocation",
@@ -412,7 +389,6 @@ impl Listed {
                 crate::process::CAPTURE_BYTES,
                 allocation,
             )?;
-            allocation.exceeded("fallback package file", limits.json_bytes, contents.len());
             let bytes = contents.len();
             let relative = path
                 .strip_prefix(&self.root)
@@ -463,8 +439,8 @@ impl Registry {
         }
     }
 
-    fn entry(&self, allocation: &mut Allocation, limits: &cargo::Limits) -> Result<Entry> {
-        let marker_digest = validate_registry_marker(&self.marker, limits, allocation)?;
+    fn entry(&self, allocation: &mut Allocation) -> Result<Entry> {
+        let marker_digest = validate_registry_marker(&self.marker, allocation)?;
         if marker_digest != self.marker_digest {
             return Err(super::input(
                 "registry-marker-changed",
@@ -488,13 +464,8 @@ impl Registry {
 }
 
 impl Git {
-    fn entry(
-        &self,
-        replay: bool,
-        allocation: &mut Allocation,
-        limits: &cargo::Limits,
-    ) -> Result<Entry> {
-        let entry = self.listed.entry(replay, allocation, limits)?;
+    fn entry(&self, replay: bool, allocation: &mut Allocation) -> Result<Entry> {
+        let entry = self.listed.entry(replay, allocation)?;
         let Entry::Directory {
             path: root, files, ..
         } = entry
@@ -518,22 +489,13 @@ impl Git {
     }
 }
 
-fn validate_registry_marker(
-    path: &Path,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<[u8; 32]> {
+fn validate_registry_marker(path: &Path, allocation: &mut Allocation) -> Result<[u8; 32]> {
     let bytes = super::read_file_budgeted(
         "Cargo completed registry extraction marker",
         path,
         1024,
         allocation,
     )?;
-    allocation.exceeded(
-        "registry extraction marker bytes",
-        limits.string_bytes,
-        bytes.len(),
-    );
     // Preflight the owned marker parse before serde constructs the value.
     allocation.items(bytes.len())?;
     let marker = marker(&bytes).map_err(|error| Error::Input {
@@ -551,19 +513,11 @@ fn parse(
     package_id: &str,
     root: &Path,
     bytes: &[u8],
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Box<[PathBuf]>> {
     if cargo_commit != toolchain::supported_cargo_commit() {
         return Err(super::input("cargo-commit-skew", cargo_commit));
     }
-    // The file-list size is an accounting target recorded on the input
-    // account; the physical bound is the child capture that produced it.
-    allocation.exceeded(
-        "Cargo package file-list bytes",
-        limits.json_bytes,
-        bytes.len(),
-    );
     if !bytes.is_empty() && !bytes.ends_with(b"\n") {
         return Err(super::input(
             "truncated-package-file-set",
@@ -576,16 +530,6 @@ fn parse(
     })?;
     let mut files = Vec::new();
     for line in text.split_terminator('\n') {
-        allocation.exceeded(
-            "Cargo package file-list entries",
-            limits.items,
-            files.len().saturating_add(1),
-        );
-        allocation.exceeded(
-            "Cargo package file-list path",
-            limits.string_bytes,
-            line.len(),
-        );
         let relative = Path::new(line);
         if line.is_empty()
             || relative.is_absolute()
@@ -786,7 +730,7 @@ mod tests {
         assert!(matches!(set, Set::Registry(_)));
         let mut allocation = Allocation::with_limits(100, 4096, 1024);
         let entry = set
-            .entry(false, &mut allocation, &Limits::standard())
+            .entry(false, &mut allocation)
             .expect("registry proof emits a freshness entry without a tree scan");
         let Entry::Registry {
             checksum,
@@ -872,70 +816,12 @@ mod tests {
             .expect("valid marker can drift");
         let mut allocation = Allocation::with_limits(100, 4096, 1024);
         assert!(matches!(
-            set.entry(true, &mut allocation, &Limits::standard()),
+            set.entry(true, &mut allocation),
             Err(Error::Input {
                 code: "registry-marker-changed",
                 ..
             })
         ));
-    }
-
-    /// The file-list size, entry count and path length are accounting
-    /// targets on the input account: the list still parses in full and each
-    /// lowered axis records its truthful figure; nothing refuses.
-    #[test]
-    fn file_list_size_entries_and_paths_record_their_targets_without_refusal() {
-        let root = Fixture::new("file-list-targets");
-        fs::write(
-            root.package_root.join("src.rs"),
-            b"pub const VALUE: u8 = 1;\n",
-        )
-        .expect("path member can be written");
-        let bytes = b"Cargo.toml\nsrc.rs\n";
-        let exercise = |limits: &Limits| {
-            let mut allocation = Allocation::new(limits);
-            let files = super::parse(
-                toolchain::supported_cargo_commit(),
-                "path+file:///fixture#crunchy@0.2.4",
-                Path::new(&root.package_root),
-                bytes,
-                limits,
-                &mut allocation,
-            )
-            .expect("the file list parses under every accounting target");
-            assert_eq!(files.len(), 2);
-            allocation.exceedances()
-        };
-        let standard = Limits::standard();
-        assert!(!exercise(&standard).is_exceeded());
-        let mut size = standard;
-        size.json_bytes = bytes.len() - 1;
-        let axis = *exercise(&size)
-            .axis("Cargo package file-list bytes")
-            .expect("the list size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (bytes.len() - 1) as u64,
-                bytes.len() as u64,
-                bytes.len() as u64
-            )
-        );
-        let mut entries = standard;
-        entries.items = 1;
-        let axis = *exercise(&entries)
-            .axis("Cargo package file-list entries")
-            .expect("the entry count records its axis");
-        assert_eq!((axis.target, axis.high_water), (1, 2));
-        let mut paths = standard;
-        paths.string_bytes = "src.rs".len();
-        let axis = *exercise(&paths)
-            .axis("Cargo package file-list path")
-            .expect("the longest path records its axis");
-        assert_eq!(
-            (axis.target, axis.high_water),
-            ("src.rs".len() as u64, "Cargo.toml".len() as u64)
-        );
     }
 
     #[test]
@@ -959,7 +845,6 @@ mod tests {
             "path+file:///fixture#crunchy@0.2.4",
             Path::new(&root.package_root),
             bytes,
-            &limits,
             &mut allocation,
         )
         .expect("pinned package list excludes only Cargo virtual archive entries");
@@ -969,129 +854,9 @@ mod tests {
         assert_eq!(files.len(), 3);
     }
 
-    #[test]
-    fn long_path_and_git_lists_share_exact_usage_and_record_exceedance_at_final_ownership() {
-        let fixture = Fixture::new("long-path-git");
-        let bytes = long_file_list(&fixture, 48);
-        let path_id = "path+file:///fixture#crunchy@0.2.4";
-        let standard = Limits::standard();
-        let path = Set::capture_path(
-            toolchain::supported_cargo_commit(),
-            path_id,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackagePath),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &standard,
-        )
-        .expect("standard envelope captures the long path list");
-        let path_usage = path.usage();
-        let exact = limits_for(path_usage);
-        reset_ownership_counters();
-        let set = Set::capture_path(
-            toolchain::supported_cargo_commit(),
-            path_id,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackagePath),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &exact,
-        )
-        .expect("the exact retained path-list envelope succeeds");
-        assert_eq!(set.usage(), path_usage);
-        assert_eq!(OWNED_PATH_SETS.with(std::cell::Cell::get), 1);
-        let owned_paths = OWNED_PACKAGE_FILE_PATHS.with(std::cell::Cell::get);
-        // One item below the exact envelope is an accounting target, not a
-        // gate: the final path item is still owned and charged, so the retained
-        // usage is the exact figure, one past the target.
-        let mut below = exact;
-        below.items = below.items.saturating_sub(1);
-        reset_ownership_counters();
-        let set = Set::capture_path(
-            toolchain::supported_cargo_commit(),
-            path_id,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackagePath),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &below,
-        )
-        .expect("an item target one below the exact usage records, never refuses");
-        assert_eq!(set.usage(), path_usage);
-        assert_eq!(set.usage().items, below.items + 1);
-        assert_eq!(
-            OWNED_PACKAGE_FILE_PATHS.with(std::cell::Cell::get),
-            owned_paths
-        );
-        assert_eq!(OWNED_PATH_SETS.with(std::cell::Cell::get), 1);
-
-        let oid = "0123456789abcdef0123456789abcdef01234567";
-        let source = format!("git+https://example.invalid/repo?rev=main#{oid}");
-        let package = Package::fixture(
-            "git+https://example.invalid/repo?rev=main#crunchy@0.2.4",
-            "crunchy",
-            "0.2.4",
-            fixture.package_root.clone(),
-            PackageSource::Git {
-                cargo_id: source.into(),
-                oid: oid.into(),
-            },
-        );
-        let git = Set::capture_git(
-            toolchain::supported_cargo_commit(),
-            &package,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackageGit),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &standard,
-        )
-        .expect("standard envelope captures the long Git list");
-        let git_usage = git.usage();
-        let exact = limits_for(git_usage);
-        reset_ownership_counters();
-        let set = Set::capture_git(
-            toolchain::supported_cargo_commit(),
-            &package,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackageGit),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &exact,
-        )
-        .expect("the exact retained Git envelope succeeds");
-        assert_eq!(set.usage(), git_usage);
-        assert_eq!(OWNED_GIT_SETS.with(std::cell::Cell::get), 1);
-        // The Git identity strings are the final items: one below the exact
-        // envelope records their charge past the target and completes ownership.
-        let mut below = exact;
-        below.items = below.items.saturating_sub(1);
-        reset_ownership_counters();
-        let set = Set::capture_git(
-            toolchain::supported_cargo_commit(),
-            &package,
-            &fixture.package_root.join("Cargo.toml"),
-            process::Cargo::fixture(),
-            package_command(&fixture.package_root, CargoAction::PackageGit),
-            &bytes,
-            Usage { items: 0, bytes: 0 },
-            &below,
-        )
-        .expect("an item target one below the exact usage records, never refuses");
-        assert_eq!(set.usage(), git_usage);
-        assert_eq!(set.usage().items, below.items + 1);
-        assert_eq!(OWNED_PATH_SETS.with(std::cell::Cell::get), 1);
-        assert_eq!(OWNED_GIT_SETS.with(std::cell::Cell::get), 1);
-    }
-
     /// A replayed `cargo package --list` child is captured within the
     /// physical bounds (`CAPTURE_BYTES` stdout, `TAIL_BYTES` stderr), never
-    /// within a capture sized from the Cargo JSON accounting target.
+    /// within a capture sized from the Cargo JSON limit.
     #[test]
     fn replayed_package_list_capture_is_physical_and_independent_of_the_json_target() {
         use crate::process::test_launch::{Expected, FileLimits, Reply, Script, Step};
@@ -1140,7 +905,7 @@ mod tests {
             vec![step],
         )
         .expect("launch script seals")
-        .run(|| set.entry(true, &mut allocation, &limits))
+        .run(|| set.entry(true, &mut allocation))
         .expect("the replayed child is launched within the physical capture bounds");
         entry.expect("the replayed list matches the captured set");
     }
@@ -1163,8 +928,8 @@ mod tests {
         .expect("exact registry identity and marker envelope succeeds");
         assert_eq!(set.usage(), registry_usage);
         assert_eq!(OWNED_REGISTRY_SETS.with(std::cell::Cell::get), 1);
-        // One item below the exact aggregate is an accounting target; the
-        // identity and marker ownership completes with the exact figure charged.
+        // One item below the exact aggregate still completes with the exact
+        // figure charged.
         let mut below = exact;
         below.items = below.items.saturating_sub(1);
         reset_ownership_counters();

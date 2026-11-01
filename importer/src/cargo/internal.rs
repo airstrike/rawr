@@ -365,26 +365,8 @@ mod tests {
         Recipe::fixture()
     }
 
-    /// A target one unit under an exact total refuses nothing; the
-    /// account records the axis with that target and a high water equal to
-    /// the exact total the exercise charged.
-    fn assert_exceeded(
-        record: crate::exceedance::Record,
-        name: &str,
-        target: usize,
-        high_water: usize,
-    ) {
-        let axis = record
-            .axis(name)
-            .unwrap_or_else(|| panic!("{name} records the lowered target"));
-        assert_eq!(axis.target, target as u64);
-        assert_eq!(axis.high_water, high_water as u64);
-        assert!(axis.first_requested > axis.target);
-        assert!(axis.first_requested <= axis.high_water);
-    }
-
     #[test]
-    fn seed_and_recipe_identity_use_exact_caps_before_ownership() {
+    fn seed_and_recipe_identity_are_charged_and_owned_once() {
         let root = std::env::temp_dir().join(format!(
             "rawr-internal-ledger-{}-{:?}",
             std::process::id(),
@@ -397,44 +379,12 @@ mod tests {
         )
         .expect("internal fixture manifest is written");
         let root = fs::canonicalize(root).expect("internal fixture root canonicalizes");
-        let seed_exercise = |limits: &crate::cargo::Limits| {
-            let mut allocation = crate::cargo::RequestAllocation::new(limits);
-            OWNED_SEEDS.with(|owned| owned.set(0));
-            let seed = Seed::transform(&root, &mut allocation)?;
-            Ok::<_, crate::Error>((allocation, seed))
-        };
         let standard = crate::cargo::Limits::standard();
-        let (usage, _) = seed_exercise(&standard).expect("standard Seed ledger measures");
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, _) = seed_exercise(&exact).expect("exact Seed ledger succeeds");
+        let mut allocation = crate::cargo::RequestAllocation::new(&standard);
+        OWNED_SEEDS.with(|owned| owned.set(0));
+        Seed::transform(&root, &mut allocation).expect("the Seed transforms");
+        assert!(allocation.items > 0 && allocation.bytes > 0);
         assert_eq!(OWNED_SEEDS.with(std::cell::Cell::get), 1);
-        assert!(!exact_usage.exceedances().is_exceeded());
-        // One unit under the exact Seed ledger refuses nothing and still
-        // owns the seed; the account records the lowered axis at the exact total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, _) =
-            seed_exercise(&item_floor).expect("one item under the Seed ledger still transforms");
-        assert_eq!(OWNED_SEEDS.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            item_usage.exceedances(),
-            crate::cargo::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, _) =
-            seed_exercise(&byte_floor).expect("one byte under the Seed ledger still transforms");
-        assert_eq!(OWNED_SEEDS.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            byte_usage.exceedances(),
-            crate::cargo::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
 
         let source = format!("path+file://{}", root.display());
         let id = format!("{source}#rawr@1.23.6");
@@ -447,46 +397,15 @@ mod tests {
                 cargo_id: source.clone().into(),
             },
         );
-        let recipe_exercise = |limits: &crate::cargo::Limits| {
-            OWNED_RECIPES.with(|owned| owned.set(0));
-            Recipe::transform_accounted(
-                &package,
-                &source,
-                &mut crate::cargo::RequestAllocation::new(limits),
-            )
-        };
-        let recipe = recipe_exercise(&standard).expect("standard Recipe ledger measures");
-        let usage = recipe._allocation;
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let exact_recipe = recipe_exercise(&exact).expect("exact Recipe ledger succeeds");
+        OWNED_RECIPES.with(|owned| owned.set(0));
+        let recipe = Recipe::transform_accounted(
+            &package,
+            &source,
+            &mut crate::cargo::RequestAllocation::new(&standard),
+        )
+        .expect("the Recipe transforms");
+        assert!(recipe._allocation.items > 0 && recipe._allocation.bytes > 0);
         assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
-        assert!(!exact_recipe._allocation.exceedances().is_exceeded());
-        // One unit under the exact Recipe ledger refuses nothing and
-        // still owns the recipe; its account records the lowered axis.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let item_recipe = recipe_exercise(&item_floor)
-            .expect("one item under the Recipe ledger still transforms");
-        assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            item_recipe._allocation.exceedances(),
-            crate::cargo::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let byte_recipe = recipe_exercise(&byte_floor)
-            .expect("one byte under the Recipe ledger still transforms");
-        assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            byte_recipe._allocation.exceedances(),
-            crate::cargo::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
         fs::remove_dir_all(root).expect("internal fixture is removed");
     }
 

@@ -99,9 +99,7 @@ impl Fixture {
         let native = evaluator
             .discover_budgeted(
                 &recipe,
-                move |_, budget| {
-                    budget.paths(1)?;
-                    budget.hash(6)?;
+                move |_, _| {
                     let validation = validations.fetch_add(1, Ordering::Relaxed) + 1;
                     if validation == runtime_drift_at.load(Ordering::Relaxed) {
                         corrupt_asset(runtime_asset.lock().unwrap().as_ref().unwrap());
@@ -174,7 +172,7 @@ impl Fixture {
         let mut transport = crate::supervisor::snapshot::Bytes::capture(&limits);
         transport.entry(path).unwrap();
         transport.file(path, source).unwrap();
-        let snapshot = transport.bind(manifest.request.snapshot, &limits).unwrap();
+        let snapshot = transport.bind(manifest.request.snapshot).unwrap();
         (manifest, snapshot)
     }
 
@@ -279,16 +277,13 @@ fn build_fixture(
                 budget,
             )
             .unwrap();
-            let executable = Evidence::capture(&path, budget)?;
-            let carrier = Evidence::capture(
-                &attempt.generated().join("rawr-generated-manifest.carrier"),
-                budget,
-            )?;
+            let executable = Evidence::capture(&path)?;
+            let carrier =
+                Evidence::capture(&attempt.generated().join("rawr-generated-manifest.carrier"))?;
             let retained = retained::Stored::capture(
                 &attempt.root(),
                 attempt.reference(),
                 retained::Mode::Pending,
-                budget,
             )?;
             let seal = bundle_seal(
                 attempt.reference(),
@@ -297,7 +292,6 @@ fn build_fixture(
                 &executable,
                 artifact.digest(),
                 &retained,
-                budget,
             )?;
             let product = Product::capture(
                 attempt.reference(),
@@ -308,7 +302,6 @@ fn build_fixture(
                 manifest.generated.digest(),
                 artifact.digest(),
                 &retained,
-                budget,
             )?;
             let root = attempt.root();
             let mut captured = Some(captured);
@@ -557,50 +550,6 @@ fn startup_handoff_cannot_replace_snapshot_or_existing_ownership() {
 }
 
 #[test]
-fn retained_storage_accounting_is_charged_on_every_refresh() {
-    let mut fixture = Fixture::new();
-    fixture.retain = true;
-    let (cold, snapshot) = fixture.generation(b"before");
-    let mut live = fixture.build(cold);
-    live.bind_snapshot(&snapshot).unwrap();
-    let chain = live.chain.as_ref().unwrap();
-    let store = chain.context().open_store().unwrap();
-    let budget = store.graph_budget();
-    let retention = chain.retention().unwrap();
-    let before = budget.census_usage().unwrap();
-    retention.validate_storage(&store).unwrap();
-    let first = budget.census_usage().unwrap();
-    retention.validate_storage(&store).unwrap();
-    let second = budget.census_usage().unwrap();
-    let delta = |before: (u64, usize, u64), after: (u64, usize, u64)| {
-        (after.0 - before.0, after.1 - before.1, after.2 - before.2)
-    };
-    let storage = delta(before, first);
-    // An unchanged closure still incurs real original-account costs each time;
-    // retention must not turn a previous refresh into free current authority.
-    assert_eq!(storage, delta(first, second));
-    assert!(storage.0 > 0 && storage.1 > 0 && storage.2 > 0);
-    println!(
-        "fixture-account\tstage=runner-storage\tdecoded={}\tpaths={}\thashed={}",
-        storage.0, storage.1, storage.2
-    );
-    let before = budget.census_usage().unwrap();
-    live.pin_prepared().unwrap();
-    let prepared = delta(before, budget.census_usage().unwrap());
-    println!(
-        "fixture-account\tstage=prepared\tdecoded={}\tpaths={}\thashed={}",
-        prepared.0, prepared.1, prepared.2
-    );
-    let before = budget.census_usage().unwrap();
-    live.pin_live_last_good().unwrap();
-    let admitted = delta(before, budget.census_usage().unwrap());
-    println!(
-        "fixture-account\tstage=live-last-good\tdecoded={}\tpaths={}\thashed={}",
-        admitted.0, admitted.1, admitted.2
-    );
-}
-
-#[test]
 fn retained_pin_transactions_validate_once_and_preserve_rollback() {
     let mut fixture = Fixture::new();
     fixture.retain = true;
@@ -650,84 +599,23 @@ fn retained_pin_transactions_validate_once_and_preserve_rollback() {
 
 #[test]
 fn retained_corruption_rejects_pre_spawn_even_after_bootstrap_takes_read_set() {
-    for failure in 0..4 {
-        let mut fixture = Fixture::new();
-        let (cold, _) = fixture.generation(b"before");
-        let mut built = fixture.build(cold);
-        built.revalidate_native().unwrap();
-        let executable = built.artifact().digest();
-        let native = built.native_identity();
-        let _prepared = built.take_prepared_read_set().unwrap();
-        let store = built
-            .chain
-            .as_ref()
-            .unwrap()
-            .context()
-            .open_store()
-            .unwrap();
-        let graph = store.graph_budget();
-        // Spend the axis exactly to its target (charging past the
-        // target records an exceedance and never refuses).
-        let (decoded, paths, hashed) = graph.census_usage().unwrap();
-        let exhausted = match failure {
-            0 => {
-                corrupt_asset(&asset(&built));
-                None
-            }
-            1 => {
-                graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH - paths)
-                    .unwrap();
-                Some((node::PATHS_RESOURCE, node::MAX_PATH_CHECKS_PER_GRAPH as u64))
-            }
-            2 => {
-                graph
-                    .hash((node::MAX_HASHED_BYTES_PER_GRAPH - hashed) as usize)
-                    .unwrap();
-                Some((node::HASHED_RESOURCE, node::MAX_HASHED_BYTES_PER_GRAPH))
-            }
-            3 => {
-                graph
-                    .decode((node::MAX_DECODED_BYTES_PER_GRAPH - decoded) as usize)
-                    .unwrap();
-                Some((node::DECODED_RESOURCE, node::MAX_DECODED_BYTES_PER_GRAPH))
-            }
-            _ => unreachable!(),
-        };
-        assert!(!graph.exceedances().is_exceeded());
-        let calls = AtomicUsize::new(0);
-        let result = built.revalidate_native().map(|_| {
-            calls.fetch_add(1, Ordering::Relaxed);
-        });
-        match exhausted {
-            None => {
-                // Retained corruption is physical evidence: it still rejects.
-                assert!(result.is_err());
-                assert_eq!(calls.load(Ordering::Relaxed), 0);
-            }
-            Some((resource, target)) => {
-                // An exhausted accounting axis never refuses: revalidation
-                // behaves exactly like the healthy case and the graph records
-                // the exceedance on that axis with a truthful high water.
-                result.unwrap();
-                assert_eq!(calls.load(Ordering::Relaxed), 1);
-                let exceeded = graph.exceedances();
-                let axis = exceeded.axis(resource).unwrap();
-                assert_eq!(axis.target, target);
-                assert!(axis.first_requested > target);
-                let (decoded, paths, hashed) = graph.census_usage().unwrap();
-                let charged = match failure {
-                    1 => paths as u64,
-                    2 => hashed,
-                    _ => decoded,
-                };
-                assert_eq!(axis.high_water, charged);
-                assert_eq!(exceeded.axes().count(), 1);
-            }
-        }
-        assert_eq!(built.artifact().digest(), executable);
-        assert_eq!(built.native_identity(), native);
-    }
+    let mut fixture = Fixture::new();
+    let (cold, _) = fixture.generation(b"before");
+    let mut built = fixture.build(cold);
+    built.revalidate_native().unwrap();
+    let executable = built.artifact().digest();
+    let native = built.native_identity();
+    let _prepared = built.take_prepared_read_set().unwrap();
+    // Retained corruption is physical evidence: it rejects.
+    corrupt_asset(&asset(&built));
+    let calls = AtomicUsize::new(0);
+    let result = built.revalidate_native().map(|_| {
+        calls.fetch_add(1, Ordering::Relaxed);
+    });
+    assert!(result.is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(built.artifact().digest(), executable);
+    assert_eq!(built.native_identity(), native);
 }
 
 #[test]
@@ -1117,19 +1005,7 @@ fn snapshot_binding_cannot_change_after_ownership_and_new_context_has_its_own_bu
         .is_err());
     live.bind_snapshot(&before).unwrap();
     let old_store = live.chain.as_ref().unwrap().context().open_store().unwrap();
-    // Exhaust the old evaluation without altering the new evaluation's budget.
-    // The spent old graph still revalidates and records its own path
-    // exceedance; the new context's graph is separate and stays clean.
-    old_store.graph_budget().exhaust_paths();
-    assert!(!old_store.graph_budget().exceedances().is_exceeded());
     live.revalidate_prepared().unwrap();
-    let old = old_store.graph_budget().exceedances();
-    let axis = old.axis(node::PATHS_RESOURCE).unwrap();
-    assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-    assert_eq!(
-        axis.high_water,
-        old_store.graph_budget().census_usage().unwrap().1 as u64
-    );
     let prepared = fixture.prepare(&live, b"before");
     let new_graph = prepared
         .manifest
@@ -1140,14 +1016,6 @@ fn snapshot_binding_cannot_change_after_ownership_and_new_context_has_its_own_bu
         .graph_budget();
     assert!(!new_graph.shares_with(old_store.graph_budget()));
     prepared.revalidate_prepared().unwrap();
-    assert!(!new_graph.exceedances().is_exceeded());
-    assert_eq!(
-        old_store
-            .graph_budget()
-            .exceedances()
-            .axis(node::PATHS_RESOURCE),
-        Some(axis)
-    );
     prepared.admit(|| Ok(())).unwrap();
 }
 

@@ -24,17 +24,11 @@ pub(crate) struct Image {
 
 pub(crate) trait Storage {
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()>;
-    /// Record a measured amount against an accounting target on the
-    /// original account; never refuses.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize);
 }
 
 impl Storage for cargo::RequestAllocation {
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
         self.retained(items, bytes)
-    }
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        cargo::RequestAllocation::exceeded(self, resource, target, actual);
     }
 }
 
@@ -43,14 +37,10 @@ impl Storage for Allocation {
         self.items(items)?;
         self.bytes(bytes)
     }
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        Allocation::exceeded(self, resource, target, actual);
-    }
 }
 
 pub(crate) struct Account<'a> {
     storage: &'a mut dyn Storage,
-    graph: &'a node::GraphBudget,
     limits: &'a cargo::Limits,
 }
 
@@ -69,16 +59,8 @@ impl<T> Slots<T> {
 }
 
 impl<'a> Account<'a> {
-    pub(crate) fn borrow(
-        storage: &'a mut dyn Storage,
-        graph: &'a node::GraphBudget,
-        limits: &'a cargo::Limits,
-    ) -> Self {
-        Self {
-            storage,
-            graph,
-            limits,
-        }
+    pub(crate) fn borrow(storage: &'a mut dyn Storage, limits: &'a cargo::Limits) -> Self {
+        Self { storage, limits }
     }
 
     // Copies of admitted bytes are owned once by the original storage
@@ -130,7 +112,6 @@ impl<'a> Account<'a> {
     }
 
     fn probe(&mut self, path: &Path) -> Result<()> {
-        self.graph.paths(1).map_err(graph_error)?;
         let bytes = crate::store::path::input_allocation(path).map_err(graph_error)?;
         self.retain(usize::from(bytes != 0), bytes)
     }
@@ -143,9 +124,6 @@ impl<'a> Account<'a> {
     }
 
     fn frame(&self, hash: &mut Sha256, bytes: &[u8]) -> Result<()> {
-        self.graph
-            .hash(bytes.len().checked_add(8).ok_or_else(overflow)?)
-            .map_err(graph_error)?;
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
         Ok(())
@@ -195,14 +173,7 @@ impl document::Admission for Account<'_> {
     fn admit(&mut self, request: document::Request) -> Result<()> {
         match request {
             document::Request::Items(items) => self.retain(items, 0),
-            document::Request::String(bytes) => {
-                self.storage.exceeded(
-                    "workspace TOML string bytes",
-                    self.limits.string_bytes,
-                    bytes,
-                );
-                Ok(())
-            }
+            document::Request::String(_) => Ok(()),
             document::Request::Allocation { bytes, alignment } => {
                 std::alloc::Layout::from_size_align(bytes, alignment).map_err(|_| overflow())?;
                 self.retain(0, bytes)
@@ -438,11 +409,6 @@ fn scan(
         let text = path
             .to_str()
             .ok_or_else(|| drift("workspace path is not UTF-8"))?;
-        account.storage.exceeded(
-            "workspace path bytes",
-            account.limits.string_bytes,
-            text.len(),
-        );
         account.retain(1, text.len())?;
         let mut value = String::new();
         value.try_reserve_exact(text.len()).map_err(allocation)?;
@@ -478,7 +444,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     account.probe(path)?;
     let mut file =
         File::open(path).map_err(|source| io("open workspace manifest", path, source))?;
-    account.graph.paths(1).map_err(graph_error)?;
     let length = file
         .metadata()
         .map_err(|source| io("inspect workspace manifest handle", path, source))?
@@ -491,18 +456,12 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
         crate::process::TAIL_BYTES,
         length,
     )?;
-    account.storage.exceeded(
-        "workspace manifest bytes",
-        account.limits.manifest_bytes,
-        length,
-    );
     account.retain(1, length)?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(length).map_err(allocation)?;
     bytes.resize(length, 0);
     let mut offset = 0;
     while offset < bytes.len() {
-        account.graph.paths(1).map_err(graph_error)?;
         match file.read(&mut bytes[offset..]) {
             Ok(0) => return Err(drift("workspace manifest shortened during read")),
             Ok(amount) => offset += amount,
@@ -512,7 +471,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     }
     let mut extra = [0];
     let extra = loop {
-        account.graph.paths(1).map_err(graph_error)?;
         match file.read(&mut extra) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             result => {

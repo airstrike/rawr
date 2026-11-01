@@ -229,10 +229,12 @@ impl rawr_directory::Admission for Admission<'_, '_> {
         use rawr_directory::{Storage, Work};
         self.0.allocation.check()?;
         match work {
-            Work::Open { .. } | Work::Reopen { .. } => self.0.graph.paths(2)?,
-            Work::Mount | Work::Read { .. } | Work::Record | Work::EntryType { .. } => {
-                self.0.graph.paths(1)?
-            }
+            Work::Open { .. }
+            | Work::Reopen { .. }
+            | Work::Mount
+            | Work::Read { .. }
+            | Work::Record
+            | Work::EntryType { .. } => {}
             Work::Allocate { storage, bytes, .. } => {
                 let items = match storage {
                     Storage::Entries => bytes / std::mem::size_of::<rawr_directory::Name>(),
@@ -241,15 +243,12 @@ impl rawr_directory::Admission for Admission<'_, '_> {
                 self.0.allocation.items(items)?;
                 self.0.allocation.bytes(bytes)?;
             }
-            Work::Name { bytes } => self
-                .0
-                .allocation
-                .string_exceeded("membership native directory name", bytes),
-            Work::Visible { entries } => self
-                .0
-                .allocation
-                .items_exceeded("membership directory entries", entries),
-            Work::Retain { .. } | Work::Copy { .. } | Work::Order | Work::Compare { .. } => {}
+            Work::Name { .. }
+            | Work::Visible { .. }
+            | Work::Retain { .. }
+            | Work::Copy { .. }
+            | Work::Order
+            | Work::Compare { .. } => {}
         }
         Ok(())
     }

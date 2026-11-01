@@ -70,12 +70,7 @@ impl Reader<'_, '_, '_> {
                     return Err(Error::Encoding("empty protected projection"));
                 }
                 let digest = self.digest()?;
-                self.budget.hash(
-                    DOMAIN
-                        .len()
-                        .checked_add(bytes.len())
-                        .ok_or(Error::Encoding("projection hash length overflow"))?,
-                )?;
+                self.budget.check()?;
                 let mut actual = Sha256::new();
                 actual.update(DOMAIN);
                 actual.update(bytes);

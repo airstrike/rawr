@@ -425,7 +425,6 @@ fn compile<B>(
         } else {
             "debug/rawr-generated-runner"
         }),
-        budget,
     )?;
     let artifact = super::super::artifact::BuiltArtifactProof::seal_budgeted(
         &manifest.generated,
@@ -435,21 +434,16 @@ fn compile<B>(
         budget,
     )
     .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-    let executable = Evidence::capture(&executable, budget)?;
-    let carrier = Evidence::capture(
-        &crate::store::bundle::path(
-            &generated,
-            Path::new("rawr-generated-manifest.carrier"),
-            budget,
-        )?,
-        budget,
-    )?;
+    let executable = Evidence::capture(&executable)?;
+    let carrier = Evidence::capture(&crate::store::bundle::path(
+        &generated,
+        Path::new("rawr-generated-manifest.carrier"),
+    )?)?;
     let reference = attempt.reference();
     let retained = retained::Stored::capture(
-        &attempt.root_budgeted(budget)?,
+        &attempt.root_budgeted()?,
         reference,
         retained::Mode::Pending,
-        budget,
     )?;
     let seal = bundle_seal(
         reference,
@@ -458,7 +452,6 @@ fn compile<B>(
         &executable,
         artifact.digest(),
         &retained,
-        budget,
     )?;
     let product = Product::capture(
         reference,
@@ -469,7 +462,6 @@ fn compile<B>(
         manifest.generated.digest(),
         artifact.digest(),
         &retained,
-        budget,
     )?;
     let pending = attempt.seal_budgeted(seal, budget)?;
     node::Bundled::validate(product, pending, |product, pending| {
@@ -618,22 +610,16 @@ impl Inputs {
         })
     }
 
-    fn validate(&self, root: &Path, budget: &node::GraphBudget) -> Result<(), node::Error> {
-        let generated = crate::store::bundle::path(root, Path::new("generated"), budget)?;
+    fn validate(&self, root: &Path) -> Result<(), node::Error> {
+        let generated = crate::store::bundle::path(root, Path::new("generated"))?;
         for file in &self.files {
-            let path = crate::store::bundle::path(&generated, Path::new(&*file.path), budget)?;
-            validate_file(&path, file.bytes, file.digest, budget)?;
+            let path = crate::store::bundle::path(&generated, Path::new(&*file.path))?;
+            validate_file(&path, file.bytes, file.digest)?;
         }
-        budget.hash(self.carrier.len())?;
         validate_file(
-            &crate::store::bundle::path(
-                &generated,
-                Path::new("rawr-generated-manifest.carrier"),
-                budget,
-            )?,
+            &crate::store::bundle::path(&generated, Path::new("rawr-generated-manifest.carrier"))?,
             self.carrier.len(),
             Sha256::digest(&self.carrier).into(),
-            budget,
         )?;
         Ok(())
     }
@@ -672,10 +658,7 @@ impl Product {
         manifest: [u8; 32],
         artifact: [u8; 32],
         retained: &retained::Stored,
-        budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
-        budget.decode(PRODUCT_BYTES)?;
-        budget.hash(seal.len())?;
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(PRODUCT_BYTES)
@@ -741,7 +724,6 @@ impl Product {
             budget,
         )?;
         self.revalidate_root(&root, inputs, retained::Mode::Frozen, budget)?;
-        budget.decode(self.canonical.len())?;
         Ok(self.canonical.clone())
     }
 
@@ -758,7 +740,6 @@ impl Product {
             budget,
         )?;
         self.revalidate_root(&root, inputs, retained::Mode::Pending, budget)?;
-        budget.decode(self.canonical.len())?;
         Ok(self.canonical.clone())
     }
 
@@ -769,8 +750,8 @@ impl Product {
         mode: retained::Mode,
         budget: &node::GraphBudget,
     ) -> Result<retained::Stored, node::Error> {
-        inputs.validate(root, budget)?;
-        let retained = self.inventory(root, inputs, budget)?;
+        inputs.validate(root)?;
+        let retained = self.inventory(root, inputs)?;
         retained.replay(root, mode, budget)?;
         let executable_path = crate::store::bundle::path(
             root,
@@ -779,9 +760,8 @@ impl Product {
             } else {
                 "target/debug/rawr-generated-runner"
             }),
-            budget,
         )?;
-        let executable = Evidence::capture(&executable_path, budget)?;
+        let executable = Evidence::capture(&executable_path)?;
         if frozen_mode(executable.mode) != self.mode
             || executable.bytes != self.executable_bytes
             || executable.digest != self.executable_digest
@@ -794,16 +774,9 @@ impl Product {
         Ok(retained)
     }
 
-    fn inventory(
-        &self,
-        root: &Path,
-        inputs: &Inputs,
-        budget: &node::GraphBudget,
-    ) -> Result<retained::Stored, node::Error> {
-        let seal_path = crate::store::bundle::path(root, Path::new("seal"), budget)?;
-        let seal = crate::store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES, budget)?;
-        budget.hash(seal.len())?;
-        budget.hash(inputs.carrier.len())?;
+    fn inventory(&self, root: &Path, inputs: &Inputs) -> Result<retained::Stored, node::Error> {
+        let seal_path = crate::store::bundle::path(root, Path::new("seal"))?;
+        let seal = crate::store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES)?;
         if seal.len() != self.seal_bytes
             || <[u8; 32]>::from(Sha256::digest(&seal)) != self.seal_digest
             || seal.get(..8) != Some(BUNDLE_MAGIC)
@@ -829,7 +802,6 @@ impl Product {
                 .ok_or(node::Error::Codec("runner inventory missing"))?,
             root,
             self.reference,
-            budget,
         )?;
         if stored.digest() != self.retained || stored.native_identity(self.artifact) != self.native
         {
@@ -846,12 +818,8 @@ impl Product {
         pin: crate::store::bundle::Guard,
     ) -> Result<super::super::Native, super::Error> {
         self.revalidate(store, inputs, store.graph_budget())?;
-        let root = crate::store::bundle::path(
-            store.root(),
-            &self.reference.relative_budgeted(store.graph_budget())?,
-            store.graph_budget(),
-        )?;
-        let target = crate::store::bundle::path(&root, Path::new("target"), store.graph_budget())?;
+        let root = crate::store::bundle::path(store.root(), &self.reference.relative_budgeted()?)?;
+        let target = crate::store::bundle::path(&root, Path::new("target"))?;
         let executable = crate::store::bundle::path(
             &target,
             Path::new(if cfg!(windows) {
@@ -859,7 +827,6 @@ impl Product {
             } else {
                 "debug/rawr-generated-runner"
             }),
-            store.graph_budget(),
         )?;
         let artifact = super::super::artifact::BuiltArtifactProof::seal_budgeted(
             manifest,
@@ -875,10 +842,7 @@ impl Product {
             }
             .into());
         }
-        let stored = self.inventory(&root, inputs, store.graph_budget())?;
-        store
-            .graph_budget()
-            .decode(store.root().as_os_str().as_encoded_bytes().len())?;
+        let stored = self.inventory(&root, inputs)?;
         let retained = retained::Proof::validate(
             stored,
             store.clone(),
@@ -919,15 +883,13 @@ struct Evidence {
 }
 
 impl Evidence {
-    fn capture(path: &Path, budget: &node::GraphBudget) -> Result<Self, node::Error> {
+    fn capture(path: &Path) -> Result<Self, node::Error> {
         let parent = path
             .parent()
             .ok_or_else(|| node::Error::Shape(path.to_path_buf()))?;
-        if retained::directory(parent, budget)? != parent {
+        if retained::directory(parent)? != parent {
             return Err(node::Error::OutsideRoot(path.to_path_buf()));
         }
-        budget.paths(1)?;
-        crate::store::path::input(path, budget)?;
         let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
             operation: "inspect runner bundle file",
             path: path.to_path_buf(),
@@ -939,7 +901,7 @@ impl Evidence {
         {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
-        let digest = retained::hash(path, &metadata, budget)?;
+        let digest = retained::hash(path, &metadata)?;
         Ok(Self {
             bytes: metadata.len(),
             digest,
@@ -955,7 +917,6 @@ fn bundle_seal(
     executable: &Evidence,
     artifact: [u8; 32],
     retained: &retained::Stored,
-    budget: &node::GraphBudget,
 ) -> Result<Box<[u8]>, node::Error> {
     let length = BUNDLE_HEADER_BYTES
         .checked_add(retained.bytes().len())
@@ -967,7 +928,6 @@ fn bundle_seal(
             actual: length,
         });
     }
-    budget.decode(length)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -1013,13 +973,8 @@ fn validate(bytes: &[u8], limit: usize) -> Result<(), node::Error> {
     Ok(())
 }
 
-fn validate_file(
-    path: &Path,
-    expected: usize,
-    digest: [u8; 32],
-    budget: &node::GraphBudget,
-) -> Result<(), node::Error> {
-    let evidence = Evidence::capture(path, budget)?;
+fn validate_file(path: &Path, expected: usize, digest: [u8; 32]) -> Result<(), node::Error> {
+    let evidence = Evidence::capture(path)?;
     if usize::try_from(evidence.bytes).unwrap_or(usize::MAX) != expected
         || evidence.digest != digest
     {

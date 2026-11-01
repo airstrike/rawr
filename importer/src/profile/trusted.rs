@@ -92,13 +92,12 @@ impl<T: Operations> Adapter<T> {
         contract: &super::Contract,
         fingerprint: [u8; 32],
         payload: &[u8],
-        limits: &crate::cargo::Limits,
     ) -> Result<super::Demand, Error> {
         assert!(
             self.identity == contract.identity() && self.version == contract.version(),
             "rawr demands a profile's hooks under the profile that classified its contract"
         );
-        let mut output = demand::Builder::new(contract, fingerprint, payload, limits)?;
+        let mut output = demand::Builder::new(contract, fingerprint, payload)?;
         self.operations.demand(
             Contract::from_current(contract),
             Checked::captured(&fingerprint, payload),
@@ -107,16 +106,12 @@ impl<T: Operations> Adapter<T> {
         output.seal()
     }
 
-    pub(crate) fn generate_owned(
-        &self,
-        demand: &super::Demand,
-        limits: &crate::cargo::Limits,
-    ) -> Result<super::Proof, Error> {
+    pub(crate) fn generate_owned(&self, demand: &super::Demand) -> Result<super::Proof, Error> {
         assert!(
             self.identity == demand.identity() && self.version == demand.version(),
             "rawr generates a profile's source under the profile that demanded it"
         );
-        let mut output = demand::Generator::new(demand, limits);
+        let mut output = demand::Generator::new(demand);
         self.operations
             .generate(Demand::from_current(demand), &mut output)?;
         output.seal(self.lifecycle)
@@ -125,9 +120,8 @@ impl<T: Operations> Adapter<T> {
     pub(crate) fn classify_parts<P: crate::api::Phase>(
         &self,
         graph: &crate::api::Graph<P>,
-        limits: &crate::cargo::Limits,
     ) -> Result<contract::Parts, Error> {
-        let mut output = contract::Builder::new(self.identity, self.version, graph, limits);
+        let mut output = contract::Builder::new(self.identity, self.version, graph);
         self.operations.classify(graph, &mut output)?;
         output.seal_parts()
     }
@@ -266,13 +260,13 @@ mod tests {
     fn explicit_adapter_classifies_owned_parts_without_current_authority() {
         let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
-        let identity = Identity::new("trusted.empty", &limits);
+        let identity = Identity::new("trusted.empty");
         let version = Version::new(1);
         let adapter = Adapter::trusted(Empty, identity, version, false);
         let parts = adapter
-            .classify_parts(&graph, &limits)
+            .classify_parts(&graph)
             .expect("owned classification");
-        let ordinary = contract::Builder::new(identity, version, &graph, &limits)
+        let ordinary = contract::Builder::new(identity, version, &graph)
             .seal()
             .expect("ordinary classification");
         assert_eq!(
@@ -284,9 +278,9 @@ mod tests {
                 .expect("contract encodes")
         );
         let demand = adapter
-            .demand_owned(&ordinary, [3; 32], &[], &limits)
+            .demand_owned(&ordinary, [3; 32], &[])
             .expect("owned demand");
-        let expected_demand = demand::Builder::new(&ordinary, [3; 32], &[], &limits)
+        let expected_demand = demand::Builder::new(&ordinary, [3; 32], &[])
             .expect("ordinary builder")
             .seal()
             .expect("ordinary demand");
@@ -299,10 +293,8 @@ mod tests {
                 .encode(limits.node_output_bytes())
                 .expect("ordinary demand encodes")
         );
-        let generated = adapter
-            .generate_owned(&demand, &limits)
-            .expect("owned generation");
-        let expected_generated = demand::Generator::new(&expected_demand, &limits)
+        let generated = adapter.generate_owned(&demand).expect("owned generation");
+        let expected_generated = demand::Generator::new(&expected_demand)
             .seal(false)
             .expect("ordinary generation");
         assert!(generated.node_chain().is_none());

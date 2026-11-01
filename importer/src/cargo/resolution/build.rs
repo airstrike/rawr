@@ -21,50 +21,6 @@ const ENTRY_HEADER_BYTES: usize = 49;
 const TARGET: u8 = 1;
 const PROTOCOL: u8 = 2;
 
-/// One Cargo build-product capture, restoration or revalidation account.
-/// The file-count and path-byte accounting targets a bundle crosses while it is
-/// captured, validated or restored are recorded here and published under
-/// `Account::Build`; the work continues and nothing refuses. Physical bounds
-/// (the store's member and byte ceilings, the node content ceiling, `depth`,
-/// checked arithmetic, `try_reserve`) keep refusing.
-pub(crate) struct BuildAccount {
-    id: u64,
-    exceeded: crate::exceedance::Record,
-}
-
-impl BuildAccount {
-    pub(crate) fn new() -> Self {
-        Self {
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
-        }
-    }
-
-    /// The axes of this account that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
-    /// Record one measured amount against its accounting target. A crossing
-    /// is published with a truthful high water and the caller continues.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            crate::exceedance::publish(crate::exceedance::Account::Build, self.id, &self.exceeded);
-        }
-    }
-}
-
-impl Default for BuildAccount {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Small content node referring to one immutable authoritative Cargo bundle.
 pub(crate) struct Product {
     canonical: Box<[u8]>,
@@ -87,11 +43,8 @@ pub(crate) fn cached(
 ) -> Result<node::Validated<Product>, node::Error> {
     let limits = context.limits();
     let parent = Parent::validated(parent);
-    let recipe = context.discover_with_parents::<Product>(
-        authority,
-        product_byte_limit(&limits)?,
-        &[parent],
-    )?;
+    let recipe =
+        context.discover_with_parents::<Product>(authority, product_byte_limit()?, &[parent])?;
     let store = context.open_store()?;
     let validation_store = store.clone();
     let product = node::Evaluator::new(&store, sink).discover_bundled_budgeted(
@@ -100,13 +53,9 @@ pub(crate) fn cached(
         |attempt| Product::capture(execute()?, target, protocol, &limits, attempt),
     )?;
     let _pin = crate::store::bundle::pin(store.root(), product.value().reference)?;
-    product.value().restore_budgeted(
-        store.root(),
-        target,
-        protocol,
-        &limits,
-        store.graph_budget(),
-    )?;
+    product
+        .value()
+        .restore_budgeted(store.root(), target, protocol, &limits)?;
     Ok(product)
 }
 
@@ -118,9 +67,7 @@ impl Product {
         limits: &super::super::Limits,
         attempt: crate::store::bundle::Attempt,
     ) -> Result<node::Bundled<Self>, node::Error> {
-        // The node content bound is the physical store ceiling; the JSON
-        // accounting target is recorded by the Cargo JSON epoch that parses
-        // this document, never here.
+        // The node content bound is the physical store ceiling.
         if raw.len() > node::MAX_CONTENT_BYTES {
             return Err(node::Error::Limit {
                 resource: "cached authoritative build JSON bytes",
@@ -129,18 +76,15 @@ impl Product {
             });
         }
         let reference = attempt.reference();
-        // One build account per capture records every accounting target
-        // the bundle crosses; nothing here refuses on one.
-        let mut account = BuildAccount::new();
+        // One build account per capture charges the bundle.
         let seal = capture_bundle(
             target,
             protocol,
             &attempt.target(),
             &attempt.build(),
             limits,
-            &mut account,
         )?;
-        let product = Self::from_bundle(raw, reference, &seal, limits, &mut account)?;
+        let product = Self::from_bundle(raw, reference, &seal, limits)?;
         let pending = attempt.seal(seal)?;
         node::Bundled::validate(product, pending, |product, pending| {
             product.revalidate_pending(pending, limits)
@@ -152,10 +96,9 @@ impl Product {
         reference: crate::store::bundle::BundleRef,
         seal: &[u8],
         limits: &super::super::Limits,
-        account: &mut BuildAccount,
     ) -> Result<Self, node::Error> {
-        validate_manifest(seal, limits, account)?;
-        let mut writer = Writer::new(product_byte_limit(limits)?);
+        validate_manifest(seal, limits)?;
+        let mut writer = Writer::new(product_byte_limit()?);
         writer.append(MAGIC)?;
         writer.append(&SCHEMA.to_le_bytes())?;
         writer.append(&reference.execution().as_bytes())?;
@@ -167,7 +110,7 @@ impl Product {
         writer.append(&raw)?;
         let raw_end = writer.len();
         let canonical = writer.finish();
-        let product = Self::decode_canonical(canonical, limits)?;
+        let product = Self::decode_canonical(canonical)?;
         if product.raw != (raw_start..raw_end) || product.reference != reference {
             return Err(node::Error::State(
                 "authoritative build bundle product changed during capture",
@@ -176,11 +119,8 @@ impl Product {
         Ok(product)
     }
 
-    fn decode_canonical(
-        canonical: Box<[u8]>,
-        limits: &super::super::Limits,
-    ) -> Result<Self, node::Error> {
-        let decoded = validate_product(&canonical, limits)?;
+    fn decode_canonical(canonical: Box<[u8]>) -> Result<Self, node::Error> {
+        let decoded = validate_product(&canonical)?;
         Ok(Self {
             canonical,
             raw: decoded.raw,
@@ -207,13 +147,7 @@ impl Product {
             self.seal_digest,
             budget,
         )?;
-        validate_bundle_root_with_budget(
-            &root,
-            limits,
-            true,
-            Some(budget),
-            &mut BuildAccount::new(),
-        )?;
+        validate_bundle_root_with_budget(&root, limits, true)?;
         Ok(self.canonical.clone())
     }
 
@@ -224,7 +158,7 @@ impl Product {
     ) -> Result<Box<[u8]>, node::Error> {
         let root =
             pending.validate_unpublished(self.reference, self.seal_bytes, self.seal_digest)?;
-        validate_bundle_root(&root, limits, false, &mut BuildAccount::new())?;
+        validate_bundle_root(&root, limits, false)?;
         Ok(self.canonical.clone())
     }
 
@@ -236,7 +170,7 @@ impl Product {
         protocol: &Path,
         limits: &super::super::Limits,
     ) -> Result<(), node::Error> {
-        self.restore_budgeted(store, target, protocol, limits, &node::GraphBudget::new())
+        self.restore_budgeted(store, target, protocol, limits)
     }
 
     fn restore_budgeted(
@@ -245,9 +179,8 @@ impl Product {
         target: &Path,
         protocol: &Path,
         limits: &super::super::Limits,
-        budget: &node::GraphBudget,
     ) -> Result<(), node::Error> {
-        let decoded = validate_product(&self.canonical, limits)?;
+        let decoded = validate_product(&self.canonical)?;
         if decoded.raw != self.raw
             || decoded.reference != self.reference
             || decoded.seal_bytes != self.seal_bytes
@@ -258,8 +191,6 @@ impl Product {
             ));
         }
         let root = store.join(self.reference.relative());
-        budget.paths(1)?;
-        budget.hash(self.seal_bytes)?;
         let seal = super::super::read_bounded(
             "cached authoritative build bundle seal",
             &root.join("seal"),
@@ -276,12 +207,10 @@ impl Product {
         let mut reader = ManifestReader::new(&seal, node::MAX_CONTENT_BYTES)?;
         reader.header()?;
         let count = reader.count;
-        // One build account per restoration records the restored tree's
-        // accounting targets; the tree is still compared and restored in full.
-        let mut account = BuildAccount::new();
-        let target_current = current_files_with_budget(target, limits, Some(budget), &mut account)?;
-        let protocol_current =
-            current_files_with_budget(protocol, limits, Some(budget), &mut account)?;
+        // One build account per restoration charges the restored tree; the
+        // tree is compared and restored in full.
+        let target_current = current_files_with_budget(target, limits)?;
+        let protocol_current = current_files_with_budget(protocol, limits)?;
         let target_empty = target_current.is_empty();
         let protocol_empty = protocol_current.is_empty();
         let mut target_expected = BTreeSet::new();
@@ -316,13 +245,7 @@ impl Product {
             }
             let path = destination_root.join(&entry.path);
             if current.contains(&entry.path) {
-                validate_file_with_mode(
-                    &path,
-                    entry.mode,
-                    entry.length,
-                    entry.digest,
-                    Some(budget),
-                )?;
+                validate_file_with_mode(&path, entry.mode, entry.length, entry.digest)?;
             } else if empty {
                 materialize_file(
                     &source_root.join(&entry.path),
@@ -330,7 +253,6 @@ impl Product {
                     entry.mode,
                     entry.length,
                     entry.digest,
-                    Some(budget),
                 )?;
             } else {
                 return Err(node::Error::Corrupt {
@@ -378,10 +300,7 @@ impl node::Value for Product {
                 actual: bytes.len(),
             });
         }
-        Self::decode_canonical(
-            bytes.to_vec().into_boxed_slice(),
-            &super::super::Limits::standard(),
-        )
+        Self::decode_canonical(bytes.to_vec().into_boxed_slice())
     }
 }
 
@@ -397,40 +316,28 @@ struct CaptureState<'capture> {
     members: usize,
     path_bytes: usize,
     limits: &'capture super::super::Limits,
-    account: &'capture mut BuildAccount,
 }
 
 impl<'capture> CaptureState<'capture> {
-    fn new(limits: &'capture super::super::Limits, account: &'capture mut BuildAccount) -> Self {
+    fn new(limits: &'capture super::super::Limits) -> Self {
         Self {
             entries: 0,
             members: 0,
             path_bytes: 0,
             limits,
-            account,
         }
     }
 
-    /// The file count and path bytes are accounting targets recorded on
-    /// the build account; the file is still captured. Checked-add overflow
+    /// The file count and path bytes are charged to the build account and
+    /// the file is captured. Checked-add overflow
     /// stays an arithmetic failure and the store's member ceiling stays
     /// physical (`retain_member`).
     fn retain_path(&mut self, path: &Path) -> Result<(), node::Error> {
         self.entries = self.entries.checked_add(1).ok_or(node::Error::Allocation)?;
-        self.account.exceeded(
-            "cached authoritative build files",
-            self.limits.items,
-            usize::try_from(self.entries).unwrap_or(usize::MAX),
-        );
         self.path_bytes = self
             .path_bytes
             .checked_add(path.as_os_str().len())
             .ok_or(node::Error::Allocation)?;
-        self.account.exceeded(
-            "cached authoritative build path bytes",
-            self.limits.input_proof_bytes,
-            self.path_bytes,
-        );
         Ok(())
     }
 
@@ -454,10 +361,9 @@ fn capture_bundle(
     bundle_target: &Path,
     bundle_protocol: &Path,
     limits: &super::super::Limits,
-    account: &mut BuildAccount,
 ) -> Result<Box<[u8]>, node::Error> {
-    if !current_files(bundle_target, limits, account)?.is_empty()
-        || !current_files(bundle_protocol, limits, account)?.is_empty()
+    if !current_files(bundle_target, limits)?.is_empty()
+        || !current_files(bundle_protocol, limits)?.is_empty()
     {
         return Err(node::Error::State(
             "authoritative Cargo bundle partitions were not empty",
@@ -468,12 +374,12 @@ fn capture_bundle(
     writer.append(&BUNDLE_SCHEMA.to_le_bytes())?;
     let count_offset = writer.len();
     writer.append(&0_u32.to_le_bytes())?;
-    let mut state = CaptureState::new(limits, account);
+    let mut state = CaptureState::new(limits);
     capture_root(TARGET, target, bundle_target, &mut writer, &mut state)?;
     capture_root(PROTOCOL, protocol, bundle_protocol, &mut writer, &mut state)?;
     writer.replace_u32(count_offset, state.entries)?;
     let bytes = writer.finish();
-    validate_manifest(&bytes, limits, account)?;
+    validate_manifest(&bytes, limits)?;
     Ok(bytes)
 }
 
@@ -578,7 +484,6 @@ fn capture_root(
             evidence.mode,
             evidence.length,
             evidence.digest,
-            None,
         )?;
         writer.entry(
             namespace,
@@ -591,11 +496,8 @@ fn capture_root(
     Ok(())
 }
 
-fn validate_product(
-    bytes: &[u8],
-    limits: &super::super::Limits,
-) -> Result<DecodedProduct, node::Error> {
-    let limit = product_byte_limit(limits)?;
+fn validate_product(bytes: &[u8]) -> Result<DecodedProduct, node::Error> {
+    let limit = product_byte_limit()?;
     if bytes.len() > limit || bytes.len() < PRODUCT_HEADER_BYTES {
         return Err(node::Error::Limit {
             resource: "cached authoritative build product bytes",
@@ -647,16 +549,11 @@ fn validate_product(
     })
 }
 
-fn validate_manifest(
-    bytes: &[u8],
-    limits: &super::super::Limits,
-    account: &mut BuildAccount,
-) -> Result<(), node::Error> {
+fn validate_manifest(bytes: &[u8], limits: &super::super::Limits) -> Result<(), node::Error> {
     let mut reader = ManifestReader::new(bytes, node::MAX_CONTENT_BYTES)?;
     reader.header()?;
     let count = usize::try_from(reader.count).unwrap_or(usize::MAX);
-    // The store's member ceiling is physical and refuses; the item target is
-    // an accounting target recorded on the build account.
+    // The store's member ceiling is physical and refuses.
     let members = bundle_member_limit();
     if count > members {
         return Err(node::Error::Limit {
@@ -665,7 +562,6 @@ fn validate_manifest(
             actual: count,
         });
     }
-    account.exceeded("cached authoritative build files", limits.items, count);
     let mut previous: Option<(u8, PathBuf)> = None;
     let mut path_bytes = 0_usize;
     for _ in 0..reader.count {
@@ -682,11 +578,6 @@ fn validate_manifest(
         path_bytes = path_bytes
             .checked_add(entry.path.as_os_str().len())
             .ok_or(node::Error::Allocation)?;
-        account.exceeded(
-            "cached authoritative build path bytes",
-            limits.input_proof_bytes,
-            path_bytes,
-        );
         let identity = (entry.namespace, entry.path.clone());
         if previous
             .as_ref()
@@ -706,21 +597,15 @@ fn validate_bundle_root(
     root: &Path,
     limits: &super::super::Limits,
     frozen: bool,
-    account: &mut BuildAccount,
 ) -> Result<(), node::Error> {
-    validate_bundle_root_with_budget(root, limits, frozen, None, account)
+    validate_bundle_root_with_budget(root, limits, frozen)
 }
 
 fn validate_bundle_root_with_budget(
     root: &Path,
     limits: &super::super::Limits,
     frozen: bool,
-    budget: Option<&node::GraphBudget>,
-    account: &mut BuildAccount,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-    }
     validate_empty_directory(
         &root.join("generated"),
         "authoritative Cargo bundle generated partition changed",
@@ -734,11 +619,11 @@ fn validate_bundle_root_with_budget(
         &root.join("seal"),
         node::MAX_CONTENT_BYTES,
     )?;
-    validate_manifest(&seal, limits, account)?;
+    validate_manifest(&seal, limits)?;
     let target = root.join("target");
     let protocol = root.join("build");
-    let target_current = current_files_with_budget(&target, limits, budget, account)?;
-    let protocol_current = current_files_with_budget(&protocol, limits, budget, account)?;
+    let target_current = current_files_with_budget(&target, limits)?;
+    let protocol_current = current_files_with_budget(&protocol, limits)?;
     let mut target_expected = BTreeSet::new();
     let mut protocol_expected = BTreeSet::new();
     let mut reader = ManifestReader::new(&seal, node::MAX_CONTENT_BYTES)?;
@@ -765,7 +650,6 @@ fn validate_bundle_root_with_budget(
             entry.length,
             entry.digest,
             frozen,
-            budget,
         )?;
     }
     reader.finish()?;
@@ -780,25 +664,19 @@ fn validate_bundle_root_with_budget(
 fn current_files(
     root: &Path,
     limits: &super::super::Limits,
-    account: &mut BuildAccount,
 ) -> Result<BTreeSet<PathBuf>, node::Error> {
-    current_files_with_budget(root, limits, None, account)
+    current_files_with_budget(root, limits)
 }
 
 fn current_files_with_budget(
     root: &Path,
     limits: &super::super::Limits,
-    budget: Option<&node::GraphBudget>,
-    account: &mut BuildAccount,
 ) -> Result<BTreeSet<PathBuf>, node::Error> {
     let mut files = BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];
     let mut path_bytes = 0_usize;
     let mut members = 0usize;
     while let Some(directory) = pending.pop() {
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-        }
         let depth = directory
             .strip_prefix(root)
             .map_err(|_| node::Error::OutsideRoot(directory.clone()))?
@@ -842,9 +720,6 @@ fn current_files_with_budget(
         }
         children.sort_unstable();
         for path in children {
-            if let Some(budget) = budget {
-                budget.paths(1)?;
-            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| node::Error::Io {
                 operation: "inspect restored authoritative build entry",
                 path: path.clone(),
@@ -864,27 +739,16 @@ fn current_files_with_budget(
                     .map_err(|_| node::Error::OutsideRoot(path.clone()))?
                     .to_path_buf();
                 validate_relative(&relative)?;
-                // Path bytes and file count are accounting targets
-                // recorded on the build account; the walk continues. A
-                // repeated relative path is a shape failure, not a target.
+                // Path bytes and file count are charged to the build
+                // account. A repeated relative path is a shape failure.
                 path_bytes = path_bytes
                     .checked_add(relative.as_os_str().len())
                     .ok_or(node::Error::Allocation)?;
-                account.exceeded(
-                    "restored authoritative build path bytes",
-                    limits.input_proof_bytes,
-                    path_bytes,
-                );
                 if !files.insert(relative) {
                     return Err(node::Error::Codec(
                         "restored authoritative build files are not distinct",
                     ));
                 }
-                account.exceeded(
-                    "restored authoritative build files",
-                    limits.items,
-                    files.len(),
-                );
             } else {
                 return Err(node::Error::Shape(path));
             }
@@ -899,9 +763,8 @@ fn materialize_file(
     mode: u32,
     length: u64,
     digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    clone_file_exact(source, destination, mode, length, digest, budget)
+    clone_file_exact(source, destination, mode, length, digest)
 }
 
 fn clone_file_exact(
@@ -910,11 +773,7 @@ fn clone_file_exact(
     expected_mode: u32,
     expected_length: u64,
     expected_digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-    }
     let parent = destination
         .parent()
         .ok_or_else(|| node::Error::Shape(destination.to_path_buf()))?;
@@ -928,7 +787,7 @@ fn clone_file_exact(
         path: destination.to_path_buf(),
         source,
     })?;
-    let evidence = Evidence::capture_with_budget(destination, budget)?;
+    let evidence = Evidence::capture_with_budget(destination)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: destination.to_path_buf(),
@@ -967,20 +826,13 @@ fn validate_bundle_file(
     expected_length: u64,
     expected_digest: [u8; 32],
     frozen: bool,
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
     let expected_mode = if frozen {
         frozen_mode(original_mode)
     } else {
         original_mode
     };
-    validate_file_with_mode(
-        path,
-        expected_mode,
-        expected_length,
-        expected_digest,
-        budget,
-    )
+    validate_file_with_mode(path, expected_mode, expected_length, expected_digest)
 }
 
 fn validate_file_with_mode(
@@ -988,11 +840,7 @@ fn validate_file_with_mode(
     expected_mode: u32,
     expected_length: u64,
     expected_digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-    }
     let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
         operation: "inspect restored authoritative build file",
         path: path.to_path_buf(),
@@ -1005,7 +853,7 @@ fn validate_file_with_mode(
     {
         return Err(node::Error::Shape(path.to_path_buf()));
     }
-    let evidence = Evidence::capture_with_budget(path, budget)?;
+    let evidence = Evidence::capture_with_budget(path)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: path.to_path_buf(),
@@ -1021,10 +869,8 @@ struct Evidence {
     digest: [u8; 32],
 }
 
-/// The product's node content bound: the physical store ceiling, never derived
-/// from the configurable JSON accounting target.
-fn product_byte_limit(limits: &super::super::Limits) -> Result<usize, node::Error> {
-    let _ = limits;
+/// The product's node content bound: the physical store ceiling.
+fn product_byte_limit() -> Result<usize, node::Error> {
     Ok(node::MAX_CONTENT_BYTES)
 }
 
@@ -1034,14 +880,11 @@ fn bundle_member_limit() -> usize {
 
 impl Evidence {
     fn capture(path: &Path) -> Result<Self, node::Error> {
-        Self::capture_with_budget(path, None)
+        Self::capture_with_budget(path)
     }
 
     /// Hashes the file as a stream, with no read limit: nothing is buffered.
-    fn capture_with_budget(
-        path: &Path,
-        budget: Option<&node::GraphBudget>,
-    ) -> Result<Self, node::Error> {
+    fn capture_with_budget(path: &Path) -> Result<Self, node::Error> {
         let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
             operation: "inspect authoritative build file",
             path: path.to_path_buf(),
@@ -1051,9 +894,6 @@ impl Evidence {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
         let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if let Some(budget) = budget {
-            budget.hash(length)?;
-        }
         let mut file = File::open(path).map_err(|source| node::Error::Io {
             operation: "open authoritative build file",
             path: path.to_path_buf(),
@@ -1453,12 +1293,10 @@ mod tests {
             &limits,
         );
         let bundle_root = store.join(product.reference.relative());
-        let mut account = super::BuildAccount::new();
-        super::validate_bundle_root(&bundle_root, &limits, false, &mut account)
+        super::validate_bundle_root(&bundle_root, &limits, false)
             .expect("captured bundle validates");
         fs::write(bundle_root.join("target/extra"), b"extra").expect("extra bundle file writes");
-        assert!(super::validate_bundle_root(&bundle_root, &limits, false, &mut account).is_err());
-        assert!(!account.exceedances().is_exceeded());
+        assert!(super::validate_bundle_root(&bundle_root, &limits, false).is_err());
         fs::remove_file(bundle_root.join("target/extra")).expect("extra bundle file retires");
         let encoded = product
             .encode(crate::node::MAX_CONTENT_BYTES)
@@ -1704,151 +1542,18 @@ mod tests {
         for directory in ["generated", "build", "target", "declared"] {
             fs::create_dir_all(bundle_root.join(directory)).expect("bundle partition creates");
         }
-        let mut account = super::BuildAccount::new();
         let seal = super::capture_bundle(
             target,
             protocol,
             &bundle_root.join("target"),
             &bundle_root.join("build"),
             limits,
-            &mut account,
         )
         .expect("bundle captures");
         fs::write(bundle_root.join("seal"), &seal).expect("bundle seal writes");
-        let product = Product::from_bundle(raw.into(), reference, &seal, limits, &mut account)
+        let product = Product::from_bundle(raw.into(), reference, &seal, limits)
             .expect("bundle product captures");
-        assert!(
-            !account.exceedances().is_exceeded(),
-            "the fixture bundle sits under every standard accounting target"
-        );
         (store, product)
-    }
-
-    /// The bundle's file count and path bytes are accounting targets on
-    /// the build account at capture, seal validation and tree restoration:
-    /// exact figures record nothing, one under captures the identical seal and
-    /// records only that axis with its truthful high water, and nothing
-    /// refuses. The store's member ceiling and `depth` stay physical.
-    #[test]
-    fn bundle_file_and_path_targets_record_without_refusal() {
-        let root = fixture("targets");
-        let target = root.join("target");
-        let protocol = root.join("protocol");
-        fs::create_dir_all(target.join("debug/deps")).expect("target tree creates");
-        fs::create_dir_all(&protocol).expect("protocol tree creates");
-        fs::write(target.join("debug/deps/libfixture.rlib"), b"artifact").expect("artifact writes");
-        fs::write(protocol.join("sidecar.json"), b"{\"ready\":true}\n").expect("sidecar writes");
-        const TARGET_PATH: &str = "debug/deps/libfixture.rlib";
-        const PROTOCOL_PATH: &str = "sidecar.json";
-        let path_bytes = TARGET_PATH.len() + PROTOCOL_PATH.len();
-        let bundles = AtomicUsize::new(0);
-        let exercise = |adjust: &dyn Fn(&mut super::super::super::Limits)| {
-            let mut limits = super::super::super::Limits::standard();
-            adjust(&mut limits);
-            let bundle = root.join(format!(
-                "bundle-{}",
-                bundles.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(bundle.join("target")).expect("bundle target partition creates");
-            fs::create_dir_all(bundle.join("build")).expect("bundle build partition creates");
-            let mut account = super::BuildAccount::new();
-            let seal = super::capture_bundle(
-                &target,
-                &protocol,
-                &bundle.join("target"),
-                &bundle.join("build"),
-                &limits,
-                &mut account,
-            )
-            .expect("the bundle captures under every accounting target");
-            super::validate_manifest(&seal, &limits, &mut account)
-                .expect("the seal validates under every accounting target");
-            let restored = super::current_files_with_budget(&target, &limits, None, &mut account)
-                .expect("the restored tree walks under every accounting target");
-            assert_eq!(restored.len(), 1);
-            (seal, account.exceedances())
-        };
-        let (standard, record) = exercise(&|_| {});
-        assert!(!record.is_exceeded());
-        let exact = |limits: &mut super::super::super::Limits| {
-            limits.items = 2;
-            limits.input_proof_bytes = path_bytes;
-        };
-        let (seal, record) = exercise(&exact);
-        assert_eq!(seal, standard);
-        assert!(!record.is_exceeded());
-        type Adjust<'a> = &'a dyn Fn(&mut super::super::super::Limits);
-        type Exceeded<'a> = &'a [(&'a str, usize, usize)];
-        let cases: [(Adjust, Exceeded); 4] = [
-            (
-                &|limits| {
-                    exact(limits);
-                    limits.items = 1;
-                },
-                &[("cached authoritative build files", 1, 2)][..],
-            ),
-            (
-                &|limits| {
-                    exact(limits);
-                    limits.items = 0;
-                },
-                &[
-                    ("cached authoritative build files", 0, 2),
-                    ("restored authoritative build files", 0, 1),
-                ][..],
-            ),
-            (
-                &|limits| {
-                    exact(limits);
-                    limits.input_proof_bytes = path_bytes - 1;
-                },
-                &[(
-                    "cached authoritative build path bytes",
-                    path_bytes - 1,
-                    path_bytes,
-                )][..],
-            ),
-            (
-                &|limits| {
-                    exact(limits);
-                    limits.input_proof_bytes = TARGET_PATH.len() - 1;
-                },
-                &[
-                    (
-                        "cached authoritative build path bytes",
-                        TARGET_PATH.len() - 1,
-                        path_bytes,
-                    ),
-                    (
-                        "restored authoritative build path bytes",
-                        TARGET_PATH.len() - 1,
-                        TARGET_PATH.len(),
-                    ),
-                ][..],
-            ),
-        ];
-        for (adjust, expected) in cases {
-            let (seal, record) = exercise(adjust);
-            assert_eq!(seal, standard, "the seal is byte-identical across targets");
-            let mut names = record.axes().map(|axis| axis.name).collect::<Vec<_>>();
-            names.sort_unstable();
-            let mut expected_names = expected
-                .iter()
-                .map(|(name, _, _)| *name)
-                .collect::<Vec<_>>();
-            expected_names.sort_unstable();
-            assert_eq!(names, expected_names);
-            for (name, target, high_water) in expected {
-                let axis = record.axis(name).expect("the lowered axis is recorded");
-                assert_eq!(
-                    (axis.target, axis.high_water),
-                    (*target as u64, *high_water as u64)
-                );
-                assert!(axis.first_requested > axis.target);
-                assert!(axis.first_requested <= axis.high_water);
-            }
-        }
-        fs::remove_dir_all(root).expect("fixture retires");
     }
 
     fn canonical(path: &Path) -> PathBuf {

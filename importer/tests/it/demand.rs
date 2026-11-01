@@ -18,9 +18,9 @@ fn demand_is_snapshot_bound_but_surface_is_position_and_multiplicity_neutral() {
     assert_ne!(first_snapshot, second_snapshot);
 
     let first_origin =
-        Origin::checked("/app/main.rs", 0, 12, &limits).expect("the first use position is bounded");
+        Origin::checked("/app/main.rs", 0, 12).expect("the first use position is bounded");
     let moved_origin =
-        Origin::checked("/app/main.rs", 1, 13, &limits).expect("the moved use position is bounded");
+        Origin::checked("/app/main.rs", 1, 13).expect("the moved use position is bounded");
     let first = demand(
         &contract,
         first_snapshot,

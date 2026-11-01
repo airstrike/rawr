@@ -34,7 +34,7 @@ pub(super) fn encode(
         })?;
     let product = parent
         .direct::<Product>(&authority, || {
-            let bytes = Plan::encode(contract, limits)
+            let bytes = Plan::encode(contract)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
             Product::capture(bytes)
         })
@@ -131,9 +131,8 @@ impl Product {
     pub(crate) fn capture_parts(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         parts: &crate::classify::ClassifiedParts,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, node::Error> {
-        let bytes = Plan::encode_parts(graph, parts, limits)
+        let bytes = Plan::encode_parts(graph, parts)
             .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
         Self::capture(bytes)
     }
@@ -198,7 +197,7 @@ mod tests {
         let contract = crate::test_fixture::graph()
             .classify(&crate::classify::Policy::standard(), &limits)
             .expect("the fixture graph classifies");
-        let bytes = Plan::encode(&contract, &limits).expect("the facade encodes");
+        let bytes = Plan::encode(&contract).expect("the facade encodes");
         let product = Product::capture(bytes.clone()).expect("the facade product captures");
         let encoded = product
             .encode(limits.node_output_bytes())

@@ -13,11 +13,6 @@ pub(super) struct Profiles<'graph> {
 impl<'graph> Profiles<'graph> {
     pub(super) fn bind(graph: &'graph BuildGraph, budget: &mut Budget<'_>) -> Result<Self> {
         budget.check()?;
-        budget.limited(
-            "retained Build profile units",
-            budget.limits.units,
-            graph.artifacts().len(),
-        )?;
         let mut profiles = Self {
             values: Slots::new(),
             index: index::Index::new(),
@@ -50,11 +45,7 @@ impl<'graph> Profiles<'graph> {
             .ok_or(Error::Encoding(
                 "stored artifact profile is absent from unit graph",
             ))?;
-        budget.limited(
-            "artifact profile bytes",
-            budget.limits.string_bytes,
-            bytes.len(),
-        )?;
+        budget.check()?;
         let mut owned = budget.owned(bytes.len())?;
         owned.extend_from_slice(bytes);
         let owned = budget.owned_box(owned)?;
@@ -90,13 +81,6 @@ mod tests {
         let limits = Limits::standard();
         let mut allocation = Allocation::for_proof(PRIOR, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("all paths spent");
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .expect("all hashing spent");
-        graph.exhaust_comparisons();
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         let profiles = Profiles::bind(&units, &mut budget).expect("borrowed profile index");
         assert_eq!(profiles.values.as_slice().len(), 1);
@@ -156,50 +140,23 @@ mod tests {
             .decode(bytes, &mut budget)
             .expect("measure copy");
         let usage = measured.usage();
-        // The profile copy is owned once by the original allocation.
-        for (item_floor, byte_floor) in [(0, 0), (1, 0), (0, 1)] {
-            let mut limited = limits;
-            limited.items = usage.items - item_floor;
-            limited.input_proof_bytes = usage.bytes - byte_floor;
-            let mut allocation = Allocation::for_proof(PRIOR, &limited);
-            let graph = node::GraphBudget::new();
-            graph
-                .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                .expect("all decoding already spent");
-            let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-            let result = Profiles::bind(&units, &mut budget)
-                .and_then(|profiles| profiles.decode(bytes, &mut budget));
-            // The copy is owned in full either way; a ceiling one under
-            // records the axis with the exact total as its high water.
-            assert_eq!(
-                result.expect("original remainder is owned").as_bytes(),
-                bytes
-            );
-            assert_eq!(
-                graph.census_usage().expect("graph census").0,
-                node::MAX_DECODED_BYTES_PER_GRAPH
-            );
-            assert_eq!(budget.usage(), usage);
-            let record = budget.exceedances();
-            if item_floor == 0 && byte_floor == 0 {
-                assert!(!record.is_exceeded(), "exact original remainder");
-            } else {
-                let (name, total) = if item_floor == 1 {
-                    (crate::input::INPUT_ITEMS_RESOURCE, usage.items)
-                } else {
-                    (crate::input::INPUT_BYTES_RESOURCE, usage.bytes)
-                };
-                let axis = record.axis(name).expect("one-under axis recorded");
-                assert_eq!(axis.target as usize, total - 1);
-                assert_eq!(axis.high_water as usize, total);
-                assert!(budget.check().is_ok(), "an exceedance never latches");
-                // A genuine failure latches the original account.
-                budget.refuse();
-                assert!(matches!(
-                    Profiles::bind(&units, &mut budget),
-                    Err(Error::Refused)
-                ));
-            }
-        }
+        // The profile copy is owned once by the original allocation and is
+        // never a decode.
+        let mut allocation = Allocation::for_proof(PRIOR, &limits);
+        let graph = node::GraphBudget::new();
+        let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+        let result = Profiles::bind(&units, &mut budget)
+            .and_then(|profiles| profiles.decode(bytes, &mut budget));
+        assert_eq!(
+            result.expect("original remainder is owned").as_bytes(),
+            bytes
+        );
+        assert_eq!(budget.usage(), usage);
+        // A genuine failure latches the original account.
+        budget.refuse();
+        assert!(matches!(
+            Profiles::bind(&units, &mut budget),
+            Err(Error::Refused)
+        ));
     }
 }

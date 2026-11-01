@@ -181,35 +181,20 @@ fn alias_error_precedes_configuration_and_base_feature_error() {
     );
 }
 
-fn bounded(
-    items: usize,
-    bytes: usize,
-) -> (
-    Result<(), Error<crate::input::membership::Error>>,
-    input::Usage,
-    crate::exceedance::Record,
-) {
+fn bounded() -> Result<(), Error<crate::input::membership::Error>> {
     let mut records = normal("[path-bases]\nworkspace='root'");
     records.extend(environment());
     let image = image(records);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {
         Ok(host) => host,
-        Err(error) => {
-            return (
-                Err(Error::Host(error)),
-                allocation.usage(),
-                allocation.exceedances(),
-            )
-        }
+        Err(error) => return Err(Error::Host(error)),
     };
     let mut paths = slots::Slots::new();
     let mut config_documents = slots::Slots::new();
@@ -257,34 +242,11 @@ fn bounded(
     let result = session.finish(result);
     drop(owner);
     drop(host);
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (result, allocation.usage(), allocation.exceedances())
+    assert!(allocation.check().is_ok());
+    result
 }
 
 #[test]
-fn shared_configured_base_and_warnings_keep_exact_original_budget() {
-    use crate::input::membership::manifest::tests::one_short;
-    let (result, used, _) = bounded(usize::MAX, usize::MAX);
-    result.unwrap();
-    let (result, exact, exceeded) = bounded(used.items, used.bytes);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(!exceeded.is_exceeded());
-    // One short of an aggregate target admits and records that axis.
-    let (result, exact, exceeded) = bounded(used.items - 1, used.bytes);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_ITEMS_RESOURCE,
-        used.items
-    ));
-    let (result, exact, exceeded) = bounded(used.items, used.bytes - 1);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_BYTES_RESOURCE,
-        used.bytes
-    ));
+fn shared_configured_base_and_warnings_complete_on_the_original_account() {
+    bounded().unwrap();
 }

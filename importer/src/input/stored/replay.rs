@@ -97,7 +97,7 @@ impl Replayed<'_, '_> {
         ) -> Result<cargo::universe::Completion>,
     ) -> Result<(cargo::universe::Completion, Completed)> {
         self.budget.check()?;
-        let mut admit = |bytes| self.budget.hash(bytes);
+        let mut admit = |_| self.budget.check();
         let completion = complete(&self.projection, self.fingerprint, &mut admit)?;
         self.budget.check()?;
         let input = Completed {
@@ -119,13 +119,11 @@ impl<'budget, 'account> Compared<'_, 'budget, 'account> {
     ) -> Result<Replayed<'budget, 'account>> {
         let budget = self.budget;
         budget.check()?;
-        let limits = budget.limits;
         let projection = input::proof::protected::project::current(
             &self.entries,
             &self.build.build().evidence,
             protected,
             self.target,
-            &limits,
             budget,
         )?;
         let retained = self
@@ -289,37 +287,10 @@ mod tests {
     fn completion_refusal_cannot_return_retained_inputs() {
         let limits = cargo::Limits::standard();
         let graph = node::GraphBudget::new();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
         let mut allocation =
             input::Allocation::for_proof(input::Usage { items: 0, bytes: 0 }, &limits);
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-        let replayed = Replayed {
-            budget: &mut budget,
-            projection: cargo::universe::BuildProjection::from_canonical(Box::default()),
-            schema: input::proof::SCHEMA,
-            entries: Box::default(),
-            fingerprint: input::fingerprint::Fingerprint::from_bytes([0; 32]),
-            native: input::native::Inputs::fixture([0; 32]),
-        };
-        let mut entered = false;
-        let result = replayed.finish(|_, _, admit| {
-            entered = true;
-            // One byte over the hashed target is admitted and recorded.
-            admit(1).expect("an exceeding digest charge is recorded, not refused");
-            // A genuine failure (checked-arithmetic overflow) is terminal.
-            admit(usize::MAX)?;
-            panic!("exhausted completion must return before minting authority")
-        });
-        assert!(entered);
-        assert!(matches!(result, Err(Error::Graph(node::Error::Allocation))));
-        let record = graph.exceedances();
-        let axis = record
-            .axis(node::HASHED_RESOURCE)
-            .expect("hashed axis recorded");
-        assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(axis.high_water, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
+        budget.refuse();
         assert!(matches!(budget.check(), Err(Error::Refused)));
         let replayed = Replayed {
             budget: &mut budget,

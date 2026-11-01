@@ -57,9 +57,6 @@ pub struct Allocation {
     usage: Usage,
     item_limit: usize,
     byte_limit: usize,
-    /// The item and byte limits are accounting targets; crossings are
-    /// recorded on this surface account, never refused.
-    account: crate::surface::account::Account,
 }
 
 impl Contract<Classified> {
@@ -402,7 +399,6 @@ impl Allocation {
             usage: Usage { items: 0, bytes: 0 },
             item_limit: limits.classified_contract_items,
             byte_limit: limits.classified_contract_bytes,
-            account: crate::surface::account::Account::surface(),
         }
     }
 
@@ -416,7 +412,6 @@ impl Allocation {
             usage: Usage { items: 0, bytes: 0 },
             item_limit: limits.classified_contract_items,
             byte_limit: limits.classified_contract_bytes,
-            account: crate::surface::account::Account::surface(),
         };
         let mut allocation = allocation;
         allocation.retain(usage.items, usage.bytes)?;
@@ -444,19 +439,6 @@ impl Allocation {
                     limit: self.byte_limit,
                     actual: usize::MAX,
                 })?;
-        // The classified Contract limits are accounting targets. A
-        // crossing is recorded with the truthful cumulative amount and the
-        // charge is accepted; only checked-arithmetic overflow refuses.
-        self.account.exceeded(
-            "P2 cumulative retained items",
-            self.item_limit,
-            actual_items,
-        );
-        self.account.exceeded(
-            "P2 cumulative retained bytes",
-            self.byte_limit,
-            actual_bytes,
-        );
         self.usage = Usage {
             items: actual_items,
             bytes: actual_bytes,
@@ -490,12 +472,6 @@ impl Allocation {
 
     pub(crate) const fn limits(&self) -> (usize, usize) {
         (self.item_limit, self.byte_limit)
-    }
-
-    /// The accounting targets this allocation crossed so far.
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
     }
 
     pub(crate) const fn retained_usage(&self) -> (usize, usize) {
@@ -541,33 +517,6 @@ mod tests {
             .expect("the exact classified Contract boundary is accepted");
         assert_eq!(allocation.usage(), (exact.items, exact.bytes));
         assert_eq!(allocation.limits(), (exact.items, exact.bytes));
-
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // One over either target is accepted and recorded truthfully.
-        let item_over = Usage {
-            items: exact.items + 1,
-            bytes: 0,
-        };
-        let allocation = Allocation::new(CONTRACT, item_over, &limits)
-            .expect("the item target records and admits");
-        let axis = *allocation
-            .exceedances()
-            .axis("P2 cumulative retained items")
-            .unwrap();
-        assert_eq!((axis.target, axis.high_water), (6_500_000, 6_500_001));
-
-        let byte_over = Usage {
-            items: 0,
-            bytes: exact.bytes + 1,
-        };
-        let allocation = Allocation::new(CONTRACT, byte_over, &limits)
-            .expect("the byte target records and admits");
-        let axis = *allocation
-            .exceedances()
-            .axis("P2 cumulative retained bytes")
-            .unwrap();
-        assert_eq!((axis.target, axis.high_water), (671_088_640, 671_088_641));
     }
 
     #[test]
@@ -595,18 +544,6 @@ mod tests {
                 standard.classified_contract_bytes,
             )
         );
-
-        isolated.items = usize::MAX;
-        isolated.json_bytes = usize::MAX;
-        isolated.classified_contract_items = usage.items - 1;
-        let allocation = Allocation::new(CONTRACT, usage, &isolated)
-            .expect("the item target records and admits");
-        let axis = *allocation
-            .exceedances()
-            .axis("P2 cumulative retained items")
-            .unwrap();
-        assert_eq!(axis.target as usize, usage.items - 1);
-        assert_eq!(axis.high_water as usize, usage.items);
     }
 
     #[test]
@@ -629,31 +566,9 @@ mod tests {
                 limits.classified_contract_bytes,
             )
         );
-
-        assert!(!allocation.exceedances().is_exceeded());
-
-        // Past both targets the cumulative charge is still one atomic
-        // transaction; it is accepted and both crossings are recorded.
-        allocation
-            .retain(1, 1)
-            .expect("the targets record and admit");
-        assert_eq!(allocation.usage(), (retained.0 + 1, retained.1 + 1));
-        let record = allocation.exceedances();
-        assert_eq!(
-            record
-                .axis("P2 cumulative retained items")
-                .map(|axis| axis.high_water),
-            Some(6_500_001)
-        );
-        assert_eq!(
-            record
-                .axis("P2 cumulative retained bytes")
-                .map(|axis| axis.high_water),
-            Some(671_088_641)
-        );
         allocation
             .retain(usize::MAX, 0)
-            .expect_err("checked overflow still refuses");
-        assert_eq!(allocation.usage(), (retained.0 + 1, retained.1 + 1));
+            .expect_err("checked overflow refuses");
+        assert_eq!(allocation.usage(), retained);
     }
 }

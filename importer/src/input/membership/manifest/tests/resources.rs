@@ -3,7 +3,7 @@ use rawr_toml::document;
 use super::super::{schema, session, storage, value, walk, Error};
 use super::{parse, Account};
 use crate::input::membership::Budget;
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn through_temporary_capture<'d>(
     document: &'d document::Document<'d>,
@@ -130,72 +130,6 @@ fn allocator_bonus_does_not_authorize_an_unadmitted_extent() {
     );
 }
 
-fn budgeted<'d>(
-    document: &'d document::Document<'d>,
-    item_limit: usize,
-    byte_limit: usize,
-    string_limit: usize,
-) -> (bool, input::Usage, crate::exceedance::Record) {
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(item_limit, byte_limit, string_limit);
-    allocation.items(7).unwrap();
-    allocation.bytes(19).unwrap();
-    let accepted = walk::project(
-        super::input(document),
-        value::Mode::SerdeValue,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        },
-    )
-    .is_ok();
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (accepted, allocation.usage, allocation.exceedances())
-}
-
-#[test]
-fn actual_original_account_accepts_exact_and_records_each_floor_with_prior_usage() {
-    let document = growth_fixture();
-    let (accepted, exact, _) = budgeted(&document, usize::MAX, usize::MAX, usize::MAX);
-    assert!(accepted);
-    assert!(exact.items > 7 && exact.bytes > 19);
-    assert_eq!(
-        budgeted(&document, exact.items, exact.bytes, 35),
-        (true, exact, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    super::admits_one_short(
-        budgeted(&document, exact.items - 1, exact.bytes, 35),
-        exact,
-        input::INPUT_ITEMS_RESOURCE,
-        exact.items,
-    );
-    super::admits_one_short(
-        budgeted(&document, exact.items, exact.bytes - 1, 35),
-        exact,
-        input::INPUT_BYTES_RESOURCE,
-        exact.bytes,
-    );
-    // The synthetic datetime is the longest string, exactly 35 bytes.
-    // One short admits the same work and records only the string axis.
-    let (okay, usage, exceeded) = budgeted(&document, exact.items, exact.bytes, 34);
-    assert!(okay, "a string target is not an admission gate");
-    assert_eq!(usage, exact, "the exact charge is still spent");
-    let mut axes = exceeded.axes();
-    let (Some(axis), None) = (axes.next(), axes.next()) else {
-        panic!("only the string axis is recorded: {exceeded:?}");
-    };
-    assert_eq!(
-        (
-            axis.name,
-            axis.target,
-            axis.first_requested,
-            axis.high_water
-        ),
-        ("membership decoded TOML string bytes", 34, 35, 35)
-    );
-}
-
 fn deep_source(leaf: &str) -> String {
     let mut source = String::from("value={");
     for _ in 0..79 {
@@ -237,7 +171,6 @@ fn deeply_compounded_generic_success_and_failure_have_flat_teardown() {
 fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
     let source = deep_source("1");
     let document = parse(&source);
-    let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     measured.items(7).unwrap();
     measured.bytes(19).unwrap();
@@ -245,7 +178,6 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
         super::input(&document),
         value::Mode::Content,
         &mut Budget {
-            graph: &graph,
             allocation: &mut measured,
         },
     )
@@ -256,7 +188,6 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let captured =
@@ -278,21 +209,10 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
 #[test]
 fn pure_interpretation_uses_no_filesystem_hash_or_candidate_comparison_event() {
     let document = growth_fixture();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let limits = cargo::Limits::standard();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     walk::project(
@@ -325,12 +245,10 @@ fn native_acquisition_stored_host_document_and_target_share_one_original_account
     .unwrap();
 
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(11).unwrap();
     allocation.bytes(23).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let acquired = live::manifest(path.as_os_str().as_bytes(), &mut budget).unwrap();

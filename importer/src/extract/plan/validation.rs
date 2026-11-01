@@ -297,7 +297,6 @@ fn fragments_from_different_compiler_invocations_reject() {
                     &probe.compiler_commit,
                     &probe.host,
                     &probe.selected_target,
-                    &limits,
                     &mut super::Allocation::new(&limits),
                 )
             };
@@ -417,7 +416,6 @@ fn cold_seal_and_read_only_validation_produce_the_same_capture() {
                 .expect("read-only validation runs no child")?;
             assert_eq!(protocol::accounted_decodes(), 1);
             assert_eq!(cold.document, retained.document);
-            assert_eq!(cold.document_bytes, retained.document_bytes);
             assert_eq!(cold.controls, retained.controls);
             assert_eq!(cold.sidecars, retained.sidecars);
             assert_eq!(cold.artifacts, retained.artifacts);

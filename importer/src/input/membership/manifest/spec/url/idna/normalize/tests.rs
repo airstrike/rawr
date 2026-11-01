@@ -228,65 +228,35 @@ fn every_constructor_and_next_refusal_stops_delegate_and_future_emissions() {
 #[test]
 fn original_account_preserves_prior_items_layouts_and_between_emission_refusal() {
     use crate::input;
-    use crate::input::membership::manifest::tests::one_short;
     use crate::input::membership::Budget;
-    use crate::node;
 
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let exact_bytes = 19
         + std::alloc::Layout::array::<Character>(4).unwrap().size()
         + std::alloc::Layout::array::<Character>(8).unwrap().size();
-    // One short of an item or byte target still admits every layout and
-    // records only that axis at the exact total; nothing latches.
-    for (items, bytes, exceeded) in [
-        (12, exact_bytes, None),
-        (11, exact_bytes, Some((input::INPUT_ITEMS_RESOURCE, 12))),
-        (
-            12,
-            exact_bytes - 1,
-            Some((input::INPUT_BYTES_RESOURCE, exact_bytes)),
-        ),
-    ] {
-        let mut allocation = input::Allocation::with_limits(items, bytes, 0);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let result = discard(
-            "\u{301}\u{300}\u{323}\u{315}\u{316}".chars(),
-            false,
-            &mut session,
-        );
-        session.finish(result).unwrap();
-        assert_eq!(allocation.usage.items, 12);
-        assert_eq!(allocation.usage.bytes, exact_bytes);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        match exceeded {
-            Some((resource, total)) => {
-                assert!(one_short(&allocation.exceedances(), resource, total))
-            }
-            None => assert!(!allocation.exceedances().is_exceeded()),
-        }
-    }
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut budget = Budget {
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let result = discard(
+        "\u{301}\u{300}\u{323}\u{315}\u{316}".chars(),
+        false,
+        &mut session,
+    );
+    session.finish(result).unwrap();
+    assert_eq!(allocation.usage.items, 12);
+    assert_eq!(allocation.usage.bytes, exact_bytes);
+    assert!(allocation.check().is_ok());
 
-    // An exhausted target no longer refuses between emissions; a genuine
-    // failure (checked-arithmetic overflow of the item account) does, and the
-    // normalizer then pulls no further input.
+    // A genuine failure (checked-arithmetic overflow of the item account)
+    // refuses between emissions, and the normalizer then pulls no further
+    // input.
     let count = Cell::new(0);
     let mut allocation = input::Allocation::with_limits(0, 0, 0);
     allocation.items(1).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

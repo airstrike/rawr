@@ -1,6 +1,6 @@
 use super::*;
+use crate::input;
 use crate::input::membership::{live, observed, stored, Budget};
-use crate::{input, node};
 use std::{
     fs,
     os::unix::fs::MetadataExt,
@@ -71,10 +71,8 @@ fn explicit_include_walk_roundtrips_native_pruning_and_archive_projection() {
     }
     fs::write(fixture.0.join("nested/Cargo.toml"), b"nested").unwrap();
     fs::write(fixture.0.join("target/unread.rs"), b"unused").unwrap();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
 
@@ -159,10 +157,8 @@ fn repeated_open_occurrences_preserve_discarded_and_delivered_native_errors() {
     use observed::traversal::Close;
     let fixture = Fixture::new();
     let missing = fixture.0.join("missing");
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let record = {
@@ -240,10 +236,8 @@ fn repeated_open_occurrences_preserve_discarded_and_delivered_native_errors() {
 fn dropped_or_refused_live_traversal_cannot_restart_the_same_owner() {
     let fixture = Fixture::new();
     for refuse in [false, true] {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut owner = live::traversal::Owner::new(&mut budget).unwrap();
@@ -251,7 +245,7 @@ fn dropped_or_refused_live_traversal_cannot_restart_the_same_owner() {
         let directory = capture.open(fixture.0.as_os_str().as_bytes()).unwrap();
         if refuse {
             assert!(capture
-                .probe(|budget| Ok(budget.graph.paths(usize::MAX)?))
+                .probe(|_| Err::<(), _>(crate::node::Error::Allocation.into()))
                 .is_err());
             assert!(capture
                 .close(directory, observed::traversal::Close::Pruned)
@@ -268,10 +262,8 @@ fn dropped_or_refused_live_traversal_cannot_restart_the_same_owner() {
 fn eleventh_open_drains_oldest_and_delivers_buffered_entries_in_source_order() {
     use observed::traversal::{Close, Event, Next, Open, Transcript};
     let fixture = Fixture::new();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut paths = vec![fixture.0.clone()];

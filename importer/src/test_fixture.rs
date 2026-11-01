@@ -180,7 +180,7 @@ fn iced_profile_graph(
     retain_text_widget: bool,
     case: IcedElementCase,
 ) -> crate::Result<api::Graph<api::Extracted>> {
-    let universe = crate::cargo::universe::Catalog::plain(&crate::cargo::Limits::standard())?;
+    let universe = crate::cargo::universe::Catalog::plain()?;
     iced_profile_graph_with_universe(retain_text_widget, case, *universe.identity())
 }
 

@@ -91,11 +91,7 @@ impl Step {
 impl Plan {
     /// Validate one nonempty construct/consume chain and its exact-once ordered
     /// argument positions before any native value exists.
-    pub fn new(
-        result: identity::Identity,
-        steps: Box<[Step]>,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Self, super::Error> {
+    pub fn new(result: identity::Identity, steps: Box<[Step]>) -> Result<Self, super::Error> {
         let Some((first, remaining)) = steps.split_first() else {
             return Err(super::Error::BuilderShape);
         };
@@ -122,19 +118,6 @@ impl Plan {
         if steps.last().map(Step::entry).map(super::Entry::identity) != Some(&result) {
             return Err(super::Error::BuilderShape);
         }
-        // Replay item and byte sizes are accounting targets recorded on
-        // a surface account for this plan; checked arithmetic still refuses.
-        let mut account = super::account::Account::surface();
-        let count = steps.iter().try_fold(steps.len(), |items, step| {
-            items
-                .checked_add(step.arguments().len())
-                .ok_or(super::Error::Limit {
-                    resource: "builder replay items",
-                    limit: limits.items,
-                    actual: usize::MAX,
-                })
-        })?;
-        account.exceeded("builder replay items", limits.items, count);
         let argument_count = steps
             .iter()
             .map(Step::arguments)
@@ -158,12 +141,6 @@ impl Plan {
         if observed.iter().any(|seen| !seen) {
             return Err(super::Error::BuilderArgument);
         }
-        let retained = retained_bytes(&result, &steps).ok_or(super::Error::Limit {
-            resource: "builder replay retained bytes",
-            limit: limits.json_bytes,
-            actual: usize::MAX,
-        })?;
-        account.exceeded("builder replay retained bytes", limits.json_bytes, retained);
         let semantic = semantic(&result, &steps);
         Ok(Self {
             result,

@@ -209,67 +209,24 @@ fn independently_reserved_attempts_fix_distinct_complete_namespaces() {
 }
 
 #[test]
-fn original_path_account_admits_exact_layout_and_records_one_less_with_cleanup() {
-    // Each Cargo form creates four directories and one fixed config; extraction creates two directories.
-    const PATHS: usize = 12;
-    let target = node::MAX_PATH_CHECKS_PER_GRAPH as u64;
-    for remaining in [PATHS, PATHS - 1] {
-        let fixture = Fixture::open("paths");
-        let mut attempted = None;
-        let result = fixture.reserve(|attempt| {
-            let root = attempt.root();
-            attempted = Some(root.clone());
-            let original = fixture.store.graph_budget();
-            let sibling = original.clone();
-            let spent = original.census_usage()?.1;
-            sibling.paths(7)?;
-            sibling.paths(node::MAX_PATH_CHECKS_PER_GRAPH - spent - 7 - remaining)?;
-            assert!(!original.exceedances().is_exceeded());
-            // The path account is a target, never a gate. Both allowances
-            // admit the complete layout; the exact charge is proven by where the
-            // original account records its first crossing.
-            let layout = Layout::bind(attempt, original)?;
-            inspect(&layout);
-            if remaining == PATHS {
-                // Exact: binding records nothing; the next single check is the
-                // first to cross, by exactly one.
-                assert!(!original.exceedances().is_exceeded());
-                original.paths(1)?;
-            } else {
-                // One less: the layout's final check crosses by exactly one.
-                let record = original.exceedances();
-                let axis = record
-                    .axis(node::PATHS_RESOURCE)
-                    .expect("one less records the layout's final path check");
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (target, target + 1, target + 1)
-                );
-                assert!(axis.site.is_some());
-            }
-            let record = original.exceedances();
-            let axis = record
-                .axis(node::PATHS_RESOURCE)
-                .expect("the original account records the crossing");
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (target, target + 1, target + 1)
-            );
-            assert_eq!(
-                original.census_usage()?.1 as u64,
-                target + 1,
-                "every charge past the target is still added to the original account"
-            );
-            drop(layout);
-            assert!(!root.exists());
-            Ok(())
-        });
-        result.expect("exact and one-less path allowances both admit the complete layout");
-        assert!(!attempted
-            .expect("the actual attempt was allocated")
-            .exists());
-        fixture.retire();
-    }
+fn original_path_account_charges_the_layout_with_cleanup() {
+    let fixture = Fixture::open("paths");
+    let mut attempted = None;
+    let result = fixture.reserve(|attempt| {
+        let root = attempt.root();
+        attempted = Some(root.clone());
+        let original = fixture.store.graph_budget();
+        let layout = Layout::bind(attempt, original)?;
+        inspect(&layout);
+        drop(layout);
+        assert!(!root.exists());
+        Ok(())
+    });
+    result.expect("the path account admits the complete layout");
+    assert!(!attempted
+        .expect("the actual attempt was allocated")
+        .exists());
+    fixture.retire();
 }
 
 #[test]
@@ -279,23 +236,10 @@ fn original_allocation_refusal_cleans_the_reserved_attempt() {
     let result = fixture.reserve(|attempt| {
         attempted = Some(attempt.root());
         let original = fixture.store.graph_budget();
-        let sibling = original.clone();
-        let spent = original.census_usage()?.0 as usize;
-        sibling.decode(17)?;
-        sibling.decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - spent - 17)?;
-        assert!(!original.exceedances().is_exceeded());
         // A spent decode account is a target; binding completes and the
         // original account records the crossing with its call site.
         let layout = Layout::bind(attempt, original)?;
         inspect(&layout);
-        let record = original.exceedances();
-        let axis = record
-            .axis(node::DECODED_RESOURCE)
-            .expect("binding charges decoded bytes on the original account");
-        assert_eq!(axis.target, node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert!(axis.high_water > axis.target);
-        assert!(axis.site.is_some());
-        assert_eq!(original.census_usage()?.0, axis.high_water);
         // A genuine allocation failure while the layout is live stays terminal
         // and still cleans the reserved attempt.
         let _live = layout;
@@ -339,7 +283,7 @@ fn consuming_seal_transfers_cleanup_to_pending_without_relocating_paths() {
                 root
             );
             let before = snapshot(&root);
-            let observed = Paths::observe(root.clone(), fixture.store.graph_budget())?;
+            let observed = Paths::observe(root.clone())?;
             assert_eq!(observed.root(), root);
             assert_eq!(observed.final_form().source(), source);
             assert_eq!(observed.receipt(), receipt);
@@ -365,21 +309,7 @@ fn seal_cannot_replace_the_original_exhausted_graph_account() {
             let layout = Layout::bind(attempt, fixture.store.graph_budget())?;
             let root = layout.root().to_path_buf();
             attempted = Some(root.clone());
-            let original = fixture.store.graph_budget();
-            let sibling = original.clone();
-            sibling.exhaust_paths();
-            assert!(!original.exceedances().is_exceeded());
-            // Sealing charges the same spent original account. The
-            // crossing is recorded there, never refused; a replacement account
-            // would have left the original's record empty.
             let pending = layout.seal(Box::from(&b"recorded seal"[..]))?;
-            let record = original.exceedances();
-            let axis = record
-                .axis(node::PATHS_RESOURCE)
-                .expect("seal charges path checks on the original account");
-            assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-            assert!(axis.high_water > axis.target);
-            assert_eq!(original.census_usage()?.1 as u64, axis.high_water);
             assert!(root.join("seal").is_file());
             drop(pending);
             assert!(!root.exists());
@@ -437,10 +367,7 @@ fn read_only_paths_reject_missing_directory_and_changed_config_without_repair() 
                         .expect("change config");
                 }
                 let before = snapshot(layout.root());
-                assert!(
-                    Paths::observe(layout.root().to_path_buf(), fixture.store.graph_budget())
-                        .is_err()
-                );
+                assert!(Paths::observe(layout.root().to_path_buf()).is_err());
                 assert_eq!(
                     snapshot(layout.root()),
                     before,
@@ -464,9 +391,7 @@ fn read_only_paths_reject_internal_directory_aliases() {
             fs::remove_dir(protocol).expect("remove protocol");
             std::os::unix::fs::symlink(layout.final_form().target(), protocol)
                 .expect("internal alias");
-            assert!(
-                Paths::observe(layout.root().to_path_buf(), fixture.store.graph_budget()).is_err()
-            );
+            assert!(Paths::observe(layout.root().to_path_buf()).is_err());
             assert!(fs::symlink_metadata(protocol)
                 .expect("alias remains")
                 .file_type()
@@ -477,45 +402,6 @@ fn read_only_paths_reject_internal_directory_aliases() {
         })
         .expect("aliases cannot redirect observed layout paths");
     fixture.retire();
-}
-
-#[test]
-fn read_only_paths_keep_the_original_exhausted_graph_account() {
-    for path_limit in [false, true] {
-        let fixture = Fixture::open("observe-budget");
-        fixture
-            .reserve(|attempt| {
-                let layout = Layout::bind(attempt, fixture.store.graph_budget())?;
-                let original = fixture.store.graph_budget();
-                let sibling = original.clone();
-                let (name, target) = if path_limit {
-                    sibling.exhaust_paths();
-                    (node::PATHS_RESOURCE, node::MAX_PATH_CHECKS_PER_GRAPH as u64)
-                } else {
-                    let spent = original.census_usage()?.0;
-                    sibling.decode((node::MAX_DECODED_BYTES_PER_GRAPH - spent) as usize)?;
-                    (node::DECODED_RESOURCE, node::MAX_DECODED_BYTES_PER_GRAPH)
-                };
-                assert!(!original.exceedances().is_exceeded());
-                // The spent shared account is a target. Observation still
-                // completes, stays read-only, and records its crossing on the
-                // original account rather than a replacement.
-                let before = snapshot(layout.root());
-                let observed = Paths::observe(layout.root().to_path_buf(), original)?;
-                assert_eq!(observed.root(), layout.root());
-                assert_eq!(snapshot(layout.root()), before);
-                let record = original.exceedances();
-                let axis = record
-                    .axis(name)
-                    .expect("observation charges the original account");
-                assert_eq!(axis.target, target);
-                assert!(axis.high_water > target);
-                assert!(axis.site.is_some());
-                Ok(())
-            })
-            .expect("the spent shared account still admits read-only observation");
-        fixture.retire();
-    }
 }
 
 // These fixtures exercise artifact/data association only. Empty section bodies
@@ -813,7 +699,7 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     let grandparent_permissions = fs::metadata(grandparent).unwrap().permissions();
     fs::set_permissions(grandparent, fs::Permissions::from_mode(0o755)).unwrap();
     let moved = grandparent.join("detached");
-    let detached = crate::runner::artifact::retained::observe_hashes(graph, |hashes| {
+    let detached = crate::runner::artifact::retained::observe_hashes(|hashes| {
         hashes.hash(&artifact, &fs::metadata(&artifact).unwrap())?;
         fs::rename(parent, &moved).unwrap();
         fs::create_dir(parent).unwrap();
@@ -890,41 +776,6 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     fs::set_permissions(&seal, fs::Permissions::from_mode(0o644)).unwrap();
     fs::write(&seal, original).unwrap();
     fs::set_permissions(&seal, permissions).unwrap();
-    // The retained record length is measured against the
-    // `input_proof_bytes` accounting target. Exactly the record admits
-    // silently; one byte less records a truthful high water on the original
-    // input account, without latching it, and the read still completes.
-    const RECORD: &str = "retained resolution record bytes";
-    let length = record_frame().len();
-    for (target, exceeded) in [(length, false), (length - 1, true)] {
-        let mut tiny = limits;
-        tiny.input_proof_bytes = target;
-        let mut tiny_account = record_account(graph);
-        let mut tiny_budget = Budget::borrow(&tiny, &mut tiny_account, graph);
-        let stored = Stored::decode(&first.value().0, &mut tiny_budget).unwrap();
-        let observed = stored
-            .read_published(
-                &fixture.store,
-                Data::KIND,
-                Data::SCHEMA,
-                node::content_digest::<Data>(&first.value().0),
-                &mut tiny_budget,
-            )
-            .unwrap();
-        assert_eq!(observed.bytes(), record_frame());
-        drop(observed);
-        assert!(tiny_budget.check().is_ok());
-        let record = tiny_account.exceedances();
-        match record.axis(RECORD) {
-            Some(axis) => {
-                assert!(exceeded, "an exact record length admits silently");
-                assert_eq!(axis.target, target as u64);
-                assert_eq!(axis.first_requested, length as u64);
-                assert_eq!(axis.high_water, length as u64);
-            }
-            None => assert!(!exceeded, "one byte over the target is recorded"),
-        }
-    }
     drop((first, second));
     fixture.store.retire_fixture().unwrap();
     fs::remove_dir_all(fixture.root).unwrap();

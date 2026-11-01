@@ -125,7 +125,7 @@ where
     ) -> Step<(&'original Original<'document>, bool)> {
         // Classifying the pathname has no I/O. In the pin it precedes reading.
         let is_embedded = is_embedded(path);
-        let raw = session.text(path.as_os_str().as_bytes(), limits)?;
+        let raw = session.text(path.as_os_str().as_bytes())?;
         let expanded = if is_embedded {
             if !script {
                 return session.reject(Diagnostic::at(Tag::ScriptRequired, None));

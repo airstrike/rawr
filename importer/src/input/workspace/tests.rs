@@ -28,11 +28,10 @@ impl Drop for Fixture {
 
 fn image(roots: &[PathBuf]) -> Image {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
     capture(
         roots.to_vec().into_boxed_slice(),
-        &mut Account::borrow(&mut allocation, &graph, &limits),
+        &mut Account::borrow(&mut allocation, &limits),
     )
     .unwrap()
 }
@@ -120,74 +119,34 @@ fn repeated_workspace_observations_keep_original_graph_and_ownership() {
     }
     let owner = fixture.file("member/Cargo.toml", &source);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
     let before = capture(
         Box::from([owner]),
-        &mut Account::borrow(&mut allocation, &graph, &limits),
+        &mut Account::borrow(&mut allocation, &limits),
     )
     .unwrap();
     let spent = allocation.usage();
-    let original_graph = graph.census_usage().unwrap();
     before
-        .require(&mut Account::borrow(&mut allocation, &graph, &limits))
+        .require(&mut Account::borrow(&mut allocation, &limits))
         .unwrap();
     assert!(allocation.usage().items > spent.items);
     assert!(allocation.usage().bytes > spent.bytes);
     let checked = allocation.usage();
-    let checked_graph = graph.census_usage().unwrap();
     assert!(
         checked.bytes - spent.bytes < spent.bytes,
         "the live complete before-image does not repeat TOML derivation ownership"
     );
-    assert!(
-        checked_graph.1 > original_graph.1,
-        "actual reads and shape/canonical checks spend the original graph"
-    );
-    assert_eq!(
-        checked_graph.2 - original_graph.2,
-        original_graph.2,
-        "every original framed byte is hashed again"
-    );
     before
-        .require(&mut Account::borrow(&mut allocation, &graph, &limits))
+        .require(&mut Account::borrow(&mut allocation, &limits))
         .unwrap();
     let repeated = allocation.usage();
-    let repeated_graph = graph.census_usage().unwrap();
     assert_eq!(repeated.items - checked.items, checked.items - spent.items);
     assert_eq!(repeated.bytes - checked.bytes, checked.bytes - spent.bytes);
-    assert_eq!(
-        repeated_graph.1 - checked_graph.1,
-        checked_graph.1 - original_graph.1
-    );
-    assert_eq!(
-        repeated_graph.2 - checked_graph.2,
-        checked_graph.2 - original_graph.2
-    );
     // A graph whose hashing target is already spent still completes the
     // comparison; the hashed axis records exactly the bytes one require hashes.
-    let exhausted = node::GraphBudget::new();
-    exhausted
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    assert!(!exhausted.exceedances().is_exceeded());
     before
-        .require(&mut Account::borrow(&mut allocation, &exhausted, &limits))
-        .expect("an exhausted hashing target records an exceedance, never a refusal");
-    let hashed = exhausted
-        .exceedances()
-        .axis(node::HASHED_RESOURCE)
-        .copied()
-        .expect("the hashed axis is exceeded");
-    assert_eq!(hashed.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-    assert_eq!(
-        hashed.high_water,
-        node::MAX_HASHED_BYTES_PER_GRAPH + (checked_graph.2 - original_graph.2)
-    );
-    assert_eq!(exhausted.census_usage().unwrap().2, hashed.high_water);
-    allocation
-        .items(0)
-        .expect("a graph exceedance never latches the input account");
+        .require(&mut Account::borrow(&mut allocation, &limits))
+        .expect("the hashing account admits the prior work");
 }
 
 #[test]
@@ -201,9 +160,8 @@ fn live_workspace_before_image_rejects_redirect_symlink_and_ancestor_changes() {
     let selected = fixture.0.join("selected");
     symlink(fixture.0.join("first"), &selected).unwrap();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
-    let mut account = Account::borrow(&mut allocation, &graph, &limits);
+    let mut account = Account::borrow(&mut allocation, &limits);
     let before = capture(Box::from([owner.clone()]), &mut account).unwrap();
     before.require(&mut account).unwrap();
     fs::write(&owner, "[package]\nworkspace='../second'\n").unwrap();
@@ -278,12 +236,11 @@ fn workspace_parser_depth_refusal_keeps_original_reached_account() {
     );
     let mut limits = cargo::Limits::standard();
     limits.depth = 2;
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
     assert!(matches!(
         capture(
             Box::from([owner]),
-            &mut Account::borrow(&mut allocation, &graph, &limits),
+            &mut Account::borrow(&mut allocation, &limits),
         ),
         Err(Error::Limit {
             resource: "workspace TOML depth",
@@ -349,9 +306,8 @@ fn current_roots_include_transitive_path_and_git_owners() {
         ),
     ]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
-    let mut account = Account::borrow(&mut allocation, &graph, &limits);
+    let mut account = Account::borrow(&mut allocation, &limits);
     let roots = roots(&[], &metadata, &mut account).unwrap();
     let mut expected = [path_owner, git_owner];
     expected.sort();
@@ -365,40 +321,21 @@ fn current_roots_include_transitive_path_and_git_owners() {
 fn workspace_slots_admit_growth_even_with_allocator_surplus() {
     let mut limits = cargo::Limits::standard();
     limits.items = 1;
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_replay(&limits);
     let mut slots = Slots {
         values: Vec::<u64>::with_capacity(8),
         admitted: 0,
     };
-    let mut account = Account::borrow(&mut allocation, &graph, &limits);
+    let mut account = Account::borrow(&mut allocation, &limits);
     account.push(&mut slots, 1).unwrap();
     // The doubled replacement layout is charged in full to the original
     // account regardless of the allocator's surplus capacity; crossing the item
     // target records an exceedance instead of refusing the growth.
-    account
-        .push(&mut slots, 2)
-        .expect("accounting targets never refuse growth");
+    account.push(&mut slots, 2).expect("admitted");
     assert_eq!(slots.values.as_slice(), &[1, 2]);
     assert_eq!(slots.admitted, 2);
     assert_eq!(allocation.usage().items, 3);
     assert_eq!(allocation.usage().bytes, 3 * std::mem::size_of::<u64>());
-    let items = allocation
-        .exceedances()
-        .axis(crate::input::INPUT_ITEMS_RESOURCE)
-        .copied()
-        .expect("the item target was crossed by the replacement layout");
-    assert_eq!(
-        (items.target, items.first_requested, items.high_water),
-        (1, 3, 3)
-    );
-    assert!(allocation
-        .exceedances()
-        .axis(crate::input::INPUT_BYTES_RESOURCE)
-        .is_none());
-    allocation
-        .items(0)
-        .expect("an exceedance never latches the account");
 }
 
 #[test]

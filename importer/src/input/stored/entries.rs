@@ -386,11 +386,6 @@ pub(super) fn fingerprint(
     entries: &[proof::Entry],
     budget: &mut Budget<'_>,
 ) -> Result<fingerprint::Fingerprint> {
-    let digest = replay::canonical::digest(
-        &(schema, entries),
-        "canonical expected proof bytes",
-        budget.limits.input_proof_bytes,
-        budget,
-    )?;
+    let digest = replay::canonical::digest(&(schema, entries), budget)?;
     Ok(fingerprint::Fingerprint::from_bytes(digest))
 }

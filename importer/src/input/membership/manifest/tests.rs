@@ -1,40 +1,9 @@
 use rawr_toml::document;
 
 use super::{schema, session, value, walk, Error, Stop, Tag};
-use crate::input;
 
 mod resources;
 mod source;
-
-/// One short of an exact accounting target still admits the whole
-/// charge. The account records only that axis, and its high water is the
-/// exact total, so the figure a refusal used to prove is still proven.
-pub(super) fn one_short(record: &crate::exceedance::Record, resource: &str, exact: usize) -> bool {
-    let mut axes = record.axes();
-    matches!(
-        (axes.next(), axes.next()),
-        (Some(axis), None) if axis.name == resource && axis.high_water == exact as u64
-    )
-}
-
-/// Assert that one accounting axis one short of `exact` admits the whole
-/// charge, spends exactly `exact`, and records only that axis at `total`.
-pub(super) fn admits_one_short(
-    (okay, usage, exceeded): (bool, input::Usage, crate::exceedance::Record),
-    exact: input::Usage,
-    resource: &str,
-    total: usize,
-) {
-    assert!(
-        okay,
-        "{resource}: an accounting target is not an admission gate"
-    );
-    assert_eq!(usage, exact, "{resource}: the exact charge is still spent");
-    assert!(
-        one_short(&exceeded, resource, total),
-        "{resource}: {exceeded:?}"
-    );
-}
 
 #[derive(Default)]
 struct Account {

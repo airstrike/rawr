@@ -2,10 +2,8 @@ use super::*;
 
 fn records() -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let records = [
@@ -35,12 +33,10 @@ fn records() -> stored::Stored {
 fn native_canonical_failure_is_data_and_does_not_latch_session() {
     let image = records();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -63,21 +59,12 @@ fn native_canonical_failure_is_data_and_does_not_latch_session() {
 #[test]
 fn missing_malformed_or_refused_query_latches_without_native_fallback() {
     let image = records();
-    for cause in 0..4 {
+    for cause in [0, 1, 3] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        if cause == 2 {
-            // An exhausted path target is recorded, not refused; overflow
-            // the account so the first path check is a genuine failure.
-            graph
-                .paths(usize::MAX)
-                .expect("the next path check overflows");
-        }
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -98,7 +85,6 @@ fn missing_malformed_or_refused_query_latches_without_native_fallback() {
         match cause {
             0 => assert!(matches!(error, Err(Error::Host(InputError::Unobserved)))),
             1 => assert!(matches!(error, Err(Error::Host(InputError::Encoding(_))))),
-            2 => assert!(matches!(error, Err(Error::Host(InputError::Budget(_))))),
             3 => assert!(matches!(error, Err(Error::Host(InputError::Input(_))))),
             _ => unreachable!(),
         }

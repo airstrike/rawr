@@ -330,7 +330,7 @@ mod tests {
 
     use super::Version;
     use crate::input::membership::manifest::{scalar, session, Error, Span, Stop, Tag};
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
 
     #[derive(Default)]
     struct Meter {
@@ -582,57 +582,29 @@ mod tests {
     }
 
     #[test]
-    fn original_budget_keeps_prior_usage_and_exact_identifier_floors() {
-        use crate::input::membership::manifest::tests::one_short;
-        for (item_floor, byte_floor) in [(0, 0), (1, 0), (0, 1)] {
-            let limits = cargo::Limits::standard();
-            let mut allocation = input::Allocation::new(&limits);
-            allocation.items(7).unwrap();
-            allocation.bytes(31).unwrap();
-            allocation.item_limit = 9 - item_floor;
-            allocation.byte_limit = 40 - byte_floor;
-            let graph = node::GraphBudget::new();
-            graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-            graph
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                .unwrap();
-            graph
-                .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                .unwrap();
-            let mut budget = input::membership::Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            };
-            let mut session = session::Session::new(&mut budget);
-            let result = Version::parse("1.2.3-alpha+0007", None, &mut session);
-            let result = session.finish(result);
-            // A one-short item or byte target still admits both owned
-            // identifiers and records only that axis at the exact total.
-            assert_eq!(
-                result.expect("exact original remainder").build(),
-                Some("0007")
-            );
-            assert_eq!(
-                allocation.usage(),
-                input::Usage {
-                    items: 9,
-                    bytes: 40
-                }
-            );
-            assert!(allocation.check().is_ok(), "accounting targets never latch");
-            let exceeded = allocation.exceedances();
-            match (item_floor, byte_floor) {
-                (0, 0) => assert!(!exceeded.is_exceeded()),
-                (1, 0) => assert!(one_short(&exceeded, input::INPUT_ITEMS_RESOURCE, 9)),
-                _ => {
-                    // The first owned identifier (36 bytes) fits; the second
-                    // crosses the one-short target and is still admitted.
-                    assert!(one_short(&exceeded, input::INPUT_BYTES_RESOURCE, 40));
-                    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                    assert_eq!(axis.first_requested, 40);
-                    assert!(axis.target >= 36);
-                }
+    fn original_budget_keeps_prior_usage_across_identifiers() {
+        let limits = cargo::Limits::standard();
+        let mut allocation = input::Allocation::new(&limits);
+        allocation.items(7).unwrap();
+        allocation.bytes(31).unwrap();
+        let mut budget = input::membership::Budget {
+            allocation: &mut allocation,
+        };
+        let mut session = session::Session::new(&mut budget);
+        let result = Version::parse("1.2.3-alpha+0007", None, &mut session);
+        let result = session.finish(result);
+        // Both owned identifiers are charged on top of the prior usage.
+        assert_eq!(
+            result.expect("exact original remainder").build(),
+            Some("0007")
+        );
+        assert_eq!(
+            allocation.usage(),
+            input::Usage {
+                items: 9,
+                bytes: 40
             }
-        }
+        );
+        assert!(allocation.check().is_ok());
     }
 }

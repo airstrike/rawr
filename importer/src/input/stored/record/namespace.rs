@@ -45,7 +45,7 @@ pub(super) fn write(writer: &mut Writer<'_>, retained: &Retained) -> Result<()> 
 
 pub(super) fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> Result<Retained> {
     let result = (|| {
-        budget.wire_section(bytes)?;
+        budget.check()?;
         let mut reader = Reader::new(bytes, budget);
         if reader.take(MAGIC.len())? != MAGIC {
             return Err(bad("unsupported namespace schema"));

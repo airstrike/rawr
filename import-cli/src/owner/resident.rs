@@ -145,7 +145,7 @@ pub(super) fn attempt(
             .prepare_inputs(inputs)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
         let freshness = scope
-            .observe(&bytes, &limits)
+            .observe(&bytes)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
         Ok((bytes, freshness, observation, staged, eligible))
     })();

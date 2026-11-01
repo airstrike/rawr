@@ -95,14 +95,12 @@ fn reference(directory: &Path, filename: Filename, warn: bool) -> Transcript {
 fn compare(directory: &Path, filename: Filename) {
     for warn in [false, true] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let record = live::discovery(
             directory.as_os_str().as_bytes(),
             filename,
             warn,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

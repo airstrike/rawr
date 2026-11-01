@@ -54,7 +54,7 @@ impl Current for NeverCurrent {
 }
 
 fn current(store: &Store, inputs: &[u8]) -> Validated<Owned> {
-    let recipe = Direct::capture([1; 32], inputs, 64, &[], 0).unwrap();
+    let recipe = Direct::capture([1; 32], inputs, 64, &[]).unwrap();
     let current = Evaluator::new(store, &crate::metrics::Current)
         .direct(&recipe, || Ok(Owned))
         .unwrap();
@@ -188,25 +188,9 @@ fn retention_copies_spend_the_original_graph_account() {
     let store = root.open();
     let current = current(&store, b"one");
     let graph = store.graph_budget();
-    let spent = graph.usage.lock().unwrap().decoded;
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-    graph.decode((target - spent) as usize).unwrap();
-    assert!(!graph.exceedances().is_exceeded());
-    // The copy still spends the original account past its target and the
-    // account records exactly the copied entry array as the exceedance.
-    let retained = Retention::from_validated(&current, None)
-        .expect("a retention copy past the accounting target is still owned");
+    // The copy spends the original account by the copied entry array.
+    let retained = Retention::from_validated(&current, None).expect("the retention copy is owned");
     assert!(retained.graph.shares_with(graph));
-    let bytes = (current.receipt().read_set().len() * std::mem::size_of::<Entry>()) as u64;
-    let decoded = graph
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the copy charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.first_requested, target + bytes);
-    assert_eq!(decoded.high_water, target + bytes);
-    assert_eq!(graph.usage.lock().unwrap().decoded, decoded.high_water);
 }
 
 fn find_payload(root: &std::path::Path) -> PathBuf {
@@ -230,14 +214,13 @@ fn find_payload(root: &std::path::Path) -> PathBuf {
 // Real discoverable provenance: the current recipe depends on bounded file
 // observations, while the owned semantic output remains unchanged.
 fn observed_parent(store: &Store, source: PathBuf, checks: Arc<AtomicU64>) -> Validated<Owned> {
-    let recipe = Discoverable::capture([1; 32], b"observed-parent", 64, &[], 0).unwrap();
+    let recipe = Discoverable::capture([1; 32], b"observed-parent", 64, &[]).unwrap();
     Evaluator::new(store, &crate::metrics::Current)
         .discover_budgeted(
             &recipe,
-            move |_: &Owned, graph| {
+            move |_: &Owned, _| {
                 checks.fetch_add(1, Ordering::Relaxed);
-                let bytes = crate::store::read_file_budgeted(&source, 64, graph)?;
-                graph.hash(bytes.len())?;
+                let bytes = crate::store::read_file_budgeted(&source, 64)?;
                 Ok(bytes)
             },
             || Ok(Owned),
@@ -255,14 +238,8 @@ fn staged_direct_mutation_during_pure_miss_rejects_current_promotion() {
     let checks = Arc::new(AtomicU64::new(0));
     let parent = observed_parent(&store, source.clone(), Arc::clone(&checks));
     let retention = Retention::from_validated(&parent, None).unwrap();
-    let recipe = Direct::capture(
-        [1; 32],
-        b"staged-miss",
-        64,
-        &[Parent::validated(&parent)],
-        1,
-    )
-    .unwrap();
+    let recipe =
+        Direct::capture([1; 32], b"staged-miss", 64, &[Parent::validated(&parent)]).unwrap();
     let before = checks.load(Ordering::Relaxed);
     let executed = AtomicU64::new(0);
     let result =
@@ -304,21 +281,14 @@ fn staged_direct_warm_hit_skips_execute_and_transitive_drift_rejects() {
         b"owned-middle",
         64,
         &[Parent::validated(&ancestor)],
-        1,
     )
     .unwrap();
     let evaluator = Evaluator::new(&store, &crate::metrics::Current);
     let middle = evaluator.direct(&middle_recipe, || Ok(Owned)).unwrap();
     let retention = Retention::from_validated(&middle, None).unwrap();
     assert_eq!(retention.entries().len(), 2);
-    let recipe = Direct::capture(
-        [1; 32],
-        b"staged-child",
-        64,
-        &[Parent::validated(&middle)],
-        1,
-    )
-    .unwrap();
+    let recipe =
+        Direct::capture([1; 32], b"staged-child", 64, &[Parent::validated(&middle)]).unwrap();
     let executed = AtomicU64::new(0);
     let first = evaluator
         .staged_direct(&recipe, &retention, || {
@@ -352,7 +322,7 @@ fn staged_direct_warm_hit_skips_execute_and_transitive_drift_rejects() {
 }
 
 fn owned_current(store: &Store, inputs: &[u8], parents: &[Parent]) -> Validated<Owned> {
-    let recipe = Direct::capture([1; 32], inputs, 64, parents, parents.len()).unwrap();
+    let recipe = Direct::capture([1; 32], inputs, 64, parents).unwrap();
     Evaluator::new(store, &crate::metrics::Current)
         .direct(&recipe, || Ok(Owned))
         .unwrap()
@@ -365,13 +335,7 @@ fn retention_successor_preserves_exact_ancestors_and_charges_original_account() 
     let parent = owned_current(&store, b"successor-parent", &[]);
     let retention = Retention::from_validated(&parent, None).unwrap();
     let child = owned_current(&store, b"successor-child", &[Parent::validated(&parent)]);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let successor = retention.extend_current(&child).unwrap();
-    let expected = child.receipt().read_set().len() * std::mem::size_of::<Entry>();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        expected as u64
-    );
     assert!(successor
         .entries()
         .iter()
@@ -389,32 +353,10 @@ fn retention_successor_preserves_exact_ancestors_and_charges_original_account() 
         retention.extend_current(&parent).is_err(),
         "an existing root is not a successor"
     );
-    // One byte short of the successor's exact charge, the copy still
-    // succeeds and the original account records a high water of exactly one
-    // byte past the target, proving the successor charged exactly `expected`.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-    let used = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - used) as usize - expected + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
     let again = retention
         .extend_current(&child)
-        .expect("a successor past the accounting target is still owned");
+        .expect("the successor is owned");
     assert!(again.entries() == successor.entries());
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the successor charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.high_water, target + 1);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
-    );
     store.retire_fixture().unwrap();
 }
 
@@ -481,13 +423,13 @@ fn retention_keeps_siblings_without_adding_recipe_edges() {
     let root = Root::prepare();
     let store = root.open();
     let evaluator = Evaluator::new(&store, &crate::metrics::Current);
-    let seed_recipe = Direct::<Owned>::capture([1; 32], b"branch-root", 64, &[], 0).unwrap();
+    let seed_recipe = Direct::<Owned>::capture([1; 32], b"branch-root", 64, &[]).unwrap();
     let seed = evaluator.direct(&seed_recipe, || Ok(Owned)).unwrap();
     let parent = Parent::validated(&seed);
     let left_recipe =
-        Direct::<Owned>::capture([1; 32], b"left", 64, std::slice::from_ref(&parent), 1).unwrap();
+        Direct::<Owned>::capture([1; 32], b"left", 64, std::slice::from_ref(&parent)).unwrap();
     let right_recipe =
-        Direct::<Owned>::capture([1; 32], b"right", 64, std::slice::from_ref(&parent), 1).unwrap();
+        Direct::<Owned>::capture([1; 32], b"right", 64, std::slice::from_ref(&parent)).unwrap();
     let left = evaluator.direct(&left_recipe, || Ok(Owned)).unwrap();
     let right = evaluator.direct(&right_recipe, || Ok(Owned)).unwrap();
     let retained = Retention::from_validated(&seed, None).unwrap();
@@ -577,16 +519,9 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
     );
     let retained = Retention::from_validated(&parent, Some(first_commitment)).unwrap();
     let child = bundled_successor(&store, b"second-bundle", &parent);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let extended = retained
         .extend_bundled_current(&child, second_commitment)
         .unwrap();
-    let bytes =
-        2 * std::mem::size_of::<Entry>() + 2 * std::mem::size_of::<(Entry, BundleCommitment)>();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        bytes as u64
-    );
     assert_eq!(extended.bundles.len(), 2);
     assert!(extended
         .bundles
@@ -600,13 +535,8 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
             && *bound == second_commitment));
     assert_eq!(extended.digest(), child.receipt().read_set().digest());
     extended.require_bindings().unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let copied = extended.try_clone().unwrap();
     assert!(copied.bundles == extended.bundles);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        bytes as u64
-    );
     assert!(copied.graph.shares_with(store.graph_budget()));
     assert!(matches!(
         Retention::from_validated(&child, Some(second_commitment)),
@@ -625,44 +555,13 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
         .collect();
     fragment.entries.sort_unstable();
     fragment.digest = digest(&fragment.entries);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let pure_retained = extended
         .extend_fragment(pure.receipt().action(), &fragment)
         .unwrap();
     assert!(pure_retained.bundles == extended.bundles);
     assert_eq!(pure_retained.entries.len(), 3);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (bytes + std::mem::size_of::<Entry>()) as u64
-    );
-
-    // Entries alone are not the copy's charge: both exact bindings are charged
-    // to the original account as well. One byte short of that exact
-    // charge the copy still succeeds, and the account records a high water of
-    // exactly one byte past the target.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-    let spent = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - spent) as usize - bytes + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
-    let copied = extended
-        .try_clone()
-        .expect("a copy past the accounting target is still owned");
+    let copied = extended.try_clone().expect("the copy is owned");
     assert!(copied.bundles == extended.bundles);
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the copy charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.high_water, target + 1);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
-    );
 }
 
 #[test]
@@ -781,14 +680,9 @@ fn retention_union_preserves_siblings_and_charges_original_arrays() {
     let right = owned_current(&store, b"union-right", &[Parent::validated(&seed)]);
     let left_retained = Retention::from_validated(&left, None).unwrap();
     let right_retained = Retention::from_validated(&right, None).unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let union = left_retained.union(&right_retained).unwrap();
     assert_eq!(union.entries.len(), 3);
     assert!(union.entries.windows(2).all(|pair| pair[0] < pair[1]));
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (4 * std::mem::size_of::<Entry>()) as u64
-    );
     assert!(union.graph.shares_with(store.graph_budget()));
     assert!(union.entries == right_retained.union(&left_retained).unwrap().entries);
     union.validate_storage(&store).unwrap();
@@ -815,16 +709,10 @@ fn retention_union_preserves_multiple_bundle_bindings_and_rejects_conflicts() {
     let left = Retention::from_validated(&first, Some(commitment())).unwrap();
     let right = Retention::from_validated(&second, Some(commitment())).unwrap();
     let both = left.union(&right).unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let union = both.union(&left).unwrap();
     assert_eq!(union.entries.len(), 2);
     assert!(union.bundles == both.bundles);
     union.require_bindings().unwrap();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (3 * (std::mem::size_of::<Entry>() + std::mem::size_of::<(Entry, BundleCommitment)>()))
-            as u64
-    );
     let mut conflicting = left.try_clone().unwrap();
     conflicting.bundles[0].1 = BundleCommitment::new(
         BundleRef::new(
@@ -901,36 +789,9 @@ fn retention_union_requires_budget_for_entries_and_commitments_before_allocating
     let store = root.open();
     let value = bundled(&current(&store, b"union-account"), false);
     let retained = Retention::from_validated(&value, Some(commitment())).unwrap();
-    let bytes =
-        2 * (std::mem::size_of::<Entry>() + std::mem::size_of::<(Entry, BundleCommitment)>());
-    // One byte short of the union's exact entry-and-commitment charge,
-    // the union still allocates and the original account records a high water
-    // of exactly one byte past the target: both arrays were charged in full.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-    let spent = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - spent) as usize - bytes + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
-    let union = retained
-        .union(&retained)
-        .expect("a union past the accounting target is still owned");
+    let union = retained.union(&retained).expect("the union is owned");
     assert!(union.entries() == retained.entries());
     assert!(union.bundles == retained.bundles);
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the union charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.first_requested, target + 1);
-    assert_eq!(decoded.high_water, target + 1);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
-    );
 }
 
 #[test]
@@ -1094,7 +955,7 @@ fn ordinary_discovered_callbacks_run_unchanged_for_both_scopes() {
     let store = root.open();
     let calls = Arc::new(AtomicU64::new(0));
     let observed = calls.clone();
-    let recipe = Discoverable::capture([7; 32], b"ordinary-scope", 64, &[], 0).unwrap();
+    let recipe = Discoverable::capture([7; 32], b"ordinary-scope", 64, &[]).unwrap();
     let value = Evaluator::new(&store, &crate::metrics::Current)
         .discover_budgeted(
             &recipe,

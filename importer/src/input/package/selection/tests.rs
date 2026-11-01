@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Basis, Selection, Source, OWNED_BUFFERS};
 use crate::cargo::{toolchain, unit};
-use crate::input::{
-    Allocation, Usage, INPUT_BYTES_RESOURCE, INPUT_ITEMS_RESOURCE, INPUT_STRING_RESOURCE,
-};
+use crate::input::{Allocation, Usage};
 use crate::Error;
 
 const OID: &str = "0123456789012345678901234567890123456789";
@@ -344,7 +342,7 @@ fn full_version_spelling_and_owner_equality_preserve_prerelease_and_build_metada
     }
 }
 
-fn retained(package: &unit::Package) -> (Usage, usize) {
+fn retained(package: &unit::Package) -> Usage {
     let mut strings = vec![
         package.id(),
         package.name(),
@@ -355,27 +353,18 @@ fn retained(package: &unit::Package) -> (Usage, usize) {
         strings.push(oid);
     }
     let selector_len = package.name().len() + 1 + package.version().len();
-    let maximum = strings
-        .iter()
-        .map(|value| value.len())
-        .max()
-        .expect("owner strings")
-        .max(selector_len);
-    (
-        Usage {
-            items: 1 + strings.len() + 2 + 1,
-            bytes: std::mem::size_of::<Selection>()
-                + strings.iter().map(|value| value.len()).sum::<usize>()
-                + package.root().as_os_str().len()
-                + package.manifest().as_os_str().len()
-                + selector_len,
-        },
-        maximum,
-    )
+    Usage {
+        items: 1 + strings.len() + 2 + 1,
+        bytes: std::mem::size_of::<Selection>()
+            + strings.iter().map(|value| value.len()).sum::<usize>()
+            + package.root().as_os_str().len()
+            + package.manifest().as_os_str().len()
+            + selector_len,
+    }
 }
 
 #[test]
-fn actual_owned_copies_fit_exact_prior_usage_and_record_each_one_over_target() {
+fn actual_owned_copies_charge_exact_prior_usage() {
     for package in [
         path("owner", "1.2.3", "/work/owner"),
         git("π", "1.2.3-rc.1+build", "/work/根"),
@@ -384,65 +373,24 @@ fn actual_owned_copies_fit_exact_prior_usage_and_record_each_one_over_target() {
             items: 3,
             bytes: 19,
         };
-        let (retained, string_limit) = retained(&package);
+        let retained = retained(&package);
         let exact = Usage {
             items: prior.items + retained.items,
             bytes: prior.bytes + retained.bytes,
         };
-        // The exact account records nothing; one less on each axis is an
-        // exceedance of exactly that axis whose high water is the exact figure,
-        // and every owned copy is still produced on the original account.
-        for (items, bytes, strings, exceeded) in [
-            (exact.items, exact.bytes, string_limit, None),
-            (
-                exact.items - 1,
-                exact.bytes,
-                string_limit,
-                Some((INPUT_ITEMS_RESOURCE, exact.items)),
-            ),
-            (
-                exact.items,
-                exact.bytes - 1,
-                string_limit,
-                Some((INPUT_BYTES_RESOURCE, exact.bytes)),
-            ),
-            (
-                exact.items,
-                exact.bytes,
-                string_limit - 1,
-                Some((INPUT_STRING_RESOURCE, string_limit)),
-            ),
-        ] {
-            let mut allocation = Allocation::with_limits(items, bytes, strings);
-            allocation.items(prior.items).expect("prior items");
-            allocation.bytes(prior.bytes).expect("prior bytes");
-            OWNED_BUFFERS.with(|owned| owned.set(0));
-            let result = Selection::derive(
-                toolchain::supported_cargo_commit(),
-                &package,
-                package.manifest(),
-                &mut allocation,
-            );
-            assert!(result
-                .expect("accounting targets never refuse")
-                .matches_package(&package));
-            assert_eq!(allocation.usage(), exact);
-            assert_eq!(OWNED_BUFFERS.with(std::cell::Cell::get), retained.items - 1);
-            let record = allocation.exceedances();
-            match exceeded {
-                None => assert!(!record.is_exceeded()),
-                Some((resource, high_water)) => {
-                    let axis = record
-                        .axis(resource)
-                        .expect("the one-less axis is recorded");
-                    assert_eq!(axis.target, (high_water - 1) as u64);
-                    assert_eq!(axis.high_water, high_water as u64);
-                    assert_eq!(record.axes().count(), 1);
-                }
-            }
-            allocation
-                .items(0)
-                .expect("an exceedance never latches the account");
-        }
+        // Every owned copy is produced on the original account.
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+        allocation.items(prior.items).expect("prior items");
+        allocation.bytes(prior.bytes).expect("prior bytes");
+        OWNED_BUFFERS.with(|owned| owned.set(0));
+        let result = Selection::derive(
+            toolchain::supported_cargo_commit(),
+            &package,
+            package.manifest(),
+            &mut allocation,
+        );
+        assert!(result.expect("selection").matches_package(&package));
+        assert_eq!(allocation.usage(), exact);
+        assert_eq!(OWNED_BUFFERS.with(std::cell::Cell::get), retained.items - 1);
     }
 }

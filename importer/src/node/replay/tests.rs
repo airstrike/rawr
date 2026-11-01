@@ -27,7 +27,7 @@ fn mixed_branch_carries_hits_without_replay_and_promotes_one_exact_union() {
                 let retention =
                     crate::node::read_set::Retention::from_validated(&owner, None).unwrap();
                 let recipe = |inputs: &[u8]| {
-                    Direct::<Owned>::capture([1; 32], inputs, 64, &[Parent::validated(&owner)], 1)
+                    Direct::<Owned>::capture([1; 32], inputs, 64, &[Parent::validated(&owner)])
                         .unwrap()
                 };
                 let first_recipe = recipe(b"profile sibling");
@@ -61,7 +61,6 @@ fn mixed_branch_carries_hits_without_replay_and_promotes_one_exact_union() {
                             b"facade child",
                             64,
                             std::slice::from_ref(&second),
-                            1,
                         )?;
                         let third = Result::Staged(batch.evaluate(&facade_recipe, || Ok(Owned))?);
                         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -101,7 +100,7 @@ fn resumed_miss_rechecks_a_winner_without_executing_or_replaying_mutable_ancesto
         .unwrap();
     let retention = crate::node::read_set::Retention::from_validated(&owner, None).unwrap();
     let recipe =
-        Direct::<Owned>::capture([1; 32], b"winner", 64, &[Parent::validated(&owner)], 1).unwrap();
+        Direct::<Owned>::capture([1; 32], b"winner", 64, &[Parent::validated(&owner)]).unwrap();
     let evaluator = Evaluator::new(&store, &crate::metrics::Current);
     let Lookup::Miss(miss) = evaluator.lookup(&recipe).unwrap() else {
         panic!("unexpected initial hit")
@@ -134,7 +133,6 @@ fn staged_pair_validates_its_complete_union_once_and_rejects_interstage_drift() 
             b"first pure",
             64,
             &[crate::node::Parent::validated(&owner)],
-            1,
         )
         .unwrap();
         let result = store.with_staged_batch(&retention, &crate::metrics::Current, |batch| {
@@ -148,7 +146,6 @@ fn staged_pair_validates_its_complete_union_once_and_rejects_interstage_drift() 
                 b"second pure",
                 64,
                 std::slice::from_ref(&first),
-                1,
             )?;
             let second = batch.evaluate(&recipe, || Ok(Owned))?;
             assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -211,7 +208,7 @@ impl Value for Owned {
 fn stage_discovered(root: &Root, store: &Store, calls: Arc<AtomicUsize>) -> Staged<Owned> {
     let source = root.0.join("source");
     fs::write(&source, b"before").expect("write initial source");
-    let recipe = Discoverable::<Owned>::capture([1; 32], b"fixed", 64, &[], 0)
+    let recipe = Discoverable::<Owned>::capture([1; 32], b"fixed", 64, &[])
         .expect("bind discoverable fixture");
     let current = recipe.complete(b"before").expect("bind initial source");
     Evaluator::new(store, &crate::metrics::Current)
@@ -297,7 +294,7 @@ fn staged_output_cannot_promote_on_a_fresh_graph() {
 #[test]
 fn replayed_output_cannot_stage_with_a_replacement_graph() {
     let graph = GraphBudget::new();
-    let current = crate::node::Direct::<Owned>::capture([1; 32], b"fixed", 64, &[], 0)
+    let current = crate::node::Direct::<Owned>::capture([1; 32], b"fixed", 64, &[])
         .expect("bind direct fixture");
     let bytes = Owned.encode(64).expect("encode fixture");
     let envelope = Envelope::direct(&current, content_digest::<Owned>(&bytes), bytes.len())

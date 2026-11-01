@@ -43,8 +43,7 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
         }
     ));
     let origin = |start| {
-        Origin::checked("application.rs", start, start + 1, &limits)
-            .expect("the builder origin is bounded")
+        Origin::checked("application.rs", start, start + 1).expect("the builder origin is bounded")
     };
     let plan = Plan::new(
         finish.clone(),
@@ -53,7 +52,6 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
             Step::consume(add, origin(1), Box::from([Value::argument(1)])),
             Step::consume(finish, origin(2), Box::default()),
         ]),
-        &limits,
     )
     .expect("the exact-once builder plan seals");
     let mut compiler = contract

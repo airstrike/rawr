@@ -1,13 +1,11 @@
 use super::{mode, Expected, Mismatch};
 use crate::input::membership::{archive, host, stored, Budget, Error};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn explicit(color: &[u8]) -> mode::Mode {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).expect("empty mode image");
@@ -46,10 +44,8 @@ fn inputs<'input>(selected: &'input [&'input [u8]]) -> archive::Inputs<'input> {
 
 fn project(input: archive::Inputs<'_>) -> archive::Projection {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).expect("empty observation image");
@@ -206,12 +202,10 @@ fn every_truncated_prefix_extra_byte_and_wrong_separator_rejects() {
 #[test]
 fn rendering_is_borrowed_and_checks_exact_output_bound_with_prior_usage() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).expect("nonzero prior items");
     allocation.bytes(19).expect("nonzero prior bytes");
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).expect("empty image");
@@ -329,12 +323,10 @@ fn stripped_output_can_be_empty_or_smaller_than_the_raw_limit() {
 #[test]
 fn stripping_adds_no_owned_output_even_with_prior_allocation_usage() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).expect("nonzero prior items");
     allocation.bytes(19).expect("nonzero prior bytes");
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).expect("empty image");

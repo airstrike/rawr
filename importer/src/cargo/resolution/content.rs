@@ -85,7 +85,7 @@ impl Scope {
         // All Rawr-owned controls, protocol sidecars, record bytes and generated
         // sources remain content, including files not individually named below.
         for name in ["declared", "generated"] {
-            let path = bundle::path(builder.root, Path::new(name), builder.budget)?;
+            let path = bundle::path(builder.root, Path::new(name))?;
             builder.add(&path, Kind::Tree)?;
         }
         builder.inputs(input.entries(), input.recipes())?;
@@ -214,7 +214,7 @@ impl<'a> Builder<'a> {
                 if omitted.len() >= bundle::MAX_MEMBERS as usize {
                     return Err(Error::Codec("query scope namespace limit exceeded"));
                 }
-                omitted.push(copy_path(&member.path, self.budget)?, self.budget)?;
+                omitted.push(copy_path(&member.path)?)?;
             }
         }
         let mut omitted = omitted.into_vec();
@@ -325,13 +325,12 @@ impl<'a> Builder<'a> {
                 actual: self.obligations.len().saturating_add(1),
             });
         }
-        let path = copy_path(path, self.budget)?;
-        self.obligations
-            .push(Obligation { path, kind }, self.budget)
+        let path = copy_path(path)?;
+        self.obligations.push(Obligation { path, kind })
     }
 
     fn finish(self) -> Result<Scope, Error> {
-        let root = copy_path(self.root, self.budget)?;
+        let root = copy_path(self.root)?;
         let mut obligations = self.obligations.into_vec();
         obligations.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         obligations.dedup_by(|later, earlier| {
@@ -350,9 +349,8 @@ impl<'a> Builder<'a> {
     }
 }
 
-fn copy_path(path: &Path, budget: &GraphBudget) -> Result<PathBuf, Error> {
+fn copy_path(path: &Path) -> Result<PathBuf, Error> {
     let length = path.as_os_str().as_encoded_bytes().len();
-    budget.decode(length)?;
     let mut owned = PathBuf::new();
     owned
         .try_reserve_exact(length)
@@ -451,7 +449,7 @@ mod tests {
             .complete(&completion, &mut allocation, &graph)
             .unwrap();
         namespace
-            .require_selection(&completion, &mut allocation, &graph)
+            .require_selection(&completion, &mut allocation)
             .unwrap();
         let mut builder = Builder::bind(&root, &graph).unwrap();
         builder.namespace(Some(&namespace)).unwrap();
@@ -463,21 +461,14 @@ mod tests {
         let scope = builder.finish().unwrap();
         let stored =
             Stored::capture_resolution(&root, reference, Mode::Pending, &graph, &scope).unwrap();
-        let before = graph.census_usage().unwrap().2;
         stored.replay(&root, Mode::Pending, &graph).unwrap();
-        namespace.revalidate(&mut allocation, &graph).unwrap();
-        let separate = graph.census_usage().unwrap().2 - before;
-        let before = graph.census_usage().unwrap().2;
+        namespace.revalidate(&mut allocation).unwrap();
         assert_eq!(
             namespace
                 .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
                 .unwrap(),
             6
         );
-        let joined = graph.census_usage().unwrap().2 - before;
-        // The six-byte queried member and its EOF probe are read once
-        // and shared, whether the two consumers run separately or joined.
-        assert_eq!(separate, joined);
         let selected = namespace
             .members
             .iter()
@@ -498,59 +489,6 @@ mod tests {
             .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
             .is_err());
         fs::write(&external, b"before").unwrap();
-        // A graph account spent to its target is not a gate. Revalidation
-        // on such an account still completes and records the crossing axis.
-        for resource in 0..3 {
-            let exhausted = GraphBudget::new();
-            let (name, target) = match resource {
-                0 => {
-                    exhausted
-                        .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                        .unwrap();
-                    (
-                        crate::node::HASHED_RESOURCE,
-                        crate::node::MAX_HASHED_BYTES_PER_GRAPH,
-                    )
-                }
-                1 => {
-                    exhausted
-                        .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                        .unwrap();
-                    (
-                        crate::node::DECODED_RESOURCE,
-                        crate::node::MAX_DECODED_BYTES_PER_GRAPH,
-                    )
-                }
-                _ => {
-                    exhausted
-                        .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-                        .unwrap();
-                    (
-                        crate::node::PATHS_RESOURCE,
-                        crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                    )
-                }
-            };
-            assert!(!exhausted.exceedances().is_exceeded());
-            assert_eq!(
-                namespace
-                    .revalidate_inventory(
-                        &stored,
-                        &root,
-                        Mode::Pending,
-                        &mut allocation,
-                        &exhausted
-                    )
-                    .unwrap(),
-                6
-            );
-            let record = exhausted.exceedances();
-            let axis = record
-                .axis(name)
-                .expect("the spent axis records its crossing");
-            assert_eq!(axis.target, target);
-            assert!(axis.high_water > target);
-        }
         fs::write(&archive, b"after!").unwrap();
         stored.replay(&root, Mode::Pending, &graph).unwrap();
         for protected in [&independent, &queried] {
@@ -689,10 +627,6 @@ mod tests {
     fn query_ownership_uses_the_spent_original_graph() {
         let budget = GraphBudget::new();
         let mut builder = Builder::bind(Path::new("/bundle"), &budget).unwrap();
-        budget
-            .decode(usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap())
-            .unwrap();
-        assert!(!budget.exceedances().is_exceeded());
         // The spent decode account is a target. Narrowing still copies
         // every omitted member and charges the original graph, whose record
         // names the first omitted path as the first charge past the target.
@@ -706,17 +640,6 @@ mod tests {
             .collect();
         assert_eq!(omitted.len(), 5);
         assert_eq!(builder.omitted.len(), omitted.len());
-        let record = budget.exceedances();
-        let axis = record
-            .axis(crate::node::DECODED_RESOURCE)
-            .expect("narrowing charges the spent original graph");
-        assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            axis.target + omitted[0].as_os_str().len() as u64
-        );
-        assert!(axis.high_water >= axis.first_requested);
-        assert!(axis.site.is_some());
     }
 
     #[test]
@@ -848,35 +771,5 @@ mod tests {
         assert!(scope.requires_content(Path::new("/declared/bundle/any/file.o")));
         assert!(scope.shares_with(&budget));
         assert!(!scope.shares_with(&GraphBudget::new()));
-    }
-
-    #[test]
-    fn selection_refuses_paths_and_records_exceedances_before_ownership() {
-        let budget = GraphBudget::new();
-        let mut builder = Builder::bind(Path::new("/bundle"), &budget).unwrap();
-        assert!(matches!(
-            builder.add(Path::new("/bundle/../escape"), Kind::File),
-            Err(Error::OutsideRoot(_))
-        ));
-        assert_eq!(builder.obligations.len(), 0);
-        budget
-            .decode(usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap())
-            .unwrap();
-        assert!(!budget.exceedances().is_exceeded());
-        // The spent decode account is a target, not a gate: the path is
-        // still retained and the owned copy is the first charge past the target.
-        let path = Path::new("/bundle/file");
-        builder.add(path, Kind::File).unwrap();
-        assert_eq!(builder.obligations.len(), 1);
-        let record = budget.exceedances();
-        let axis = record
-            .axis(crate::node::DECODED_RESOURCE)
-            .expect("selection charges the original graph");
-        assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            axis.target + path.as_os_str().len() as u64
-        );
-        assert!(axis.site.is_some());
     }
 }

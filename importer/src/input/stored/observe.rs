@@ -64,33 +64,12 @@ pub(in crate::input) fn entry<Package>(
     }
 }
 
-fn file(
+/// Record a file's length, then stream it into its digest.
+pub(in crate::input) fn file(
     role: Role,
     package_id: Option<&str>,
     source: &Path,
     base: &Path,
-    budget: &mut Budget<'_>,
-) -> Result<Entry> {
-    limited_file(
-        role,
-        package_id,
-        source,
-        base,
-        "input proof bytes",
-        budget.limits.input_proof_bytes,
-        budget,
-    )
-}
-
-/// Record a file's length against the producer's configurable accounting
-/// `target`, then stream it into its digest.
-pub(in crate::input) fn limited_file(
-    role: Role,
-    package_id: Option<&str>,
-    source: &Path,
-    base: &Path,
-    resource: &'static str,
-    target: usize,
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     budget.check()?;
@@ -103,7 +82,6 @@ pub(in crate::input) fn limited_file(
     };
     let metadata = path::metadata(&source, false, budget)?;
     let bytes = read::length(metadata.len(), budget)?;
-    budget.limited(resource, target, bytes)?;
     let digest = read::digest(&source, bytes, budget)?;
     Ok(Entry::File {
         role,
@@ -115,13 +93,11 @@ pub(in crate::input) fn limited_file(
 }
 
 /// Configuration candidates are absent or regular files, never directory trees.
-pub(in crate::input) fn limited_optional_file(
+pub(in crate::input) fn optional_file(
     role: Role,
     package_id: Option<&str>,
     source: &Path,
     base: &Path,
-    resource: &'static str,
-    target: usize,
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     budget.check()?;
@@ -130,15 +106,7 @@ pub(in crate::input) fn limited_optional_file(
         path::reject_symlinks(&normalized, budget)?;
     }
     match path::metadata(&normalized, false, budget) {
-        Ok(metadata) if metadata.is_file() => limited_file(
-            role,
-            package_id,
-            &normalized,
-            base,
-            resource,
-            target,
-            budget,
-        ),
+        Ok(metadata) if metadata.is_file() => file(role, package_id, &normalized, base, budget),
         Ok(_) => Err(Error::Policy("config-input-shape").into()),
         Err(super::Error::Observation(Error::Io { source, .. }))
             if source.kind() == std::io::ErrorKind::NotFound =>
@@ -191,11 +159,7 @@ fn follows(role: Role) -> bool {
 fn package(value: Option<&str>, budget: &mut Budget<'_>) -> Result<Option<Box<str>>> {
     value
         .map(|value| {
-            budget.limited(
-                "input owned string bytes",
-                budget.limits.string_bytes,
-                value.len(),
-            )?;
+            budget.check()?;
             budget.owned_text(value)
         })
         .transpose()

@@ -397,8 +397,7 @@ pub fn install(
     engine: &mut crate::Engine,
     bytes: &[u8],
 ) -> Result<Box<[host::facade::Definition]>, Error> {
-    let limits = rawr_import::cargo::Limits::standard();
-    let plan = facade::Plan::decode(bytes, &limits)?;
+    let plan = facade::Plan::decode(bytes)?;
     let mut allocation = account::Attempt::standard()?;
     install_decoded(engine, &plan, &mut allocation)
 }
@@ -410,8 +409,7 @@ pub fn install_retained(
     bytes: &[u8],
     native: &mut account::Native,
 ) -> Result<Box<[host::facade::Definition]>, Error> {
-    let limits = rawr_import::cargo::Limits::standard();
-    let plan = facade::Plan::decode(bytes, &limits)?;
+    let plan = facade::Plan::decode(bytes)?;
     install_decoded(engine, &plan, &mut native.allocation())
 }
 

@@ -323,11 +323,7 @@ impl<'account> Capture<'_, '_, 'account> {
         let terminated = terminated(path.bytes(), self.owner.budget)?;
         let name = CStr::from_bytes_with_nul(&terminated)
             .map_err(|_| Error::Encoding("invalid loop handle path"))?;
-        // std::fs::OpenOptions uses cvt_r: reserve one eventual close, then
-        // prospectively charge every open attempt, including EINTR retries.
-        self.owner.budget.graph.paths(1)?;
         let opened = loop {
-            self.owner.budget.graph.paths(1)?;
             match <native::System as file::System>::open(&mut native::System, name) {
                 Err(code) if code == libc::EINTR => continue,
                 result => break result,
@@ -337,7 +333,6 @@ impl<'account> Capture<'_, '_, 'account> {
             Err(code) => (traversal::Handle::OpenFailed(code), Err(code)),
             Ok(descriptor) => {
                 let descriptor = Descriptor(descriptor);
-                self.owner.budget.graph.paths(1)?;
                 match <native::System as file::System>::fstat(&mut native::System, descriptor.0)? {
                     Stat::Error(code) => (traversal::Handle::StatFailed(code), Err(code)),
                     Stat::Metadata(metadata) => {

@@ -165,7 +165,7 @@ fn request(project: &Project, limits: &Limits) -> rawr_import::cargo::Request {
     Request::builder(&project.root, &project.cache(), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("geometry", &fixture("geometry-api"), limits)

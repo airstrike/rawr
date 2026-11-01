@@ -154,14 +154,7 @@ where
         Surface::Complete | Surface::First => None,
     };
     for outcome in contract.outcomes() {
-        require_outcome(
-            &mut compiler,
-            outcome,
-            &entry,
-            &limits,
-            &mut position,
-            &mut skip,
-        );
+        require_outcome(&mut compiler, outcome, &entry, &mut position, &mut skip);
         if matches!(surface, Surface::First) && position != 0 {
             break;
         }
@@ -222,14 +215,7 @@ where
         }
         for implementation in outcome.implementations() {
             for associated in implementation.associated() {
-                require_outcome(
-                    &mut compiler,
-                    associated,
-                    &entry,
-                    &limits,
-                    &mut position,
-                    &mut skip,
-                );
+                require_outcome(&mut compiler, associated, &entry, &mut position, &mut skip);
             }
         }
     }
@@ -256,7 +242,7 @@ pub fn snapshot_transport() -> rawr_import::supervisor::snapshot::Bytes {
         .file(SNAPSHOT_ENTRY, SNAPSHOT_SOURCE)
         .expect("the transport source is bounded");
     capture
-        .bind(expected, &limits)
+        .bind(expected)
         .expect("the moved transport matches its sealed snapshot")
 }
 
@@ -275,7 +261,7 @@ fn snapshot_transport_with(entry: &str, source: &[u8]) -> rawr_import::superviso
         .file(entry, source)
         .expect("the other transport source is bounded");
     capture
-        .bind(expected, &limits)
+        .bind(expected)
         .expect("the other moved transport matches its own snapshot")
 }
 
@@ -296,7 +282,6 @@ fn require_outcome<B>(
     compiler: &mut rawr_import::surface::Compiler<'_, B>,
     outcome: rawr_import::classify::Outcome<'_>,
     entry: &str,
-    limits: &rawr_import::cargo::Limits,
     position: &mut u32,
     skip: &mut Option<usize>,
 ) {
@@ -316,8 +301,7 @@ fn require_outcome<B>(
     compiler
         .require(
             outcome.identity().clone(),
-            Origin::checked(entry, *position, *position + 1, limits)
-                .expect("the Rawr origin is bounded"),
+            Origin::checked(entry, *position, *position + 1).expect("the Rawr origin is bounded"),
         )
         .expect("the admitted outcome is demanded");
     *position += 1;
@@ -347,7 +331,7 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
     rawr_import::cargo::Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(extract::Policy::manifest(limits).seal())
+        .policy(extract::Policy::manifest().seal())
         .expect("the manifest policy fits")
         .dependency(
             Dependency::path("facade_a", &fixture, limits)

@@ -7,7 +7,7 @@ use crate::input::membership::manifest::{
     reference, scalar, schema::manifest::Original, value, Error, Stop,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use std::path::Path;
 
 fn key<'a, A: document::Admission>(session: &mut Session<'_, A>) -> Key<'a> {
@@ -64,10 +64,8 @@ fn selected_text_and_decoded_definition_share_the_transparent_path_protocol() {
         ),
     ] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let records = [
@@ -148,10 +146,8 @@ fn wrong_final_type_wins_over_valid_environment_and_builtin_codec_runs_last() {
         ),
     ] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         // A valid environment cannot conceal wrong configuration type. Without
@@ -185,10 +181,8 @@ fn wrong_final_type_wins_over_valid_environment_and_builtin_codec_runs_last() {
 #[test]
 fn missing_record_refuses_before_config_callback_and_stays_terminal() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).unwrap();

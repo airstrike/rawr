@@ -60,31 +60,27 @@ fn cached_consumption_authority_is_bound_to_the_original_workspace_image() {
     let manifest = fixture.0.join("Cargo.toml");
     fs::write(&manifest, b"[workspace]\nresolver='2'\n").unwrap();
     let limits = Limits::standard();
-    let graph = crate::node::GraphBudget::new();
     let mut allocation = RequestAllocation::new(&limits);
     let image = crate::input::workspace::capture(
         Box::from([manifest.clone()]),
-        &mut crate::input::workspace::Account::borrow(&mut allocation, &graph, &limits),
+        &mut crate::input::workspace::Account::borrow(&mut allocation, &limits),
     )
     .unwrap();
-    let first =
-        workspace_node_authority(b"same Build bytes", &image, &mut allocation, &graph).unwrap();
+    let first = workspace_node_authority(b"same Build bytes", &image, &mut allocation).unwrap();
     assert_ne!(first.as_ref(), b"same Build bytes");
     fs::write(&manifest, b"[workspace]\nresolver='3'\n").unwrap();
     assert!(image
         .require(&mut crate::input::workspace::Account::borrow(
             &mut allocation,
-            &graph,
-            &limits
+            &limits,
         ))
         .is_err());
     let changed = crate::input::workspace::capture(
         Box::from([manifest]),
-        &mut crate::input::workspace::Account::borrow(&mut allocation, &graph, &limits),
+        &mut crate::input::workspace::Account::borrow(&mut allocation, &limits),
     )
     .unwrap();
-    let second =
-        workspace_node_authority(b"same Build bytes", &changed, &mut allocation, &graph).unwrap();
+    let second = workspace_node_authority(b"same Build bytes", &changed, &mut allocation).unwrap();
     assert_ne!(first, second);
 }
 
@@ -100,7 +96,6 @@ fn workspace_roots_use_input_roles_and_lock_bytes_keep_direct_freshness() {
     fs::create_dir(fixture.0.join("bogus")).unwrap();
     fs::write(fixture.0.join("bogus/Cargo.toml"), "[workspace]\n").unwrap();
     let limits = Limits::standard();
-    let graph = crate::node::GraphBudget::new();
     let mut allocation = RequestAllocation::new(&limits);
     let canonical = canonical_authority(&manifest, &mut allocation).unwrap();
     assert_eq!(canonical, manifest);
@@ -115,7 +110,7 @@ fn workspace_roots_use_input_roles_and_lock_bytes_keep_direct_freshness() {
             cargo_id: "path+harness".into(),
         },
     )]);
-    let mut account = crate::input::workspace::Account::borrow(&mut allocation, &graph, &limits);
+    let mut account = crate::input::workspace::Account::borrow(&mut allocation, &limits);
     let roots = crate::input::workspace::roots(&inputs, &metadata, &mut account).unwrap();
     assert_eq!(roots.as_ref(), std::slice::from_ref(&manifest));
     let image = crate::input::workspace::capture(roots, &mut account).unwrap();

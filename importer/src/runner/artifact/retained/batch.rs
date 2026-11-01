@@ -10,8 +10,8 @@ use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use sha2::{Digest as _, Sha256};
 
 use super::{corrupt, io, permissions, same_file};
-use crate::node::{Error, GraphBudget};
-use crate::store::{self, bundle};
+use crate::node::Error;
+use crate::store::bundle;
 
 struct Directory {
     path: PathBuf,
@@ -24,18 +24,15 @@ struct Directory {
 
 /// Private to trusted validation code. `observe` withholds its result until all
 /// original attachments pass; the callback must not perform external execution.
-pub(crate) struct Pending<'a> {
-    graph: &'a GraphBudget,
+pub(crate) struct Pending {
     directories: Vec<Directory>,
     admitted: usize,
 }
 
 pub(crate) fn observe<T>(
-    graph: &GraphBudget,
-    operation: impl FnOnce(&mut Pending<'_>) -> Result<T, Error>,
+    operation: impl FnOnce(&mut Pending) -> Result<T, Error>,
 ) -> Result<T, Error> {
     let mut pending = Pending {
-        graph,
         directories: Vec::new(),
         admitted: 0,
     };
@@ -48,26 +45,21 @@ pub(crate) fn observe<T>(
     result
 }
 
-impl Pending<'_> {
+impl Pending {
     pub(crate) fn hash(&mut self, path: &Path, expected: &Metadata) -> Result<[u8; 32], Error> {
         let length = usize::try_from(expected.len()).map_err(|_| Error::Allocation)?;
         // The digest is a pure function of the file bytes: one computation per
         // physical identity serves every later check in this process.
         let identity = crate::file_digest::Identity::of(expected);
         let memoized = crate::file_digest::get(identity, crate::file_digest::Domain::Sha256);
-        if memoized.is_none() {
-            self.graph
-                .hash(length.checked_add(1).ok_or(Error::Allocation)?)?;
-        }
         let parent = path.parent().ok_or_else(|| corrupt(path))?;
         let index = self.bind(parent)?;
         if !self.directories[index].canonical {
             self.canonical(index)?;
             self.directories[index].canonical = true;
         }
-        let name = name(path.file_name().ok_or_else(|| corrupt(path))?, self.graph)?;
+        let name = name(path.file_name().ok_or_else(|| corrupt(path))?)?;
         let directory = &self.directories[index];
-        self.graph.paths(1)?;
         let fd = rustix::fs::openat(
             &directory.file,
             name.as_c_str(),
@@ -76,7 +68,6 @@ impl Pending<'_> {
         )
         .map_err(|error| io("open retained relative file", path, error.into()))?;
         let mut file = File::from(fd);
-        self.graph.paths(1)?;
         let opened = file
             .metadata()
             .map_err(|error| io("inspect retained relative file", path, error))?;
@@ -89,12 +80,10 @@ impl Pending<'_> {
             return Err(corrupt(path));
         }
         let opened_identity = crate::file_digest::Identity::of(&opened);
-        if let Some(digest) = memoized {
-            if opened_identity == identity {
-                return Ok(digest);
-            }
-            self.graph
-                .hash(length.checked_add(1).ok_or(Error::Allocation)?)?;
+        if let Some(digest) = memoized
+            && opened_identity == identity
+        {
+            return Ok(digest);
         }
         let mut digest = Sha256::new();
         let mut buffer = [0; 64 * 1024];
@@ -113,7 +102,6 @@ impl Pending<'_> {
         {
             return Err(corrupt(path));
         }
-        self.graph.paths(1)?;
         let after = rustix::fs::statat(&directory.file, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW)
             .map_err(|error| io("reinspect retained relative file", path, error.into()))?;
         if !matches(&after, expected)
@@ -155,13 +143,9 @@ impl Pending<'_> {
                 parent = Some(index);
                 continue;
             }
-            let name = name(
-                prefix.file_name().unwrap_or_else(|| OsStr::new("/")),
-                self.graph,
-            )?;
-            let owned = bundle::path(prefix, Path::new(""), self.graph)?;
+            let name = name(prefix.file_name().unwrap_or_else(|| OsStr::new("/")))?;
+            let owned = bundle::path(prefix, Path::new(""))?;
             self.reserve()?;
-            self.graph.paths(1)?;
             let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
             let fd = match parent {
                 Some(index) => rustix::fs::openat(
@@ -174,7 +158,6 @@ impl Pending<'_> {
             }
             .map_err(|error| io("open retained lookup directory", prefix, error.into()))?;
             let file = File::from(fd);
-            self.graph.paths(1)?;
             let metadata = file
                 .metadata()
                 .map_err(|error| io("inspect retained lookup directory", prefix, error))?;
@@ -202,10 +185,6 @@ impl Pending<'_> {
                 .checked_mul(2)
                 .ok_or(Error::Allocation)?
                 .max(1);
-            self.graph.decode(
-                next.checked_mul(std::mem::size_of::<Directory>())
-                    .ok_or(Error::Allocation)?,
-            )?;
             self.directories
                 .try_reserve_exact(next - self.directories.len())
                 .map_err(|_| Error::Allocation)?;
@@ -216,8 +195,6 @@ impl Pending<'_> {
 
     fn canonical(&self, index: usize) -> Result<(), Error> {
         let path = &self.directories[index].path;
-        self.graph.paths(1)?;
-        store::path::canonical(path, self.graph)?;
         let current = std::fs::canonicalize(path)
             .map_err(|error| io("canonicalize retained lookup parent", path, error))?;
         if current != *path {
@@ -228,7 +205,6 @@ impl Pending<'_> {
 
     fn finish(&self) -> Result<(), Error> {
         for (index, directory) in self.directories.iter().enumerate() {
-            self.graph.paths(1)?;
             let (parent, name): (&File, &CStr) = match directory.parent {
                 Some(parent) => (&self.directories[parent].file, directory.name.as_c_str()),
                 None => (&directory.file, c"."),
@@ -254,13 +230,12 @@ impl Pending<'_> {
     }
 }
 
-fn name(value: &OsStr, graph: &GraphBudget) -> Result<CString, Error> {
+fn name(value: &OsStr) -> Result<CString, Error> {
     let length = value
         .as_bytes()
         .len()
         .checked_add(1)
         .ok_or(Error::Allocation)?;
-    graph.decode(length)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)

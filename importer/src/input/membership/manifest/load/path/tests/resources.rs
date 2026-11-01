@@ -1,9 +1,6 @@
 use rawr_toml::document;
 
-use crate::input::membership::manifest::tests::admits_one_short;
 use crate::input::membership::manifest::{session, storage, Error, Stop};
-use crate::input::membership::Budget;
-use crate::{input, node};
 
 use super::exercise;
 
@@ -61,82 +58,6 @@ fn refusal_is_permanent_and_precedes_every_unadmitted_native_allocation() {
         assert!(matches!(session.finish(Ok(())), Err(Error::Admission(index)) if index == refusal));
         assert_eq!(account.requests, full.requests[..=refusal], "{refusal}");
     }
-}
-
-fn limited(
-    items: usize,
-    bytes: usize,
-    string: usize,
-) -> (bool, input::Usage, crate::exceedance::Record) {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    let mut allocation = input::Allocation::with_limits(items, bytes, string);
-    allocation.items(9).unwrap();
-    allocation.bytes(27).unwrap();
-    let mut budget = Budget {
-        graph: &graph,
-        allocation: &mut allocation,
-    };
-    let mut session = session::Session::new(&mut budget);
-    let result = exercise(&mut session);
-    let success = session.finish(result).is_ok();
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (success, allocation.usage, allocation.exceedances())
-}
-
-#[test]
-fn all_native_and_string_storage_uses_the_original_exact_remaining_account() {
-    let (success, usage, _) = limited(usize::MAX, usize::MAX, usize::MAX);
-    assert!(success);
-    let mut account = Account::default();
-    let mut session = session::Session::new(&mut account);
-    let result = exercise(&mut session);
-    session.finish(result).unwrap();
-    let string = account
-        .requests
-        .iter()
-        .filter_map(|request| match request {
-            document::Request::String(length) => Some(*length),
-            _ => None,
-        })
-        .max()
-        .unwrap();
-    assert_eq!(
-        limited(usage.items, usage.bytes, string),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        limited(usage.items - 1, usage.bytes, string),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        limited(usage.items, usage.bytes - 1, string),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-    // One short of the longest string records the decoded-string axis
-    // while the same native and string storage is admitted.
-    let (success, spent, exceeded) = limited(usage.items, usage.bytes, string - 1);
-    admits_one_short(
-        (success, spent, exceeded),
-        usage,
-        "membership decoded TOML string bytes",
-        string,
-    );
-    let axis = exceeded
-        .axis("membership decoded TOML string bytes")
-        .unwrap();
-    assert_eq!(
-        (axis.target, axis.first_requested),
-        (string as u64 - 1, string as u64)
-    );
 }
 
 #[test]

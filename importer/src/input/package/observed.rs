@@ -79,17 +79,13 @@ fn acquire(
     let maximum = usize::try_from(metadata.len()).map_err(|_| budget.overflow())?;
     before_open(&marker)?;
     let bytes = observe::read::bounded(&marker, maximum, budget)?;
-    budget.limited(
-        "registry extraction marker bytes",
-        budget.limits.string_bytes,
-        bytes.len(),
-    )?;
+    budget.check()?;
     parser::admit(&bytes, budget)?;
     let marker = super::marker(&bytes).map_err(|_| policy("registry-marker-malformed"))?;
     if marker.v != REGISTRY_MARKER_SCHEMA {
         return Err(policy("registry-marker-schema"));
     }
-    budget.hash(bytes.len())?;
+    budget.check()?;
     let marker_digest: [u8; 32] = Sha256::digest(&bytes).into();
     if marker_digest != retained.marker_digest {
         return Err(observe::Error::Drift("registry-marker-changed").into());
@@ -99,7 +95,7 @@ fn acquire(
     let root = root
         .to_str()
         .ok_or(stored::Error::Encoding("registry root is not Unicode"))?;
-    budget.limited("input path bytes", crate::input::LINE_BYTES, root.len())?;
+    budget.check()?;
     let root = budget.owned_text(root)?;
     Ok(Entry::Registry {
         role: Role::DefaultPackageSource,
@@ -127,11 +123,7 @@ fn child(root: &Path, name: &str, candidate: &Path) -> bool {
 }
 
 fn scalar(value: &str, budget: &mut Budget<'_>) -> stored::Result<Box<str>> {
-    budget.limited(
-        "input owned string bytes",
-        budget.limits.string_bytes,
-        value.len(),
-    )?;
+    budget.check()?;
     budget.owned_text(value)
 }
 

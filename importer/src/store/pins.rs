@@ -1221,14 +1221,9 @@ mod tests {
     fn first_parentless_reservation_reclaims_the_last_sorted_ledger_at_the_exact_cap() {
         let store = fixture_store("first-parentless-ledger-cap");
         let last = fill_project_ledgers(&store, true);
-        let recipe = crate::node::Direct::<Artifact>::capture(
-            [0x32; 32],
-            b"first-parentless",
-            4_096,
-            &[],
-            1,
-        )
-        .unwrap();
+        let recipe =
+            crate::node::Direct::<Artifact>::capture([0x32; 32], b"first-parentless", 4_096, &[])
+                .unwrap();
         let value = crate::node::Evaluator::new(&store, &crate::metrics::Noop)
             .direct(&recipe, || {
                 assert!(!last.exists(), "recovery precedes the transform");
@@ -1266,7 +1261,6 @@ mod tests {
             b"first-parentless-no-reclaim",
             4_096,
             &[],
-            1,
         )
         .unwrap();
         let before = fs::read(store.root().join("ledgers/installation")).unwrap();
@@ -1307,7 +1301,6 @@ mod tests {
                 b"first-parentless-bundle",
                 4_096,
                 &[],
-                1,
             )
             .unwrap();
             let before = fs::read(store.root().join("ledgers/installation")).unwrap();

@@ -15,9 +15,6 @@ thread_local! {
     static REGISTRY: Cell<usize> = const { Cell::new(0) };
     /// Final-form lock bytes the last script wrote.
     static LOCK_BYTES: Cell<usize> = const { Cell::new(0) };
-    /// Charge the warm graph exactly to its path and decode targets before
-    /// it starts, so every warm charge is an exceedance.
-    static PRECHARGE_WARM: Cell<bool> = const { Cell::new(false) };
     /// Open the next owner fixture at this exact (removed) root, so two
     /// limits profiles run over byte-identical paths.
     static FIXTURE_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -27,148 +24,19 @@ thread_local! {
 /// in 85,521 bytes; this many synthetic registry packages renders about that.
 const GALLERY_REGISTRY: usize = 340;
 
-/// Per-graph account figures for one owner graph: request high water
-/// plus the graph's decode, path-check and hashed high waters and the axes that
-/// crossed their targets.
-#[derive(Clone, Copy)]
-struct GraphFigures {
-    request: usize,
-    decoded: u64,
-    paths: usize,
-    hashed: u64,
-    exceeded: crate::exceedance::Record,
-}
-
-impl GraphFigures {
-    fn capture(request: usize, graph: &node::GraphBudget) -> Self {
-        let (decoded, paths, hashed) = graph.census_usage().expect("graph census");
-        Self {
-            request,
-            decoded,
-            paths,
-            hashed,
-            exceeded: graph.exceedances(),
-        }
-    }
-
-    fn report(&self, name: &str, limits: &Limits) {
-        eprintln!(
-            "  {name}: request high water {} of {} bytes; decode {} of {} bytes; path checks {} of \
-             {}; hashed {} bytes",
-            self.request,
-            limits.manifest_bytes,
-            self.decoded,
-            limits.graph_targets().decoded,
-            self.paths,
-            limits.graph_targets().paths,
-            self.hashed,
-        );
-        if self.exceeded.is_exceeded() {
-            for axis in self.exceeded.axes() {
-                eprintln!(
-                    "    exceeded: {} reached {} (target {}){}",
-                    axis.name,
-                    axis.high_water,
-                    axis.target,
-                    axis.site
-                        .map(|site| format!(" first at {}:{}", site.file(), site.line()))
-                        .unwrap_or_default()
-                );
-            }
-        } else {
-            eprintln!("    no accounting target exceeded");
-        }
-    }
-}
-
 /// Request-account high water per owner graph, in bytes, with per-graph
-/// account figures and the cold graph's semantic output for cross-target
-/// comparison.
+/// account figures.
 struct Measured {
     lock: usize,
     cold: usize,
     repair: usize,
     warm: usize,
-    cold_graph: GraphFigures,
-    repair_graph: GraphFigures,
-    warm_graph: GraphFigures,
-    semantic: [[u8; 32]; 8],
-    contents: [node::Digest; 6],
-    /// The cold graph's complete generated output: every generated file's
-    /// exact bytes, by path.
-    files: Vec<(Box<str>, Box<[u8]>)>,
-    /// The cold graph's checked product content.
-    checked: Box<[u8]>,
-    /// The fixture root the cohort ran under (removed when it returns).
-    root: PathBuf,
+    /// Owner replays the warm graph validated.
+    warm_replays: usize,
 }
 
 fn high_water() -> usize {
     cargo::REQUEST_HIGH_WATER.with(Cell::get)
-}
-
-/// Print this thread's graph decode charges by call site, largest first.
-fn report_decode_sites() {
-    let mut sites: Vec<_> = node::DECODE_SITES.with(|sites| {
-        sites
-            .borrow()
-            .iter()
-            .map(|(site, (calls, bytes))| (site.clone(), *calls, *bytes))
-            .collect()
-    });
-    sites.sort_by_key(|(_, _, bytes)| std::cmp::Reverse(*bytes));
-    let total: u64 = sites.iter().map(|(_, _, bytes)| bytes).sum();
-    eprintln!(
-        "gallery-scale graph decode charges: {total} bytes over {} sites",
-        sites.len()
-    );
-    for (site, calls, bytes) in sites.iter().take(20) {
-        eprintln!("  {bytes:>12} bytes {calls:>7} calls  {site}");
-    }
-    let mut files = BTreeMap::<&str, (usize, u64)>::new();
-    for (site, calls, bytes) in &sites {
-        let file = site
-            .rsplit_once(':')
-            .map_or(site.as_str(), |(file, _)| file);
-        let entry = files.entry(file).or_default();
-        entry.0 += calls;
-        entry.1 += bytes;
-    }
-    let mut files: Vec<_> = files.into_iter().collect();
-    files.sort_by_key(|(_, (_, bytes))| std::cmp::Reverse(*bytes));
-    eprintln!("gallery-scale graph decode charges by file:");
-    for (file, (calls, bytes)) in files {
-        eprintln!("  {bytes:>12} bytes {calls:>7} calls  {file}");
-    }
-    owner::REPLAY_TRACE.with(|trace| {
-        for (index, (decoded, files)) in trace.borrow().iter().enumerate() {
-            let mut files: Vec<_> = files.iter().filter(|(_, bytes)| **bytes > 0).collect();
-            files.sort_by_key(|(_, bytes)| std::cmp::Reverse(**bytes));
-            let top: Vec<String> = files
-                .iter()
-                .take(6)
-                .map(|(file, bytes)| format!("{file}={bytes}"))
-                .collect();
-            eprintln!("  validate {index}: +{decoded} decoded; {}", top.join(" "));
-        }
-    });
-    let mut paths: Vec<_> = node::PATH_SITES.with(|sites| {
-        sites
-            .borrow()
-            .iter()
-            .map(|(site, (calls, checks))| (site.clone(), *calls, *checks))
-            .collect()
-    });
-    paths.sort_by_key(|(_, _, checks)| std::cmp::Reverse(*checks));
-    let total: u64 = paths.iter().map(|(_, _, checks)| checks).sum();
-    eprintln!(
-        "gallery-scale graph path checks: {total} of {} over {} sites",
-        node::MAX_PATH_CHECKS_PER_GRAPH,
-        paths.len()
-    );
-    for (site, calls, checks) in paths.iter().take(20) {
-        eprintln!("  {checks:>9} checks {calls:>7} calls  {site}");
-    }
 }
 
 fn reset_high_water() {
@@ -440,169 +308,44 @@ fn protected_owner_rebuild_reuses_derived_semantic_suffix_and_successor() {
     protected_owner_rebuild(0, &Limits::standard());
 }
 
-/// Name the axes a cohort's three graphs crossed, for the completion report.
-fn exceeded_axes(measured: &Measured) -> Vec<String> {
-    let mut axes = Vec::new();
-    for (graph, figures) in [
-        ("cold", &measured.cold_graph),
-        ("repair", &measured.repair_graph),
-        ("warm", &measured.warm_graph),
-    ] {
-        for axis in figures.exceeded.axes() {
-            axes.push(format!(
-                "{graph}: {} reached {} (target {})",
-                axis.name, axis.high_water, axis.target
-            ));
-        }
-    }
-    axes
-}
-
-/// The owner route (`prepare_cached_in`) captures its context in
-/// the original attempt scope, whose graph account is bound to the captured
-/// `[rust.limits]` graph targets rather than the standard ones; a path charge
-/// past a configured `graph-path-checks = 1` is recorded against that target.
+/// The owner route (`prepare_cached_in`) captures its context in the
+/// original attempt scope and keeps that scope's graph account on later routes.
 #[test]
-fn owner_route_scope_measures_configured_graph_targets() {
-    let mut limits = Limits::standard();
-    limits.configure("graph-path-checks", 1).unwrap();
+fn owner_route_context_shares_the_attempt_scope_account() {
+    let limits = Limits::standard();
     let fixture = Fixture::open_with(&limits);
     let scope = crate::supervisor::snapshot::attempt::Scope::begin();
     let context = owner::scoped_context_for_test(&fixture.request, &limits, &scope)
         .expect("the owner route captures its context in the attempt scope");
-    assert_eq!(context.graph_budget().targets(), limits.graph_targets());
     assert!(context.graph_budget().shares_with(scope.budget()));
-    assert!(!scope.budget().exceedances().is_exceeded());
-    context
-        .graph_budget()
-        .paths(2)
-        .expect("an accounting axis never refuses");
-    let record = scope.budget().exceedances();
-    let axis = record
-        .axis(node::PATHS_RESOURCE)
-        .expect("the owner route records the configured path-check crossing");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (1, 2, 2)
-    );
-    assert_eq!(record.axes().count(), 1);
-    // The same scope keeps the same account and profile on a later route.
     let again = owner::scoped_context_for_test(&fixture.request, &limits, &scope).unwrap();
     assert!(again.graph_budget().shares_with(scope.budget()));
     assert_eq!(again.identity(), context.identity());
-    // The configured profile changes identity, and a standard
-    // scope measures against the standard targets.
-    let standard = owner::scoped_context_for_test(
-        &fixture.request,
-        &Limits::standard(),
-        &crate::supervisor::snapshot::attempt::Scope::begin(),
-    )
-    .unwrap();
-    assert_eq!(
-        standard.graph_budget().targets(),
-        node::GraphTargets::STANDARD
-    );
-    assert_ne!(standard.identity(), context.identity());
-    drop((context, again, standard));
+    drop((context, again));
     fixture.retire();
 }
 
-/// A Gallery-shaped closure completes cold → repair → warm under the
-/// standard accounting targets. The request account, decode and path-check
-/// high waters are measured per graph and every target crossing is reported
-/// by axis, target and measured figure; none refuses the graph.
+/// A Gallery-shaped closure completes cold → repair → warm. The request
+/// account, decode and path-check high waters are measured per graph. The
+/// warm graph replays its owner once and every later consumer reuses that
+/// replay while its stamps hold.
 #[cfg(unix)]
 #[test]
-fn gallery_scale_owner_graphs_complete_and_report_targets() {
+fn gallery_scale_owner_graphs_complete_and_warm_reuses_one_replay() {
     let limits = Limits::standard();
     let measured =
         profile(GALLERY_REGISTRY, &limits).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     assert!(measured.lock >= 80 * 1024, "lock is Gallery-sized");
-    let exceeded = exceeded_axes(&measured);
-    eprintln!(
-        "cohort({GALLERY_REGISTRY}) completed cold → repair → warm; exceedance report: {}",
-        if exceeded.is_empty() {
-            "no accounting target crossed".to_owned()
-        } else {
-            exceeded.join("; ")
-        }
-    );
-    // The Gallery-shaped cohort completes cold, repair and warm whatever the
-    // accounting targets say. Where a graph crosses the path target the
-    // crossing is recorded truthfully; doing less work than the target is the
-    // goal, never a failure. The warm graph replays its owner once and every
-    // later consumer reuses that replay while its stamps hold.
-    let targets = limits.graph_targets();
     assert!(
-        measured.warm_graph.paths <= targets.paths,
-        "warm: {} path checks; a repeated owner replay returned",
-        measured.warm_graph.paths
+        measured.warm_replays <= 1,
+        "warm: {} owner replays; a repeated owner replay returned",
+        measured.warm_replays
     );
-    for (graph, figures) in [
-        ("cold", &measured.cold_graph),
-        ("repair", &measured.repair_graph),
-    ] {
-        let Some(paths) = figures.exceeded.axis(node::PATHS_RESOURCE) else {
-            assert!(
-                figures.paths <= targets.paths,
-                "{graph}: unrecorded crossing"
-            );
-            continue;
-        };
-        assert_eq!(paths.target, targets.paths as u64, "{graph}");
-        assert_eq!(
-            paths.high_water, figures.paths as u64,
-            "{graph}: truthful path-check high water"
-        );
-        assert!(paths.first_requested > paths.target, "{graph}");
-        assert!(
-            paths.site.is_some(),
-            "{graph}: the first exceeding path check is attributed"
-        );
-    }
-    for (graph, figures) in [
-        ("cold", &measured.cold_graph),
-        ("repair", &measured.repair_graph),
-        ("warm", &measured.warm_graph),
-    ] {
-        for axis in figures.exceeded.axes() {
-            assert!(axis.high_water > axis.target, "{graph} {}", axis.name);
-            assert!(
-                axis.name == node::PATHS_RESOURCE
-                    || axis.name == node::DECODED_RESOURCE
-                    || axis.name == node::HASHED_RESOURCE
-                    || axis.name == node::LOOKUPS_RESOURCE
-                    || axis.name == node::DEEP_RESOURCE
-                    || axis.name == node::COMPARISONS_RESOURCE,
-                "{graph} names a graph axis: {}",
-                axis.name
-            );
-        }
-        let crossed_request = figures.request > limits.manifest_bytes;
-        let crossed_paths = figures.paths > limits.graph_targets().paths;
-        let crossed_decode = figures.decoded > limits.graph_targets().decoded;
-        assert_eq!(
-            crossed_paths,
-            figures.exceeded.axis(node::PATHS_RESOURCE).is_some(),
-            "{graph}: the path-check report matches the measured high water"
-        );
-        assert_eq!(
-            crossed_decode,
-            figures.exceeded.axis(node::DECODED_RESOURCE).is_some(),
-            "{graph}: the decode report matches the measured high water"
-        );
-        if crossed_request {
-            eprintln!(
-                "  {graph}: request account crossed its target ({} bytes)",
-                figures.request
-            );
-        }
-    }
 }
 
 /// Reduced cohorts, profiling per-replay decode and request growth so the
 /// Gallery-scale figures can be extrapolated. Every cohort completes
-/// and reports its high waters and the axes that crossed their targets.
+/// and reports its high waters.
 #[cfg(unix)]
 #[test]
 fn scaled_owner_graphs_profile_per_replay_accounts() {
@@ -610,17 +353,7 @@ fn scaled_owner_graphs_profile_per_replay_accounts() {
     let mut failed = None;
     for registry in [40, 120] {
         match profile(registry, &limits) {
-            Ok(measured) => {
-                let exceeded = exceeded_axes(&measured);
-                eprintln!(
-                    "cohort({registry}) completed cold → repair → warm; exceedance report: {}",
-                    if exceeded.is_empty() {
-                        "no accounting target crossed".to_owned()
-                    } else {
-                        exceeded.join("; ")
-                    }
-                );
-            }
+            Ok(_) => eprintln!("cohort({registry}) completed cold → repair → warm"),
             Err(panic) => {
                 failed.get_or_insert(panic);
             }
@@ -631,145 +364,11 @@ fn scaled_owner_graphs_profile_per_replay_accounts() {
     }
 }
 
-/// Graph output is byte-identical with and without an exceedance.
-///
-/// First, within one fixture, the warm graph is charged exactly to its path and
-/// decode targets before it starts, so every one of its charges crosses a
-/// target; `protected_owner_rebuild` already asserts that this warm graph
-/// converges on the repair graph's exact input, semantic fingerprints, node
-/// contents, actions and artifact. Second, the same cohort under a tiny
-/// configured graph profile, run over the same (reused) fixture root, crosses
-/// its targets in every graph, records them with truthful high waters, still
-/// converges cold → repair → warm, and produces the standard cohort's
-/// complete semantic output and generated files.
-#[cfg(unix)]
-#[test]
-fn owner_graph_output_is_identical_with_and_without_exceedance() {
-    let standard = Limits::standard();
-    PRECHARGE_WARM.set(true);
-    let precharged = profile(0, &standard);
-    PRECHARGE_WARM.set(false);
-    let precharged = precharged.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-    assert!(
-        !precharged
-            .repair_graph
-            .exceeded
-            .axis(node::PATHS_RESOURCE)
-            .is_some()
-            || precharged.repair_graph.paths > standard.graph_targets().paths
-    );
-    for axis in [node::PATHS_RESOURCE, node::DECODED_RESOURCE] {
-        let exceeded = precharged
-            .warm_graph
-            .exceeded
-            .axis(axis)
-            .unwrap_or_else(|| panic!("the precharged warm graph crosses {axis}"));
-        assert!(exceeded.first_requested > exceeded.target);
-        assert!(
-            exceeded.site.is_some(),
-            "{axis}: the first exceeding site is attributed"
-        );
-    }
-    assert_eq!(
-        precharged
-            .warm_graph
-            .exceeded
-            .axis(node::PATHS_RESOURCE)
-            .unwrap()
-            .high_water,
-        precharged.warm_graph.paths as u64
-    );
-    assert_eq!(
-        precharged
-            .warm_graph
-            .exceeded
-            .axis(node::DECODED_RESOURCE)
-            .unwrap()
-            .high_water,
-        precharged.warm_graph.decoded
-    );
-
-    let mut tiny = standard;
-    tiny.configure("graph-path-checks", 8).unwrap();
-    tiny.configure("graph-decode-bytes", 1024).unwrap();
-    // The configured cohort reuses the standard cohort's exact (removed) root,
-    // so both run over byte-identical paths and differ only in the limits
-    // profile.
-    FIXTURE_ROOT.with(|root| *root.borrow_mut() = Some(precharged.root.clone()));
-    let configured = profile(0, &tiny).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-    assert_eq!(configured.root, precharged.root, "one fixture root");
-    // Identical semantic output across target settings, compared
-    // between the two cohorts directly: every semantic identity (contract,
-    // profile rules, checked, demand, generated, native, build request key
-    // and generated manifest) and every generated file's exact bytes must
-    // agree, so any target-dependent change to the generated source fails.
-    assert_eq!(configured.semantic, precharged.semantic);
-    assert!(
-        configured.files.len() > 4,
-        "every generated file, src/main.rs and its adapter modules, is compared"
-    );
-    assert_eq!(configured.files, precharged.files);
-    // Node contents agree except the checked product, whose header carries
-    // its demand's retained-usage figures (items at 8..16, bytes at 16..24).
-    // Those are accounting measurements that differ between two runs of the
-    // same standard profile at the same root as well (a run-dependent
-    // retained path), so only they are normalized; the checked fingerprint,
-    // payload and canonical demand bytes must match exactly.
-    for slot in [0, 1, 2, 4, 5] {
-        assert_eq!(
-            configured.contents[slot], precharged.contents[slot],
-            "node content {slot}"
-        );
-    }
-    let normalized = |content: &[u8]| {
-        let mut content = content.to_vec();
-        content[8..24].fill(0);
-        content
-    };
-    assert_eq!(&precharged.checked[..8], b"RAWRCHK1");
-    assert_eq!(
-        normalized(&configured.checked),
-        normalized(&precharged.checked),
-        "the checked product agrees outside its retained-usage figures"
-    );
-    for (graph, figures) in [
-        ("cold", &configured.cold_graph),
-        ("repair", &configured.repair_graph),
-        ("warm", &configured.warm_graph),
-    ] {
-        let paths = figures
-            .exceeded
-            .axis(node::PATHS_RESOURCE)
-            .unwrap_or_else(|| panic!("{graph} crosses the tiny path-check target"));
-        assert_eq!(paths.target, 8);
-        assert_eq!(
-            paths.high_water, figures.paths as u64,
-            "{graph}: truthful high water"
-        );
-        assert!(
-            paths.site.is_some(),
-            "{graph}: the first exceeding site is attributed"
-        );
-        let decoded = figures
-            .exceeded
-            .axis(node::DECODED_RESOURCE)
-            .unwrap_or_else(|| panic!("{graph} crosses the tiny decode target"));
-        assert_eq!(decoded.target, 1024);
-        assert_eq!(
-            decoded.high_water, figures.decoded,
-            "{graph}: truthful high water"
-        );
-    }
-}
-
 /// Run one cohort and report its request high water, per-graph account
 /// figures and graph decode charges, whether or not it completes.
 #[cfg(unix)]
 fn profile(registry: usize, limits: &Limits) -> std::thread::Result<Measured> {
     let limit = limits.manifest_bytes;
-    node::DECODE_SITES.with(|sites| sites.borrow_mut().clear());
-    node::PATH_SITES.with(|sites| sites.borrow_mut().clear());
-    owner::REPLAY_TRACE.with(|trace| trace.borrow_mut().clear());
     let result = std::panic::catch_unwind(|| protected_owner_rebuild(registry, limits));
     match &result {
         Ok(measured) => {
@@ -778,9 +377,6 @@ fn profile(registry: usize, limits: &Limits) -> std::thread::Result<Measured> {
                  warm {} of {limit} bytes",
                 measured.lock, measured.cold, measured.repair, measured.warm
             );
-            measured.cold_graph.report("cold", limits);
-            measured.repair_graph.report("repair", limits);
-            measured.warm_graph.report("warm", limits);
         }
         Err(_) => eprintln!(
             "cohort({registry}) request account: failed after high water {} of {limit} bytes \
@@ -789,7 +385,6 @@ fn profile(registry: usize, limits: &Limits) -> std::thread::Result<Measured> {
             LOCK_BYTES.get()
         ),
     }
-    report_decode_sites();
     REGISTRY.set(0);
     result
 }
@@ -823,7 +418,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     let api_content = api.node_chain().unwrap().parent().content();
     let api_semantics = api.semantic_fingerprint();
     let source = api_source(&limits);
-    let adapter = api_adapter(&limits);
+    let adapter = api_adapter();
     let completed = crate::composition::evaluate_retained_semantic(
         api,
         &adapter,
@@ -844,7 +439,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     .unwrap();
     let cold_suffix = derived_suffix(completed, &adapter, source, &limits, Expect::Cold, action);
     let cold_high = high_water();
-    let cold_graph = GraphFigures::capture(cold_high, context.graph_budget());
     // Shutdown releases the OS guards, but leaves the durable prior roots.
     drop(prepared);
     let old_bundle = ATTEMPT.with(|slot| slot.borrow_mut().take().unwrap());
@@ -943,7 +537,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         repair_action,
     );
     let repair_high = high_water();
-    let repair_graph = GraphFigures::capture(repair_high, repair_context.graph_budget());
     assert_ne!(cold_suffix.exact_input, repaired_suffix.exact_input);
     assert_eq!(cold_suffix.semantic, repaired_suffix.semantic);
     assert_eq!(cold_suffix.contents, repaired_suffix.contents);
@@ -963,19 +556,8 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     store.fixture_physical_inventory().unwrap();
 
     reset_high_water();
+    owner::REPLAYS.with(|replays| replays.set(0));
     let (warm_context, request, cached) = reopen();
-    if PRECHARGE_WARM.get() {
-        let graph = warm_context.graph_budget();
-        graph.exhaust_paths();
-        let (decoded, _, _) = graph.census_usage().unwrap();
-        graph
-            .decode((limits.graph_targets().decoded - decoded) as usize)
-            .unwrap();
-        assert!(
-            !graph.exceedances().is_exceeded(),
-            "exact targets are not exceedances"
-        );
-    }
     let warm =
         owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
             .unwrap();
@@ -1013,7 +595,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         repair_action,
     );
     let warm_high = high_water();
-    let warm_graph = GraphFigures::capture(warm_high, warm_context.graph_budget());
+    let warm_replays = validates();
     assert_eq!(warm_suffix.exact_input, repaired_suffix.exact_input);
     assert_eq!(warm_suffix.semantic, repaired_suffix.semantic);
     assert_eq!(warm_suffix.contents, repaired_suffix.contents);
@@ -1035,14 +617,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         cold: cold_high,
         repair: repair_high,
         warm: warm_high,
-        cold_graph,
-        repair_graph,
-        warm_graph,
-        semantic: cold_suffix.semantic,
-        contents: cold_suffix.contents,
-        files: cold_suffix.files,
-        checked: cold_suffix.checked,
-        root,
+        warm_replays,
     }
 }
 
@@ -1069,7 +644,7 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
         .unwrap();
     let hits = || owner::STAGE_HITS.with(std::cell::Cell::get);
-    owner::REPLAY_TRACE.with(|trace| trace.borrow_mut().clear());
+    owner::REPLAYS.with(|replays| replays.set(0));
     let before = hits();
     let prepared = node::Chain::validated(context.clone(), cold.node())
         .prepare_read_set()
@@ -1079,12 +654,11 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     drop(prepared);
 
     let bundle = ATTEMPT.with(|slot| slot.borrow_mut().take().unwrap());
-    let lock =
-        crate::cargo::resolution::layout::Paths::observe(bundle.clone(), &node::GraphBudget::new())
-            .unwrap()
-            .final_form()
-            .lock()
-            .to_path_buf();
+    let lock = crate::cargo::resolution::layout::Paths::observe(bundle.clone())
+        .unwrap()
+        .final_form()
+        .lock()
+        .to_path_buf();
     let frozen = fs::metadata(&lock).unwrap().permissions();
     // Same bytes, new status-change time: the next consumer replays in full.
     fs::set_permissions(&lock, frozen.clone()).unwrap();
@@ -1120,27 +694,8 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Decode sites a staged record interpretation must not revisit on a hit replay.
-const RECORD_DECODE_FILES: [&str; 4] = [
-    "importer/src/input/stored/record.rs",
-    "importer/src/input/stored.rs",
-    "importer/src/input/stored/build/codec.rs",
-    "importer/src/input/stored/record/namespace.rs",
-];
-
-/// Graph decode bytes one validate charged at the record interpretation sites.
-fn record_decode_bytes(validate: usize) -> u64 {
-    owner::REPLAY_TRACE.with(|trace| {
-        let (_, files) = &trace.borrow()[validate];
-        RECORD_DECODE_FILES
-            .iter()
-            .map(|file| files.get(*file).copied().unwrap_or(0))
-            .sum()
-    })
-}
-
 fn validates() -> usize {
-    owner::REPLAY_TRACE.with(|trace| trace.borrow().len())
+    owner::REPLAYS.with(Cell::get)
 }
 
 /// A later consumer in one graph reuses the staged record interpretation
@@ -1161,7 +716,7 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    owner::REPLAY_TRACE.with(|trace| trace.borrow_mut().clear());
+    owner::REPLAYS.with(|replays| replays.set(0));
     let hits = || owner::STAGE_HITS.with(Cell::get);
     let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
         .unwrap();
@@ -1177,11 +732,10 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
     );
     drop(prepared);
     let bundle = ATTEMPT.with(|slot| slot.borrow().clone().unwrap());
-    let record =
-        crate::cargo::resolution::layout::Paths::observe(bundle, &node::GraphBudget::new())
-            .unwrap()
-            .record()
-            .to_path_buf();
+    let record = crate::cargo::resolution::layout::Paths::observe(bundle)
+        .unwrap()
+        .record()
+        .to_path_buf();
     fs::set_permissions(&record, fs::metadata(&record).unwrap().permissions()).unwrap();
     let prepared = node::Chain::validated(context.clone(), cold.node())
         .prepare_read_set()
@@ -1195,11 +749,6 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
         validates(),
         cold_validates + 1,
         "one changed stamp, one replay"
-    );
-    assert_eq!(
-        record_decode_bytes(cold_validates),
-        0,
-        "a hit replay decodes no record, stored, build-codec or namespace wire"
     );
     drop(prepared);
     drop(cold);
@@ -1226,19 +775,12 @@ fn staged_owner_record_is_reused_within_one_graph_and_never_across_graphs() {
         owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
             .unwrap();
     assert!(validates() > warm_first, "the warm graph replays the owner");
-    assert!(
-        record_decode_bytes(warm_first) > 0,
-        "the second graph's first replay decodes the record afresh"
-    );
     let warm_replays = validates() - warm_first;
     assert_eq!(
         hits() - before,
         3 * (warm_replays - 1),
         "every later replay of the warm graph reuses its own staged values"
     );
-    for validate in warm_first + 1..validates() {
-        assert_eq!(record_decode_bytes(validate), 0, "validate {validate}");
-    }
     drop(warm);
     drop(fresh);
     drop(context);
@@ -1292,13 +834,10 @@ fn staged_owner_record_refuses_record_drift_between_replays() {
         drop(prepared);
 
         let bundle = ATTEMPT.with(|slot| slot.borrow_mut().take().unwrap());
-        let record = crate::cargo::resolution::layout::Paths::observe(
-            bundle.clone(),
-            &node::GraphBudget::new(),
-        )
-        .unwrap()
-        .record()
-        .to_path_buf();
+        let record = crate::cargo::resolution::layout::Paths::observe(bundle.clone())
+            .unwrap()
+            .record()
+            .to_path_buf();
         let frozen = fs::metadata(&record).unwrap().permissions();
         let original = fs::read(&record).unwrap();
         let mut drifted = original.clone();
@@ -1337,8 +876,6 @@ struct Suffix {
     actions: [node::ActionKey; 6],
     /// Every generated file's exact bytes, by path.
     files: Vec<(Box<str>, Box<[u8]>)>,
-    /// The checked product's exact encoded node content.
-    checked: Box<[u8]>,
     #[cfg(feature = "test-fixtures")]
     artifact: (node::ActionKey, PathBuf, [u8; 32]),
 }
@@ -1387,8 +924,6 @@ fn derived_suffix(
         owned_identity(&generated.demand).0,
         owned_identity(&generated.generated).0,
     ];
-    let checked_content =
-        node::Value::encode(checked.product.value(), usize::MAX).expect("checked encodes");
     let mut semantic = [[0; 32]; 8];
     semantic[0] = *contract.fingerprint().as_bytes();
     semantic[1] = *profile.rules_digest();
@@ -1399,7 +934,7 @@ fn derived_suffix(
     // Ordinary callbacks can observe exact identity even when the separately
     // audited source path reuses all of its semantic products.
     let observed_raw = *contract.raw_fingerprint().as_bytes();
-    let ordinary = crate::checked::evaluate(&contract, &profile, &facade, source, limits, || {
+    let ordinary = crate::checked::evaluate(&contract, &profile, &facade, source, || {
         Ok::<_, ()>((
             contract
                 .compiler((), source, limits)
@@ -1464,7 +999,6 @@ fn derived_suffix(
         contents,
         actions,
         files,
-        checked: checked_content,
         #[cfg(feature = "test-fixtures")]
         artifact,
     }
@@ -1620,10 +1154,10 @@ impl crate::profile::Checked for ApiChecked {
         &[9; 32]
     }
 }
-fn api_adapter(limits: &Limits) -> crate::profile::trusted::Adapter<ApiProfile> {
+fn api_adapter() -> crate::profile::trusted::Adapter<ApiProfile> {
     crate::profile::trusted::Adapter::trusted(
         ApiProfile,
-        crate::profile::Identity::new("api.continuation.fixture", limits),
+        crate::profile::Identity::new("api.continuation.fixture"),
         crate::profile::Version::new(1),
         false,
     )
@@ -1660,7 +1194,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
         "cold API does not promote before classification"
     );
     let source = api_source(&limits);
-    let adapter = api_adapter(&limits);
+    let adapter = api_adapter();
     let completed = crate::composition::evaluate_api_semantic(
         api,
         &adapter,
@@ -1741,7 +1275,7 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
         attestation: context.cached_toolchain().unwrap(),
     };
     let policy = crate::classify::Policy::standard();
-    let adapter = api_adapter(&limits);
+    let adapter = api_adapter();
     let source = api_source(&limits);
     // This owner exposes no demandable item; plan round trips are covered
     // by the composition fixture (`resolved_plans_replay_like_the_contract`).
@@ -1880,7 +1414,7 @@ fn retained_api_rejects_owner_drift_before_source_callback() {
     .unwrap();
     assert!(crate::composition::evaluate_api(
         api,
-        &api_adapter(&limits),
+        &api_adapter(),
         &crate::classify::Policy::standard(),
         api_source(&limits),
         &limits,
@@ -1916,7 +1450,7 @@ fn retained_api_rejects_foreign_composition_context() {
     api.publication.context = other.context.clone();
     assert!(crate::composition::evaluate_api(
         api,
-        &api_adapter(&limits),
+        &api_adapter(),
         &crate::classify::Policy::standard(),
         api_source(&limits),
         &limits,

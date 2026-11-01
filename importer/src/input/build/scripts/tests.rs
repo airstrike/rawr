@@ -129,8 +129,6 @@ fn exhausted_decode_axis_does_not_refuse_association_but_a_refused_account_latch
     let mut scripts = [script(false), script(true)];
     let limits = Limits::standard();
     let work = node::GraphBudget::new();
-    work.decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("consume the decode allowance");
     let mut account = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
     let mut budget = Budget::borrow(&limits, &mut account, &work);
     // Script association compares admitted values only: no decode event.
@@ -143,10 +141,6 @@ fn exhausted_decode_axis_does_not_refuse_association_but_a_refused_account_latch
         &mut budget,
     )
     .expect("pure association needs no decode allowance");
-    assert_eq!(
-        work.census_usage().expect("graph census").0,
-        node::MAX_DECODED_BYTES_PER_GRAPH
-    );
     // A refused original account still stops the association at its first step.
     assert!(budget.storage(0, usize::MAX).is_err());
     assert!(matches!(budget.check(), Err(Error::Refused)));

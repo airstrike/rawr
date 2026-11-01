@@ -214,10 +214,6 @@ impl KeySource {
     fn is_empty(&self) -> bool {
         matches!(self, Self::Path)
     }
-
-    fn len(&self) -> usize {
-        self.as_ref().len()
-    }
 }
 
 impl AsRef<str> for KeySource {
@@ -292,11 +288,6 @@ type MetadataProjection = (
 );
 
 impl BuildProjection {
-    /// Domain and payload bytes fed to the projection hash.
-    pub(crate) fn hash_bytes(payload: usize) -> Option<usize> {
-        BUILD_PROJECTION_DOMAIN.len().checked_add(payload)
-    }
-
     /// Transform one already-canonical bounded JSON record into owned proof state.
     pub(crate) fn from_canonical(bytes: Box<[u8]>) -> Self {
         let digest = build_projection_digest(&bytes);
@@ -321,7 +312,7 @@ fn build_projection_digest(bytes: &[u8]) -> Digest {
 
 impl Definition {
     #[cfg(test)]
-    pub(crate) fn fixture_authenticated(seed: &'static [u8], limits: &Limits) -> Self {
+    pub(crate) fn fixture_authenticated(seed: &'static [u8]) -> Self {
         Self::new(
             ROOT_PACKAGE,
             Some(FRAMEWORK_PACKAGE),
@@ -334,7 +325,6 @@ impl Definition {
             "dev",
             "rustc",
             "cargo",
-            limits,
         )
         .expect("authenticated fixture universe seals")
     }
@@ -345,7 +335,6 @@ impl Definition {
         target: &str,
         profile: &str,
         proof: &super::toolchain::Proof,
-        limits: &Limits,
     ) -> Self {
         Self::new(
             self.root,
@@ -359,7 +348,6 @@ impl Definition {
             Box::leak(profile.into()),
             Box::leak(proof.rustc_commit().into()),
             Box::leak(proof.cargo_commit().into()),
-            limits,
         )
         .expect("fixture definition binds actual toolchain inputs")
     }
@@ -381,16 +369,15 @@ impl Definition {
         cargo_profile: &'static str,
         rustc_commit: &'static str,
         cargo_commit: &'static str,
-        limits: &Limits,
     ) -> Result<Self> {
         assert!(
             !name.is_empty() && version != 0 && endpoint_table != 0,
             "a compiled-in resolution universe has a name and nonzero versions"
         );
         // The seed is compiled-in program text, not admitted input; its
-        // size is fixed at build time and an accounting target never refuses it.
+        // size is fixed at build time.
         let seed_digest = Digest(Sha256::digest(seed).into());
-        let protected = Closure::parse_rooted(seed, root, limits)?;
+        let protected = Closure::parse_rooted(seed, root)?;
         let mut identity = Sha256::new();
         identity.update(b"rawr.import.cargo.resolution-universe/v1");
         identity.update(SCHEMA.to_le_bytes());
@@ -427,41 +414,27 @@ impl Definition {
         self.identity.as_bytes()
     }
 
-    pub(crate) fn candidate(&self, bytes: Box<[u8]>, limits: &Limits) -> Result<Candidate> {
-        self.candidate_in(bytes, limits, &mut super::ControlAccount::legacy())
+    pub(crate) fn candidate(&self, bytes: Box<[u8]>) -> Result<Candidate> {
+        self.candidate_in(bytes, &mut super::ControlAccount::legacy())
     }
 
     pub(crate) fn candidate_accounted(
         &self,
         bytes: Box<[u8]>,
-        limits: &Limits,
         allocation: &mut super::RequestAllocation,
-        graph: &crate::node::GraphBudget,
     ) -> Result<Candidate> {
-        self.candidate_in(
-            bytes,
-            limits,
-            &mut super::ControlAccount::current(allocation, graph),
-        )
+        self.candidate_in(bytes, &mut super::ControlAccount::current(allocation))
     }
 
     pub(super) fn candidate_in(
         &self,
         bytes: Box<[u8]>,
-        limits: &Limits,
         account: &mut super::ControlAccount<'_>,
     ) -> Result<Candidate> {
         // Match the existing authority TOML ownership precharge, retaining it
         // in this evaluation's account across repeated current validations.
         account.parser(bytes.len())?;
-        account.hash(bytes.len())?;
-        let closure = Closure::parse_in_rooted(
-            &bytes,
-            self.root,
-            limits,
-            account,
-            &mut UniverseAccount::new(),
-        )?;
+        let closure = Closure::parse_in_rooted(&bytes, self.root)?;
         let digest = Digest(Sha256::digest(&bytes).into());
         account.holder(Candidate::HOLDER_BYTES)?;
         Ok(Candidate(Arc::new(Locked {
@@ -550,26 +523,16 @@ impl Definition {
                 .as_ref()
                 .map_or(JsonOwnership::empty(), Budgeted::ownership),
         )?;
-        // One universe account per admission records every accounting
-        // target this observation crosses; nothing here refuses on one.
-        let mut universe = UniverseAccount::new();
-        let universe = &mut universe;
         allocation.transform_owned(consumed, |allocation| {
             let packages = match metadata {
-                Some(metadata) => metadata_packages(metadata, limits, allocation, universe)?,
+                Some(metadata) => metadata_packages(metadata, allocation)?,
                 #[cfg(test)]
-                None => metadata_packages_from_value(value.value(), limits, allocation, universe)?,
+                None => metadata_packages_from_value(value.value(), allocation)?,
                 #[cfg(not(test))]
                 None => return Err(json_schema("typed Cargo metadata authority is absent")),
             };
-            let projected = metadata_observation(
-                value,
-                records,
-                packages.value(),
-                limits,
-                allocation,
-                universe,
-            )?;
+            let projected =
+                metadata_observation(value, records, packages.value(), limits, allocation)?;
             Ok(MetadataObservation {
                 universe: self.identity,
                 packages,
@@ -589,10 +552,6 @@ impl Definition {
             .packages
             .ownership()
             .checked_add(metadata.projected.ownership())?;
-        // One universe account per admission records every accounting
-        // target this authentication crosses; nothing here refuses on one.
-        let mut universe = UniverseAccount::new();
-        let universe = &mut universe;
         allocation.transform_owned(consumed, |allocation| {
             require_universe(self.identity, metadata.universe, "protected metadata proof")?;
             let (reachable_units, reachable_packages) = unit_reachability_rooted(
@@ -600,9 +559,7 @@ impl Definition {
                 self.root,
                 self.framework.is_none(),
                 metadata.packages.value(),
-                limits,
                 allocation,
-                universe,
             )?;
             let (metadata_bytes, packages) = metadata_projection_from_observation(
                 metadata.projected,
@@ -610,7 +567,6 @@ impl Definition {
                 reachable_packages.value(),
                 limits,
                 allocation,
-                universe,
             )?;
             reachable_packages.drop_from(allocation)?;
             metadata.packages.drop_from(allocation)?;
@@ -618,14 +574,8 @@ impl Definition {
                 b"rawr.import.cargo.protected-metadata/v1",
                 metadata_bytes.value(),
             );
-            let unit_projection = unit_projection(
-                value,
-                packages.value(),
-                reachable_units.value(),
-                limits,
-                allocation,
-                universe,
-            )?;
+            let unit_projection =
+                unit_projection(value, packages.value(), reachable_units.value(), allocation)?;
             reachable_units.drop_from(allocation)?;
             let unit_bytes = unit_projection;
             let unit_digest =
@@ -653,7 +603,7 @@ impl Definition {
         let value = super::unit::bounded_json("protected Cargo metadata", bytes, limits)?;
         let mut allocation = super::unit::JsonAllocation::empty();
         let ownership = JsonOwnership::tree(&value)?;
-        allocation.acquire(ownership, limits)?;
+        allocation.acquire(ownership)?;
         self.observe_metadata_value(
             Budgeted::from_retained(value, ownership),
             None,
@@ -667,7 +617,7 @@ impl Catalog {
     /// The universe of a runner with no host profile: it governs the
     /// closure of the `rawr` runtime crate and fixes no framework.
     #[doc(hidden)]
-    pub fn plain(limits: &Limits) -> Result<Self> {
+    pub fn plain() -> Result<Self> {
         Definition::new(
             PLAIN_ROOT,
             None,
@@ -680,7 +630,6 @@ impl Catalog {
             CARGO_PROFILE,
             RUSTC_COMMIT,
             CARGO_COMMIT,
-            limits,
         )
         .map(Self::new)
     }
@@ -1168,19 +1117,6 @@ impl ProtectedPackage {
         roots.sort_unstable_by_key(|package| std::cmp::Reverse(package.root.as_os_str().len()));
     }
 
-    /// Exact bytes fed to the shared token hash, before any hash work occurs.
-    pub(crate) fn token_hash_bytes(&self) -> Option<usize> {
-        [
-            self.key.name.as_ref(),
-            self.key.version.as_ref(),
-            self.key.source.as_ref(),
-        ]
-        .into_iter()
-        .try_fold(PACKAGE_KEY_DOMAIN.len(), |bytes, value| {
-            bytes.checked_add(8)?.checked_add(value.len())
-        })
-    }
-
     pub(crate) fn token_bytes(&self) -> [u8; 64] {
         key_token_bytes(&self.key)
     }
@@ -1197,75 +1133,17 @@ fn require_universe(expected: Digest, actual: Digest, field: &'static str) -> Re
     }
 }
 
-/// One resolution-universe admission or closure-parse account. The
-/// package, edge, unit, lookup-work and string accounting targets a universe
-/// crosses while projecting Cargo JSON or parsing a lock are recorded here and
-/// published under `Account::Universe`; the work continues and nothing
-/// refuses. Physical bounds (the capture that read the document, the node
-/// content ceiling, `try_reserve`) stay with their owners.
-pub(crate) struct UniverseAccount {
-    id: u64,
-    exceeded: crate::exceedance::Record,
-}
-
-impl UniverseAccount {
-    pub(crate) fn new() -> Self {
-        Self {
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
-        }
-    }
-
-    /// The axes of this account that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
-    /// Record one measured amount against its accounting target. A crossing
-    /// is published with a truthful high water and the caller continues.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            crate::exceedance::publish(
-                crate::exceedance::Account::Universe,
-                self.id,
-                &self.exceeded,
-            );
-        }
-    }
-}
-
-impl Default for UniverseAccount {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn metadata_packages(
     metadata: &super::unit::Metadata,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Budgeted<BTreeMap<Arc<str>, ProtectedPackage>>> {
-    let package_count = metadata.package_count();
-    // The package count is an accounting target recorded on the
-    // universe account; every package is still projected.
-    universe.exceeded(
-        "protected metadata packages",
-        limits.packages,
-        package_count,
-    );
     let mut ownership = JsonOwnership::collection();
-    allocation.acquire(ownership, limits)?;
+    allocation.acquire(ownership)?;
     let mut by_id = BTreeMap::new();
     let outcome = (|| {
         for (id, package) in metadata.package_entries() {
             let entry = JsonOwnership::members(1);
-            allocation.acquire(entry, limits)?;
+            allocation.acquire(entry)?;
             ownership = ownership.checked_add(entry)?;
             if by_id
                 .insert(
@@ -1301,40 +1179,26 @@ fn metadata_packages(
 #[cfg(test)]
 fn metadata_packages_from_value(
     value: &JsonValue,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Budgeted<BTreeMap<Arc<str>, ProtectedPackage>>> {
     let object = json_object(value, "protected Cargo metadata root")?;
     let packages = json_array(object.get("packages"), "metadata packages")?;
-    universe.exceeded(
-        "protected metadata packages",
-        limits.packages,
-        packages.len(),
-    );
     let mut ownership = JsonOwnership::collection();
-    allocation.acquire(ownership, limits)?;
+    allocation.acquire(ownership)?;
     let mut by_id = BTreeMap::new();
     let outcome = (|| {
         for package in packages {
             let package = json_object(package, "metadata package")?;
-            let id = json_bounded_str(package, "id", limits, universe)?;
-            let manifest = json_bounded_str(package, "manifest_path", limits, universe)?;
+            let id = json_bounded_str(package, "id")?;
+            let manifest = json_bounded_str(package, "manifest_path")?;
             let root = Path::new(manifest)
                 .parent()
                 .ok_or_else(|| json_schema("Cargo manifest path has no parent"))?;
-            let name = json_bounded_str(package, "name", limits, universe)?;
-            let version = json_bounded_str(package, "version", limits, universe)?;
+            let name = json_bounded_str(package, "name")?;
+            let version = json_bounded_str(package, "version")?;
             let source = match package.get("source") {
                 Some(JsonValue::Null) | None => "",
-                Some(JsonValue::String(source)) => {
-                    universe.exceeded(
-                        "protected Cargo metadata source bytes",
-                        limits.string_bytes,
-                        source.len(),
-                    );
-                    source.as_str()
-                }
+                Some(JsonValue::String(source)) => source.as_str(),
                 Some(_) => return Err(json_schema("metadata package source is invalid")),
             };
             let mut entry = JsonOwnership::members(1)
@@ -1347,7 +1211,7 @@ fn metadata_packages_from_value(
             if !source.is_empty() {
                 entry = entry.checked_add(JsonOwnership::string(source.len()))?;
             }
-            allocation.acquire(entry, limits)?;
+            allocation.acquire(entry)?;
             ownership = ownership.checked_add(entry)?;
             if by_id
                 .insert(
@@ -1384,7 +1248,6 @@ fn metadata_observation(
     all_packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Budgeted<BTreeMap<Arc<str>, ProjectedPackage>>> {
     let document_ownership = value.ownership();
     let (mut value, _) = value.into_parts();
@@ -1404,15 +1267,8 @@ fn metadata_observation(
     let nodes = nodes_value
         .as_array_mut()
         .ok_or_else(|| json_schema("metadata resolve nodes are invalid"))?;
-    // Package and edge counts are accounting targets recorded on the
-    // universe account; the observation is still projected in full.
-    universe.exceeded(
-        "protected metadata observation packages",
-        limits.packages,
-        packages.len().max(nodes.len()),
-    );
     let mut ownership = JsonOwnership::collection();
-    allocation.acquire(ownership, limits)?;
+    allocation.acquire(ownership)?;
     let mut projected = BTreeMap::<Arc<str>, ProjectedPackage>::new();
     let mut moved_ownership = JsonOwnership::empty();
     let mut edges = 0_usize;
@@ -1456,28 +1312,16 @@ fn metadata_observation(
             record.drop_from(allocation)?;
         }
         let shared_id = {
-            let id = json_bounded_str(
-                json_object(package.value(), "metadata package")?,
-                "id",
-                limits,
-                universe,
-            )?;
+            let id = json_bounded_str(json_object(package.value(), "metadata package")?, "id")?;
             all_packages
                 .get_key_value(id)
                 .map(|(id, _)| Arc::clone(id))
                 .ok_or_else(|| json_schema("metadata observation package is absent"))?
         };
         let entry = JsonOwnership::members(1);
-        allocation.acquire(entry, limits)?;
-        normalize_metadata_package(
-            &mut package,
-            shared_id.as_ref(),
-            all_packages,
-            limits,
-            allocation,
-            universe,
-        )?;
-        let package = projection_bytes_budgeted(package, allocation, limits)?;
+        allocation.acquire(entry)?;
+        normalize_metadata_package(&mut package, shared_id.as_ref(), all_packages, allocation)?;
+        let package = projection_bytes_budgeted(package, allocation)?;
         ownership = ownership
             .checked_add(entry)?
             .checked_add(package.ownership())?;
@@ -1499,12 +1343,7 @@ fn metadata_observation(
     for node in std::mem::take(nodes) {
         let node_ownership = JsonOwnership::tree(&node)?;
         moved_ownership = moved_ownership.checked_add(node_ownership)?;
-        let id = json_bounded_str(
-            json_object(&node, "metadata resolve node")?,
-            "id",
-            limits,
-            universe,
-        )?;
+        let id = json_bounded_str(json_object(&node, "metadata resolve node")?, "id")?;
         let entry = projected
             .get_mut(id)
             .ok_or_else(|| json_schema("metadata observation resolve package is absent"))?;
@@ -1514,15 +1353,8 @@ fn metadata_observation(
             ));
         }
         let mut node = Budgeted::from_retained(node, node_ownership);
-        edges = edges.saturating_add(normalize_resolve_node(
-            &mut node,
-            all_packages,
-            limits,
-            allocation,
-            universe,
-        )?);
-        universe.exceeded("protected metadata observation edges", limits.edges, edges);
-        let node = projection_bytes_budgeted(node, allocation, limits)?;
+        edges = edges.saturating_add(normalize_resolve_node(&mut node, all_packages, allocation)?);
+        let node = projection_bytes_budgeted(node, allocation)?;
         ownership = ownership.checked_add(node.ownership())?;
         entry.resolve = Some(node.into_parts().0);
     }
@@ -1549,17 +1381,16 @@ fn metadata_projection_from_observation(
     reachable: &BTreeSet<Arc<str>>,
     limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<MetadataProjection> {
     let mut protected_ownership = JsonOwnership::collection();
-    allocation.acquire(protected_ownership, limits)?;
+    allocation.acquire(protected_ownership)?;
     let mut protected = BTreeMap::new();
     for id in reachable {
         let (shared_id, package) = all_packages
             .get_key_value(id.as_ref())
             .ok_or_else(|| json_schema("unit-reachable metadata package is absent"))?;
         let entry = JsonOwnership::members(1);
-        allocation.acquire(entry, limits)?;
+        allocation.acquire(entry)?;
         protected_ownership = protected_ownership.checked_add(entry)?;
         protected.insert(Arc::clone(shared_id), package.clone());
     }
@@ -1567,7 +1398,7 @@ fn metadata_projection_from_observation(
 
     let token_ownership =
         JsonOwnership::collection().checked_add(JsonOwnership::nodes(protected.value().len()))?;
-    allocation.acquire(token_ownership, limits)?;
+    allocation.acquire(token_ownership)?;
     let tokens = protected
         .value()
         .values()
@@ -1576,7 +1407,7 @@ fn metadata_projection_from_observation(
     let (mut observed, observed_ownership) = observed.into_parts();
     let parts_structure =
         JsonOwnership::collection().checked_add(JsonOwnership::nodes(protected.value().len()))?;
-    allocation.acquire(parts_structure, limits)?;
+    allocation.acquire(parts_structure)?;
     let mut projected = Vec::<Budgeted<Box<[u8]>>>::new();
     projected
         .try_reserve_exact(protected.value().len())
@@ -1621,11 +1452,8 @@ fn metadata_projection_from_observation(
             &tokens,
             allocation,
         )?);
-        // The filtered edge count is an accounting target recorded on
-        // the universe account; the projection continues.
-        universe.exceeded("protected metadata edges", limits.edges, edges);
-        let package = projection_bytes_budgeted(package, allocation, limits)?;
-        let resolve = projection_bytes_budgeted(resolve, allocation, limits)?;
+        let package = projection_bytes_budgeted(package, allocation)?;
+        let resolve = projection_bytes_budgeted(resolve, allocation)?;
         const ENTRY_PREFIX: &[u8] = b"{\"key\":\"";
         const ENTRY_PACKAGE: &[u8] = b"\",\"package\":";
         const ENTRY_RESOLVE: &[u8] = b",\"resolve\":";
@@ -1640,7 +1468,7 @@ fn metadata_projection_from_observation(
             .and_then(|total| total.checked_add(ENTRY_SUFFIX.len()))
             .ok_or_else(|| json_schema("protected metadata entry byte count overflow"))?;
         let token = key_token_bytes(&selected.key);
-        let entry = allocation.retain_with(JsonOwnership::buffer(total), limits, || {
+        let entry = allocation.retain_with(JsonOwnership::buffer(total), || {
             let mut bytes = Vec::new();
             bytes
                 .try_reserve_exact(total)
@@ -1685,7 +1513,7 @@ fn metadata_projection_from_observation(
         .and_then(|total| total.checked_add(projected.len().saturating_sub(1)))
         .and_then(|total| total.checked_add(SUFFIX.len()))
         .ok_or_else(|| json_schema("protected metadata projection byte count overflow"))?;
-    let output = allocation.retain_with(JsonOwnership::buffer(total), limits, || {
+    let output = allocation.retain_with(JsonOwnership::buffer(total), || {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(total)
@@ -1771,15 +1599,11 @@ struct PendingUnits {
 }
 
 impl PendingUnits {
-    fn retain(
-        bound: usize,
-        allocation: &mut JsonAllocation,
-        limits: &Limits,
-    ) -> Result<Budgeted<Self>> {
+    fn retain(bound: usize, allocation: &mut JsonAllocation) -> Result<Budgeted<Self>> {
         let ownership = JsonOwnership::collection()
             .checked_add(JsonOwnership::nodes(bound))?
             .checked_add(JsonOwnership::collection())?;
-        allocation.retain_with(ownership, limits, || {
+        allocation.retain_with(ownership, || {
             let mut pending = Vec::new();
             pending
                 .try_reserve_exact(bound)
@@ -1802,7 +1626,6 @@ impl PendingUnits {
         queue: &mut Budgeted<Self>,
         index: usize,
         allocation: &mut JsonAllocation,
-        limits: &Limits,
     ) -> Result<bool> {
         queue.transform(|queue, ownership| {
             if index >= queue.bound {
@@ -1816,7 +1639,7 @@ impl PendingUnits {
             }
             debug_assert!(queue.pending.len() < queue.pending.capacity());
             let discovered = JsonOwnership::nodes(1);
-            allocation.acquire(discovered, limits)?;
+            allocation.acquire(discovered)?;
             let inserted = queue.discovered.insert(index);
             debug_assert!(inserted, "the discovery check precedes the only insertion");
             queue.pending.push(index);
@@ -1864,8 +1687,6 @@ fn metadata_projection(
     value: &JsonValue,
     all_packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     reachable: &BTreeSet<Arc<str>>,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
 ) -> Result<(JsonValue, BTreeMap<Arc<str>, ProtectedPackage>)> {
     let mut allocation = JsonAllocation::empty();
     let object = json_object(value, "protected Cargo metadata root")?;
@@ -1877,7 +1698,6 @@ fn metadata_projection(
         "metadata resolve",
     )?;
     let nodes = json_array(resolve.get("nodes"), "metadata resolve nodes")?;
-    universe.exceeded("protected metadata nodes", limits.packages, nodes.len());
     let protected = reachable
         .iter()
         .map(|id| {
@@ -1892,17 +1712,14 @@ fn metadata_projection(
         .iter()
         .map(|package| {
             let object = json_object(package, "metadata package")?;
-            Ok((
-                json_bounded_string(object, "id", limits, universe)?,
-                package,
-            ))
+            Ok((json_bounded_string(object, "id")?, package))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let nodes_by_id = nodes
         .iter()
         .map(|node| {
             let object = json_object(node, "metadata resolve node")?;
-            let id = json_bounded_string(object, "id", limits, universe)?;
+            let id = json_bounded_string(object, "id")?;
             Ok((id, node))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
@@ -1921,29 +1738,19 @@ fn metadata_projection(
             .ok_or_else(|| json_schema("unit-reachable package document is absent"))?)
         .clone();
         let package_ownership = JsonOwnership::tree(&package)?;
-        let mut package = allocation.retain_with(package_ownership, limits, || Ok(package))?;
-        normalize_metadata_package(
-            &mut package,
-            id,
-            all_packages,
-            limits,
-            &mut allocation,
-            universe,
-        )?;
+        let mut package = allocation.retain_with(package_ownership, || Ok(package))?;
+        normalize_metadata_package(&mut package, id, all_packages, &mut allocation)?;
         let node = nodes_by_id
             .get(id.as_ref())
             .ok_or_else(|| json_schema("protected resolve node is absent"))?;
         let node = (*node).clone();
         let node_ownership = JsonOwnership::tree(&node)?;
-        let mut node = allocation.retain_with(node_ownership, limits, || Ok(node))?;
+        let mut node = allocation.retain_with(node_ownership, || Ok(node))?;
         edge_count = edge_count.saturating_add(normalize_resolve_node(
             &mut node,
             &protected,
-            limits,
             &mut allocation,
-            universe,
         )?);
-        universe.exceeded("protected metadata edges", limits.edges, edge_count);
         let (package, _) = package.into_parts();
         let (node, _) = node.into_parts();
         projected.push(serde_json::json!({
@@ -1960,7 +1767,6 @@ fn rewrite_json_string_from_bytes(
     new_bytes: usize,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    limits: &Limits,
     build: impl FnOnce(&str) -> Result<Vec<u8>>,
 ) -> Result<()> {
     let previous = value
@@ -1971,7 +1777,7 @@ fn rewrite_json_string_from_bytes(
     let new = JsonOwnership::string_bytes(new_bytes);
     let next_ownership = ownership.checked_sub(old)?.checked_add(new)?;
     let buffer = JsonOwnership::buffer(new_bytes);
-    allocation.acquire(buffer, limits)?;
+    allocation.acquire(buffer)?;
     let replacement_bytes = match build(previous) {
         Ok(replacement) if replacement.len() == new_bytes => replacement,
         Ok(_) => {
@@ -1991,7 +1797,7 @@ fn rewrite_json_string_from_bytes(
         }
     };
     let growth = JsonOwnership::string_bytes(new_bytes.saturating_sub(old_bytes));
-    if let Err(error) = allocation.acquire(growth, limits) {
+    if let Err(error) = allocation.acquire(growth) {
         allocation.release(buffer)?;
         return Err(error);
     }
@@ -2026,7 +1832,6 @@ fn replace_json_key_token(
     key: &Key,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    limits: &Limits,
 ) -> Result<()> {
     const TOKEN_BYTES: usize = 64;
 
@@ -2038,7 +1843,7 @@ fn replace_json_key_token(
     let new = JsonOwnership::string_bytes(TOKEN_BYTES);
     let next_ownership = ownership.checked_sub(old)?.checked_add(new)?;
     let growth = JsonOwnership::string_bytes(TOKEN_BYTES.saturating_sub(old_bytes));
-    allocation.acquire(growth, limits)?;
+    allocation.acquire(growth)?;
 
     let token = key_token_bytes(key);
     let JsonValue::String(string) = value else {
@@ -2073,12 +1878,11 @@ fn replace_object_key_token(
     key: &Key,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    limits: &Limits,
 ) -> Result<()> {
     let value = object
         .get_mut(field)
         .ok_or_else(|| json_schema(&format!("protected string `{field}` is absent")))?;
-    replace_json_key_token(value, key, allocation, ownership, limits)
+    replace_json_key_token(value, key, allocation, ownership)
 }
 
 fn insert_object_string(
@@ -2087,7 +1891,6 @@ fn insert_object_string(
     value_bytes: usize,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    limits: &Limits,
     build: impl FnOnce() -> Result<String>,
 ) -> Result<()> {
     if object.contains_key(field) {
@@ -2096,7 +1899,7 @@ fn insert_object_string(
         )));
     }
     let acquired = JsonOwnership::object_string_field(field, value_bytes)?;
-    allocation.acquire(acquired, limits)?;
+    allocation.acquire(acquired)?;
     let value = match build() {
         Ok(value) if value.len() == value_bytes => value,
         Ok(_) => {
@@ -2152,39 +1955,31 @@ fn normalize_metadata_package(
     value: &mut Budgeted<JsonValue>,
     id: &str,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<()> {
     let package = packages
         .get(id)
         .ok_or_else(|| json_schema("protected metadata package id is absent"))?;
     value.transform(|value, ownership| {
         let object = json_object_mut(value, "protected metadata package")?;
-        replace_object_key_token(object, "id", &package.key, allocation, ownership, limits)?;
+        replace_object_key_token(object, "id", &package.key, allocation, ownership)?;
         normalize_path_field(
             object,
             "manifest_path",
             package,
             packages,
-            limits,
             allocation,
             ownership,
-            universe,
         )?;
         normalize_optional_path_field(
             object,
             "license_file",
             package,
             packages,
-            limits,
             allocation,
             ownership,
-            universe,
         )?;
-        normalize_optional_path_field(
-            object, "readme", package, packages, limits, allocation, ownership, universe,
-        )?;
+        normalize_optional_path_field(object, "readme", package, packages, allocation, ownership)?;
         if let Some(dependencies) = object.get_mut("dependencies") {
             let dependencies = dependencies
                 .as_array_mut()
@@ -2192,7 +1987,7 @@ fn normalize_metadata_package(
             for dependency in dependencies {
                 let dependency = json_object_mut(dependency, "metadata package dependency")?;
                 normalize_optional_path_field(
-                    dependency, "path", package, packages, limits, allocation, ownership, universe,
+                    dependency, "path", package, packages, allocation, ownership,
                 )?;
             }
         }
@@ -2206,10 +2001,8 @@ fn normalize_metadata_package(
                     "src_path",
                     package,
                     packages,
-                    limits,
                     allocation,
                     ownership,
-                    universe,
                 )?;
             }
         }
@@ -2220,17 +2013,15 @@ fn normalize_metadata_package(
 fn normalize_resolve_node(
     value: &mut Budgeted<JsonValue>,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<usize> {
     value.transform(|value, ownership| {
         let object = json_object_mut(value, "protected metadata resolve node")?;
-        let id = json_bounded_string(object, "id", limits, universe)?;
+        let id = json_bounded_string(object, "id")?;
         let package = packages
             .get(id.as_ref())
             .ok_or_else(|| json_schema("protected resolve package id is absent"))?;
-        replace_object_key_token(object, "id", &package.key, allocation, ownership, limits)?;
+        replace_object_key_token(object, "id", &package.key, allocation, ownership)?;
         let mut edges = 0_usize;
         if let Some(dependencies) = object.get_mut("dependencies") {
             let dependencies = dependencies
@@ -2254,7 +2045,7 @@ fn normalize_resolve_node(
                 let package = packages
                     .get(id)
                     .ok_or_else(|| json_schema("protected resolve edge escaped the cohort"))?;
-                replace_json_key_token(dependency, &package.key, allocation, ownership, limits)?;
+                replace_json_key_token(dependency, &package.key, allocation, ownership)?;
             }
         }
         if let Some(dependencies) = object.get_mut("deps") {
@@ -2275,18 +2066,11 @@ fn normalize_resolve_node(
             edges = edges.saturating_add(dependencies.len());
             for dependency in dependencies {
                 let dependency = json_object_mut(dependency, "resolve dependency record")?;
-                let id = json_bounded_string(dependency, "pkg", limits, universe)?;
+                let id = json_bounded_string(dependency, "pkg")?;
                 let package = packages
                     .get(id.as_ref())
                     .ok_or_else(|| json_schema("protected resolve record escaped the cohort"))?;
-                replace_object_key_token(
-                    dependency,
-                    "pkg",
-                    &package.key,
-                    allocation,
-                    ownership,
-                    limits,
-                )?;
+                replace_object_key_token(dependency, "pkg", &package.key, allocation, ownership)?;
             }
         }
         Ok(edges)
@@ -2297,19 +2081,9 @@ fn normalize_resolve_node(
 fn unit_reachability(
     value: &JsonValue,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Reachability> {
-    unit_reachability_rooted(
-        value,
-        ROOT_PACKAGE,
-        false,
-        packages,
-        limits,
-        allocation,
-        universe,
-    )
+    unit_reachability_rooted(value, ROOT_PACKAGE, false, packages, allocation)
 }
 
 /// The units and packages reachable from `root`'s lib unit. With
@@ -2321,23 +2095,18 @@ fn unit_reachability_rooted(
     root: &str,
     unbuilt: bool,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Reachability> {
     let object = json_object(value, "protected Cargo unit root")?;
     let units = json_array(object.get("units"), "Cargo units")?;
-    // Unit and edge counts are accounting targets recorded on the
-    // universe account; reachability still closes over every unit.
-    universe.exceeded("protected Cargo units", limits.units, units.len());
-    let mut pending = PendingUnits::retain(units.len(), allocation, limits)?;
+    let mut pending = PendingUnits::retain(units.len(), allocation)?;
     for (index, unit) in units.iter().enumerate() {
         let unit_object = json_object(unit, "Cargo unit")?;
-        let id = json_bounded_str(unit_object, "pkg_id", limits, universe)?;
+        let id = json_bounded_str(unit_object, "pkg_id")?;
         let package = packages
             .get(id)
             .ok_or_else(|| json_schema("Cargo unit package is absent from metadata"))?;
-        let mode = json_bounded_str(unit_object, "mode", limits, universe)?;
+        let mode = json_bounded_str(unit_object, "mode")?;
         let target = json_object(
             unit_object
                 .get("target")
@@ -2353,7 +2122,7 @@ fn unit_reachability_rooted(
                     .is_some_and(|kind| matches!(kind, "lib" | "rlib"))
             })
         {
-            PendingUnits::enqueue(&mut pending, index, allocation, limits)?;
+            PendingUnits::enqueue(&mut pending, index, allocation)?;
         }
     }
     if PendingUnits::is_empty(&pending) && !unbuilt {
@@ -2366,36 +2135,31 @@ fn unit_reachability_rooted(
             .and_then(JsonValue::as_array)
             .ok_or_else(|| json_schema("Cargo unit dependencies are absent"))?;
         edges = edges.saturating_add(dependencies.len());
-        universe.exceeded(
-            "protected Cargo unit reachability edges",
-            limits.edges,
-            edges,
-        );
         for dependency in dependencies {
             let target = dependency
                 .get("index")
                 .and_then(JsonValue::as_u64)
                 .and_then(|index| usize::try_from(index).ok())
                 .ok_or_else(|| json_schema("Cargo unit dependency index is invalid"))?;
-            PendingUnits::enqueue(&mut pending, target, allocation, limits)?;
+            PendingUnits::enqueue(&mut pending, target, allocation)?;
         }
     }
     let reachable_units = PendingUnits::finish(pending, allocation)?;
 
     let mut reachable_ownership = JsonOwnership::collection();
-    allocation.acquire(reachable_ownership, limits)?;
+    allocation.acquire(reachable_ownership)?;
     let mut reachable_packages = BTreeSet::new();
     for index in reachable_units.value() {
         let unit = units
             .get(*index)
             .ok_or_else(|| json_schema("reachable Cargo unit index is invalid"))?;
-        let id = json_bounded_str(json_object(unit, "Cargo unit")?, "pkg_id", limits, universe)?;
+        let id = json_bounded_str(json_object(unit, "Cargo unit")?, "pkg_id")?;
         if !reachable_packages.contains(id) {
             let (shared_id, _) = packages
                 .get_key_value(id)
                 .ok_or_else(|| json_schema("reachable Cargo unit package is absent"))?;
             let entry = JsonOwnership::nodes(1);
-            allocation.acquire(entry, limits)?;
+            allocation.acquire(entry)?;
             reachable_ownership = reachable_ownership.checked_add(entry)?;
             reachable_packages.insert(Arc::clone(shared_id));
         }
@@ -2410,19 +2174,10 @@ fn unit_projection(
     value: &JsonValue,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     reachable_units: &BTreeSet<usize>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Budgeted<Box<[u8]>>> {
     allocation.transform_owned(JsonOwnership::default(), |allocation| {
-        unit_projection_owned(
-            value,
-            packages,
-            reachable_units,
-            limits,
-            allocation,
-            universe,
-        )
+        unit_projection_owned(value, packages, reachable_units, allocation)
     })
 }
 
@@ -2430,18 +2185,15 @@ fn unit_projection_owned(
     value: &JsonValue,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
     reachable_units: &BTreeSet<usize>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<Budgeted<Box<[u8]>>> {
     let object = json_object(value, "protected Cargo unit root")?;
     let units = json_array(object.get("units"), "Cargo units")?;
-    universe.exceeded("protected Cargo units", limits.units, units.len());
     let vector_scratch = JsonOwnership::collection()
         .checked_add(JsonOwnership::collection())?
         .checked_add(JsonOwnership::collection())?
         .checked_add(JsonOwnership::nodes(units.len().saturating_mul(2)))?;
-    allocation.acquire(vector_scratch, limits)?;
+    allocation.acquire(vector_scratch)?;
     let mut scratch = vector_scratch;
     let mut unit_packages = Vec::new();
     let mut unit_keys = Vec::new();
@@ -2460,7 +2212,7 @@ fn unit_projection_owned(
     let mut protected_keys = BTreeSet::new();
     for (index, unit) in units.iter().enumerate() {
         let unit_object = json_object(unit, "Cargo unit")?;
-        let id = json_bounded_str(unit_object, "pkg_id", limits, universe)?;
+        let id = json_bounded_str(unit_object, "pkg_id")?;
         let package = packages
             .get(id)
             .filter(|_| reachable_units.contains(&index));
@@ -2469,7 +2221,7 @@ fn unit_projection_owned(
         let Some(package) = package else {
             continue;
         };
-        let mut normalized = allocation.clone_tree(unit, limits)?;
+        let mut normalized = allocation.clone_tree(unit)?;
         if let Some(removed) = json_object_mut(normalized.value_mut(), "protected Cargo unit key")?
             .remove("dependencies")
         {
@@ -2482,18 +2234,10 @@ fn unit_projection_owned(
                 Ok(())
             })?;
         }
-        normalize_unit_base(
-            &mut normalized,
-            package,
-            packages,
-            limits,
-            allocation,
-            universe,
-        )?;
+        normalize_unit_base(&mut normalized, package, packages, allocation)?;
         let digest = projection_digest_budgeted(
             b"rawr.import.cargo.protected-unit-key/v1",
             normalized,
-            limits,
             allocation,
         )?;
         unit_keys[index] = Some(digest);
@@ -2533,7 +2277,7 @@ fn unit_projection_owned(
             return Err(json_schema("Cargo unit identity is ambiguous"));
         }
         let set_node = JsonOwnership::nodes(1);
-        allocation.acquire(set_node, limits)?;
+        allocation.acquire(set_node)?;
         scratch = scratch.checked_add(set_node)?;
         protected_keys.insert(digest);
         unit_keys[index] = Some(digest);
@@ -2541,7 +2285,7 @@ fn unit_projection_owned(
 
     let parts_structure =
         JsonOwnership::collection().checked_add(JsonOwnership::nodes(reachable_units.len()))?;
-    allocation.acquire(parts_structure, limits)?;
+    allocation.acquire(parts_structure)?;
     let mut projected = Vec::new();
     projected
         .try_reserve_exact(reachable_units.len())
@@ -2555,8 +2299,8 @@ fn unit_projection_owned(
         }
         let package = unit_packages[index]
             .ok_or_else(|| json_schema("protected Cargo unit package escaped reachability"))?;
-        let mut unit = allocation.clone_tree(unit, limits)?;
-        normalize_unit_base(&mut unit, package, packages, limits, allocation, universe)?;
+        let mut unit = allocation.clone_tree(unit)?;
+        normalize_unit_base(&mut unit, package, packages, allocation)?;
         unit.transform(|unit, ownership| {
             let object = json_object_mut(unit, "protected Cargo unit")?;
             let dependencies = object
@@ -2574,15 +2318,9 @@ fn unit_projection_owned(
                 let target = unit_keys[target]
                     .as_ref()
                     .ok_or_else(|| json_schema("protected Cargo unit edge escaped the cohort"))?;
-                insert_object_string(
-                    dependency,
-                    "unit",
-                    64,
-                    allocation,
-                    ownership,
-                    limits,
-                    || Ok(target.to_string()),
-                )?;
+                insert_object_string(dependency, "unit", 64, allocation, ownership, || {
+                    Ok(target.to_string())
+                })?;
                 drop(remove_object_field(
                     dependency, "index", allocation, ownership,
                 )?);
@@ -2590,15 +2328,14 @@ fn unit_projection_owned(
             let key = unit_keys[index]
                 .as_ref()
                 .ok_or_else(|| json_schema("protected Cargo unit key is absent"))?;
-            insert_object_string(object, "unit", 64, allocation, ownership, limits, || {
+            insert_object_string(object, "unit", 64, allocation, ownership, || {
                 Ok(key.to_string())
             })
         })?;
-        projected.push(projection_bytes_budgeted(unit, allocation, limits)?);
+        projected.push(projection_bytes_budgeted(unit, allocation)?);
     }
     let version = object.get("version").unwrap_or(&JsonValue::Null);
-    let version =
-        projection_bytes_budgeted(allocation.clone_tree(version, limits)?, allocation, limits)?;
+    let version = projection_bytes_budgeted(allocation.clone_tree(version)?, allocation)?;
     drop(unit_packages);
     drop(unit_keys);
     drop(protected_keys);
@@ -2621,7 +2358,7 @@ fn unit_projection_owned(
         .and_then(|total| total.checked_add(version.value().len()))
         .and_then(|total| total.checked_add(SUFFIX.len()))
         .ok_or_else(|| json_schema("protected Cargo unit projection byte count overflow"))?;
-    let output = allocation.retain_with(JsonOwnership::buffer(total), limits, || {
+    let output = allocation.retain_with(JsonOwnership::buffer(total), || {
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(total)
@@ -2658,25 +2395,16 @@ fn normalize_unit_base(
     value: &mut Budgeted<JsonValue>,
     package: &ProtectedPackage,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
-    universe: &mut UniverseAccount,
 ) -> Result<()> {
     value.transform(|value, ownership| {
         let object = json_object_mut(value, "protected Cargo unit")?;
-        replace_object_key_token(
-            object,
-            "pkg_id",
-            &package.key,
-            allocation,
-            ownership,
-            limits,
-        )?;
+        replace_object_key_token(object, "pkg_id", &package.key, allocation, ownership)?;
         match object.get("is_std") {
             None => {
                 let inserted = JsonValue::Bool(false);
                 let acquired = JsonOwnership::object_field("is_std", &inserted)?;
-                allocation.acquire(acquired, limits)?;
+                allocation.acquire(acquired)?;
                 object.insert("is_std".into(), inserted);
                 *ownership = ownership.checked_add(acquired)?;
             }
@@ -2696,10 +2424,8 @@ fn normalize_unit_base(
             "src_path",
             package,
             packages,
-            limits,
             allocation,
             ownership,
-            universe,
         )?;
         Ok(())
     })
@@ -2711,10 +2437,8 @@ fn normalize_path_field(
     field: &'static str,
     package: &ProtectedPackage,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    universe: &mut UniverseAccount,
 ) -> Result<()> {
     let value = object
         .get_mut(field)
@@ -2722,22 +2446,10 @@ fn normalize_path_field(
     let path = value
         .as_str()
         .ok_or_else(|| json_schema(&format!("protected path `{field}` is invalid")))?;
-    // The path length is an accounting target recorded on the universe
-    // account; the path is still normalized under the JSON epoch's charges.
-    universe.exceeded(
-        "protected Cargo path bytes",
-        limits.string_bytes,
-        path.len(),
-    );
     let normalized_bytes = normalized_path_len(path, package, packages)?;
-    rewrite_json_string_from_bytes(
-        value,
-        normalized_bytes,
-        allocation,
-        ownership,
-        limits,
-        |path| normalized_path_bytes(path, package, packages, normalized_bytes),
-    )
+    rewrite_json_string_from_bytes(value, normalized_bytes, allocation, ownership, |path| {
+        normalized_path_bytes(path, package, packages, normalized_bytes)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2746,16 +2458,14 @@ fn normalize_optional_path_field(
     field: &'static str,
     package: &ProtectedPackage,
     packages: &BTreeMap<Arc<str>, ProtectedPackage>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
     ownership: &mut JsonOwnership,
-    universe: &mut UniverseAccount,
 ) -> Result<()> {
     match object.get(field) {
         None | Some(JsonValue::Null) => Ok(()),
-        Some(JsonValue::String(_)) => normalize_path_field(
-            object, field, package, packages, limits, allocation, ownership, universe,
-        ),
+        Some(JsonValue::String(_)) => {
+            normalize_path_field(object, field, package, packages, allocation, ownership)
+        }
         Some(_) => Err(json_schema(&format!("optional path `{field}` is invalid"))),
     }
 }
@@ -2902,10 +2612,9 @@ fn key_token(key: &Key) -> String {
 fn projection_digest_budgeted(
     domain: &[u8],
     value: Budgeted<JsonValue>,
-    limits: &Limits,
     allocation: &mut JsonAllocation,
 ) -> Result<Digest> {
-    let bytes = projection_bytes_budgeted(value, allocation, limits)?;
+    let bytes = projection_bytes_budgeted(value, allocation)?;
     let digest = projection_digest_bytes(domain, bytes.value());
     bytes.drop_from(allocation)?;
     Ok(digest)
@@ -2914,12 +2623,11 @@ fn projection_digest_budgeted(
 fn projection_bytes_budgeted(
     value: Budgeted<JsonValue>,
     allocation: &mut JsonAllocation,
-    limits: &Limits,
 ) -> Result<Budgeted<Box<[u8]>>> {
     let consumed = value.ownership();
     allocation.transform_owned(consumed, |allocation| {
         let mut value = value;
-        canonicalize_json(value.value_mut(), allocation, limits)?;
+        canonicalize_json(value.value_mut(), allocation)?;
         struct Counter(usize);
         impl std::io::Write for Counter {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -2939,7 +2647,7 @@ fn projection_bytes_budgeted(
             reason: error.to_string().into_boxed_str(),
         })?;
         let ownership = JsonOwnership::buffer(counter.0);
-        let bytes = allocation.retain_with(ownership, limits, || {
+        let bytes = allocation.retain_with(ownership, || {
             let mut bytes = Vec::new();
             bytes
                 .try_reserve_exact(counter.0)
@@ -2959,11 +2667,11 @@ fn projection_bytes_budgeted(
 }
 
 #[cfg(test)]
-fn projection_bytes(value: JsonValue, limits: &Limits) -> Result<Box<[u8]>> {
+fn projection_bytes(value: JsonValue) -> Result<Box<[u8]>> {
     let mut allocation = JsonAllocation::empty();
     let ownership = JsonOwnership::tree(&value)?;
-    let value = allocation.retain_with(ownership, limits, || Ok(value))?;
-    let bytes = projection_bytes_budgeted(value, &mut allocation, limits)?;
+    let value = allocation.retain_with(ownership, || Ok(value))?;
+    let bytes = projection_bytes_budgeted(value, &mut allocation)?;
     let (bytes, _) = bytes.into_parts();
     Ok(bytes)
 }
@@ -2976,15 +2684,11 @@ fn projection_digest_bytes(domain: &[u8], bytes: &[u8]) -> Digest {
     Digest(digest.finalize().into())
 }
 
-fn canonicalize_json(
-    value: &mut JsonValue,
-    allocation: &mut JsonAllocation,
-    limits: &Limits,
-) -> Result<()> {
+fn canonicalize_json(value: &mut JsonValue, allocation: &mut JsonAllocation) -> Result<()> {
     match value {
         JsonValue::Array(values) => {
             for value in values.iter_mut() {
-                canonicalize_json(value, allocation, limits)?;
+                canonicalize_json(value, allocation)?;
             }
             let scratch = values.iter().try_fold(
                 JsonOwnership::collection().checked_add(JsonOwnership::nodes(values.len()))?,
@@ -2992,7 +2696,7 @@ fn canonicalize_json(
                     ownership.checked_add(JsonOwnership::buffer(canonical_json_len(value)?))
                 },
             )?;
-            let sorted = allocation.with_scratch(scratch, limits, || {
+            let sorted = allocation.with_scratch(scratch, || {
                 let mut keyed = Vec::new();
                 keyed
                     .try_reserve_exact(values.len())
@@ -3024,12 +2728,12 @@ fn canonicalize_json(
         }
         JsonValue::Object(object) => {
             for value in object.values_mut() {
-                canonicalize_json(value, allocation, limits)?;
+                canonicalize_json(value, allocation)?;
             }
             let scratch = JsonOwnership::collection()
                 .checked_add(JsonOwnership::collection())?
                 .checked_add(JsonOwnership::nodes(object.len()))?;
-            let sorted = allocation.with_scratch(scratch, limits, || {
+            let sorted = allocation.with_scratch(scratch, || {
                 let retained = std::mem::take(object);
                 let mut sorted = Vec::new();
                 sorted
@@ -3098,30 +2802,20 @@ fn json_array<'a>(value: Option<&'a JsonValue>, field: &str) -> Result<&'a [Json
 fn json_bounded_string(
     object: &JsonMap<String, JsonValue>,
     field: &'static str,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
 ) -> Result<Box<str>> {
-    Ok(json_bounded_str(object, field, limits, universe)?.into())
+    Ok(json_bounded_str(object, field)?.into())
 }
 
-/// Read one string field. Its length is an accounting target recorded
-/// on the universe account, never a refusal; the string stays owned by the
-/// JSON epoch that admitted the document.
+/// Read one string field. The string stays owned by the JSON epoch that
+/// admitted the document.
 fn json_bounded_str<'a>(
     object: &'a JsonMap<String, JsonValue>,
     field: &'static str,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
 ) -> Result<&'a str> {
     let value = object
         .get(field)
         .and_then(JsonValue::as_str)
         .ok_or_else(|| json_schema(&format!("`{field}` is not a string")))?;
-    universe.exceeded(
-        "protected Cargo JSON string bytes",
-        limits.string_bytes,
-        value.len(),
-    );
     Ok(value)
 }
 
@@ -3134,55 +2828,16 @@ fn json_schema(reason: &str) -> Error {
 
 impl Closure {
     #[cfg(test)]
-    fn parse(bytes: &[u8], limits: &Limits) -> Result<Self> {
-        Self::parse_rooted(bytes, ROOT_PACKAGE, limits)
+    fn parse(bytes: &[u8]) -> Result<Self> {
+        Self::parse_rooted(bytes, ROOT_PACKAGE)
     }
 
-    fn parse_rooted(bytes: &[u8], root: &str, limits: &Limits) -> Result<Self> {
-        Self::parse_in_rooted(
-            bytes,
-            root,
-            limits,
-            &mut super::ControlAccount::legacy(),
-            &mut UniverseAccount::new(),
-        )
+    fn parse_rooted(bytes: &[u8], root: &str) -> Result<Self> {
+        Self::parse_in_rooted(bytes, root)
     }
 
-    #[cfg(test)]
-    fn parse_in(
-        bytes: &[u8],
-        limits: &Limits,
-        account: &mut super::ControlAccount<'_>,
-        universe: &mut UniverseAccount,
-    ) -> Result<Self> {
-        Self::parse_in_rooted(bytes, ROOT_PACKAGE, limits, account, universe)
-    }
-
-    /// Parse one lock. The lock size and precharge are recorded on the
-    /// request account that admitted the bytes; the package, edge, lookup-work
-    /// and string targets are recorded on this closure parse's universe
-    /// account. Nothing here refuses on an accounting target.
-    fn parse_in_rooted(
-        bytes: &[u8],
-        root: &str,
-        limits: &Limits,
-        account: &mut super::ControlAccount<'_>,
-        universe: &mut UniverseAccount,
-    ) -> Result<Self> {
-        // The lock size and its one-byte-per-node TOML precharge are
-        // accounting targets recorded on the current request account (which
-        // `candidate_in` has already charged); the physical bound is the
-        // capture that read the lock.
-        account.exceeded(
-            "resolution universe lock bytes",
-            limits.json_bytes,
-            bytes.len(),
-        );
-        account.exceeded(
-            "resolution universe lock precharge",
-            limits.items,
-            bytes.len(),
-        );
+    /// Parse one lock under the request account that admitted its bytes.
+    fn parse_in_rooted(bytes: &[u8], root: &str) -> Result<Self> {
         let text = std::str::from_utf8(bytes).map_err(|error| Error::Schema {
             document: "resolution universe lock",
             reason: error.to_string().into_boxed_str(),
@@ -3198,21 +2853,16 @@ impl Closure {
                 document: "resolution universe lock",
                 reason: "package array is absent".into(),
             })?;
-        universe.exceeded(
-            "resolution universe packages",
-            limits.packages,
-            tables.len(),
-        );
         let mut raw = BTreeMap::new();
         for table in tables {
-            let key = key(table, limits, universe)?;
+            let key = key(table)?;
             if raw.insert(key, table).is_some() {
                 return Err(schema("duplicate package identity"));
             }
         }
         let mut dependency_index = DependencyIndex::new();
         for key in raw.keys() {
-            for spelling in dependency_spellings(key, limits, universe)? {
+            for spelling in dependency_spellings(key)? {
                 match dependency_index.entry(spelling) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         entry.insert(Some(key.clone()));
@@ -3230,10 +2880,7 @@ impl Closure {
                 .and_then(Item::as_array)
                 .map_or(0, toml_edit::Array::len);
             edges = edges.saturating_add(count);
-            universe.exceeded("resolution universe lock edges", limits.edges, edges);
         }
-        let work = raw.len().saturating_mul(3).saturating_add(edges);
-        universe.exceeded("resolution universe lock lookup work", limits.items, work);
         let mut roots = raw
             .keys()
             .filter(|key| key.name.as_ref() == root && key.source.is_empty());
@@ -3252,35 +2899,17 @@ impl Closure {
                 source,
             })?;
         for (key, table) in &raw {
-            let dependencies = dependencies(table, &dependency_index, limits, universe)?;
+            let dependencies = dependencies(table, &dependency_index)?;
             packages.push(Package {
                 name: key.name.as_ref().into(),
                 version: key.version.as_ref().into(),
                 source: key.source.as_ref().into(),
-                checksum: bounded_string(
-                    string(table, "checksum").unwrap_or_default(),
-                    limits,
-                    universe,
-                )?,
+                checksum: bounded_string(string(table, "checksum").unwrap_or_default())?,
                 dependencies: dependencies.into_boxed_slice(),
             });
         }
         packages.sort_unstable();
         let _ = root;
-        account.hash(b"rawr.import.cargo.resolution-universe-closure/v1".len())?;
-        for package in &packages {
-            account.hash(
-                40 + package.name.len()
-                    + package.version.len()
-                    + package.source.len()
-                    + package.checksum.len(),
-            )?;
-            for dependency in &package.dependencies {
-                account.hash(
-                    24 + dependency.name.len() + dependency.version.len() + dependency.source.len(),
-                )?;
-            }
-        }
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.cargo.resolution-universe-closure/v1");
         for package in &packages {
@@ -3361,40 +2990,20 @@ fn describe_framework(package: &Package) -> String {
     }
 }
 
-fn key(table: &Table, limits: &Limits, universe: &mut UniverseAccount) -> Result<Key> {
+fn key(table: &Table) -> Result<Key> {
     Ok(Key {
-        name: bounded_string(required(table, "name")?, limits, universe)?.into(),
-        version: bounded_string(required(table, "version")?, limits, universe)?.into(),
-        source: bounded_string(
-            string(table, "source").unwrap_or_default(),
-            limits,
-            universe,
-        )?
-        .into(),
+        name: bounded_string(required(table, "name")?)?.into(),
+        version: bounded_string(required(table, "version")?)?.into(),
+        source: bounded_string(string(table, "source").unwrap_or_default())?.into(),
     })
 }
 
-/// A lock string's length is an accounting target recorded on the
-/// closure parse's universe account; the string is still retained.
-fn bounded_string(
-    value: &str,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
-) -> Result<Box<str>> {
-    universe.exceeded(
-        "resolution universe lock string bytes",
-        limits.string_bytes,
-        value.len(),
-    );
+/// Retain one lock string.
+fn bounded_string(value: &str) -> Result<Box<str>> {
     Ok(value.into())
 }
 
-fn dependencies(
-    table: &Table,
-    index: &DependencyIndex,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
-) -> Result<Vec<Key>> {
+fn dependencies(table: &Table, index: &DependencyIndex) -> Result<Vec<Key>> {
     let Some(values) = table.get("dependencies").and_then(Item::as_array) else {
         return Ok(Vec::new());
     };
@@ -3409,11 +3018,6 @@ fn dependencies(
         let dependency = value
             .as_str()
             .ok_or_else(|| schema("dependency identity is not a string"))?;
-        universe.exceeded(
-            "resolution universe dependency identity bytes",
-            limits.string_bytes,
-            dependency.len(),
-        );
         let key = index
             .get(dependency)
             .ok_or_else(|| schema("dependency identity is absent"))?
@@ -3425,37 +3029,12 @@ fn dependencies(
     Ok(resolved)
 }
 
-fn dependency_spellings(
-    key: &Key,
-    limits: &Limits,
-    universe: &mut UniverseAccount,
-) -> Result<Vec<Box<str>>> {
+fn dependency_spellings(key: &Key) -> Result<Vec<Box<str>>> {
     let mut spellings = Vec::with_capacity(if key.source.is_empty() { 2 } else { 3 });
     spellings.push(key.name.as_ref().into());
-    let versioned_len = key
-        .name
-        .len()
-        .saturating_add(1)
-        .saturating_add(key.version.len());
-    // Derived spelling lengths are accounting targets recorded on the
-    // closure parse's universe account; every spelling is still indexed.
-    universe.exceeded(
-        "resolution universe dependency spelling bytes",
-        limits.string_bytes,
-        versioned_len,
-    );
     let versioned = format!("{} {}", key.name, key.version);
     spellings.push(versioned.clone().into_boxed_str());
     if !key.source.is_empty() {
-        let sourced_len = versioned
-            .len()
-            .saturating_add(3)
-            .saturating_add(key.source.len());
-        universe.exceeded(
-            "resolution universe dependency spelling bytes",
-            limits.string_bytes,
-            sourced_len,
-        );
         spellings.push(format!("{versioned} ({})", key.source).into_boxed_str());
     }
     Ok(spellings)
@@ -3480,10 +3059,9 @@ fn schema(reason: &str) -> Error {
 mod tests {
     #[test]
     fn staged_candidate_names_only_its_exact_bytes_and_universe() {
-        let limits = Limits::standard();
         let definition = definition();
         let candidate = definition
-            .candidate(SEED.as_bytes().into(), &limits)
+            .candidate(SEED.as_bytes().into())
             .expect("seed candidate parses");
         let length = SEED.len() as u64;
         let digest: [u8; 32] = Sha256::digest(SEED.as_bytes()).into();
@@ -3506,120 +3084,33 @@ mod tests {
     fn current_candidate_parser_retains_spending_across_replays() {
         let limits = Limits::standard();
         let definition = definition();
-        let graph = crate::node::GraphBudget::new();
         let mut allocation = super::super::RequestAllocation::new(&limits);
         let owned = SEED.len() + super::Candidate::HOLDER_BYTES;
-        allocation
-            .bytes(limits.manifest_bytes - owned)
-            .expect("leave exact parser ownership");
-        let before = allocation.items;
+        let (items, bytes) = (allocation.items, allocation.bytes);
         definition
-            .candidate_accounted(SEED.as_bytes().into(), &limits, &mut allocation, &graph)
-            .expect("exact parser and holder ownership fits");
-        assert_eq!(allocation.bytes, limits.manifest_bytes);
-        assert_eq!(allocation.items, before + SEED.len() + 1);
-        assert!(!allocation.exceedances().is_exceeded());
-        // The replay past the target still retains its parser and holder
-        // ownership in the same account and records the exceeding byte axis.
+            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
+            .expect("parser and holder ownership is charged");
+        assert_eq!(allocation.bytes, bytes + owned);
+        assert_eq!(allocation.items, items + SEED.len() + 1);
+        // The replay retains its parser and holder ownership in the same account.
         definition
-            .candidate_accounted(SEED.as_bytes().into(), &limits, &mut allocation, &graph)
-            .expect("the replay past the target still charges and parses");
-        assert_eq!(allocation.bytes, limits.manifest_bytes + owned);
-        assert_eq!(allocation.items, before + 2 * (SEED.len() + 1));
-        let bytes = allocation
-            .exceedances()
-            .axis(super::super::REQUEST_BYTES_RESOURCE)
-            .copied()
-            .expect("the replay records the request byte axis");
-        assert_eq!(bytes.target, limits.manifest_bytes as u64);
-        assert_eq!(
-            bytes.first_requested,
-            (limits.manifest_bytes + SEED.len()) as u64,
-            "the parser precharge is the first exceeding charge"
-        );
-        assert_eq!(bytes.high_water, (limits.manifest_bytes + owned) as u64);
+            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
+            .expect("the replay charges and parses");
+        assert_eq!(allocation.bytes, bytes + 2 * owned);
+        assert_eq!(allocation.items, items + 2 * (SEED.len() + 1));
 
-        let mut exhausted = super::super::RequestAllocation::new(&limits);
-        exhausted
-            .bytes(limits.manifest_bytes)
-            .expect("exhaust current parser ownership");
-        // The current-account charge precedes even malformed TOML parsing: the
-        // exceedance is recorded before the parse itself refuses the bytes.
-        let Err(error) =
-            definition.candidate_accounted(b"[".as_slice().into(), &limits, &mut exhausted, &graph)
+        let mut malformed = super::super::RequestAllocation::new(&limits);
+        let Err(error) = definition.candidate_accounted(b"[".as_slice().into(), &mut malformed)
         else {
-            panic!("malformed TOML still refuses");
+            panic!("malformed TOML refuses");
         };
         assert!(!matches!(error, crate::Error::Limit { .. }));
-        let bytes = exhausted
-            .exceedances()
-            .axis(super::super::REQUEST_BYTES_RESOURCE)
-            .copied()
-            .expect("the exhausted account records the parser precharge");
-        assert_eq!(bytes.first_requested, limits.manifest_bytes as u64 + 1);
     }
 
     use super::Definition;
     use crate::cargo::Limits;
     use sha2::{Digest as _, Sha256};
     use std::{path::PathBuf, sync::Arc};
-
-    /// Lowers one target of a set of limits.
-    type Lower = fn(&mut Limits);
-    /// Adjusts a set of limits for one case.
-    type Adjust<'a> = &'a dyn Fn(&mut Limits);
-    /// The axes a case exceeds, with their targets and peaks.
-    type Exceeded<'a> = &'a [(&'a str, usize, usize)];
-
-    /// Floors: one unit under each measured JSON peak, paired with the
-    /// epoch axis the lowered target records on.
-    const FLOORS: [(Lower, &str); 4] = [
-        (
-            |limits: &mut Limits| limits.items = limits.items.saturating_sub(1),
-            "Cargo aggregate retained items",
-        ),
-        (
-            |limits: &mut Limits| limits.json_bytes = limits.json_bytes.saturating_sub(1),
-            "Cargo aggregate retained bytes",
-        ),
-        (
-            |limits: &mut Limits| limits.string_bytes = limits.string_bytes.saturating_sub(1),
-            "Cargo JSON retained string bytes",
-        ),
-        (
-            |limits: &mut Limits| limits.containers = limits.containers.saturating_sub(1),
-            "Cargo JSON retained containers",
-        ),
-    ];
-
-    fn floor_target(limits: &Limits, index: usize) -> usize {
-        [
-            limits.items,
-            limits.json_bytes,
-            limits.string_bytes,
-            limits.containers,
-        ][index]
-    }
-
-    fn peak_component(peak: (usize, usize, usize, usize), index: usize) -> usize {
-        [peak.0, peak.1, peak.2, peak.3][index]
-    }
-
-    /// A one-unit floor under a measured peak refuses nothing; the epoch
-    /// records `axis` with the lowered target and the peak as its high water.
-    fn assert_floor_exceeded(
-        record: &crate::exceedance::Record,
-        axis: &str,
-        target: usize,
-        peak: usize,
-    ) {
-        let axis = record
-            .axis(axis)
-            .unwrap_or_else(|| panic!("{axis} records the lowered target"));
-        assert_eq!(axis.target, target as u64);
-        assert_eq!(axis.high_water, peak as u64);
-        assert!(axis.first_requested > axis.target);
-    }
 
     const SEED: &str = "version = 4\n\n[[package]]\nname = \"rawr-iced\"\nversion = \"1.0.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"1.2.3\"\nsource = \"registry+exact\"\nchecksum = \"aa\"\n";
     const AUTHENTICATED_METADATA: &str = r#"{
@@ -3671,7 +3162,6 @@ mod tests {
             "dev",
             "rustc",
             "cargo",
-            &Limits::standard(),
         )
         .expect("fixture universe seals")
     }
@@ -3733,16 +3223,14 @@ mod tests {
 
     fn admit(definition: Definition, bytes: Box<[u8]>) -> crate::Result<super::FinalLock> {
         let metadata = metadata_proof(&definition);
-        definition
-            .candidate(bytes, &Limits::standard())?
-            .admit(&metadata)
+        definition.candidate(bytes)?.admit(&metadata)
     }
 
     fn pending(definition: Definition) -> super::Pending {
         let metadata = metadata_proof(&definition);
         let universe = definition.identity;
         let lock = definition
-            .candidate(SEED.as_bytes().into(), &Limits::standard())
+            .candidate(SEED.as_bytes().into())
             .expect("fixture candidate parses")
             .admit(&metadata)
             .expect("fixture candidate admits");
@@ -3764,7 +3252,6 @@ mod tests {
 
     #[test]
     fn typed_metadata_shares_package_authority_with_protected_and_reachable_maps() {
-        let limits = Limits::standard();
         let root_id = "path+file:///fixture/rawr-iced#1.0.0";
         let dependency_id = "registry+https://example.invalid/index#shared@1.2.3";
         let registry_source: Arc<str> = "registry+https://example.invalid/index".into();
@@ -3806,8 +3293,7 @@ mod tests {
             .expect("registry package has a universe source");
 
         let mut allocation = super::JsonAllocation::empty();
-        let mut universe = super::UniverseAccount::new();
-        let packages = super::metadata_packages(&metadata, &limits, &mut allocation, &mut universe)
+        let packages = super::metadata_packages(&metadata, &mut allocation)
             .expect("typed package authority projects");
         assert_eq!(
             packages.ownership().usage(),
@@ -3864,14 +3350,9 @@ mod tests {
             }]
         });
         let strings_before = allocation.full_usage().2;
-        let (reachable_units, reachable_packages) = super::unit_reachability(
-            &units,
-            packages.value(),
-            &limits,
-            &mut allocation,
-            &mut universe,
-        )
-        .expect("both package identities are reachable");
+        let (reachable_units, reachable_packages) =
+            super::unit_reachability(&units, packages.value(), &mut allocation)
+                .expect("both package identities are reachable");
         assert_eq!(reachable_packages.ownership().usage(), (3, 0, 0, 1));
         assert_eq!(allocation.full_usage().2, strings_before);
         assert!(Arc::ptr_eq(
@@ -3942,221 +3423,13 @@ mod tests {
         assert!(admit(definition(), lock.into_bytes().into_boxed_slice()).is_err());
     }
 
-    /// The lock size and its one-byte-per-node precharge are accounting
-    /// targets recorded on the current request account: exact records
-    /// nothing, one under parses and records the truthful size, and the
-    /// legacy (compiled-in seed) path parses under no account.
     #[test]
-    fn lock_dom_precharge_and_size_record_their_targets_without_refusal() {
-        let graph = crate::node::GraphBudget::new();
-        let exercise = |items: usize, json_bytes: usize| {
-            let mut limits = Limits::standard();
-            limits.items = items;
-            limits.json_bytes = json_bytes;
-            let mut allocation = crate::cargo::RequestAllocation::new(&limits);
-            super::Closure::parse_in(
-                SEED.as_bytes(),
-                &limits,
-                &mut crate::cargo::ControlAccount::current(&mut allocation, &graph),
-                &mut super::UniverseAccount::new(),
-            )
-            .expect("the lock parses under every accounting target");
-            allocation.exceedances()
-        };
-        let exact = exercise(SEED.len(), SEED.len());
-        assert!(exact.axis("resolution universe lock precharge").is_none());
-        assert!(exact.axis("resolution universe lock bytes").is_none());
-
-        let precharge = exercise(SEED.len() - 1, SEED.len());
-        let axis = *precharge
-            .axis("resolution universe lock precharge")
-            .expect("one item under the precharge records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (SEED.len() - 1) as u64,
-                SEED.len() as u64,
-                SEED.len() as u64
-            )
-        );
-        assert!(precharge.axis("resolution universe lock bytes").is_none());
-
-        let size = exercise(SEED.len(), SEED.len() - 1);
-        let axis = *size
-            .axis("resolution universe lock bytes")
-            .expect("one byte under the lock size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (SEED.len() - 1) as u64,
-                SEED.len() as u64,
-                SEED.len() as u64
-            )
-        );
-
-        let mut limits = Limits::standard();
-        limits.items = SEED.len() - 1;
-        limits.json_bytes = SEED.len() - 1;
-        super::Closure::parse(SEED.as_bytes(), &limits)
-            .expect("compiled-in seed bytes parse under no account");
-    }
-
-    /// The lock's package, edge, lookup-work and string targets are
-    /// accounting targets on the closure parse's universe account: the exact
-    /// figure records nothing, one under parses the same closure and records
-    /// only that axis with its truthful high water, nothing latches, and a
-    /// later genuine source failure still refuses after the record.
-    #[test]
-    fn lock_closure_targets_record_their_axes_without_refusal() {
-        let reference = super::Closure::parse(SEED.as_bytes(), &Limits::standard())
-            .expect("the fixture lock parses under standard targets");
-        let parse = |lock: &str, limits: &Limits, universe: &mut super::UniverseAccount| {
-            super::Closure::parse_in(
-                lock.as_bytes(),
-                limits,
-                &mut crate::cargo::ControlAccount::legacy(),
-                universe,
-            )
-        };
-        let exercise = |adjust: &dyn Fn(&mut Limits)| {
-            let mut limits = Limits::standard();
-            adjust(&mut limits);
-            let mut universe = super::UniverseAccount::new();
-            let closure = parse(SEED, &limits, &mut universe)
-                .expect("the lock parses under every accounting target");
-            assert_eq!(closure.digest, reference.digest);
-            assert_eq!(closure.packages, reference.packages);
-            universe.exceedances()
-        };
-        // SEED holds two packages, one edge and 2 * 3 + 1 lookup steps; its
-        // longest derived spelling is the sourced dependency spelling.
-        const SPELLING: usize = "shared 1.2.3 (registry+exact)".len();
-        let exact = |limits: &mut Limits| {
-            limits.packages = 2;
-            limits.edges = 1;
-            limits.items = 7;
-            limits.string_bytes = SPELLING;
-        };
-        assert!(!exercise(&exact).is_exceeded());
-        let cases: [(Adjust, &str, usize, usize); 4] = [
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.packages = 1;
-                },
-                "resolution universe packages",
-                1,
-                2,
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.edges = 0;
-                },
-                "resolution universe lock edges",
-                0,
-                1,
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.items = 6;
-                },
-                "resolution universe lock lookup work",
-                6,
-                7,
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.string_bytes = SPELLING - 1;
-                },
-                "resolution universe dependency spelling bytes",
-                SPELLING - 1,
-                SPELLING,
-            ),
-        ];
-        for (adjust, axis, target, high_water) in cases {
-            let record = exercise(adjust);
-            assert_eq!(
-                record.axes().count(),
-                1,
-                "{axis} is the only exceeding axis"
-            );
-            let recorded = record
-                .axis(axis)
-                .unwrap_or_else(|| panic!("{axis} records its lowered target"));
-            assert_eq!(
-                (
-                    recorded.target,
-                    recorded.first_requested,
-                    recorded.high_water
-                ),
-                (target as u64, high_water as u64, high_water as u64)
-            );
-        }
-
-        // A checksum past the string target is retained whole and recorded.
-        let oversized = SEED.replace(
-            "checksum = \"aa\"",
-            &format!("checksum = \"{}\"", "a".repeat(32)),
-        );
-        let mut limits = Limits::standard();
-        limits.string_bytes = 24;
-        let mut universe = super::UniverseAccount::new();
-        let closure =
-            parse(&oversized, &limits, &mut universe).expect("an oversized checksum still parses");
-        assert!(closure
-            .packages
-            .iter()
-            .any(|package| package.checksum.len() == 32));
-        let axis = universe
-            .exceedances()
-            .axis("resolution universe lock string bytes")
-            .copied()
-            .expect("the checksum records the lock string axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (24, 32, 32)
-        );
-
-        // Not latched: the same account parses again and keeps its high water.
-        limits.packages = 1;
-        parse(SEED, &limits, &mut universe).expect("the recorded account still parses");
-        parse(SEED, &limits, &mut universe).expect("the recorded account parses again");
-        let record = universe.exceedances();
-        assert_eq!(
-            record
-                .axis("resolution universe packages")
-                .unwrap()
-                .high_water,
-            2
-        );
-        assert_eq!(
-            record
-                .axis("resolution universe lock string bytes")
-                .unwrap()
-                .high_water,
-            32
-        );
-
-        // A genuine source failure after the record is still terminal and is
-        // not an accounting refusal.
+    fn dangling_lock_dependency_rejects() {
         let dangling = SEED.replace("dependencies = [\"shared\"]", "dependencies = [\"absent\"]");
-        let mut universe = super::UniverseAccount::new();
-        let error = parse(&dangling, &limits, &mut universe)
-            .expect_err("a dangling dependency identity still refuses");
+        let error = super::Closure::parse(dangling.as_bytes())
+            .expect_err("a dangling dependency identity refuses");
         assert!(!matches!(error, crate::Error::Limit { .. }));
         assert!(format!("{error}").contains("absent"));
-        assert_eq!(
-            universe
-                .exceedances()
-                .axis("resolution universe packages")
-                .unwrap()
-                .high_water,
-            2,
-            "the package axis recorded before the source failure"
-        );
     }
 
     #[test]
@@ -4164,221 +3437,9 @@ mod tests {
         let ambiguous = format!(
             "{SEED}\n[[package]]\nname = \"shared\"\nversion = \"9.9.9\"\nsource = \"registry+other\"\nchecksum = \"bb\"\n"
         );
-        let error = super::Closure::parse(ambiguous.as_bytes(), &Limits::standard())
+        let error = super::Closure::parse(ambiguous.as_bytes())
             .expect_err("name-only dependency cannot select an ambiguous indexed package");
         assert!(format!("{error}").contains("ambiguous"));
-    }
-
-    /// The package, unit, edge and string accounting targets crossed
-    /// while a universe projects Cargo JSON are recorded on the universe
-    /// account: exact figures record nothing, one under projects byte-identical
-    /// output and records only that axis with its truthful high water, and
-    /// nothing refuses.
-    #[test]
-    fn protected_json_projection_targets_record_their_axes_without_refusal() {
-        let root_id = "path+file:///fixture/rawr-iced#1.0.0";
-        let dep_id = "registry+exact#shared@1.2.3";
-        let metadata = serde_json::json!({
-            "packages": [{
-                "id": root_id,
-                "name": "rawr-iced",
-                "version": "1.0.0",
-                "source": null,
-                "manifest_path": "/fixture/rawr-iced/Cargo.toml",
-                "dependencies": [],
-                "targets": [{"kind": ["lib"], "src_path": "/fixture/rawr-iced/src/lib.rs"}]
-            }, {
-                "id": dep_id,
-                "name": "shared",
-                "version": "1.2.3",
-                "source": "registry+exact",
-                "manifest_path": "/registry/shared-1.2.3/Cargo.toml",
-                "dependencies": [],
-                "targets": [{"kind": ["lib"], "src_path": "/registry/shared-1.2.3/src/lib.rs"}]
-            }],
-            "resolve": {"nodes": [{
-                "id": root_id,
-                "dependencies": [dep_id],
-                "deps": [{"name": "shared", "pkg": dep_id}],
-                "features": ["base"]
-            }, {
-                "id": dep_id,
-                "dependencies": [],
-                "deps": [],
-                "features": []
-            }]}
-        });
-        let unit = serde_json::json!({
-            "version": 1,
-            "units": [{
-                "pkg_id": root_id,
-                "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["rlib"],
-                    "src_path": "/fixture/rawr-iced/src/lib.rs"
-                },
-                "mode": "build",
-                "features": ["base"],
-                "dependencies": [{"index": 1}],
-                "is_std": false
-            }, {
-                "pkg_id": dep_id,
-                "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["rlib"],
-                    "src_path": "/registry/shared-1.2.3/src/lib.rs"
-                },
-                "mode": "build",
-                "features": [],
-                "dependencies": [],
-                "is_std": false
-            }]
-        });
-        let exercise = |adjust: &dyn Fn(&mut Limits)| {
-            let mut limits = Limits::standard();
-            adjust(&mut limits);
-            let mut allocation = super::JsonAllocation::empty();
-            let mut universe = super::UniverseAccount::new();
-            let document = metadata.clone();
-            let document_ownership = super::JsonOwnership::tree(&document)?;
-            allocation.acquire(document_ownership, &limits)?;
-            let packages = super::metadata_packages_from_value(
-                &document,
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            allocation.charge_tree(&unit, &limits)?;
-            let (reachable_units, reachable_packages) = super::unit_reachability(
-                &unit,
-                packages.value(),
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            let (reference, _) = super::metadata_projection(
-                &document,
-                packages.value(),
-                reachable_packages.value(),
-                &limits,
-                &mut universe,
-            )?;
-            let reference = super::projection_bytes(reference, &limits)?;
-            let observed = super::metadata_observation(
-                super::Budgeted::from_retained(document, document_ownership),
-                None,
-                packages.value(),
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            let (projection, _) = super::metadata_projection_from_observation(
-                observed,
-                packages.value(),
-                reachable_packages.value(),
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            let units = super::unit_projection(
-                &unit,
-                packages.value(),
-                reachable_units.value(),
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            Ok::<_, crate::Error>((
-                (reference, projection.into_parts().0, units.into_parts().0),
-                universe.exceedances(),
-            ))
-        };
-        let (standard, record) = exercise(&|_| {}).expect("standard targets project");
-        assert!(!record.is_exceeded());
-        // Two packages and units, two resolve edges, one unit edge; the longest
-        // string is the root package id.
-        const ID: usize = "path+file:///fixture/rawr-iced#1.0.0".len();
-        let exact = |limits: &mut Limits| {
-            limits.packages = 2;
-            limits.units = 2;
-            limits.edges = 2;
-            limits.string_bytes = ID;
-        };
-        let (bytes, record) = exercise(&exact).expect("exact targets project");
-        assert_eq!(bytes, standard);
-        assert!(!record.is_exceeded());
-        let cases: [(Adjust, Exceeded); 5] = [
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.packages = 1;
-                },
-                &[
-                    ("protected metadata packages", 1, 2),
-                    ("protected metadata nodes", 1, 2),
-                    ("protected metadata observation packages", 1, 2),
-                ][..],
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.units = 1;
-                },
-                &[("protected Cargo units", 1, 2)][..],
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.edges = 1;
-                },
-                &[
-                    ("protected metadata observation edges", 1, 2),
-                    ("protected metadata edges", 1, 2),
-                ][..],
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.edges = 0;
-                },
-                &[
-                    ("protected metadata observation edges", 0, 2),
-                    ("protected metadata edges", 0, 2),
-                    ("protected Cargo unit reachability edges", 0, 1),
-                ][..],
-            ),
-            (
-                &|limits: &mut Limits| {
-                    exact(limits);
-                    limits.string_bytes = ID - 1;
-                },
-                &[("protected Cargo JSON string bytes", ID - 1, ID)][..],
-            ),
-        ];
-        for (adjust, expected) in cases {
-            let (bytes, record) = exercise(adjust).expect("one under a target still projects");
-            assert_eq!(
-                bytes, standard,
-                "the projection is byte-identical across targets"
-            );
-            let mut names = record.axes().map(|axis| axis.name).collect::<Vec<_>>();
-            names.sort_unstable();
-            let mut expected_names = expected
-                .iter()
-                .map(|(name, _, _)| *name)
-                .collect::<Vec<_>>();
-            expected_names.sort_unstable();
-            assert_eq!(names, expected_names);
-            for (name, target, high_water) in expected {
-                let axis = record.axis(name).expect("the lowered axis is recorded");
-                assert_eq!(
-                    (axis.target, axis.high_water),
-                    (*target as u64, *high_water as u64)
-                );
-                assert!(axis.first_requested > axis.target);
-                assert!(axis.first_requested <= axis.high_water);
-            }
-        }
     }
 
     #[test]
@@ -4410,7 +3471,6 @@ mod tests {
                 "dev",
                 "rustc",
                 "cargo",
-                &Limits::standard(),
             )
             .expect("changed compiler-proof cohort seals");
 
@@ -4435,7 +3495,6 @@ mod tests {
             "dev",
             "rustc",
             "cargo",
-            &Limits::standard(),
         )
         .expect("changed protected closure seals");
         let changed_toolchain = Definition::new(
@@ -4450,7 +3509,6 @@ mod tests {
             "dev",
             "different-rustc",
             "cargo",
-            &Limits::standard(),
         )
         .expect("changed toolchain seals");
 
@@ -4608,31 +3666,20 @@ mod tests {
         )
         .expect("unit fixture parses");
         let mut allocation = super::JsonAllocation::empty();
-        let mut universe = super::UniverseAccount::new();
         allocation
-            .charge_tree(&metadata, &limits)
+            .charge_tree(&metadata)
             .expect("metadata DOM charges");
-        let packages =
-            super::metadata_packages_from_value(&metadata, &limits, &mut allocation, &mut universe)
-                .expect("package facts derive");
-        allocation
-            .charge_tree(&unit, &limits)
-            .expect("unit DOM charges");
-        let (reachable_units, _) = super::unit_reachability(
-            &unit,
-            packages.value(),
-            &limits,
-            &mut allocation,
-            &mut universe,
-        )
-        .expect("unit reachability derives");
+        let packages = super::metadata_packages_from_value(&metadata, &mut allocation)
+            .expect("package facts derive");
+        allocation.charge_tree(&unit).expect("unit DOM charges");
+        let (reachable_units, _) =
+            super::unit_reachability(&unit, packages.value(), &mut allocation)
+                .expect("unit reachability derives");
         let projection = super::unit_projection(
             &unit,
             packages.value(),
             reachable_units.value(),
-            &limits,
             &mut allocation,
-            &mut universe,
         )
         .expect("streamed unit projection derives");
         assert_eq!(
@@ -4673,46 +3720,26 @@ mod tests {
             .collect::<Vec<_>>();
         let unit = serde_json::json!({"version": 1, "units": units});
 
-        let exercise = |limits: &Limits| {
+        let exercise = || {
             let mut allocation = super::JsonAllocation::empty();
-            let mut universe = super::UniverseAccount::new();
-            allocation.charge_tree(&metadata, limits)?;
-            let packages = super::metadata_packages_from_value(
-                &metadata,
-                limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            allocation.charge_tree(&unit, limits)?;
-            let (reachable_units, reachable_packages) = super::unit_reachability(
-                &unit,
-                packages.value(),
-                limits,
-                &mut allocation,
-                &mut universe,
-            )?;
+            allocation.charge_tree(&metadata)?;
+            let packages = super::metadata_packages_from_value(&metadata, &mut allocation)?;
+            allocation.charge_tree(&unit)?;
+            let (reachable_units, reachable_packages) =
+                super::unit_reachability(&unit, packages.value(), &mut allocation)?;
             reachable_packages.drop_from(&mut allocation)?;
             let before = allocation.full_usage();
             let projection = super::unit_projection(
                 &unit,
                 packages.value(),
                 reachable_units.value(),
-                limits,
                 &mut allocation,
-                &mut universe,
             )?;
             let peak = allocation.peak_usage();
-            Ok::<_, crate::Error>((
-                projection.value().to_vec(),
-                before,
-                peak,
-                allocation.exceedances(),
-            ))
+            Ok::<_, crate::Error>((projection.value().to_vec(), before, peak))
         };
 
-        let (canonical, before, peak, record) =
-            exercise(&standard).expect("streamed scale projection seals");
-        assert!(!record.is_exceeded());
+        let (canonical, before, peak) = exercise().expect("streamed scale projection seals");
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&canonical)
                 .expect("projection remains canonical JSON")["units"]
@@ -4724,41 +3751,6 @@ mod tests {
         let additional_strings = peak.2.saturating_sub(before.2);
         assert!(additional_strings < LONG.saturating_mul(4));
         assert!(additional_strings < LONG.saturating_mul(COUNT / 2));
-
-        let mut exact = standard;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = peak.2;
-        exact.containers = peak.3;
-        let (exact_canonical, _, _, exact_record) =
-            exercise(&exact).expect("exact high-water seals");
-        assert_eq!(exact_canonical, canonical);
-        assert!(!exact_record.is_exceeded());
-
-        // One unit under the exact peak still projects the same bytes
-        // and records the lowered axis with the peak as its high water.
-        let mut string_floor = exact;
-        string_floor.string_bytes = string_floor.string_bytes.saturating_sub(1);
-        let (floor_canonical, _, _, record) =
-            exercise(&string_floor).expect("the string floor still projects");
-        assert_eq!(floor_canonical, canonical);
-        assert_floor_exceeded(
-            &record,
-            "Cargo JSON retained string bytes",
-            string_floor.string_bytes,
-            peak.2,
-        );
-        let mut byte_floor = exact;
-        byte_floor.json_bytes = byte_floor.json_bytes.saturating_sub(1);
-        let (floor_canonical, _, _, record) =
-            exercise(&byte_floor).expect("the byte floor still projects");
-        assert_eq!(floor_canonical, canonical);
-        assert_floor_exceeded(
-            &record,
-            "Cargo aggregate retained bytes",
-            byte_floor.json_bytes,
-            peak.1,
-        );
     }
 
     #[test]
@@ -4778,15 +3770,15 @@ mod tests {
         )
         .expect("unit fixture parses once");
 
-        let exercise = |limits: &Limits| {
+        let exercise = || {
             let mut shared = super::super::unit::JsonAllocation::empty();
             let metadata_ownership = super::JsonOwnership::tree(&metadata)?;
-            shared.acquire(metadata_ownership, limits)?;
+            shared.acquire(metadata_ownership)?;
             let metadata_dom = shared.full_usage();
             let observation = definition.observe_metadata_value(
                 super::Budgeted::from_retained(metadata.clone(), metadata_ownership),
                 None,
-                limits,
+                &standard,
                 &mut shared,
             )?;
             assert_eq!(
@@ -4795,39 +3787,17 @@ mod tests {
                 "only the moved observation remains after the source DOM is consumed"
             );
             assert_ne!(shared.full_usage(), metadata_dom);
-            shared.charge_tree(&unit, limits)?;
+            shared.charge_tree(&unit)?;
             let unit_and_metadata_doms = shared.full_usage();
             let (_metadata, _unit) =
-                definition.authenticate_value(&unit, observation, limits, &mut shared)?;
+                definition.authenticate_value(&unit, observation, &standard, &mut shared)?;
             assert!(shared.peak_usage().0 > unit_and_metadata_doms.0);
             Ok::<_, crate::Error>(shared)
         };
 
-        let measured = exercise(&standard).expect("standard epoch measures all live ownership");
+        let measured = exercise().expect("standard epoch measures all live ownership");
         let peak = measured.peak_usage();
         assert!(peak.0 > 0 && peak.1 > 0 && peak.2 > 0 && peak.3 > 0);
-        let mut exact = standard;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = peak.2;
-        exact.containers = peak.3;
-        let exact_epoch = exercise(&exact).expect("the exact simultaneous high-water caps seal");
-        assert!(!exact_epoch.exceedances().is_exceeded());
-
-        // A one-unit ownership floor refuses nothing; the shared epoch
-        // reaches the same peak and records the lowered axis.
-        for (index, (lowered, axis)) in FLOORS.iter().enumerate() {
-            let mut floor = exact;
-            lowered(&mut floor);
-            let shared = exercise(&floor).expect("one-unit ownership floor still seals");
-            assert_eq!(shared.peak_usage(), peak);
-            assert_floor_exceeded(
-                &shared.exceedances(),
-                axis,
-                floor_target(&floor, index),
-                peak_component(peak, index),
-            );
-        }
     }
 
     #[test]
@@ -4840,14 +3810,9 @@ mod tests {
         )
         .expect("reference metadata parses");
         let mut reference_allocation = super::JsonAllocation::empty();
-        let mut reference_universe = super::UniverseAccount::new();
-        let reference_packages = super::metadata_packages_from_value(
-            &reference_document,
-            &limits,
-            &mut reference_allocation,
-            &mut reference_universe,
-        )
-        .expect("reference packages derive");
+        let reference_packages =
+            super::metadata_packages_from_value(&reference_document, &mut reference_allocation)
+                .expect("reference packages derive");
         let reference_reachable = reference_packages
             .value()
             .keys()
@@ -4857,12 +3822,10 @@ mod tests {
             &reference_document,
             reference_packages.value(),
             &reference_reachable,
-            &limits,
-            &mut reference_universe,
         )
         .expect("clone-shaped reference projection derives");
         let reference =
-            super::projection_bytes(reference, &limits).expect("reference projection serializes");
+            super::projection_bytes(reference).expect("reference projection serializes");
 
         for compact in [false, true] {
             let document = super::super::unit::bounded_json(
@@ -4872,28 +3835,17 @@ mod tests {
             )
             .expect("owned metadata parses");
             let mut allocation = super::JsonAllocation::empty();
-            let mut universe = super::UniverseAccount::new();
             let document_ownership =
                 super::JsonOwnership::tree(&document).expect("owned metadata measures");
             allocation
-                .acquire(document_ownership, &limits)
+                .acquire(document_ownership)
                 .expect("owned metadata charges once");
-            let packages = super::metadata_packages_from_value(
-                &document,
-                &limits,
-                &mut allocation,
-                &mut universe,
-            )
-            .expect("owned packages derive");
+            let packages = super::metadata_packages_from_value(&document, &mut allocation)
+                .expect("owned packages derive");
             let mut document = super::Budgeted::from_retained(document, document_ownership);
             let records = if compact {
-                super::super::unit::compact_metadata_packages(
-                    &mut document,
-                    true,
-                    &mut allocation,
-                    &limits,
-                )
-                .expect("complete package records compact")
+                super::super::unit::compact_metadata_packages(&mut document, true, &mut allocation)
+                    .expect("complete package records compact")
             } else {
                 None
             };
@@ -4903,7 +3855,6 @@ mod tests {
                 packages.value(),
                 &limits,
                 &mut allocation,
-                &mut universe,
             )
             .expect("owned metadata moves into the observation");
             let reachable_ownership = packages
@@ -4915,7 +3866,7 @@ mod tests {
                 })
                 .expect("reachable ownership measures");
             let reachable = allocation
-                .retain_with(reachable_ownership, &limits, || {
+                .retain_with(reachable_ownership, || {
                     Ok(packages
                         .value()
                         .keys()
@@ -4929,7 +3880,6 @@ mod tests {
                 reachable.value(),
                 &limits,
                 &mut allocation,
-                &mut universe,
             )
             .expect("moved metadata projects");
             reachable
@@ -4989,12 +3939,10 @@ mod tests {
         let document_ownership =
             super::JsonOwnership::tree(&document).expect("two-package DOM measures");
         allocation
-            .acquire(document_ownership, &limits)
+            .acquire(document_ownership)
             .expect("two-package DOM charges once");
-        let mut universe = super::UniverseAccount::new();
-        let packages =
-            super::metadata_packages_from_value(&document, &limits, &mut allocation, &mut universe)
-                .expect("two-package authority derives");
+        let packages = super::metadata_packages_from_value(&document, &mut allocation)
+            .expect("two-package authority derives");
         let shared_rawr_id = Arc::clone(
             packages
                 .value()
@@ -5003,15 +3951,10 @@ mod tests {
                 .0,
         );
         let reference_reachable = std::collections::BTreeSet::from([Arc::clone(&shared_rawr_id)]);
-        let (reference, _) = super::metadata_projection(
-            &document,
-            packages.value(),
-            &reference_reachable,
-            &limits,
-            &mut universe,
-        )
-        .expect("reachable-only reference metadata projects");
-        let reference = super::projection_bytes(reference, &limits)
+        let (reference, _) =
+            super::metadata_projection(&document, packages.value(), &reference_reachable)
+                .expect("reachable-only reference metadata projects");
+        let reference = super::projection_bytes(reference)
             .expect("reachable-only reference metadata serializes");
         let observed = super::metadata_observation(
             super::Budgeted::from_retained(document, document_ownership),
@@ -5019,7 +3962,6 @@ mod tests {
             packages.value(),
             &limits,
             &mut allocation,
-            &mut universe,
         )
         .expect("two-package observation derives");
         let before = allocation.full_usage();
@@ -5027,7 +3969,7 @@ mod tests {
             .checked_add(super::JsonOwnership::nodes(1))
             .expect("one reachable id measures");
         let reachable = allocation
-            .retain_with(reachable_ownership, &limits, || {
+            .retain_with(reachable_ownership, || {
                 Ok(std::collections::BTreeSet::from([shared_rawr_id]))
             })
             .expect("one reachable id retains");
@@ -5037,7 +3979,6 @@ mod tests {
             reachable.value(),
             &limits,
             &mut allocation,
-            &mut universe,
         )
         .expect("only reachable metadata projects");
         let exact_live = packages
@@ -5069,118 +4010,34 @@ mod tests {
     }
 
     #[test]
-    fn canonical_projection_precharges_sort_keys_and_buffer_and_records_floor_exceedances() {
-        type Usage = (usize, usize, usize, usize);
-        fn exercise(
-            limits: &Limits,
-        ) -> crate::Result<(Box<[u8]>, Usage, crate::exceedance::Record)> {
-            let value = serde_json::json!([
-                {"b": "second", "a": [2, 1]},
-                {"b": "first", "a": [1, 2]}
-            ]);
-            let mut allocation = super::JsonAllocation::empty();
-            let ownership = super::JsonOwnership::tree(&value)?;
-            let value = allocation.retain_with(ownership, limits, || Ok(value))?;
-            let bytes = super::projection_bytes_budgeted(value, &mut allocation, limits)?;
-            assert_eq!(allocation.full_usage(), bytes.ownership().usage());
-            let peak = allocation.peak_usage();
-            let (bytes, ownership) = bytes.into_parts();
-            allocation.release(ownership)?;
-            assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
-            Ok((bytes, peak, allocation.exceedances()))
-        }
-
-        let standard = Limits::standard();
-        let (bytes, peak, record) =
-            exercise(&standard).expect("standard canonical projection measures");
-        assert!(!record.is_exceeded());
+    fn canonical_projection_precharges_sort_keys_and_buffer() {
+        let value = serde_json::json!([
+            {"b": "second", "a": [2, 1]},
+            {"b": "first", "a": [1, 2]}
+        ]);
+        let mut allocation = super::JsonAllocation::empty();
+        let ownership = super::JsonOwnership::tree(&value).expect("tree ownership measures");
+        let value = allocation
+            .retain_with(ownership, || Ok(value))
+            .expect("the tree retains");
+        let bytes = super::projection_bytes_budgeted(value, &mut allocation)
+            .expect("the canonical projection derives");
+        assert_eq!(allocation.full_usage(), bytes.ownership().usage());
+        assert!(
+            allocation.peak_usage().0 > bytes.ownership().usage().0,
+            "the sort-key scratch is charged before it is released"
+        );
+        let (bytes, ownership) = bytes.into_parts();
+        allocation.release(ownership).expect("the output releases");
+        assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
         assert_eq!(
             bytes.as_ref(),
             br#"[{"a":[1,2],"b":"first"},{"a":[1,2],"b":"second"}]"#
         );
-        let mut exact = standard;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = peak.2;
-        exact.containers = peak.3;
-        let (exact_bytes, _, exact_record) =
-            exercise(&exact).expect("exact tree plus sort scratch plus buffer peak seals");
-        assert_eq!(exact_bytes, bytes);
-        assert!(!exact_record.is_exceeded());
-        // One unit under the peak still projects the same bytes and
-        // records the lowered axis with the peak as its high water.
-        for (index, (lowered, axis)) in FLOORS.iter().enumerate() {
-            let mut floor = exact;
-            lowered(&mut floor);
-            let (floor_bytes, floor_peak, record) =
-                exercise(&floor).expect("one-unit canonical projection floor still seals");
-            assert_eq!(floor_bytes, bytes);
-            assert_eq!(floor_peak, peak);
-            assert_floor_exceeded(
-                &record,
-                axis,
-                floor_target(&floor, index),
-                peak_component(peak, index),
-            );
-        }
-
-        // The sort-key scratch is charged past an items target that admits
-        // only the borrowed DOM: the projection still completes, retains only
-        // its output, and records the scratch on the aggregate items axis.
-        let value = serde_json::json!([{"b": 2, "a": 1}]);
-        let ownership = super::JsonOwnership::tree(&value).expect("tree ownership measures");
-        let mut scratch_floor = standard;
-        scratch_floor.items = ownership.usage().0;
-        let mut allocation = super::JsonAllocation::empty();
-        let value = allocation
-            .retain_with(ownership, &scratch_floor, || Ok(value))
-            .expect("the borrowed DOM itself fits the floor");
-        assert!(!allocation.exceedances().is_exceeded());
-        let projected = super::projection_bytes_budgeted(value, &mut allocation, &scratch_floor)
-            .expect("the sort scratch past the items target still projects");
-        assert_eq!(&projected.value()[..], br#"[{"a":1,"b":2}]"#);
-        assert_eq!(allocation.full_usage(), projected.ownership().usage());
-        let scratch = allocation
-            .exceedances()
-            .axis("Cargo aggregate retained items")
-            .copied()
-            .expect("the sort scratch records the aggregate items axis");
-        assert_eq!(scratch.target, scratch_floor.items as u64);
-        assert_eq!(scratch.high_water, allocation.peak_usage().0 as u64);
-        let (_, ownership) = projected.into_parts();
-        allocation.release(ownership).expect("the output releases");
-        assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
-
-        // The output buffer is charged past a byte target that admits only the
-        // input string plus two bytes: the buffer still allocates, retains
-        // only the output, and records the aggregate byte axis.
-        let value = serde_json::json!("x");
-        let ownership = super::JsonOwnership::tree(&value).expect("scalar ownership measures");
-        let mut buffer_floor = standard;
-        buffer_floor.json_bytes = ownership.usage().1 + 2;
-        let mut allocation = super::JsonAllocation::empty();
-        let value = allocation
-            .retain_with(ownership, &buffer_floor, || Ok(value))
-            .expect("the input string fits before output allocation");
-        assert!(!allocation.exceedances().is_exceeded());
-        let projected = super::projection_bytes_budgeted(value, &mut allocation, &buffer_floor)
-            .expect("the output buffer past the byte target still allocates");
-        assert_eq!(&projected.value()[..], br#""x""#);
-        assert_eq!(allocation.full_usage(), projected.ownership().usage());
-        let buffer = allocation
-            .exceedances()
-            .axis("Cargo aggregate retained bytes")
-            .copied()
-            .expect("the output buffer records the aggregate byte axis");
-        assert_eq!(buffer.target, buffer_floor.json_bytes as u64);
-        assert_eq!(buffer.high_water, allocation.peak_usage().1 as u64);
-        let (_, ownership) = projected.into_parts();
-        allocation.release(ownership).expect("the output releases");
-        assert_eq!(allocation.full_usage(), (0, 0, 0, 0));
     }
 
     #[test]
-    fn package_token_replacement_reuses_string_ownership_at_the_exact_cap() {
+    fn package_token_replacement_reuses_string_ownership() {
         let key = super::Key {
             name: "fixture".into(),
             version: "1.0.0".into(),
@@ -5189,14 +4046,12 @@ mod tests {
         let expected = super::key_token(&key);
         let mut value = serde_json::Value::String("x".repeat(128));
         let mut ownership = super::JsonOwnership::tree(&value).expect("old string measures");
-        let mut limits = Limits::standard();
-        limits.string_bytes = 128;
         let mut allocation = super::JsonAllocation::empty();
         allocation
-            .acquire(ownership, &limits)
-            .expect("old string fits the exact cap");
+            .acquire(ownership)
+            .expect("old string is charged");
 
-        super::replace_json_key_token(&mut value, &key, &mut allocation, &mut ownership, &limits)
+        super::replace_json_key_token(&mut value, &key, &mut allocation, &mut ownership)
             .expect("shorter token reuses the existing string ownership");
         assert_eq!(value.as_str(), Some(expected.as_str()));
         assert_eq!(allocation.full_usage(), ownership.usage());
@@ -5205,28 +4060,15 @@ mod tests {
         let mut short = serde_json::Value::String("x".repeat(63));
         let mut short_ownership =
             super::JsonOwnership::tree(&short).expect("short string measures");
-        limits.string_bytes = 63;
-        let mut floor = super::JsonAllocation::empty();
-        floor
-            .acquire(short_ownership, &limits)
-            .expect("short string fits its exact cap");
-        assert!(!floor.exceedances().is_exceeded());
-        // The one-byte growth past the exact string target still
-        // replaces the token in place and records the string axis at 64 bytes.
-        super::replace_json_key_token(&mut short, &key, &mut floor, &mut short_ownership, &limits)
-            .expect("the longer token still charges its growth past the target");
+        let mut growing = super::JsonAllocation::empty();
+        growing
+            .acquire(short_ownership)
+            .expect("short string is charged");
+        super::replace_json_key_token(&mut short, &key, &mut growing, &mut short_ownership)
+            .expect("the longer token charges its growth");
         assert_eq!(short.as_str(), Some(expected.as_str()));
-        assert_eq!(floor.full_usage(), short_ownership.usage());
-        assert_eq!(floor.full_usage().2, 64);
-        let strings = floor
-            .exceedances()
-            .axis("Cargo JSON retained string bytes")
-            .copied()
-            .expect("the token growth records the string axis");
-        assert_eq!(
-            (strings.target, strings.first_requested, strings.high_water),
-            (63, 64, 64)
-        );
+        assert_eq!(growing.full_usage(), short_ownership.usage());
+        assert_eq!(growing.full_usage().2, 64);
     }
 
     #[test]
@@ -5247,19 +4089,14 @@ mod tests {
         let expected = "$SELF/src/lib.rs";
         let mut value = serde_json::Value::String(original.into());
         let mut ownership = super::JsonOwnership::tree(&value).expect("old path measures");
-        let mut limits = Limits::standard();
-        limits.string_bytes = original.len();
         let mut allocation = super::JsonAllocation::empty();
-        allocation
-            .acquire(ownership, &limits)
-            .expect("old path fits the exact string cap");
+        allocation.acquire(ownership).expect("old path is charged");
 
         super::rewrite_json_string_from_bytes(
             &mut value,
             expected.len(),
             &mut allocation,
             &mut ownership,
-            &limits,
             |path| super::normalized_path_bytes(path, &package, &packages, expected.len()),
         )
         .expect("shorter normalized path reuses string ownership");
@@ -5270,50 +4107,30 @@ mod tests {
         let mut short = serde_json::Value::String("src".into());
         let mut short_ownership =
             super::JsonOwnership::tree(&short).expect("relative path measures");
-        let mut floor = super::JsonAllocation::empty();
-        limits.string_bytes = "$SELF/src".len().saturating_sub(1);
-        floor
-            .acquire(short_ownership, &limits)
-            .expect("raw relative path fits");
-        assert!(!floor.exceedances().is_exceeded());
-        // The six-byte growth past the string target still rewrites the
-        // path through bounded byte scratch and records the string axis at
-        // the rewritten length.
+        let mut growing = super::JsonAllocation::empty();
+        growing
+            .acquire(short_ownership)
+            .expect("raw relative path is charged");
         super::rewrite_json_string_from_bytes(
             &mut short,
             "$SELF/src".len(),
-            &mut floor,
+            &mut growing,
             &mut short_ownership,
-            &limits,
             |path| super::normalized_path_bytes(path, &package, &packages, "$SELF/src".len()),
         )
-        .expect("the longer normalized path still charges its growth past the target");
+        .expect("the longer normalized path charges its growth");
         assert_eq!(short.as_str(), Some("$SELF/src"));
-        assert_eq!(floor.full_usage(), short_ownership.usage());
-        assert_eq!(floor.full_usage().2, "$SELF/src".len());
-        let strings = floor
-            .exceedances()
-            .axis("Cargo JSON retained string bytes")
-            .copied()
-            .expect("the path growth records the string axis");
-        assert_eq!(
-            (strings.target, strings.first_requested, strings.high_water),
-            (
-                "$SELF/src".len() as u64 - 1,
-                "$SELF/src".len() as u64,
-                "$SELF/src".len() as u64
-            )
-        );
+        assert_eq!(growing.full_usage(), short_ownership.usage());
+        assert_eq!(growing.full_usage().2, "$SELF/src".len());
     }
 
     #[test]
     fn budgeted_move_transfers_existing_ownership_without_a_second_charge() {
-        let limits = Limits::standard();
         let value = serde_json::json!({"owned": ["once"]});
         let ownership = super::JsonOwnership::tree(&value).expect("tree ownership measures");
         let mut allocation = super::JsonAllocation::empty();
         let budgeted = allocation
-            .retain_with(ownership, &limits, || Ok(value))
+            .retain_with(ownership, || Ok(value))
             .expect("tree ownership retains");
         let before = allocation.full_usage();
         let (value, transferred) = budgeted.into_parts();
@@ -5343,7 +4160,7 @@ mod tests {
         let incomplete_ownership =
             super::JsonOwnership::tree(&incomplete).expect("incomplete DOM ownership measures");
         allocation
-            .acquire(incomplete_ownership, &limits)
+            .acquire(incomplete_ownership)
             .expect("owned incomplete DOM charges once");
         assert!(definition
             .observe_metadata_value(
@@ -5357,7 +4174,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_edges_discover_each_pending_unit_once_under_exact_queue_caps() {
+    fn duplicate_edges_discover_each_pending_unit_once() {
         let standard = Limits::standard();
         let metadata = super::super::unit::bounded_json(
             "duplicate-edge metadata fixture",
@@ -5391,31 +4208,18 @@ mod tests {
                 > unit["units"].as_array().expect("units are an array").len()
         );
 
-        let exercise = |limits: &Limits| {
+        let exercise = || {
             let mut allocation = super::JsonAllocation::empty();
-            let mut universe = super::UniverseAccount::new();
-            allocation.charge_tree(&metadata, limits)?;
-            let packages = super::metadata_packages_from_value(
-                &metadata,
-                limits,
-                &mut allocation,
-                &mut universe,
-            )?;
-            allocation.charge_tree(&unit, limits)?;
-            let (reachable_units, reachable_packages) = super::unit_reachability(
-                &unit,
-                packages.value(),
-                limits,
-                &mut allocation,
-                &mut universe,
-            )?;
+            allocation.charge_tree(&metadata)?;
+            let packages = super::metadata_packages_from_value(&metadata, &mut allocation)?;
+            allocation.charge_tree(&unit)?;
+            let (reachable_units, reachable_packages) =
+                super::unit_reachability(&unit, packages.value(), &mut allocation)?;
             let projection = super::unit_projection(
                 &unit,
                 packages.value(),
                 reachable_units.value(),
-                limits,
                 &mut allocation,
-                &mut universe,
             )?;
             let bytes = projection;
             reachable_units.drop_from(&mut allocation)?;
@@ -5424,18 +4228,10 @@ mod tests {
             let peak = allocation.peak_usage();
             let (bytes, ownership) = bytes.into_parts();
             allocation.release(ownership)?;
-            Ok::<_, crate::Error>((
-                bytes,
-                peak,
-                allocation.exceedances(),
-                universe.exceedances(),
-            ))
+            Ok::<_, crate::Error>((bytes, peak))
         };
 
-        let (canonical, peak, record, universe_record) =
-            exercise(&standard).expect("standard duplicate graph measures");
-        assert!(!record.is_exceeded());
-        assert!(!universe_record.is_exceeded());
+        let (canonical, peak) = exercise().expect("standard duplicate graph measures");
         assert_eq!(
             canonical
                 .windows(b"\"unit\"".len())
@@ -5443,58 +4239,13 @@ mod tests {
                 .count(),
             7
         );
-        let mut exact = standard;
-        exact.units = 1;
-        exact.items = peak.0;
-        exact.json_bytes = peak.1;
-        exact.string_bytes = peak.2;
-        exact.containers = peak.3;
-        let (exact_canonical, _, exact_record, exact_universe) =
-            exercise(&exact).expect("exact queue high-water seals");
-        assert_eq!(exact_canonical, canonical);
-        assert!(!exact_record.is_exceeded());
-        assert!(!exact_universe.is_exceeded());
-
-        // The unit count is an accounting target recorded on the
-        // universe account; the zero-unit floor still projects the same bytes
-        // and records the truthful unit count.
-        let mut unit_floor = exact;
-        unit_floor.units = 0;
-        let (floor_canonical, floor_peak, _, universe_record) =
-            exercise(&unit_floor).expect("the zero-unit target still projects");
-        assert_eq!(floor_canonical, canonical);
-        assert_eq!(floor_peak, peak);
-        let axis = universe_record
-            .axis("protected Cargo units")
-            .copied()
-            .expect("the unit count records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, 1, 1)
-        );
-        // One unit under each queue peak still projects the same bytes
-        // and records the lowered axis with the peak as its high water.
-        for index in [0, 1, 3] {
-            let (lowered, axis) = FLOORS[index];
-            let mut floor = exact;
-            lowered(&mut floor);
-            let (floor_canonical, floor_peak, record, _) =
-                exercise(&floor).expect("one-unit queue floor still seals");
-            assert_eq!(floor_canonical, canonical);
-            assert_eq!(floor_peak, peak);
-            assert_floor_exceeded(
-                &record,
-                axis,
-                floor_target(&floor, index),
-                peak_component(peak, index),
-            );
-        }
+        assert!(peak.0 > 0, "the queue and projection were charged");
 
         let mut allocation = super::JsonAllocation::empty();
-        let mut pending = super::PendingUnits::retain(1, &mut allocation, &standard)
-            .expect("one-unit queue reserves once");
+        let mut pending =
+            super::PendingUnits::retain(1, &mut allocation).expect("one-unit queue reserves once");
         for _ in 0..16 {
-            super::PendingUnits::enqueue(&mut pending, 0, &mut allocation, &standard)
+            super::PendingUnits::enqueue(&mut pending, 0, &mut allocation)
                 .expect("duplicate discovery is infallible");
         }
         assert_eq!(super::PendingUnits::peak(&pending), 1);
@@ -5587,8 +4338,7 @@ mod tests {
     /// and fixes no framework: a lock with any iced, or none, is admitted.
     #[test]
     fn the_plain_universe_governs_rawr_and_fixes_no_framework() {
-        let limits = Limits::standard();
-        let plain = super::Catalog::plain(&limits).unwrap();
+        let plain = super::Catalog::plain().unwrap();
         assert!(plain.names_package("rawr"));
         assert!(!plain.names_package("iced"));
         let project = "version = 4\n\n[[package]]\nname = \"rawr\"\nversion = \"1.25.1\"\n\

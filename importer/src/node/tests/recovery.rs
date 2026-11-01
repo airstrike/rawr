@@ -67,93 +67,6 @@ fn same_action_equal_size_frozen_corruption_retires_once_then_reuses() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// The hashed-byte account is an accounting target. Validating the
-/// commitment on an account already at its target records the allocation
-/// hash as the first exceeding charge and keeps going, so the oversized seal
-/// is classified as candidate-owned corruption (positive classification) and
-/// the bundle is repaired and then reused.
-#[test]
-fn oversized_frozen_seal_records_hash_exceedance_then_classifies_corruption_and_repairs() {
-    let root = temporary("oversized-seal-corruption");
-    let context = prepare_fixture(&root);
-    let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"oversized-seal", 4096)
-        .unwrap();
-    let current = store.clone();
-    let first = Evaluator::new(&store, &Counts::default())
-        .discover_bundled(&recipe, move |value| validate(value, &current), stable)
-        .unwrap();
-    let old_root = store.root().join(first.value().reference.relative());
-    let seal = old_root.join("seal");
-    let frozen = fs::metadata(&seal).unwrap().permissions();
-    fs::set_permissions(&seal, fs::Permissions::from_mode(0o600)).unwrap();
-    let oversized = super::super::MAX_CONTENT_BYTES as u64 + 1;
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&seal)
-        .unwrap()
-        .set_len(oversized)
-        .unwrap();
-    fs::set_permissions(&seal, frozen).unwrap();
-
-    let refused = super::super::GraphBudget::new();
-    refused
-        .hash(super::super::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    let allocation_bytes = fs::metadata(old_root.join("allocation")).unwrap().len();
-    let commitment = crate::store::bundle::BundleCommitment::new(
-        first.value().reference,
-        first.value().seal_length,
-        first.value().seal_digest,
-    );
-    let result = crate::store::bundle::validate_consumer_commitment(
-        store.root(),
-        &commitment,
-        BundleValue::KIND,
-        BundleValue::SCHEMA,
-        first.content().digest(),
-        &refused,
-    );
-    assert!(
-        matches!(&result, Err(Error::CandidateCorrupt(corruption))
-            if format!("{corruption:?}").contains("fact: Seal")),
-        "the oversized seal is candidate-owned corruption, never an accounting refusal: {result:?}"
-    );
-    let exceeded = refused.exceedances();
-    let hashed = exceeded
-        .axis(super::super::HASHED_RESOURCE)
-        .expect("the allocation hash crosses the hashed-byte target");
-    assert_eq!(hashed.target, super::super::MAX_HASHED_BYTES_PER_GRAPH);
-    assert_eq!(
-        hashed.first_requested,
-        super::super::MAX_HASHED_BYTES_PER_GRAPH + allocation_bytes
-    );
-    assert!(hashed.high_water >= hashed.first_requested);
-    assert_eq!(fs::metadata(&seal).unwrap().len(), oversized);
-
-    let fresh = fixture_context(&root).open_store().unwrap();
-    let current = fresh.clone();
-    let counts = Counts::default();
-    let repaired = Evaluator::new(&fresh, &counts)
-        .discover_bundled(&recipe, move |value| validate(value, &current), stable)
-        .unwrap();
-    assert_eq!(first.receipt().action(), repaired.receipt().action());
-    assert!(!old_root.exists());
-    assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
-    let warm = fixture_context(&root).open_store().unwrap();
-    let current = warm.clone();
-    Evaluator::new(&warm, &Counts::default())
-        .discover_bundled(
-            &recipe,
-            move |value| validate(value, &current),
-            |_| panic!("repaired oversized seal must reuse its replacement"),
-        )
-        .unwrap();
-    store.retire_fixture().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
 #[test]
 fn unknown_operational_refusal_and_external_drift_never_nominate_retirement() {
     for case in 0..7 {
@@ -207,7 +120,6 @@ fn unknown_operational_refusal_and_external_drift_never_nominate_retirement() {
 
 fn inventory_owner(
     attempt: crate::store::bundle::Attempt,
-    graph: &super::super::GraphBudget,
 ) -> Result<super::super::Bundled<BundleValue>, Error> {
     use crate::runner::artifact::retained;
     fs::write(attempt.generated().join("input"), b"generated")
@@ -216,7 +128,6 @@ fn inventory_owner(
         &attempt.root(),
         attempt.reference(),
         retained::Mode::Pending,
-        graph,
     )?;
     let value = BundleValue {
         reference: attempt.reference(),
@@ -237,12 +148,9 @@ fn validate_inventory(
     use crate::runner::artifact::retained;
     value.validate_published(store)?;
     let root = store.root().join(value.reference.relative());
-    let bytes = crate::store::read_file_budgeted(
-        &root.join("seal"),
-        super::super::MAX_CONTENT_BYTES,
-        store.graph_budget(),
-    )?;
-    let inventory = retained::Stored::decode(&bytes, &root, value.reference, store.graph_budget())?;
+    let bytes =
+        crate::store::read_file_budgeted(&root.join("seal"), super::super::MAX_CONTENT_BYTES)?;
+    let inventory = retained::Stored::decode(&bytes, &root, value.reference)?;
     inventory.replay_published(
         &root,
         store,
@@ -263,12 +171,11 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
         .discover::<BundleValue>(b"owned-member", 4096)
         .unwrap();
     let current = store.clone();
-    let graph = store.graph_budget().clone();
     let first = Evaluator::new(&store, &Counts::default())
         .discover_bundled(
             &recipe,
             move |value| validate_inventory(value, &current),
-            move |attempt| inventory_owner(attempt, &graph),
+            inventory_owner,
         )
         .unwrap();
     let old_root = store.root().join(first.value().reference.relative());
@@ -279,13 +186,12 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
     fs::set_permissions(&member, frozen).unwrap();
     let fresh = fixture_context(&root).open_store().unwrap();
     let current = fresh.clone();
-    let graph = fresh.graph_budget().clone();
     let counts = Counts::default();
     let repaired = Evaluator::new(&fresh, &counts)
         .discover_bundled(
             &recipe,
             move |value| validate_inventory(value, &current),
-            move |attempt| inventory_owner(attempt, &graph),
+            inventory_owner,
         )
         .unwrap();
     assert_eq!(first.receipt().action(), repaired.receipt().action());
@@ -306,6 +212,76 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
         crate::store::bundle::count_bundles(store.root()).unwrap(),
         1
     );
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// An oversized frozen seal is classified as candidate-owned corruption,
+/// repaired by one miss and reused afterwards.
+#[test]
+fn oversized_frozen_seal_classifies_corruption_then_repairs_and_reuses() {
+    let root = temporary("oversized-seal-corruption");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().unwrap();
+    let recipe = context
+        .discover::<BundleValue>(b"oversized-seal", 4096)
+        .unwrap();
+    let current = store.clone();
+    let first = Evaluator::new(&store, &Counts::default())
+        .discover_bundled(&recipe, move |value| validate(value, &current), stable)
+        .unwrap();
+    let old_root = store.root().join(first.value().reference.relative());
+    let seal = old_root.join("seal");
+    let frozen = fs::metadata(&seal).unwrap().permissions();
+    fs::set_permissions(&seal, fs::Permissions::from_mode(0o600)).unwrap();
+    let oversized = super::super::MAX_CONTENT_BYTES as u64 + 1;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&seal)
+        .unwrap()
+        .set_len(oversized)
+        .unwrap();
+    fs::set_permissions(&seal, frozen).unwrap();
+
+    let graph = super::super::GraphBudget::new();
+    let commitment = crate::store::bundle::BundleCommitment::new(
+        first.value().reference,
+        first.value().seal_length,
+        first.value().seal_digest,
+    );
+    let result = crate::store::bundle::validate_consumer_commitment(
+        store.root(),
+        &commitment,
+        BundleValue::KIND,
+        BundleValue::SCHEMA,
+        first.content().digest(),
+        &graph,
+    );
+    assert!(
+        matches!(&result, Err(Error::CandidateCorrupt(corruption))
+            if format!("{corruption:?}").contains("fact: Seal")),
+        "the oversized seal is candidate-owned corruption: {result:?}"
+    );
+    assert_eq!(fs::metadata(&seal).unwrap().len(), oversized);
+
+    let fresh = fixture_context(&root).open_store().unwrap();
+    let current = fresh.clone();
+    let counts = Counts::default();
+    let repaired = Evaluator::new(&fresh, &counts)
+        .discover_bundled(&recipe, move |value| validate(value, &current), stable)
+        .unwrap();
+    assert_eq!(first.receipt().action(), repaired.receipt().action());
+    assert!(!old_root.exists());
+    assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
+    let warm = fixture_context(&root).open_store().unwrap();
+    let current = warm.clone();
+    Evaluator::new(&warm, &Counts::default())
+        .discover_bundled(
+            &recipe,
+            move |value| validate(value, &current),
+            |_| panic!("repaired oversized seal must reuse its replacement"),
+        )
+        .unwrap();
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }

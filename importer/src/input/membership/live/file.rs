@@ -46,14 +46,8 @@ pub(super) fn acquire(
     let native = terminated(path.bytes(), budget)?;
     let native = CStr::from_bytes_with_nul(&native)
         .map_err(|_| Error::Encoding("invalid terminated native path"))?;
-
-    budget.graph.paths(1)?;
     let before_path = system.stat(native)?;
-    // Reserve exactly one possible descriptor cleanup before any acquisition.
-    // A failed open leaves this reservation spent, like every other admission.
-    budget.graph.paths(1)?;
     let opened = loop {
-        budget.graph.paths(1)?;
         match system.open(native) {
             Err(code) if code == libc::EINTR => continue,
             result => break result,
@@ -74,15 +68,12 @@ pub(super) fn acquire(
                 descriptor,
                 system: &mut *system,
             };
-            budget.graph.paths(1)?;
             let opened = source.system.fstat(source.descriptor)?;
             let value = read(&mut source, limit, budget)?;
-            budget.graph.paths(1)?;
             let after = source.system.fstat(source.descriptor)?;
             (value, Some(opened), Some(after))
         }
     };
-    budget.graph.paths(1)?;
     let after_path = system.stat(native)?;
     let record = observed::Record {
         query: observed::Query::File(path),
@@ -134,7 +125,6 @@ fn read<S: System>(
         } else {
             remaining.min(CHUNK)
         };
-        budget.graph.paths(1)?;
         match source
             .system
             .read(source.descriptor, &mut scratch[..requested])

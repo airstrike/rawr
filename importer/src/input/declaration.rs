@@ -31,14 +31,13 @@ impl Declarations {
         limits: &cargo::Limits,
     ) -> Result<Self> {
         let mut allocation = Allocation::new(limits);
-        Self::read_accounted(cargo_commit, package_id, out_dir, limits, &mut allocation)
+        Self::read_accounted(cargo_commit, package_id, out_dir, &mut allocation)
     }
 
     pub(super) fn read_accounted(
         cargo_commit: &str,
         package_id: &str,
         out_dir: &Path,
-        limits: &cargo::Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
         if cargo_commit != toolchain::supported_cargo_commit() {
@@ -47,12 +46,6 @@ impl Declarations {
                 reason: cargo_commit.into(),
             });
         }
-        // The PackageId length is an accounting target; record it.
-        allocation.exceeded(
-            "saved-output PackageId",
-            limits.string_bytes,
-            package_id.len(),
-        );
         allocation.string(package_id)?;
         allocation.path(out_dir)?;
         let out_dir = out_directory(out_dir)?;
@@ -78,7 +71,6 @@ impl Declarations {
             crate::process::CAPTURE_BYTES,
             allocation,
         )?;
-        allocation.exceeded("Cargo saved build output", limits.json_bytes, bytes.len());
         let mut paths = Vec::new();
         let mut environment = Vec::new();
         let mut directives = Vec::new();

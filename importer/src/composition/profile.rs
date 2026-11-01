@@ -112,7 +112,6 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
             contract.rules_digest(),
             &fingerprint,
             payload,
-            limits,
             (!adapter.uses_semantic_api()).then_some(&contract.graph_fingerprint()),
         )?,
         limits.node_output_bytes(),
@@ -123,7 +122,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
         Outcome::Hit(demand) => {
             let parts = demand
                 .value()
-                .owned(contract, fingerprint, payload, limits)
+                .owned(contract, fingerprint, payload)
                 .map_err(Error::fresh)?;
             let recipe = generated_recipe(context, adapter, demand, parts.value(), limits)?;
             let generated = recipe.lookup_owned(&evaluator).map_err(node_error)?;
@@ -138,7 +137,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
         ) => {
             let proof = generated
                 .value()
-                .owned(parts.value(), lifecycle, limits)
+                .owned(parts.value(), lifecycle)
                 .map_err(Error::fresh)?;
             let retained_demand = initial.extend_current(&demand).map_err(node_error)?;
             let retained_generated = retained_demand
@@ -163,7 +162,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                     Outcome::Hit(value) => batch.carry_owned(value)?,
                     Outcome::Miss(miss) => Owned::Staged(recipe.resume(batch, miss, || {
                         let value = adapter
-                            .demand_owned(contract, fingerprint, payload, limits)
+                            .demand_owned(contract, fingerprint, payload)
                             .map_err(failure)?;
                         Product::capture(&value, limits.node_output_bytes()).map_err(failure)
                     })?),
@@ -174,7 +173,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                     None => {
                         let parts = demand
                             .value()
-                            .owned(contract, fingerprint, payload, limits)
+                            .owned(contract, fingerprint, payload)
                             .map_err(|error| failure(error.fresh()))?;
                         let recipe =
                             generated_recipe(context, adapter, &demand, parts.value(), limits)
@@ -187,9 +186,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                     Outcome::Hit(value) => batch.carry_owned(value)?,
                     Outcome::Miss(miss) => {
                         Owned::Staged(generated_recipe.resume(batch, miss, || {
-                            let proof = adapter
-                                .generate_owned(parts.value(), limits)
-                                .map_err(failure)?;
+                            let proof = adapter.generate_owned(parts.value()).map_err(failure)?;
                             GeneratedProduct::capture(&proof, limits.node_output_bytes())
                                 .map_err(failure)
                         })?)
@@ -197,7 +194,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                 };
                 let proof = generated
                     .value()
-                    .owned(parts.value(), lifecycle, limits)
+                    .owned(parts.value(), lifecycle)
                     .map_err(|error| failure(error.fresh()))?;
                 let retained_generated = batch.retention().try_clone()?;
                 O::complete(

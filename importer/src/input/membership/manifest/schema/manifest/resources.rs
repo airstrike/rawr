@@ -2,7 +2,7 @@ use rawr_toml::document;
 
 use super::{Field, Original, Value};
 use crate::input::membership::manifest::{reference, session, storage, value, Error, Stop};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 const SOURCE: &str = r#"
 cargo-features=['profile-rustflags']
@@ -120,8 +120,7 @@ fn every_original_refusal_retains_first_cause_and_blocks_all_later_work() {
 }
 
 #[test]
-fn whole_original_preserves_original_item_and_byte_floors() {
-    use crate::input::membership::manifest::tests::one_short;
+fn whole_original_charges_the_original_account() {
     let document = document::parse(SOURCE, 80, &mut reference::Account).unwrap();
     let mut meter = prior();
     let mut session = session::Session::new(&mut meter);
@@ -135,38 +134,18 @@ fn whole_original_preserves_original_item_and_byte_floors() {
             _ => {}
         }
     }
-    for (item_floor, byte_floor) in [(0, 0), (1, 0), (0, 1)] {
-        let limits = cargo::Limits::standard();
-        let mut allocation = input::Allocation::new(&limits);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        allocation.item_limit = items - item_floor;
-        allocation.byte_limit = bytes - byte_floor;
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        let mut budget = input::membership::Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let result = Original::interpret(value::Input::root(&document), &mut session);
-        let result = session.finish(result);
-        // A one-short item or byte target still admits the whole original
-        // and records only that axis at the exact total; nothing latches.
-        assert!(result.is_ok());
-        assert_eq!(allocation.usage(), input::Usage { items, bytes });
-        assert!(!allocation.refused);
-        let exceeded = allocation.exceedances();
-        match (item_floor, byte_floor) {
-            (0, 0) => assert!(!exceeded.is_exceeded()),
-            (1, 0) => assert!(one_short(&exceeded, input::INPUT_ITEMS_RESOURCE, items)),
-            _ => assert!(one_short(&exceeded, input::INPUT_BYTES_RESOURCE, bytes)),
-        }
-    }
+    let limits = cargo::Limits::standard();
+    let mut allocation = input::Allocation::new(&limits);
+    allocation.items(7).unwrap();
+    allocation.bytes(31).unwrap();
+    let mut budget = input::membership::Budget {
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let result = Original::interpret(value::Input::root(&document), &mut session);
+    let result = session.finish(result);
+    // The whole original charges what the recording account observed.
+    assert!(result.is_ok());
+    assert_eq!(allocation.usage(), input::Usage { items, bytes });
+    assert!(!allocation.refused);
 }

@@ -384,16 +384,7 @@ impl Proof {
     pub fn fixture_lifecycle_with_chain_application(
         chain: crate::node::Chain,
         application: [u8; 32],
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        // Source and proof sizes are accounting targets recorded on a
-        // profile account; nothing here refuses on them.
-        let mut account = crate::surface::account::Account::profile();
-        account.exceeded(
-            "fixture lifecycle profile source bytes",
-            limits.json_bytes,
-            FIXTURE_LIFECYCLE_SOURCE.len(),
-        );
         let mut proof = Self::neutral_with_application(application);
         proof.product_lifecycle = true;
         proof.source = Box::from(FIXTURE_LIFECYCLE_SOURCE);
@@ -411,11 +402,6 @@ impl Proof {
             projections: &proof.projections,
         })
         .expect("a profile proof serializes");
-        account.exceeded(
-            "fixture lifecycle profile proof bytes",
-            limits.json_bytes,
-            canonical.len(),
-        );
         proof.owner = owner_digest(&canonical);
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.profile/fixture-lifecycle/v1");
@@ -435,19 +421,18 @@ impl Proof {
         if demand.node_chain().is_some() {
             return demand::cached::generate(definition, demand, limits);
         }
-        Self::generate_direct(definition, demand, limits)
+        Self::generate_direct(definition, demand)
     }
 
     fn generate_direct<C: Checked, D: Definition<C>>(
         definition: &D,
         demand: &Demand,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         assert!(
             definition.identity() == demand.identity() && definition.version() == demand.version(),
             "rawr generates a profile's source under the profile that demanded it"
         );
-        let mut output = demand::Generator::new(demand, limits);
+        let mut output = demand::Generator::new(demand);
         definition.generate(demand, &mut output)?;
         output.seal(definition.owns_product_lifecycle())
     }
@@ -487,59 +472,18 @@ impl Proof {
         demand: &Demand,
         product_lifecycle: bool,
         chain: crate::node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        Self::decode_owned(bytes, demand, product_lifecycle, limits)
-            .map(|parts| parts.into_current(chain))
+        Self::decode_owned(bytes, demand, product_lifecycle).map(|parts| parts.into_current(chain))
     }
 
     pub(crate) fn decode_owned(
         bytes: &[u8],
         demand: &Demand,
         product_lifecycle: bool,
-        limits: &crate::cargo::Limits,
     ) -> Result<Parts, Error> {
-        // Document, source and item sizes are accounting targets recorded
-        // on a profile account for this replay; the physical bound is the node
-        // content ceiling that already admitted the bytes. Checked-arithmetic
-        // overflow stays terminal.
-        let mut account = crate::surface::account::Account::profile();
-        Self::decode_owned_accounted(bytes, demand, product_lifecycle, limits, &mut account)
-    }
-
-    pub(crate) fn decode_owned_accounted(
-        bytes: &[u8],
-        demand: &Demand,
-        product_lifecycle: bool,
-        limits: &crate::cargo::Limits,
-        account: &mut crate::surface::account::Account,
-    ) -> Result<Parts, Error> {
-        account.exceeded(
-            "generated profile proof bytes",
-            limits.json_bytes,
-            bytes.len(),
-        );
         let stored: StoredOwnerCanonical =
             serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a generated profile proof serializes");
-        let items = stored
-            .aliases
-            .len()
-            .checked_add(stored.sources.len())
-            .and_then(|items| items.checked_add(stored.abis.len()))
-            .and_then(|items| items.checked_add(stored.endpoints.len()))
-            .and_then(|items| items.checked_add(stored.projections.len()))
-            .ok_or(Error::Limit {
-                resource: "generated profile proof items",
-                limit: limits.items,
-                actual: usize::MAX,
-            })?;
-        account.exceeded(
-            "generated profile proof source bytes",
-            limits.json_bytes,
-            stored.source.len(),
-        );
-        account.exceeded("generated profile proof items", limits.items, items);
         if canonical.as_slice() != bytes
             || stored.schema != 9
             || stored.identity != *demand.identity().as_bytes()
@@ -745,17 +689,16 @@ pub fn classify<C: Checked, D: Definition<C>>(
     if graph.node_chain().is_some() {
         return cached::classify(definition, graph, limits);
     }
-    classify_direct(definition, graph, limits)
+    classify_direct(definition, graph)
 }
 
 fn classify_direct<C: Checked, D: Definition<C>>(
     definition: &D,
     graph: &crate::api::Graph<crate::api::Extracted>,
-    limits: &crate::cargo::Limits,
 ) -> Result<Contract, Error> {
     let identity = definition.identity();
     let version = definition.version();
-    let mut output = contract::Builder::new(identity, version, graph, limits);
+    let mut output = contract::Builder::new(identity, version, graph);
     definition.classify(graph, &mut output)?;
     output.seal()
 }
@@ -770,14 +713,13 @@ pub fn demand<C: Checked, D: Definition<C>>(
     if contract.node_chain().is_some() {
         return demand::cached::evaluate(definition, contract, checked, limits);
     }
-    demand_direct(definition, contract, checked, limits)
+    demand_direct(definition, contract, checked)
 }
 
 fn demand_direct<C: Checked, D: Definition<C>>(
     definition: &D,
     contract: &Contract,
     checked: &C,
-    limits: &crate::cargo::Limits,
 ) -> Result<Demand, Error> {
     assert!(
         definition.identity() == contract.identity() && definition.version() == contract.version(),
@@ -787,7 +729,6 @@ fn demand_direct<C: Checked, D: Definition<C>>(
         contract,
         checked.profile_fingerprint(),
         checked.profile_payload(),
-        limits,
     )?;
     definition.demand(contract, checked, &mut output)?;
     output.seal()

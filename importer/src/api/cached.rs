@@ -751,47 +751,10 @@ mod tests {
         .unwrap();
         assert!(decode.items >= product.stored().unwrap().selected_usage.items);
         assert!(decode.bytes >= product.stored().unwrap().selected_usage.bytes);
-        assert!(decode.admission_bytes >= decode.bytes);
-        eprintln!("API_DECODE_FIXTURE support retained_items={} retained_bytes={} decode_items={} decode_bytes={} admission_bytes={}",
+        eprintln!("API_DECODE_FIXTURE support retained_items={} retained_bytes={} decode_items={} decode_bytes={}",
             product.stored().unwrap().selected_usage.items, product.stored().unwrap().selected_usage.bytes,
-            decode.items, decode.bytes, decode.admission_bytes);
+            decode.items, decode.bytes);
         product.stored_mut().selected_usage = crate::api::Usage { items: 0, bytes: 0 };
-        let mut short = Allocation::with_limits(usize::MAX, decode.admission_bytes + 18);
-        short.bytes(19).unwrap();
-        let error = product
-            .replay(&Context::fixture(), Vec::new(), &limits, &mut short)
-            .err()
-            .unwrap();
-        // The decoder admission one over the byte target is recorded
-        // (honoring the prior 19 bytes, ignoring the zeroed ownership header)
-        // and replay continues to the ownership audit, which refuses.
-        assert!(matches!(
-            error,
-            crate::Error::Extraction {
-                code: "stored-api-ownership",
-                ..
-            }
-        ));
-        let record = short.exceedances();
-        let axis = record
-            .axis("canonical allocation bytes")
-            .expect("the admission exceedance is recorded");
-        assert_eq!(axis.target, (decode.admission_bytes + 18) as u64);
-        assert_eq!(axis.first_requested, (decode.admission_bytes + 19) as u64);
-        assert!(axis.high_water >= axis.first_requested);
-        assert!(!short.is_refused());
-        let mut exact = Allocation::with_limits(decode.items + 17, decode.admission_bytes + 19);
-        exact.items(17).unwrap();
-        exact.bytes(19).unwrap();
-        exact
-            .admit_decode(decode.items, decode.admission_bytes)
-            .unwrap();
-        assert_eq!(
-            exact.usage(),
-            (17, 19),
-            "prospective admission is not a second charge"
-        );
-        assert!(!exact.exceedances().is_exceeded());
         let mut admitted = Allocation::new(&limits);
         let error = product
             .replay(&Context::fixture(), Vec::new(), &limits, &mut admitted)
@@ -897,14 +860,13 @@ mod tests {
         .unwrap();
         assert!(decode.items >= product.stored().unwrap().selected_usage.items);
         assert!(decode.bytes >= product.stored().unwrap().selected_usage.bytes);
-        eprintln!("API_DECODE_FIXTURE nested retained_items={} retained_bytes={} decode_items={} decode_bytes={} admission_bytes={}",
+        eprintln!("API_DECODE_FIXTURE nested retained_items={} retained_bytes={} decode_items={} decode_bytes={}",
             product.stored().unwrap().selected_usage.items, product.stored().unwrap().selected_usage.bytes,
-            decode.items, decode.bytes, decode.admission_bytes);
+            decode.items, decode.bytes);
         replay(&product, &limits).unwrap();
         let unknown =
             crate::extract::protocol::selected_preflight(br#"{"unclassified":[null]}"#, &limits)
                 .unwrap();
         assert!(unknown.bytes >= crate::api::decode::Shape::widest());
-        assert!(unknown.admission_bytes >= 4 * crate::api::decode::Shape::widest());
     }
 }

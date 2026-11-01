@@ -400,7 +400,7 @@ fn internal_directory_aliases_are_rejected_before_probe_publication() {
 }
 
 #[test]
-fn original_plan_limits_admit_exact_usage_and_record_one_less() {
+fn plan_preparation_charges_the_same_usage_each_time() {
     let fixture = Fixture::open("account");
     fixture
         .reserve(|layout, proof| {
@@ -409,53 +409,9 @@ fn original_plan_limits_admit_exact_usage_and_record_one_less() {
             let baseline = Plan::prepare_in(layout, &graph, proof, toolchain::HOST, &limits)?;
             let (items, bytes) = baseline.allocation.usage();
             drop(baseline);
-            let mut exact = limits;
-            exact.canonical_items = items;
-            exact.canonical_bytes = bytes;
-            let admitted = Plan::prepare_in(layout, &graph, proof, toolchain::HOST, &exact)?;
-            assert_eq!(admitted.allocation.usage(), (items, bytes));
-            assert!(!admitted.allocation.exceedances().is_exceeded());
-            drop(admitted);
-            // One less than the original cumulative charge prepares the
-            // same plan and records only the crossed axis, at its floor target
-            // and the truthful cumulative high water.
-            for (item_floor, expected, other) in [
-                (
-                    true,
-                    "canonical allocation items",
-                    "canonical allocation bytes",
-                ),
-                (
-                    false,
-                    "canonical allocation bytes",
-                    "canonical allocation items",
-                ),
-            ] {
-                let mut floor = exact;
-                if item_floor {
-                    floor.canonical_items -= 1;
-                } else {
-                    floor.canonical_bytes -= 1;
-                }
-                let recorded = Plan::prepare_in(layout, &graph, proof, toolchain::HOST, &floor)
-                    .expect("one less than the original cumulative charge records");
-                assert_eq!(recorded.allocation.usage(), (items, bytes));
-                assert!(!recorded.allocation.is_refused());
-                let axis = *recorded
-                    .allocation
-                    .exceedances()
-                    .axis(expected)
-                    .expect("the crossed axis records");
-                let (target, high_water) = if item_floor {
-                    (items - 1, items)
-                } else {
-                    (bytes - 1, bytes)
-                };
-                assert_eq!(axis.target, target as u64);
-                assert_eq!(axis.high_water, high_water as u64);
-                assert!(recorded.allocation.exceedances().axis(other).is_none());
-                drop(recorded);
-            }
+            let again = Plan::prepare_in(layout, &graph, proof, toolchain::HOST, &limits)?;
+            assert_eq!(again.allocation.usage(), (items, bytes));
+            assert!(!again.allocation.is_refused());
             Ok(())
         })
         .expect("prospective limits remain the caller's limits");
@@ -463,7 +419,7 @@ fn original_plan_limits_admit_exact_usage_and_record_one_less() {
 }
 
 #[test]
-fn empty_graph_refusal_does_not_publish_controls_and_a_zero_byte_account_records() {
+fn empty_graph_refusal_does_not_publish_controls() {
     let fixture = Fixture::open("early");
     fixture
         .reserve(|layout, proof| {
@@ -475,34 +431,14 @@ fn empty_graph_refusal_does_not_publish_controls_and_a_zero_byte_account_records
             assert_eq!(code(error), "missing-extraction-unit");
             assert!(!layout.extraction().source().exists());
             assert!(!layout.extraction().plan().exists());
-            // The original zero-byte account is an accounting target. The
-            // plan prepares, publishes its controls, and records the byte axis
-            // at its zero target and truthful cumulative high water.
-            //
-            // `Plan::prepare_in` constructs its own `Allocation::new`, so no
-            // latched account can be injected here; the terminal "does not
-            // publish controls" half of this proof is the account's own
-            // `Allocation::refused()` ordering tests.
-            let mut recorded = limits;
-            recorded.canonical_bytes = 0;
-            let plan = Plan::prepare_in(layout, &graph(), proof, toolchain::HOST, &recorded)
-                .expect("a zero-byte account records and still prepares");
+            // A nonempty graph then prepares, publishes its controls and
+            // charges its bytes.
+            let plan = Plan::prepare_in(layout, &graph(), proof, toolchain::HOST, &limits)
+                .expect("the plan prepares");
             assert!(layout.extraction().source().exists());
             let (_, bytes) = plan.allocation.usage();
             assert!(bytes > 0);
             assert!(!plan.allocation.is_refused());
-            let axis = *plan
-                .allocation
-                .exceedances()
-                .axis("canonical allocation bytes")
-                .expect("the byte axis records");
-            assert_eq!(axis.target, 0);
-            assert_eq!(axis.high_water, bytes as u64);
-            assert!(plan
-                .allocation
-                .exceedances()
-                .axis("canonical allocation items")
-                .is_none());
             Ok(())
         })
         .expect("early rejection cleans the reservation");

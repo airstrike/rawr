@@ -50,8 +50,6 @@ pub(in crate::input) fn dependency_digest(
             sources: &dependency.sources,
             environment: &dependency.environment,
         },
-        "structured replay bytes",
-        budget.limits.json_bytes,
         budget,
     )
 }
@@ -64,12 +62,7 @@ pub(in crate::input) fn saved_output(
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     budget.check()?;
-    let digest = canonical::digest(
-        &SavedOutput::borrow(declarations),
-        "structured replay bytes",
-        budget.limits.json_bytes,
-        budget,
-    )?;
+    let digest = canonical::digest(&SavedOutput::borrow(declarations), budget)?;
     let package_id = scalar(&declarations.package_id, budget)?;
     let execution = path(execution, budget)?;
     let name = scalar("saved-output", budget)?;
@@ -97,11 +90,7 @@ fn hex(digest: [u8; 32], budget: &mut Budget<'_>) -> Result<Box<str>> {
 }
 
 fn scalar(value: &str, budget: &mut Budget<'_>) -> Result<Box<str>> {
-    budget.limited(
-        "input owned string bytes",
-        budget.limits.string_bytes,
-        value.len(),
-    )?;
+    budget.check()?;
     budget.owned_text(value)
 }
 
@@ -114,7 +103,7 @@ fn path_text<'path>(value: &'path Path, budget: &mut Budget<'_>) -> Result<&'pat
     let value = value
         .to_str()
         .ok_or(Error::Encoding("structured replay path is not Unicode"))?;
-    budget.limited("input path bytes", crate::input::LINE_BYTES, value.len())?;
+    budget.check()?;
     Ok(value)
 }
 

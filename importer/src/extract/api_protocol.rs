@@ -7,7 +7,7 @@ const COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const ARGUMENTS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn production_canonical_epoch_has_exact_item_and_byte_boundaries() {
+fn production_canonical_limits_and_a_latched_account() {
     let limits = cargo::Limits::standard();
     assert_eq!(limits.item_limit(), 2_500_000);
     assert_eq!(limits.byte_limit(), 33_554_432);
@@ -15,61 +15,6 @@ fn production_canonical_epoch_has_exact_item_and_byte_boundaries() {
     assert_eq!(limits.retained_graph_bytes, 536_870_912);
     assert_eq!(limits.classified_contract_items, 6_500_000);
     assert_eq!(limits.classified_contract_bytes, 671_088_640);
-    // The canonical item and byte targets are accounting targets. The
-    // exact boundary records nothing; the next charge is kept as truthful
-    // high water, recorded on the account, and never latches it.
-    let mut allocation = Allocation::new(&limits);
-    allocation
-        .items(19_000_000)
-        .expect("the exact canonical allocation boundary is accepted");
-    assert!(allocation
-        .exceedances()
-        .axis("canonical allocation items")
-        .is_none());
-    let retained = allocation.usage();
-    allocation
-        .items(1)
-        .expect("one item past the canonical target is recorded, not refused");
-    assert_records(
-        &allocation.exceedances(),
-        "canonical allocation items",
-        19_000_000,
-        19_000_001,
-        19_000_001,
-    );
-    assert!(!allocation.is_refused());
-    assert_eq!(
-        allocation.usage(),
-        (retained.0 + 1, retained.1),
-        "the exceeding charge is kept as truthful high water"
-    );
-
-    let mut allocation = Allocation::new(&limits);
-    allocation
-        .bytes(1_207_959_552)
-        .expect("the exact canonical byte boundary is accepted");
-    assert!(allocation
-        .exceedances()
-        .axis("canonical allocation bytes")
-        .is_none());
-    let retained = allocation.usage();
-    allocation
-        .bytes(1)
-        .expect("one byte past the canonical target is recorded, not refused");
-    assert_records(
-        &allocation.exceedances(),
-        "canonical allocation bytes",
-        1_207_959_552,
-        1_207_959_553,
-        1_207_959_553,
-    );
-    assert!(!allocation.is_refused());
-    assert_eq!(
-        allocation.usage(),
-        (retained.0, retained.1 + 1),
-        "the exceeding charge is kept as truthful high water"
-    );
-
     // Terminal only through an injected genuine cause: a latched account
     // fails every charge first and does no further work.
     let mut refused = Allocation::refused();
@@ -77,85 +22,18 @@ fn production_canonical_epoch_has_exact_item_and_byte_boundaries() {
     assert_refused(refused.bytes(1));
     assert!(refused.is_refused());
     assert_eq!(refused.usage(), (0, 0), "a latched account charges nothing");
-    assert!(!refused.exceedances().is_exceeded());
 }
 
 #[test]
-fn canonical_evidence_epoch_is_exact_atomic_and_isolated_from_production() {
+fn canonical_evidence_epoch_descends_from_capture_authority() {
     let limits = cargo::Limits::standard();
-    let mut evidence = Allocation::new(&limits)
+    let evidence = Allocation::new(&limits)
         .into_evidence(&limits, protocol::Population::default())
         .expect("normal capture authority transforms into evidence authority");
-    evidence
-        .items(CANONICAL_EVIDENCE_ITEMS)
-        .expect("the exact canonical evidence boundary is accepted");
-    assert!(evidence
-        .exceedances()
-        .axis("canonical allocation items")
-        .is_none());
-    let retained = evidence.usage();
-    // The evidence item target is an accounting target; the exceeding
-    // charge is kept and recorded against the evidence epoch's own target.
-    evidence
-        .items(1)
-        .expect("one item past the evidence target is recorded, not refused");
-    assert_records(
-        &evidence.exceedances(),
-        "canonical allocation items",
-        25_000_000,
-        25_000_001,
-        25_000_001,
-    );
-    assert!(!evidence.is_refused());
-    assert_eq!(evidence.usage(), (retained.0 + 1, retained.1));
-
-    let mut production = Allocation::new(&limits);
-    production
-        .items(19_000_000)
-        .expect("normal canonical authority remains accepted at 19M");
-    assert!(production
-        .exceedances()
-        .axis("canonical allocation items")
-        .is_none());
-    production
-        .items(1)
-        .expect("the production target records independently of the evidence epoch");
-    assert_records(
-        &production.exceedances(),
-        "canonical allocation items",
-        19_000_000,
-        19_000_001,
-        19_000_001,
-    );
-    assert!(!production.is_refused());
     assert_eq!(limits.canonical_items, 19_000_000);
     assert_eq!(limits.canonical_bytes, 1_207_959_552);
     assert_eq!(evidence.byte_limit, CANONICAL_EVIDENCE_BYTES);
     assert_eq!(evidence.string_limit, limits.string_bytes);
-
-    let mut evidence_bytes = Allocation::new(&limits)
-        .into_evidence(&limits, protocol::Population::default())
-        .expect("private evidence inherits only canonical byte authority");
-    evidence_bytes
-        .bytes(2_147_483_648)
-        .expect("the exact private canonical byte boundary is accepted");
-    assert!(evidence_bytes
-        .exceedances()
-        .axis("canonical allocation bytes")
-        .is_none());
-    let retained = evidence_bytes.usage();
-    evidence_bytes
-        .bytes(1)
-        .expect("one byte past the evidence byte target is recorded, not refused");
-    assert_records(
-        &evidence_bytes.exceedances(),
-        "canonical allocation bytes",
-        2_147_483_648,
-        2_147_483_649,
-        2_147_483_649,
-    );
-    assert!(!evidence_bytes.is_refused());
-    assert_eq!(evidence_bytes.usage(), (retained.0, retained.1 + 1));
 
     // A latched account stays terminal across the evidence transformation.
     let mut latched = Allocation::new(&limits);
@@ -195,9 +73,8 @@ fn canonical_evidence_returns_only_scalars_without_cache_publication() {
     let mut allocation = Allocation::new(&limits);
     let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
         .expect("fixture document decodes under production authority");
-    let mut invocations =
-        Invocations::seal_document_with_allocation(&document, allocation, &limits)
-            .expect("fixture capture seals");
+    let mut invocations = Invocations::seal_document_with_allocation(&document, allocation)
+        .expect("fixture capture seals");
     invocations.allocation.moved_document();
     let session = crate::process::EvidenceSession::new();
 
@@ -1263,16 +1140,12 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
         namespace: identity::Namespace::Type,
     };
     let policy = Policy::excluding(key.clone(), "not part of the contract", test_span());
-    let budget = crate::node::GraphBudget::new();
-    let policy_identity = policy.cache_identity(&budget).unwrap();
-    assert_ne!(
-        policy_identity,
-        Policy::empty().cache_identity(&budget).unwrap()
-    );
+    let policy_identity = policy.cache_identity().unwrap();
+    assert_ne!(policy_identity, Policy::empty().cache_identity().unwrap());
     assert_ne!(
         policy_identity,
         Policy::excluding(key.clone(), "changed reason", test_span())
-            .cache_identity(&budget)
+            .cache_identity()
             .unwrap()
     );
     assert_ne!(
@@ -1282,7 +1155,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
             "not part of the contract",
             api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7)
         )
-        .cache_identity(&budget)
+        .cache_identity()
         .unwrap()
     );
     let included = graph(std::slice::from_ref(&root), Policy::empty());
@@ -1302,10 +1175,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
         "excluded for a different Rawr policy reason",
         api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7),
     );
-    assert_ne!(
-        policy_identity,
-        changed_policy.cache_identity(&budget).unwrap()
-    );
+    assert_ne!(policy_identity, changed_policy.cache_identity().unwrap());
     let changed = graph(std::slice::from_ref(&root), changed_policy);
     assert_eq!(excluded.canonical_bytes(), changed.canonical_bytes());
     assert_eq!(excluded.fingerprint(), changed.fingerprint());
@@ -1626,16 +1496,13 @@ fn unavailable_external_artifact_authority_rejects_only_dependent_paths() {
     ]);
     let limits = cargo::Limits::standard();
     let invocations = expected(std::slice::from_ref(&root), &limits)
-        .bind_external(
-            vec![ExternalBinding {
-                crate_name: "dep".into(),
-                stable_crate_id: stable_id(dependency).into_boxed_str(),
-                artifacts: vec!["/unjoined/libdep.rlib".into()].into_boxed_slice(),
-                authority: None,
-                package: None,
-            }],
-            &limits,
-        )
+        .bind_external(vec![ExternalBinding {
+            crate_name: "dep".into(),
+            stable_crate_id: stable_id(dependency).into_boxed_str(),
+            artifacts: vec!["/unjoined/libdep.rlib".into()].into_boxed_slice(),
+            authority: None,
+            package: None,
+        }])
         .expect("unavailable external compiler identity remains bounded evidence");
     let graph = canonicalize(
         &document(&[root]),
@@ -1766,7 +1633,7 @@ fn unknown_schema_cfg_doc_and_non_normal_authority_reject() {
 }
 
 #[test]
-fn byte_definition_and_string_targets_record_while_depth_rejects() {
+fn sidecar_depth_is_a_physical_bound() {
     let mut root = fragment("root 0.1.0 (path+root)", "root", Some("root"));
     root["definitions"] = json!([
         struct_definition(
@@ -1785,104 +1652,26 @@ fn byte_definition_and_string_targets_record_while_depth_rejects() {
         ),
     ]);
     let bytes = document(std::slice::from_ref(&root));
-    // The sidecar document size is an accounting target. The exact
-    // size records nothing; one byte under admits the document and records
-    // the axis on the canonical account with the true size, unlatched.
-    let mut limits = cargo::Limits::standard();
-    limits.json_bytes = bytes.len();
-    let mut allocation = Allocation::new(&limits);
-    protocol::decode_accounted(&bytes, &limits, &mut allocation)
-        .expect("a document at the JSON target decodes");
-    assert!(!allocation.exceedances().is_exceeded());
-    let mut limits = cargo::Limits::standard();
-    limits.json_bytes = bytes.len() - 1;
-    let mut allocation = Allocation::new(&limits);
-    protocol::decode_accounted(&bytes, &limits, &mut allocation)
-        .expect("a document one byte over the JSON target still decodes");
-    let axis = *allocation
-        .exceedances()
-        .axis("sidecar bytes")
-        .expect("the sidecar size records its axis");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (
-            (bytes.len() - 1) as u64,
-            bytes.len() as u64,
-            bytes.len() as u64
-        )
-    );
-    assert!(!allocation.is_refused());
-
-    // The sidecar definition count is an accounting target. The two
-    // definitions at a unit target of two record nothing; a target of one
-    // admits both and records the true count, unlatched.
-    let mut limits = cargo::Limits::standard();
-    limits.units = 2;
-    let (_, allocation) = protocol::decode_recorded(&bytes, &limits)
-        .expect("two definitions at the unit target decode");
-    assert!(allocation
-        .exceedances()
-        .axis("sidecar definitions")
-        .is_none());
-    let mut limits = cargo::Limits::standard();
-    limits.units = 1;
-    let (_, allocation) = protocol::decode_recorded(&bytes, &limits)
-        .expect("two definitions over a unit target of one still decode");
-    assert_records(&allocation.exceedances(), "sidecar definitions", 1, 2, 2);
-    assert!(!allocation.is_refused());
+    protocol::decode(&bytes, &cargo::Limits::standard()).expect("the document decodes");
 
     // Depth is a physical bound of the fixed-frame scanner: it still refuses.
     let mut limits = cargo::Limits::standard();
     limits.depth = 3;
     assert_limit(protocol::decode(&bytes, &limits), "sidecar depth");
-
-    // The longest sidecar string is an accounting target. Every other
-    // fixture string is at most 64 bytes, so only the 128-byte name crosses a
-    // 127-byte target, and the exact 128-byte target records nothing.
-    let mut long = root;
-    long["handshake"]["package"]["name"] = Value::String("x".repeat(128));
-    let bytes = document(&[long]);
-    let mut limits = cargo::Limits::standard();
-    limits.string_bytes = 128;
-    let (_, allocation) = protocol::decode_recorded(&bytes, &limits)
-        .expect("a string at the sidecar string target decodes");
-    assert!(allocation.exceedances().axis("sidecar string").is_none());
-    let mut limits = cargo::Limits::standard();
-    limits.string_bytes = 127;
-    let (_, allocation) = protocol::decode_recorded(&bytes, &limits)
-        .expect("a 128-byte string over a 127-byte target still decodes");
-    assert_records(&allocation.exceedances(), "sidecar string", 127, 128, 128);
-    assert!(!allocation.is_refused());
 }
 
 #[test]
-fn aggregate_item_target_counts_unclassified_arrays_before_decode() {
+fn unknown_top_level_key_is_a_schema_failure_after_the_scan() {
     let bytes = format!(
         r#"{{"schema":{},"fragments":[],"display_path":[0,1]}}"#,
         protocol::SCHEMA
     );
-    // The aggregate sidecar item count is an accounting target that the
-    // scan records on the account before serde runs. The unknown top-level
-    // key is then a schema correctness failure, never an accounting refusal:
-    // the two elements at an item target of two record nothing; a target of
-    // one records the true count, unlatched, and the schema failure follows.
-    let mut limits = cargo::Limits::standard();
-    limits.items = 2;
+    let limits = cargo::Limits::standard();
     let mut allocation = Allocation::new(&limits);
     assert_code(
         protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
         "sidecar-schema",
     );
-    assert!(allocation.exceedances().axis("sidecar items").is_none());
-
-    let mut limits = cargo::Limits::standard();
-    limits.items = 1;
-    let mut allocation = Allocation::new(&limits);
-    assert_code(
-        protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
-        "sidecar-schema",
-    );
-    assert_records(&allocation.exceedances(), "sidecar items", 1, 2, 2);
     assert!(!allocation.is_refused());
 }
 
@@ -1922,64 +1711,11 @@ fn canonical_rejection_fanout_charges_exact_recursive_owned_payload() {
     let items = measured.items;
     let bytes = measured.bytes;
 
-    let mut exact = Allocation::with_limits(items.saturating_mul(2), bytes.saturating_mul(2));
-    exact
-        .clone_rejected(&rejected)
-        .and_then(|_| exact.clone_rejected(&rejected))
-        .expect("the exact two-path fanout boundary succeeds");
-    assert!(
-        !exact.exceedances().is_exceeded(),
-        "the exact fanout boundary records nothing"
-    );
-    assert_eq!(exact.usage(), (items * 2, bytes * 2));
-
-    // One item short of the two-path fanout still clones both paths.
-    // The crossing charge reaches the exact total (no charge can pass it),
-    // so the record names the true cumulative amount, and the account is
-    // not latched.
-    let mut item_short =
-        Allocation::with_limits(items.saturating_mul(2).saturating_sub(1), usize::MAX);
-    item_short
-        .clone_rejected(&rejected)
-        .and_then(|_| item_short.clone_rejected(&rejected))
-        .expect("one item short of the fanout boundary still clones both paths");
-    assert_records(
-        &item_short.exceedances(),
-        "canonical allocation items",
-        items * 2 - 1,
-        items * 2,
-        items * 2,
-    );
-    assert!(item_short
-        .exceedances()
-        .axis("canonical allocation bytes")
-        .is_none());
-    assert!(!item_short.is_refused());
-    assert_eq!(
-        item_short.usage(),
-        (items * 2, bytes * 2),
-        "the second clone is charged in full as truthful high water"
-    );
-
-    let mut byte_short =
-        Allocation::with_limits(usize::MAX, bytes.saturating_mul(2).saturating_sub(1));
-    byte_short
-        .clone_rejected(&rejected)
-        .and_then(|_| byte_short.clone_rejected(&rejected))
-        .expect("one byte short of the fanout boundary still clones both paths");
-    assert_records(
-        &byte_short.exceedances(),
-        "canonical allocation bytes",
-        bytes * 2 - 1,
-        bytes * 2,
-        bytes * 2,
-    );
-    assert!(byte_short
-        .exceedances()
-        .axis("canonical allocation items")
-        .is_none());
-    assert!(!byte_short.is_refused());
-    assert_eq!(byte_short.usage(), (items * 2, bytes * 2));
+    let mut both = Allocation::with_limits(usize::MAX, usize::MAX);
+    both.clone_rejected(&rejected)
+        .and_then(|_| both.clone_rejected(&rejected))
+        .expect("the two-path fanout clones both paths");
+    assert_eq!(both.usage(), (items * 2, bytes * 2));
 
     // Terminal only through a latched account: the clone charges nothing.
     let mut refused = Allocation::refused();
@@ -1989,7 +1725,7 @@ fn canonical_rejection_fanout_charges_exact_recursive_owned_payload() {
 
 #[test]
 #[cfg(feature = "rustc-driver")]
-fn invocation_seal_and_external_bind_share_exact_allocation_boundaries() {
+fn invocation_seal_and_external_bind_share_one_allocation() {
     fn handshake() -> protocol::Handshake {
         let value = fragment("root 0.1.0 (path+root)", "root", Some("root"));
         serde_json::from_value(value["handshake"].clone())
@@ -2015,86 +1751,23 @@ fn invocation_seal_and_external_bind_share_exact_allocation_boundaries() {
     }
 
     let measured = Allocation::with_limits(usize::MAX, usize::MAX);
-    let sealed =
-        Invocations::seal_with_allocation(vec![handshake()], measured, &cargo::Limits::standard())
-            .expect("the invocation seals");
+    let sealed = Invocations::seal_with_allocation(vec![handshake()], measured)
+        .expect("the invocation seals");
     let sealed_usage = sealed.allocation.usage();
     let bound = sealed
-        .bind_external(vec![binding()], &cargo::Limits::standard())
+        .bind_external(vec![binding()])
         .expect("the external authority binds");
-    let bound_usage = bound.allocation.usage();
-
-    let exact = Allocation::with_limits(bound_usage.0, bound_usage.1);
-    let exact =
-        Invocations::seal_with_allocation(vec![handshake()], exact, &cargo::Limits::standard())
-            .expect("the exact seal boundary succeeds")
-            .bind_external(vec![binding()], &cargo::Limits::standard())
-            .expect("the exact bind boundary succeeds");
-    assert!(exact
-        .allocation
-        .exceedances()
-        .axis("canonical allocation items")
-        .is_none());
-    assert!(exact
-        .allocation
-        .exceedances()
-        .axis("canonical allocation bytes")
-        .is_none());
-    assert_eq!(exact.allocation.usage(), bound_usage);
-
-    // One item short of the bind boundary still binds. The seal stays
-    // under the target; the bind's crossing charge reaches the exact total,
-    // which the record names, and the account is not latched.
-    let item_limit = bound_usage.0.saturating_sub(1);
-    assert!(item_limit >= sealed_usage.0);
-    let item_short = Invocations::seal_with_allocation(
-        vec![handshake()],
-        Allocation::with_limits(item_limit, usize::MAX),
-        &cargo::Limits::standard(),
-    )
-    .expect("the item-short seal still succeeds")
-    .bind_external(vec![binding()], &cargo::Limits::standard())
-    .expect("the item-short bind still succeeds; the target is recorded");
-    assert_records(
-        &item_short.allocation.exceedances(),
-        "canonical allocation items",
-        item_limit,
-        bound_usage.0,
-        bound_usage.0,
-    );
-    assert!(!item_short.allocation.is_refused());
-    assert_eq!(item_short.allocation.usage(), bound_usage);
-
-    let byte_limit = bound_usage.1.saturating_sub(1);
-    assert!(byte_limit >= sealed_usage.1);
-    let byte_short = Invocations::seal_with_allocation(
-        vec![handshake()],
-        Allocation::with_limits(usize::MAX, byte_limit),
-        &cargo::Limits::standard(),
-    )
-    .expect("the byte-short seal still succeeds")
-    .bind_external(vec![binding()], &cargo::Limits::standard())
-    .expect("the byte-short bind still succeeds; the target is recorded");
-    assert_records(
-        &byte_short.allocation.exceedances(),
-        "canonical allocation bytes",
-        byte_limit,
-        bound_usage.1,
-        bound_usage.1,
-    );
-    assert!(!byte_short.allocation.is_refused());
-    assert_eq!(byte_short.allocation.usage(), bound_usage);
+    assert!(bound.allocation.usage().0 > sealed_usage.0);
 
     // Terminal only through a latched account: the seal's first charge fails.
     assert_refused(Invocations::seal_with_allocation(
         vec![handshake()],
         Allocation::refused(),
-        &cargo::Limits::standard(),
     ));
 }
 
 #[test]
-fn canonicalize_records_identity_fanout_after_protocol_preflight_passes() {
+fn canonicalize_charges_identity_fanout_on_the_canonical_account() {
     let mut root = fragment("root 0.1.0 (path+root)", "root", Some("root"));
     root["handshake"]["package"]["name"] = Value::String("identity-fanout".repeat(512));
     let mut definitions = Vec::new();
@@ -2121,53 +1794,6 @@ fn canonicalize_records_identity_fanout_after_protocol_preflight_passes() {
     root["reachable"] = Value::Array(reachable);
     let bytes = document(std::slice::from_ref(&root));
 
-    // The raw canonical encoding is wider than the wire document, so a
-    // JSON target of exactly the wire size passes preflight silently and is
-    // crossed once by the measured raw encoding, which is recorded on the
-    // canonical account while the graph still completes.
-    let mut byte_limits = cargo::Limits::standard();
-    byte_limits.json_bytes = bytes.len();
-    protocol::decode(&bytes, &byte_limits).expect("the exact wire-byte preflight passes");
-    let (_, byte_account) = canonicalize_recorded(
-        &bytes,
-        expected(std::slice::from_ref(&root), &byte_limits),
-        Policy::empty(),
-        &api::Context::fixture(),
-        &byte_limits,
-    )
-    .expect("a raw canonical encoding wider than the wire bytes still completes");
-    let raw = *byte_account
-        .exceedances()
-        .axis("canonical raw API bytes")
-        .expect("the raw canonical size records its axis");
-    assert_eq!(raw.target, bytes.len() as u64);
-    assert!(
-        raw.first_requested > raw.target,
-        "the identity fanout widens the raw encoding past the wire bytes"
-    );
-    assert_eq!(
-        raw.first_requested, raw.high_water,
-        "the raw encoding is measured exactly once"
-    );
-    assert!(byte_account.exceedances().axis("sidecar bytes").is_none());
-    assert!(!byte_account.is_refused());
-
-    // The exact measured raw size admits silently.
-    let mut raw_limits = cargo::Limits::standard();
-    raw_limits.json_bytes = raw.high_water as usize;
-    let (_, raw_account) = canonicalize_recorded(
-        &bytes,
-        expected(std::slice::from_ref(&root), &raw_limits),
-        Policy::empty(),
-        &api::Context::fixture(),
-        &raw_limits,
-    )
-    .expect("the exact raw canonical size completes");
-    assert!(raw_account
-        .exceedances()
-        .axis("canonical raw API bytes")
-        .is_none());
-
     let (completed, standard_account) = canonicalize_recorded(
         &bytes,
         expected(std::slice::from_ref(&root), &cargo::Limits::standard()),
@@ -2176,37 +1802,8 @@ fn canonicalize_records_identity_fanout_after_protocol_preflight_passes() {
         &cargo::Limits::standard(),
     )
     .expect("the standard canonical epoch completes the fixture");
-    assert!(!standard_account.exceedances().is_exceeded());
     let items = completed.transaction().items;
     assert_eq!(standard_account.usage().0, items);
-
-    // One item short of the canonical total still completes; the
-    // crossing charge reaches the exact total, which the record names.
-    let mut item_limits = cargo::Limits::standard();
-    item_limits.canonical_items = items.saturating_sub(1);
-    protocol::decode(&bytes, &item_limits).expect("the wire-item preflight remains independent");
-    let (item_completed, item_account) = canonicalize_recorded(
-        &bytes,
-        expected(std::slice::from_ref(&root), &item_limits),
-        Policy::empty(),
-        &api::Context::fixture(),
-        &item_limits,
-    )
-    .expect("one item short of the canonical total still completes");
-    assert_records(
-        &item_account.exceedances(),
-        "canonical allocation items",
-        items - 1,
-        items,
-        items,
-    );
-    assert!(!item_account.is_refused());
-    assert_eq!(item_completed.transaction().items, items);
-    assert_eq!(
-        item_completed.fingerprint(),
-        completed.fingerprint(),
-        "recording changes no canonical content"
-    );
 
     // Terminal only through a latched account.
     let Invocations { authority, .. } =
@@ -2270,7 +1867,7 @@ fn moved_document_decodes_and_accounts_once_with_canonical_cardinality_and_order
     let mut allocation = Allocation::new(&limits);
     let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
         .expect("the complete document decodes once");
-    let invocations = Invocations::seal_document_with_allocation(&document, allocation, &limits)
+    let invocations = Invocations::seal_document_with_allocation(&document, allocation)
         .expect("borrowed seal-time invariants hold without moving handshakes");
     let graph = canonicalize_document(
         document,
@@ -2292,71 +1889,6 @@ fn moved_document_decodes_and_accounts_once_with_canonical_cardinality_and_order
             .collect::<Vec<_>>(),
         ["alpha", "zeta"],
     );
-}
-
-#[test]
-fn semantic_array_keys_consume_edge_and_package_budgets_during_preflight() {
-    for key in [
-        "reexports",
-        "relevance",
-        "binders",
-        "artifacts",
-        "path",
-        "display_path",
-        "captures",
-        "target_kinds",
-        "crate_types",
-    ] {
-        let bytes = format!(
-            r#"{{"schema":{},"fragments":[],"{key}":[0]}}"#,
-            protocol::SCHEMA
-        );
-        // The scan records the edge count on the account before serde
-        // rejects the unknown top-level key as a schema failure. One edge at
-        // an edge target of one records nothing; a target of zero records the
-        // true count, unlatched.
-        let mut limits = cargo::Limits::standard();
-        limits.edges = 1;
-        let mut allocation = Allocation::new(&limits);
-        assert_code(
-            protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
-            "sidecar-schema",
-        );
-        assert!(allocation.exceedances().axis("sidecar edges").is_none());
-        let mut limits = cargo::Limits::standard();
-        limits.edges = 0;
-        let mut allocation = Allocation::new(&limits);
-        assert_code(
-            protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
-            "sidecar-schema",
-        );
-        assert_records(&allocation.exceedances(), "sidecar edges", 0, 1, 1);
-        assert!(!allocation.is_refused());
-    }
-
-    for key in ["loaded_crates", "external_crates"] {
-        let bytes = format!(
-            r#"{{"schema":{},"fragments":[],"{key}":[{{}}]}}"#,
-            protocol::SCHEMA
-        );
-        let mut limits = cargo::Limits::standard();
-        limits.packages = 1;
-        let mut allocation = Allocation::new(&limits);
-        assert_code(
-            protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
-            "sidecar-schema",
-        );
-        assert!(allocation.exceedances().axis("sidecar packages").is_none());
-        let mut limits = cargo::Limits::standard();
-        limits.packages = 0;
-        let mut allocation = Allocation::new(&limits);
-        assert_code(
-            protocol::decode_accounted(bytes.as_bytes(), &limits, &mut allocation),
-            "sidecar-schema",
-        );
-        assert_records(&allocation.exceedances(), "sidecar packages", 0, 1, 1);
-        assert!(!allocation.is_refused());
-    }
 }
 
 #[test]
@@ -2859,9 +2391,8 @@ fn evidence(fragments: &[Value]) -> CanonicalizationEvidence {
     let mut allocation = Allocation::new(&limits);
     let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
         .expect("the evidence fixture decodes");
-    let mut invocations =
-        Invocations::seal_document_with_allocation(&document, allocation, &limits)
-            .expect("the evidence fixture handshakes seal");
+    let mut invocations = Invocations::seal_document_with_allocation(&document, allocation)
+        .expect("the evidence fixture handshakes seal");
     invocations.allocation.moved_document();
     let session = crate::process::EvidenceSession::new();
     let evidence = canonicalize_evidence_document(
@@ -3057,55 +2588,6 @@ fn anonymous_import_without_single_provenance_fails_closed() {
     root["reachable"] = json!([root["reachable"][0].clone()]);
     root["reachable"][0]["reexports"][0]["kind"] = json!("glob");
     assert_anonymous_code(root, "anonymous-import-provenance");
-}
-
-#[test]
-fn anonymous_import_item_and_edge_preflight_boundaries_are_exact() {
-    let mut root = anonymous_fixture(false);
-    root["definitions"] = json!([root["definitions"][0].clone()]);
-    root["reachable"] = json!([root["reachable"][0].clone()]);
-    let bytes = document(&[root]);
-    // The preflight item and edge counts are accounting targets, so no
-    // target makes the decode fail. A target of zero records every element,
-    // and its high water is the fixture's true count; the exact count admits
-    // silently and one short records the true count, unlatched.
-    for (field, resource) in [("items", "sidecar items"), ("edges", "sidecar edges")] {
-        let mut measure = cargo::Limits::standard();
-        if field == "items" {
-            measure.items = 0;
-        } else {
-            measure.edges = 0;
-        }
-        let (_, measured) = protocol::decode_recorded(&bytes, &measure)
-            .expect("a zero preflight target still decodes the anonymous fixture");
-        let axis = *measured
-            .exceedances()
-            .axis(resource)
-            .expect("a zero target records the first element");
-        assert_eq!((axis.target, axis.first_requested), (0, 1));
-        let floor = usize::try_from(axis.high_water).expect("the count fits");
-        assert!(
-            (1..=256).contains(&floor),
-            "the anonymous fixture has a bounded preflight floor"
-        );
-
-        let mut exact = cargo::Limits::standard();
-        let mut short = cargo::Limits::standard();
-        if field == "items" {
-            exact.items = floor;
-            short.items = floor - 1;
-        } else {
-            exact.edges = floor;
-            short.edges = floor - 1;
-        }
-        let (_, allocation) = protocol::decode_recorded(&bytes, &exact)
-            .expect("the exact anonymous preflight floor is accepted");
-        assert!(allocation.exceedances().axis(resource).is_none());
-        let (_, allocation) = protocol::decode_recorded(&bytes, &short)
-            .expect("one short of the anonymous preflight floor still decodes");
-        assert_records(&allocation.exceedances(), resource, floor - 1, floor, floor);
-        assert!(!allocation.is_refused());
-    }
 }
 
 #[test]
@@ -3538,8 +3020,7 @@ fn assert_code<T>(result: Result<T>, expected: &'static str) {
     );
 }
 
-/// Physical bounds only: `depth` and the fixed scanner frames still
-/// refuse. Accounting targets are recorded; see [`assert_records`].
+/// Physical bounds only: `depth` and the fixed scanner frames refuse.
 fn assert_limit<T>(result: Result<T>, expected: &'static str) {
     let error = result
         .err()
@@ -3547,26 +3028,6 @@ fn assert_limit<T>(result: Result<T>, expected: &'static str) {
     assert!(
         matches!(&error, Error::Limit { resource, .. } if *resource == expected),
         "expected physical bound `{expected}`, got `{error}`"
-    );
-}
-
-/// An accounting target crossed by a charge is recorded on the owning
-/// account with its configured target, the cumulative amount of the first
-/// crossing charge, and the final cumulative high water.
-fn assert_records(
-    record: &crate::exceedance::Record,
-    name: &str,
-    target: usize,
-    first: usize,
-    high: usize,
-) {
-    let axis = record
-        .axis(name)
-        .unwrap_or_else(|| panic!("the account records `{name}`; recorded {record:?}"));
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (target as u64, first as u64, high as u64),
-        "`{name}` records (target, first requested, high water)"
     );
 }
 
@@ -3581,7 +3042,7 @@ fn assert_refused<T>(result: Result<T>) {
 }
 
 /// `canonicalize` with the canonical account returned beside the graph, so a
-/// test can read the exceedance record the transaction left behind.
+/// test can read the usage the transaction charged.
 fn canonicalize_recorded(
     bytes: &[u8],
     invocations: Invocations,
@@ -3595,7 +3056,7 @@ fn canonicalize_recorded(
     } = invocations;
     allocation.retain(policy.usage)?;
     let document = protocol::decode_accounted(bytes, limits, &mut allocation)?;
-    let fragments = correlate(document.fragments, &authority, limits, &mut allocation)?;
+    let fragments = correlate(document.fragments, &authority, &mut allocation)?;
     let graph = canonicalize_fragments(
         fragments,
         authority,

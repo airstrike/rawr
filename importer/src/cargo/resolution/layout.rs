@@ -5,7 +5,7 @@ use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::node;
-use crate::store::{self, bundle};
+use crate::store::bundle;
 
 const PROVISIONAL_CONFIG: &[u8] = b"[build]\nbuild-dir = \"build/provisional\"\n";
 pub(in crate::cargo) const FINAL_CONFIG: &[u8] = b"[build]\nbuild-dir = \"build/final\"\n";
@@ -62,8 +62,8 @@ impl Layout {
         attempt: bundle::Attempt,
         budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
-        let root = attempt.root_budgeted(budget)?;
-        let paths = Paths::derive(root, Mode::Create, budget)?;
+        let root = attempt.root_budgeted()?;
+        let paths = Paths::derive(root, Mode::Create)?;
         Ok(Self {
             attempt,
             budget: budget.clone(),
@@ -105,7 +105,7 @@ impl Layout {
 
     /// Cold commands retain the original shared account while controls are mutable.
     pub(crate) fn require_configs(&self) -> Result<(), node::Error> {
-        self.paths.require_configs(&self.budget)
+        self.paths.require_configs()
     }
 
     /// Seal only after the caller has completed every command and output check.
@@ -117,46 +117,32 @@ impl Layout {
 impl Paths {
     /// Transfer an already validated bundle root and inspect its fixed geometry.
     /// This neither replaces complete bundle validation nor checks payload files.
-    pub(crate) fn observe(root: PathBuf, budget: &node::GraphBudget) -> Result<Self, node::Error> {
+    pub(crate) fn observe(root: PathBuf) -> Result<Self, node::Error> {
         if !root.is_absolute() {
             return Err(node::Error::OutsideRoot(root));
         }
-        Self::derive(root, Mode::Observe, budget)
+        Self::derive(root, Mode::Observe)
     }
 
-    fn derive(root: PathBuf, mode: Mode, budget: &node::GraphBudget) -> Result<Self, node::Error> {
-        let generated = bundle::path(&root, Path::new("generated"), budget)?;
-        let target = bundle::path(&root, Path::new("target"), budget)?;
-        let build = bundle::path(&root, Path::new("build"), budget)?;
-        let declared = bundle::path(&root, Path::new(DECLARED_DIRECTORY), budget)?;
+    fn derive(root: PathBuf, mode: Mode) -> Result<Self, node::Error> {
+        let generated = bundle::path(&root, Path::new("generated"))?;
+        let target = bundle::path(&root, Path::new("target"))?;
+        let build = bundle::path(&root, Path::new("build"))?;
+        let declared = bundle::path(&root, Path::new(DECLARED_DIRECTORY))?;
         let (generated, target, build, declared) = match mode {
             Mode::Create => (generated, target, build, declared),
             Mode::Observe => (
-                observe_directory(generated, budget)?,
-                observe_directory(target, budget)?,
-                observe_directory(build, budget)?,
-                observe_directory(declared, budget)?,
+                observe_directory(generated)?,
+                observe_directory(target)?,
+                observe_directory(build)?,
+                observe_directory(declared)?,
             ),
         };
-        let provisional = Cargo::bind(
-            &generated,
-            &target,
-            &build,
-            &declared,
-            "provisional",
-            mode,
-            budget,
-        )?;
-        let final_form = Cargo::bind(
-            &generated, &target, &build, &declared, "final", mode, budget,
-        )?;
-        let extraction = Extraction::bind(&declared, mode, budget)?;
-        let receipt = bundle::path(
-            final_form.root(),
-            Path::new(crate::cargo::UNIVERSE_RECEIPT),
-            budget,
-        )?;
-        let record = bundle::path(&declared, Path::new(RECORD_NAME), budget)?;
+        let provisional = Cargo::bind(&generated, &target, &build, &declared, "provisional", mode)?;
+        let final_form = Cargo::bind(&generated, &target, &build, &declared, "final", mode)?;
+        let extraction = Extraction::bind(&declared, mode)?;
+        let receipt = bundle::path(final_form.root(), Path::new(crate::cargo::UNIVERSE_RECEIPT))?;
+        let record = bundle::path(&declared, Path::new(RECORD_NAME))?;
         Ok(Self {
             root,
             provisional,
@@ -192,9 +178,9 @@ impl Paths {
         &self.record
     }
 
-    pub(crate) fn require_configs(&self, budget: &node::GraphBudget) -> Result<(), node::Error> {
-        self.provisional.require_config(budget)?;
-        self.final_form.require_config(budget)
+    pub(crate) fn require_configs(&self) -> Result<(), node::Error> {
+        self.provisional.require_config()?;
+        self.final_form.require_config()
     }
 }
 
@@ -206,24 +192,23 @@ impl Cargo {
         declared: &Path,
         name: &str,
         mode: Mode,
-        budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
         let relative = Path::new(name);
-        let root = directory(generated, relative, mode, budget)?;
-        let source_root = directory(&root, Path::new("src"), mode, budget)?;
-        let manifest = bundle::path(&root, Path::new("Cargo.toml"), budget)?;
-        let source = bundle::path(&source_root, Path::new("lib.rs"), budget)?;
-        let lock = bundle::path(&root, Path::new("Cargo.lock"), budget)?;
-        let target = directory(target, relative, mode, budget)?;
-        let build = directory(build, relative, mode, budget)?;
+        let root = directory(generated, relative, mode)?;
+        let source_root = directory(&root, Path::new("src"), mode)?;
+        let manifest = bundle::path(&root, Path::new("Cargo.toml"))?;
+        let source = bundle::path(&source_root, Path::new("lib.rs"))?;
+        let lock = bundle::path(&root, Path::new("Cargo.lock"))?;
+        let target = directory(target, relative, mode)?;
+        let build = directory(build, relative, mode)?;
         let (config_name, config_bytes) = match name {
             "provisional" => ("build-provisional.toml", PROVISIONAL_CONFIG),
             "final" => ("build-final.toml", FINAL_CONFIG),
             _ => return Err(node::Error::State("unknown reserved Cargo form")),
         };
-        let config = bundle::path(declared, Path::new(config_name), budget)?;
+        let config = bundle::path(declared, Path::new(config_name))?;
         let config = match mode {
-            Mode::Create => publish_config(config, config_bytes, budget)?,
+            Mode::Create => publish_config(config, config_bytes)?,
             Mode::Observe => config,
         };
         let cargo = Self {
@@ -237,7 +222,7 @@ impl Cargo {
             config_bytes,
         };
         if matches!(mode, Mode::Observe) {
-            cargo.require_config(budget)?;
+            cargo.require_config()?;
         }
         Ok(cargo)
     }
@@ -274,11 +259,8 @@ impl Cargo {
         self.config_bytes
     }
 
-    pub(crate) fn require_config(&self, budget: &node::GraphBudget) -> Result<(), node::Error> {
-        budget.decode(self.config.as_os_str().len())?;
+    pub(crate) fn require_config(&self) -> Result<(), node::Error> {
         let path = self.config.clone();
-        budget.paths(1)?;
-        store::path::canonical(&path, budget)?;
         let canonical = match fs::canonicalize(&path) {
             Ok(canonical) => canonical,
             Err(source) => {
@@ -292,8 +274,6 @@ impl Cargo {
         if canonical.as_os_str() != path.as_os_str() {
             return Err(node::Error::Shape(canonical));
         }
-        budget.paths(1)?;
-        store::path::input(&path, budget)?;
         let mut file = match fs::File::open(&path) {
             Ok(file) => file,
             Err(source) => {
@@ -348,13 +328,7 @@ impl Cargo {
     }
 }
 
-fn publish_config(
-    path: PathBuf,
-    bytes: &[u8],
-    budget: &node::GraphBudget,
-) -> Result<PathBuf, node::Error> {
-    budget.paths(1)?;
-    store::path::input(&path, budget)?;
+fn publish_config(path: PathBuf, bytes: &[u8]) -> Result<PathBuf, node::Error> {
     let mut file = match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -380,11 +354,11 @@ fn publish_config(
 }
 
 impl Extraction {
-    fn bind(declared: &Path, mode: Mode, budget: &node::GraphBudget) -> Result<Self, node::Error> {
-        let root = directory(declared, Path::new("extraction"), mode, budget)?;
-        let protocol = directory(&root, Path::new("protocol"), mode, budget)?;
-        let plan = bundle::path(&root, Path::new("plan.json"), budget)?;
-        let source = bundle::path(&root, Path::new("probe.rs"), budget)?;
+    fn bind(declared: &Path, mode: Mode) -> Result<Self, node::Error> {
+        let root = directory(declared, Path::new("extraction"), mode)?;
+        let protocol = directory(&root, Path::new("protocol"), mode)?;
+        let plan = bundle::path(&root, Path::new("plan.json"))?;
+        let source = bundle::path(&root, Path::new("probe.rs"))?;
         Ok(Self {
             root,
             protocol,
@@ -410,18 +384,11 @@ impl Extraction {
     }
 }
 
-fn directory(
-    parent: &Path,
-    relative: &Path,
-    mode: Mode,
-    budget: &node::GraphBudget,
-) -> Result<PathBuf, node::Error> {
-    let path = bundle::path(parent, relative, budget)?;
+fn directory(parent: &Path, relative: &Path, mode: Mode) -> Result<PathBuf, node::Error> {
+    let path = bundle::path(parent, relative)?;
     if matches!(mode, Mode::Observe) {
-        return observe_directory(path, budget);
+        return observe_directory(path);
     }
-    budget.paths(1)?;
-    store::path::input(&path, budget)?;
     match fs::create_dir(&path) {
         Ok(()) => Ok(path),
         Err(source) => Err(node::Error::Io {
@@ -432,9 +399,7 @@ fn directory(
     }
 }
 
-fn observe_directory(path: PathBuf, budget: &node::GraphBudget) -> Result<PathBuf, node::Error> {
-    budget.paths(1)?;
-    store::path::input(&path, budget)?;
+fn observe_directory(path: PathBuf) -> Result<PathBuf, node::Error> {
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(source) => {
@@ -448,8 +413,6 @@ fn observe_directory(path: PathBuf, budget: &node::GraphBudget) -> Result<PathBu
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(node::Error::Shape(path));
     }
-    budget.paths(1)?;
-    store::path::canonical(&path, budget)?;
     let canonical = match fs::canonicalize(&path) {
         Ok(canonical) => canonical,
         Err(source) => {

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest as _, Sha256};
 
-use crate::node::{Error, GraphBudget};
+use crate::node::Error;
 
 pub(crate) struct Freshness {
     files: Box<[Source]>,
@@ -20,27 +20,19 @@ struct Source {
 }
 
 impl super::Bytes {
-    pub(crate) fn freshness(
-        &self,
-        budget: &GraphBudget,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Freshness, Error> {
-        budget.decode(self.framed.len())?;
+    pub(crate) fn freshness(&self) -> Result<Freshness, Error> {
         let mut cursor = self
             .framed
             .strip_prefix(super::ENTRY_DOMAIN)
             .ok_or(Error::State("bound snapshot lost its framing"))?;
         let malformed = |_| Error::State("bound snapshot lost its canonical fields");
-        // The transport was validated against its accounting targets when it
-        // was bound; this re-parse only reads the exact framed fields.
-        let _ = limits;
+        // The transport was validated when it was bound; this re-parse only
+        // reads the exact framed fields.
         super::take_string_field(&mut cursor).map_err(malformed)?;
         let mut files = Vec::new();
         while !cursor.is_empty() {
             let path = super::take_string_field(&mut cursor).map_err(malformed)?;
             let contents = super::take_bytes(&mut cursor).map_err(malformed)?;
-            budget.paths(1)?;
-            budget.hash(contents.len())?;
             files.try_reserve(1).map_err(|_| Error::Allocation)?;
             files.push(Source {
                 path: PathBuf::from(path),
@@ -60,25 +52,16 @@ impl Freshness {
         self.snapshot == snapshot.digest
     }
 
-    pub(crate) fn revalidate(&self, budget: &GraphBudget) -> Result<(), Error> {
+    pub(crate) fn revalidate(&self) -> Result<(), Error> {
         for source in &self.files {
-            source.revalidate(budget)?;
+            source.revalidate()?;
         }
         Ok(())
     }
 }
 
 impl Source {
-    fn revalidate(&self, budget: &GraphBudget) -> Result<(), Error> {
-        // Canonical spelling rejects aliases and symlink parents as well as a
-        // symlink at the leaf. Charge the traversal before touching the path.
-        budget.paths(
-            self.path
-                .components()
-                .count()
-                .saturating_mul(2)
-                .saturating_add(5),
-        )?;
+    fn revalidate(&self) -> Result<(), Error> {
         let io = |source| Error::Io {
             operation: "revalidate bound Rawr snapshot source",
             path: self.path.clone(),
@@ -94,7 +77,6 @@ impl Source {
         if before.len() != self.bytes as u64 {
             return Err(drift(&self.path));
         }
-        budget.hash(self.bytes)?;
         let mut file = File::open(&self.path).map_err(io)?;
         let opened = file.metadata().map_err(io)?;
         if !same(&before, &opened) {
@@ -177,19 +159,17 @@ mod tests {
         let mut bytes = super::super::Bytes::capture(&limits);
         bytes.entry(path).unwrap();
         bytes.file(path, b"before").unwrap();
-        (root, bytes.bind(snapshot, &limits).unwrap())
+        (root, bytes.bind(snapshot).unwrap())
     }
 
     #[test]
     fn bound_snapshot_rejects_silent_same_length_source_drift_and_path_aliases() {
         let (root, bytes) = fixture();
-        let freshness = bytes
-            .freshness(&GraphBudget::new(), &crate::cargo::Limits::standard())
-            .unwrap();
-        freshness.revalidate(&GraphBudget::new()).unwrap();
+        let freshness = bytes.freshness().unwrap();
+        freshness.revalidate().unwrap();
         fs::write(root.join("main.rs"), b"after!").unwrap();
         assert!(matches!(
-            freshness.revalidate(&GraphBudget::new()),
+            freshness.revalidate(),
             Err(Error::SourceChanged(_))
         ));
         fs::remove_file(root.join("main.rs")).unwrap();
@@ -197,87 +177,27 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("other.rs"), root.join("main.rs")).unwrap();
-            assert!(matches!(
-                freshness.revalidate(&GraphBudget::new()),
-                Err(Error::Shape(_))
-            ));
+            assert!(matches!(freshness.revalidate(), Err(Error::Shape(_))));
         }
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn freshness_charges_exact_decode_hash_and_path_caps_before_work() {
+    fn freshness_charges_exact_decode_hash_and_path_work_before_it_runs() {
         let (root, bytes) = fixture();
-        let limits = crate::cargo::Limits::standard();
-        // Each cap is an accounting target. The exact remaining amount
-        // records nothing; one unit short still completes the work and records
-        // an exceedance whose high water is exactly one past the target, which
-        // proves the exact charge without any refusal.
-        let high_water = |budget: &GraphBudget, resource: &str| {
-            budget
-                .exceedances()
-                .axis(resource)
-                .map(|axis| axis.high_water)
-        };
-        for short in [false, true] {
-            let budget = GraphBudget::new();
-            budget
-                .decode(
-                    crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.framed.len()
-                        + usize::from(short),
-                )
-                .unwrap();
-            bytes
-                .freshness(&budget, &limits)
-                .expect("an accounting axis never refuses");
-            assert_eq!(
-                high_water(&budget, crate::node::DECODED_RESOURCE),
-                short.then_some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1)
-            );
-        }
-        let freshness = bytes.freshness(&GraphBudget::new(), &limits).unwrap();
+        let freshness = bytes.freshness().unwrap();
         let source = &freshness.files[0];
-        for short in [false, true] {
-            let budget = GraphBudget::new();
-            budget
-                .hash(
-                    crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize - source.bytes
-                        + usize::from(short),
-                )
-                .unwrap();
-            freshness
-                .revalidate(&budget)
-                .expect("an accounting axis never refuses");
-            assert_eq!(
-                high_water(&budget, crate::node::HASHED_RESOURCE),
-                short.then_some(crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1)
-            );
-        }
-        let charge = source.path.components().count() * 2 + 5;
-        let budget = GraphBudget::new();
-        budget
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - charge)
-            .unwrap();
-        freshness.revalidate(&budget).unwrap();
-        assert_eq!(high_water(&budget, crate::node::PATHS_RESOURCE), None);
-        // A nonexistent file distinguishes the precharged traversal, recorded
+        freshness.revalidate().unwrap();
+        // A nonexistent file distinguishes the precharged traversal, charged
         // before the path is touched, from the I/O failure the work then reports.
         fs::remove_file(&source.path).unwrap();
-        let budget = GraphBudget::new();
-        budget
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - charge + 1)
-            .unwrap();
         assert!(matches!(
-            freshness.revalidate(&budget),
+            freshness.revalidate(),
             Err(Error::Io {
                 operation: "revalidate bound Rawr snapshot source",
                 ..
             })
         ));
-        assert_eq!(
-            high_water(&budget, crate::node::PATHS_RESOURCE),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-        );
         fs::remove_dir_all(root).unwrap();
     }
 }

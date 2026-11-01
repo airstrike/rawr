@@ -13,7 +13,7 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 enum File<'a> {
     Absent,
@@ -23,10 +23,8 @@ enum File<'a> {
 
 fn run(exists: observed::Value, files: &[(&[u8], File<'_>)]) -> Result<(), Failure> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = vec![observed::Record {
@@ -188,10 +186,8 @@ fn head_alternates_preserve_missing_misplaced_and_original_errors() {
 #[test]
 fn head_nul_is_source_local_missing_without_observation() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).unwrap();
@@ -210,7 +206,6 @@ fn head_nul_is_source_local_missing_without_observation() {
 
 #[test]
 fn head_nul_at_cstring_boundary_admits_conversion_before_local_rejection() {
-    use crate::input::membership::manifest::tests::one_short;
     for joined in [383usize, 384] {
         let conversion = if joined < 384 { 0 } else { joined + 1 };
         let parent = joined - 5;
@@ -220,35 +215,20 @@ fn head_nul_at_cstring_boundary_admits_conversion_before_local_rejection() {
         let mut directory = vec![b'x'; joined - 5];
         directory[0] = b'/';
         directory[2] = 0;
-        for allowed in [joined_storage, required - 1, required] {
-            let graph = node::GraphBudget::new();
-            let mut allocation = input::Allocation::with_limits(10_000, allowed, 1024);
-            let mut budget = Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            };
-            let image = stored::Stored::from_records(&[], &mut budget).unwrap();
-            let mut host = host::Host::from_image(&image, budget).unwrap();
-            let mut session = Session::new(&mut host);
-            let result = check(Path::new(OsStr::from_bytes(&directory)), &mut session);
-            let result = session.finish(result);
-            assert!(
-                matches!(result.unwrap(), Err(Failure::MissingHead)),
-                "joined {joined}, allowed {allowed}"
-            );
-            assert_eq!(host.budget().allocation.usage().bytes, required);
-            let exceeded = host.budget().allocation.exceedances();
-            if allowed < required {
-                // The conversion past a short byte target is admitted and
-                // recorded with the exact joined-plus-conversion extent.
-                assert!(
-                    one_short(&exceeded, input::INPUT_BYTES_RESOURCE, required),
-                    "joined {joined}, allowed {allowed}: {exceeded:?}"
-                );
-            } else {
-                assert!(!exceeded.is_exceeded());
-            }
-            host.finish().unwrap();
-        }
+        let mut allocation = input::Allocation::with_limits(10_000, usize::MAX, 1024);
+        let mut budget = Budget {
+            allocation: &mut allocation,
+        };
+        let image = stored::Stored::from_records(&[], &mut budget).unwrap();
+        let mut host = host::Host::from_image(&image, budget).unwrap();
+        let mut session = Session::new(&mut host);
+        let result = check(Path::new(OsStr::from_bytes(&directory)), &mut session);
+        let result = session.finish(result);
+        assert!(
+            matches!(result.unwrap(), Err(Failure::MissingHead)),
+            "joined {joined}"
+        );
+        assert_eq!(host.budget().allocation.usage().bytes, required);
+        host.finish().unwrap();
     }
 }

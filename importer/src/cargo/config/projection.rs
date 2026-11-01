@@ -142,38 +142,25 @@ impl Projection {
         limits: &cargo::Limits,
         allocation: &mut cargo::RequestAllocation,
     ) -> Result<Self> {
-        bounded("environment projection target", target, limits, allocation);
-        bounded(
-            "environment projection profile",
-            profile,
-            limits,
-            allocation,
-        );
         allocation.string(target)?;
         allocation.string(profile)?;
         let mut values = BTreeMap::<String, Option<Box<str>>>::new();
         for key in STATIC_KEYS {
-            insert_environment(&mut values, environment, key, limits, allocation)?;
+            insert_environment(&mut values, environment, key, allocation)?;
         }
         let mut platforms = [toolchain::HOST, target];
         platforms.sort_unstable();
         let platform_count = if platforms[0] == platforms[1] { 1 } else { 2 };
         for platform in platforms.into_iter().take(platform_count) {
-            let platform = component(platform, limits, allocation)?;
+            let platform = component(platform, allocation)?;
             for suffix in TARGET_SUFFIXES {
-                let key = derived_key("CARGO_TARGET_", &platform, "_", suffix, limits, allocation)?;
-                insert_environment(&mut values, environment, &key, limits, allocation)?;
+                let key = derived_key("CARGO_TARGET_", &platform, "_", suffix, allocation)?;
+                insert_environment(&mut values, environment, &key, allocation)?;
             }
         }
-        let profile_component = component(profile, limits, allocation)?;
-        let profile_prefix = derived_key(
-            "CARGO_PROFILE_",
-            &profile_component,
-            "_",
-            "",
-            limits,
-            allocation,
-        )?;
+        let profile_component = component(profile, allocation)?;
+        let profile_prefix =
+            derived_key("CARGO_PROFILE_", &profile_component, "_", "", allocation)?;
         // Cargo reads only the profile it builds, so a variable for another
         // profile changes nothing. Of the built profile's own keys, those
         // Cargo reads but the projection does not key reject.
@@ -202,10 +189,9 @@ impl Projection {
                 &profile_component,
                 "_",
                 suffix,
-                limits,
                 allocation,
             )?;
-            insert_environment(&mut values, environment, &key, limits, allocation)?;
+            insert_environment(&mut values, environment, &key, allocation)?;
         }
         for suffix in BUILD_OVERRIDE_SUFFIXES {
             let key = derived_key(
@@ -213,48 +199,32 @@ impl Projection {
                 &profile_component,
                 "_BUILD_OVERRIDE_",
                 suffix,
-                limits,
                 allocation,
             )?;
-            insert_environment(&mut values, environment, &key, limits, allocation)?;
+            insert_environment(&mut values, environment, &key, allocation)?;
         }
 
-        insert_derived(&mut values, "CARGO_INCREMENTAL", "0", limits, allocation)?;
+        insert_derived(&mut values, "CARGO_INCREMENTAL", "0", allocation)?;
         insert_derived(
             &mut values,
             "rawr.context.cargo_commit",
             toolchain::supported_cargo_commit(),
-            limits,
             allocation,
         )?;
         insert_derived(
             &mut values,
             "rawr.context.rustc_commit",
             toolchain::supported_rustc_commit(),
-            limits,
             allocation,
         )?;
         insert_derived(
             &mut values,
             "rawr.context.host",
             toolchain::HOST,
-            limits,
             allocation,
         )?;
-        insert_derived(
-            &mut values,
-            "rawr.context.target",
-            target,
-            limits,
-            allocation,
-        )?;
-        insert_derived(
-            &mut values,
-            "rawr.context.profile",
-            profile,
-            limits,
-            allocation,
-        )?;
+        insert_derived(&mut values, "rawr.context.target", target, allocation)?;
+        insert_derived(&mut values, "rawr.context.profile", profile, allocation)?;
         for (key, value) in [
             (
                 "rawr.context.parallelism_schema",
@@ -297,12 +267,9 @@ impl Projection {
                 allocation.formatted(format_args!("3"))?,
             ),
         ] {
-            insert_derived(&mut values, key, &value, limits, allocation)?;
+            insert_derived(&mut values, key, &value, allocation)?;
         }
 
-        // The entry count is an accounting target recorded on the
-        // request account; the projection seals every entry.
-        allocation.exceeded("environment projection entries", limits.items, values.len());
         allocation.items(values.len())?;
         let mut entries = Vec::with_capacity(values.len());
         for (key, value) in values {
@@ -450,15 +417,10 @@ fn insert_environment(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     environment: &Environment,
     key: &str,
-    limits: &cargo::Limits,
     allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
-    bounded("environment projection key", key, limits, allocation);
     let value = environment.value(key).map(|value| keyed_value(key, value));
-    if let Some(value) = &value {
-        bounded("environment projection value", value, limits, allocation);
-    }
-    insert(values, key, value.as_deref(), limits, allocation)
+    insert(values, key, value.as_deref(), allocation)
 }
 
 /// The value one environment variable contributes to keys and projections.
@@ -534,30 +496,17 @@ fn insert_derived(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     key: &str,
     value: &str,
-    limits: &cargo::Limits,
     allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
-    bounded("environment projection key", key, limits, allocation);
-    bounded("environment projection value", value, limits, allocation);
-    insert(values, key, Some(value), limits, allocation)
+    insert(values, key, Some(value), allocation)
 }
 
 fn insert(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     key: &str,
     value: Option<&str>,
-    limits: &cargo::Limits,
     allocation: &mut cargo::RequestAllocation,
 ) -> Result<()> {
-    // A new entry past the item target is recorded on the request
-    // account and still inserted.
-    if !values.contains_key(key) {
-        allocation.exceeded(
-            "environment projection entries",
-            limits.items,
-            values.len().saturating_add(1),
-        );
-    }
     if let Some(previous) = values.get(key) {
         return if previous.as_deref() == value {
             Ok(())
@@ -577,17 +526,7 @@ fn insert(
     Ok(())
 }
 
-fn component(
-    value: &str,
-    limits: &cargo::Limits,
-    allocation: &mut cargo::RequestAllocation,
-) -> Result<String> {
-    bounded(
-        "environment projection component",
-        value,
-        limits,
-        allocation,
-    );
+fn component(value: &str, allocation: &mut cargo::RequestAllocation) -> Result<String> {
     allocation.items(1)?;
     allocation.bytes(value.len())?;
     let mut output = String::with_capacity(value.len());
@@ -606,7 +545,6 @@ fn derived_key(
     component: &str,
     separator: &str,
     suffix: &str,
-    limits: &cargo::Limits,
     allocation: &mut cargo::RequestAllocation,
 ) -> Result<String> {
     let length = prefix
@@ -615,11 +553,6 @@ fn derived_key(
         .and_then(|length| length.checked_add(separator.len()))
         .and_then(|length| length.checked_add(suffix.len()))
         .expect("an environment key's length fits in memory");
-    allocation.exceeded(
-        "environment projection key bytes",
-        limits.string_bytes,
-        length,
-    );
     allocation.items(1)?;
     allocation.bytes(length)?;
     let mut key = String::with_capacity(length);
@@ -630,17 +563,7 @@ fn derived_key(
     Ok(key)
 }
 
-/// A projected string's length is an accounting target recorded on the
-/// request account; the string is still retained and charged.
-fn bounded(
-    resource: &'static str,
-    value: &str,
-    limits: &cargo::Limits,
-    allocation: &mut cargo::RequestAllocation,
-) {
-    allocation.exceeded(resource, limits.string_bytes, value.len());
-}
-
+/// A projected string is retained and charged to the request account.
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
@@ -649,24 +572,6 @@ mod tests {
     use crate::cargo::config::Environment;
     use crate::cargo::Limits;
     use crate::process::parallelism;
-
-    /// A target one unit under an exact total refuses nothing; the
-    /// account records the axis with that target and a high water equal to
-    /// the exact total the exercise charged.
-    fn assert_exceeded(
-        record: crate::exceedance::Record,
-        name: &str,
-        target: usize,
-        high_water: usize,
-    ) {
-        let axis = record
-            .axis(name)
-            .unwrap_or_else(|| panic!("{name} records the lowered target"));
-        assert_eq!(axis.target, target as u64);
-        assert_eq!(axis.high_water, high_water as u64);
-        assert!(axis.first_requested > axis.target);
-        assert!(axis.first_requested <= axis.high_water);
-    }
 
     #[test]
     fn jobs_and_stage_caps_are_exact_freshness_facts() {
@@ -773,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_entries_target_profile_and_derived_facts_share_one_exact_ledger() {
+    fn projection_entries_target_profile_and_derived_facts_share_one_ledger() {
         let measure = |limits: &Limits| {
             let parallelism = parallelism::Proof::fixture(
                 NonZeroUsize::new(12).expect("fixture jobs are nonzero"),
@@ -790,121 +695,9 @@ mod tests {
             )?;
             Ok::<_, crate::Error>((allocation, projection))
         };
-        let standard = Limits::standard();
-        let (usage, projection) = measure(&standard).expect("standard projection measures");
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, exact_projection) = measure(&exact).expect("exact ledger seals");
-        assert_eq!(usage.items, exact_usage.items);
-        assert_eq!(usage.bytes, exact_usage.bytes);
-        assert_eq!(projection, exact_projection);
-        assert!(!exact_usage.exceedances().is_exceeded());
-
-        // One unit under the exact ledger refuses nothing; the account
-        // records the lowered axis with the exact total as its high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, item_projection) =
-            measure(&item_floor).expect("one item under the ledger still derives");
-        assert_eq!(item_projection, projection);
-        assert_exceeded(
-            item_usage.exceedances(),
-            crate::cargo::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, byte_projection) =
-            measure(&byte_floor).expect("one byte under the ledger still derives");
-        assert_eq!(byte_projection, projection);
-        assert_exceeded(
-            byte_usage.exceedances(),
-            crate::cargo::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
-    }
-
-    /// The projection's entry count and string lengths are accounting
-    /// targets on the request account: the exact figures record no projection
-    /// axis, one under derives the identical projection and records that axis
-    /// with its truthful high water, and nothing refuses.
-    #[test]
-    fn projection_entry_and_string_targets_record_without_refusal() {
-        let measure = |limits: &Limits| {
-            let parallelism = parallelism::Proof::fixture(
-                NonZeroUsize::new(12).expect("fixture jobs are nonzero"),
-            )
-            .expect("fixture parallelism seals");
-            let mut allocation = crate::cargo::RequestAllocation::new(limits);
-            let projection = Projection::derive_governed_budgeted(
-                &Environment::empty(),
-                "aarch64-apple-darwin",
-                "dev",
-                parallelism,
-                limits,
-                &mut allocation,
-            )
-            .expect("the projection derives under every accounting target");
-            (allocation.exceedances(), projection)
-        };
-        let projection_axes = |record: crate::exceedance::Record| {
-            record
-                .axes()
-                .filter(|axis| axis.name.starts_with("environment projection"))
-                .copied()
-                .collect::<Vec<_>>()
-        };
-        let standard = Limits::standard();
-        let (_, projection) = measure(&standard);
-        let entries = projection.entries.len();
-        let longest = projection
-            .entries
-            .iter()
-            .map(|entry| {
-                entry
-                    .key
-                    .len()
-                    .max(entry.value.as_deref().map_or(0, str::len))
-            })
-            .max()
-            .expect("the projection has entries");
-        let mut exact = standard;
-        exact.items = entries;
-        exact.string_bytes = longest;
-        let (record, same) = measure(&exact);
-        assert_eq!(same, projection);
-        assert!(projection_axes(record).is_empty());
-
-        let mut entry_floor = exact;
-        entry_floor.items = entries - 1;
-        let (record, same) = measure(&entry_floor);
-        assert_eq!(same, projection);
-        let axes = projection_axes(record);
-        assert_eq!(axes.len(), 1);
-        assert_eq!(axes[0].name, "environment projection entries");
-        assert_eq!(
-            (axes[0].target, axes[0].first_requested, axes[0].high_water),
-            ((entries - 1) as u64, entries as u64, entries as u64)
-        );
-
-        let mut string_floor = exact;
-        string_floor.string_bytes = longest - 1;
-        let (record, same) = measure(&string_floor);
-        assert_eq!(same, projection);
-        let axes = projection_axes(record);
-        assert!(!axes.is_empty(), "the longest string records its axis");
-        for axis in &axes {
-            assert_eq!(axis.target, (longest - 1) as u64);
-            assert!(axis.first_requested > axis.target);
-            assert!(axis.high_water <= longest as u64);
-        }
-        assert_eq!(
-            axes.iter().map(|axis| axis.high_water).max(),
-            Some(longest as u64)
-        );
+        let (usage, projection) = measure(&Limits::standard()).expect("the projection derives");
+        assert!(usage.items >= projection.entries.len());
+        assert!(usage.bytes > 0);
     }
 
     #[test]
@@ -922,40 +715,9 @@ mod tests {
             let cloned = projection.clone_budgeted(&mut allocation)?;
             Ok::<_, crate::Error>((allocation, cloned))
         };
-        let (usage, cloned) = measure(&standard).expect("standard clone measures");
+        let (usage, cloned) = measure(&standard).expect("the projection clones");
         assert_eq!(projection, cloned);
-
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, exact_clone) = measure(&exact).expect("exact clone seals");
-        assert_eq!(projection, exact_clone);
-        assert!(!exact_usage.exceedances().is_exceeded());
-
-        // One unit under the exact clone ledger refuses nothing; the
-        // account records the lowered axis with the exact total as high water.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, item_clone) =
-            measure(&item_floor).expect("one item under the clone ledger still clones");
-        assert_eq!(projection, item_clone);
-        assert_exceeded(
-            item_usage.exceedances(),
-            crate::cargo::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, byte_clone) =
-            measure(&byte_floor).expect("one byte under the clone ledger still clones");
-        assert_eq!(projection, byte_clone);
-        assert_exceeded(
-            byte_usage.exceedances(),
-            crate::cargo::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
+        assert!(usage.items > 0 && usage.bytes > 0);
     }
 
     #[test]

@@ -106,11 +106,7 @@ pub(in crate::input) fn require(
         if script::fallback(&declarations)
             && !fallback.as_slice().contains(&script.package_id.as_ref())
         {
-            budget.limited(
-                "default package file sets",
-                budget.limits.packages,
-                fallback.as_slice().len().saturating_add(1),
-            )?;
+            budget.check()?;
             fallback.push(script.package_id.as_ref(), budget)?;
             let current = metadata
                 .package(&script.package_id)
@@ -166,11 +162,7 @@ fn push(
     budget: &mut Budget<'_>,
     observe: impl FnOnce(&mut Budget<'_>) -> Result<Entry>,
 ) -> Result<()> {
-    budget.limited(
-        "input proof entries",
-        budget.limits.items,
-        entries.as_slice().len().saturating_add(1),
-    )?;
+    budget.check()?;
     // Admit the real entry slot before its fields or filesystem observation.
     entries.reserve(budget)?;
     let entry = observe(budget)?;

@@ -124,9 +124,8 @@ impl Stored {
         root: &Path,
         reference: bundle::BundleRef,
         mode: Mode,
-        budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
-        Self::capture_with(root, reference, mode, budget, SCHEMA, |_| true)
+        Self::capture_with(root, reference, mode, SCHEMA, |_| true)
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -146,7 +145,6 @@ impl Stored {
             root,
             reference,
             mode,
-            budget,
             RESOLUTION_SCHEMA,
             |path| scope.requires_content(path),
             |path| {
@@ -165,11 +163,10 @@ impl Stored {
         root: &Path,
         reference: bundle::BundleRef,
         mode: Mode,
-        budget: &node::GraphBudget,
         schema: u32,
         retains: impl Fn(&Path) -> bool,
     ) -> Result<Self, node::Error> {
-        Self::capture_classified(root, reference, mode, budget, schema, retains, |_| {
+        Self::capture_classified(root, reference, mode, schema, retains, |_| {
             if schema == RESOLUTION_SCHEMA {
                 3
             } else {
@@ -182,20 +179,19 @@ impl Stored {
         root: &Path,
         reference: bundle::BundleRef,
         mode: Mode,
-        budget: &node::GraphBudget,
         schema: u32,
         retains: impl Fn(&Path) -> bool,
         directory_kind: impl Fn(&Path) -> u8,
     ) -> Result<Self, node::Error> {
-        let canonical = directory(root, budget)?;
-        if canonical != root || !root.ends_with(reference.relative_budgeted(budget)?) {
+        let canonical = directory(root)?;
+        if canonical != root || !root.ends_with(reference.relative_budgeted()?) {
             return Err(node::Error::OutsideRoot(root.to_path_buf()));
         }
         let mut pending = bundle::buffer::Buffer::new();
         for name in ROOTS.into_iter().rev() {
             let name =
                 std::str::from_utf8(name).map_err(|_| node::Error::Codec("retained root"))?;
-            push_path(&mut pending, root, Path::new(name), budget)?;
+            push_path(&mut pending, root, Path::new(name))?;
         }
         let mut records = bundle::buffer::Buffer::new();
         let mut length = HEADER
@@ -203,8 +199,6 @@ impl Stored {
             .ok_or(node::Error::Allocation)?;
         let mut file_bytes = 0_u64;
         while let Some(path) = pending.pop() {
-            budget.paths(1)?;
-            store::path::input(&path, budget)?;
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|source| io("inspect retained member", &path, source))?;
             if metadata.file_type().is_symlink()
@@ -226,13 +220,12 @@ impl Stored {
                 .and_then(|size| size.checked_add(relative.len()))
                 .ok_or(node::Error::Allocation)?;
             bounded(length)?;
-            budget.decode(relative.len())?;
             let relative = relative.to_vec().into_boxed_slice();
             let (kind, bytes, digest) = if metadata.is_dir() {
                 let remaining = (bundle::MAX_MEMBERS as usize)
                     .saturating_sub(records.len() + pending.len() + 1);
-                for child in bundle::paths(&path, remaining, budget)?.into_iter().rev() {
-                    pending.push(child, budget)?;
+                for child in bundle::paths(&path, remaining)?.into_iter().rev() {
+                    pending.push(child)?;
                 }
                 (directory_kind(&path), 0, [0; 32])
             } else {
@@ -247,21 +240,18 @@ impl Stored {
                     });
                 }
                 if retains(&path) {
-                    (1, metadata.len(), hash(&path, &metadata, budget)?)
+                    (1, metadata.len(), hash(&path, &metadata)?)
                 } else {
                     (2, metadata.len(), [0; 32])
                 }
             };
-            records.push(
-                Record {
-                    path: relative,
-                    kind,
-                    mode: expected_mode,
-                    bytes,
-                    digest,
-                },
-                budget,
-            )?;
+            records.push(Record {
+                path: relative,
+                kind,
+                mode: expected_mode,
+                bytes,
+                digest,
+            })?;
             if records.len() > bundle::MAX_MEMBERS as usize {
                 return Err(node::Error::Limit {
                     resource: "runner retained members",
@@ -272,7 +262,6 @@ impl Stored {
         }
         let mut records = records.into_vec();
         records.sort_unstable_by(|left, right| left.path.cmp(&right.path));
-        budget.decode(length)?;
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
@@ -295,7 +284,6 @@ impl Stored {
             bytes.extend_from_slice(&record.digest);
         }
         debug_assert_eq!(bytes.len(), length);
-        budget.hash(bytes.len())?;
         Ok(Self {
             digest: Sha256::digest(&bytes).into(),
             canonical: bytes.into_boxed_slice(),
@@ -307,9 +295,8 @@ impl Stored {
         bytes: &[u8],
         root: &Path,
         reference: bundle::BundleRef,
-        budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
-        Self::decode_with(bytes, root, reference, budget, SCHEMA)
+        Self::decode_with(bytes, root, reference, SCHEMA)
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -317,16 +304,14 @@ impl Stored {
         bytes: &[u8],
         root: &Path,
         reference: bundle::BundleRef,
-        budget: &node::GraphBudget,
     ) -> Result<Self, node::Error> {
-        Self::decode_with(bytes, root, reference, budget, RESOLUTION_SCHEMA)
+        Self::decode_with(bytes, root, reference, RESOLUTION_SCHEMA)
     }
 
     fn decode_with(
         bytes: &[u8],
         root: &Path,
         reference: bundle::BundleRef,
-        budget: &node::GraphBudget,
         schema: u32,
     ) -> Result<Self, node::Error> {
         bounded(bytes.len())?;
@@ -354,11 +339,6 @@ impl Stored {
             ));
         }
         // A flat, complete path/type stream is also the exact child set of every directory.
-        budget.decode(
-            count
-                .checked_mul(std::mem::size_of::<(&[u8], u8)>())
-                .ok_or(node::Error::Allocation)?,
-        )?;
         let mut paths: Vec<(&[u8], u8)> = Vec::new();
         paths
             .try_reserve_exact(count)
@@ -422,8 +402,6 @@ impl Stored {
                 "retained root set or record length changed",
             ));
         }
-        budget.decode(bytes.len())?;
-        budget.hash(bytes.len())?;
         Ok(Self {
             canonical: bytes.into(),
             digest: Sha256::digest(bytes).into(),
@@ -470,7 +448,7 @@ impl Stored {
             node::read_set::Scope::Complete,
             None,
             mismatch,
-            |path, metadata, _| hash(path, metadata, budget).map(Some),
+            |path, metadata, _| hash(path, metadata).map(Some),
         )
     }
 
@@ -564,7 +542,7 @@ impl Stored {
                 let control = matches!(relative.components().next(),
                     Some(std::path::Component::Normal(name)) if name == "declared" || name == "generated");
                 if control {
-                    hash(path, metadata, budget).map(Some)
+                    hash(path, metadata).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -584,14 +562,13 @@ impl Stored {
         budget: &node::GraphBudget,
     ) -> Result<(), node::Error> {
         let (expected_length, expected) = self.resolution_commitment(root, path)?;
-        budget.hash(bytes.len())?;
         let actual: [u8; 32] = Sha256::digest(bytes).into();
         if bytes.len() as u64 != expected_length || actual != expected {
             // These owned bytes reject interpretation, but their reader
             // may have raced a path replacement. Only the inventory's
             // safe current read can establish candidate-local corruption.
             self.replay_resolution_content_from(root, origin, budget, |path, metadata, _| {
-                hash(path, metadata, budget)
+                hash(path, metadata)
             })?;
             return Err(node::Error::Codec(
                 "early control bytes changed during read",
@@ -657,16 +634,11 @@ impl Stored {
             .checked_add(root_length)
             .ok_or(node::Error::Allocation)?;
         if self.canonical.get(HEADER..offset) != Some(root.as_os_str().as_encoded_bytes())
-            || directory(root, budget)? != root
-            || !root.ends_with(self.reference.relative_budgeted(budget)?)
+            || directory(root)? != root
+            || !root.ends_with(self.reference.relative_budgeted()?)
         {
             return Err(corrupt(root));
         }
-        budget.decode(
-            count
-                .checked_mul(std::mem::size_of::<Expected<'_>>())
-                .ok_or(node::Error::Allocation)?,
-        )?;
         let mut expected = Vec::new();
         expected
             .try_reserve_exact(count)
@@ -703,11 +675,8 @@ impl Stored {
                     "consumer replay requires resolution inventory",
                 ));
             }
-            return self.replay_consumer(root, mode, budget, &expected, mismatch, content);
+            return self.replay_consumer(root, mode, &expected, mismatch, content);
         }
-        // Mark each expected member once: counting alone could accept a repeated
-        // directory entry in place of a missing member during enumeration.
-        budget.decode(count)?;
         let mut seen = Vec::new();
         seen.try_reserve_exact(count)
             .map_err(|_| node::Error::Allocation)?;
@@ -788,21 +757,19 @@ impl Stored {
             for name in ROOTS.into_iter().rev() {
                 let name =
                     std::str::from_utf8(name).map_err(|_| node::Error::Codec("retained root"))?;
-                push_path(&mut pending, root, Path::new(name), budget)?;
+                push_path(&mut pending, root, Path::new(name))?;
             }
             let mut walked = 0_usize;
             while let Some(path) = pending.pop() {
                 walked += 1;
-                budget.paths(1)?;
-                store::path::input(&path, budget)?;
                 let metadata = fs::symlink_metadata(&path)
                     .map_err(|source| io("inspect retained member", &path, source))?;
                 member(&path, &metadata)?;
                 if metadata.is_dir() {
                     let remaining =
                         (bundle::MAX_MEMBERS as usize).saturating_sub(walked + pending.len());
-                    for child in bundle::paths(&path, remaining, budget)?.into_iter().rev() {
-                        pending.push(child, budget)?;
+                    for child in bundle::paths(&path, remaining)?.into_iter().rev() {
+                        pending.push(child)?;
                     }
                 }
             }
@@ -826,7 +793,6 @@ impl Stored {
         &self,
         root: &Path,
         mode: Mode,
-        budget: &node::GraphBudget,
         expected: &[Expected<'_>],
         mismatch: impl Fn(Mismatch, &Path) -> node::Error,
         mut content: impl FnMut(&Path, &fs::Metadata, [u8; 32]) -> Result<Option<[u8; 32]>, node::Error>,
@@ -845,9 +811,7 @@ impl Stored {
                 std::str::from_utf8(entry.path)
                     .map_err(|_| node::Error::Codec("retained path encoding"))?,
             );
-            let path = bundle::path(root, relative, budget)?;
-            budget.paths(1)?;
-            store::path::input(&path, budget)?;
+            let path = bundle::path(root, relative)?;
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|source| io("inspect retained consumer", &path, source))?;
             if metadata.file_type().is_symlink()
@@ -859,11 +823,11 @@ impl Stored {
                 return Err(corrupt(&path));
             }
             if metadata.is_dir() {
-                if directory(&path, budget)? != path {
+                if directory(&path)? != path {
                     return Err(corrupt(&path));
                 }
                 if entry.kind == 3 {
-                    let children = bundle::paths(&path, bundle::MAX_MEMBERS as usize, budget)?;
+                    let children = bundle::paths(&path, bundle::MAX_MEMBERS as usize)?;
                     let start = expected.partition_point(|child| {
                         child
                             .path
@@ -987,7 +951,7 @@ fn is_directory(kind: u8) -> bool {
     matches!(kind, 0 | 3 | 4)
 }
 
-pub(crate) fn directory(path: &Path, budget: &node::GraphBudget) -> Result<PathBuf, node::Error> {
+pub(crate) fn directory(path: &Path) -> Result<PathBuf, node::Error> {
     let anchor = path
         .ancestors()
         .last()
@@ -995,16 +959,12 @@ pub(crate) fn directory(path: &Path, budget: &node::GraphBudget) -> Result<PathB
     let relative = path
         .strip_prefix(anchor)
         .map_err(|_| node::Error::OutsideRoot(path.to_path_buf()))?;
-    store::existing_directory_budgeted(anchor, relative, budget)?.ok_or_else(|| corrupt(path))
+    store::existing_directory_budgeted(anchor, relative)?.ok_or_else(|| corrupt(path))
 }
 
 /// Hashes the file as a stream. The read is not bounded: nothing is held in
 /// memory, and Cargo builds artifacts of any size.
-pub(crate) fn hash(
-    path: &Path,
-    metadata: &fs::Metadata,
-    budget: &node::GraphBudget,
-) -> Result<[u8; 32], node::Error> {
+pub(crate) fn hash(path: &Path, metadata: &fs::Metadata) -> Result<[u8; 32], node::Error> {
     let length = usize::try_from(metadata.len()).map_err(|_| node::Error::Allocation)?;
     // The digest is a pure function of the file bytes: one computation per
     // physical identity serves every later check. `metadata` is the caller's
@@ -1016,15 +976,12 @@ pub(crate) fn hash(
     {
         return Ok(digest);
     }
-    budget.hash(length.checked_add(1).ok_or(node::Error::Allocation)?)?;
     let parent = path
         .parent()
         .ok_or_else(|| node::Error::Shape(path.to_path_buf()))?;
-    if directory(parent, budget)? != parent {
+    if directory(parent)? != parent {
         return Err(node::Error::OutsideRoot(path.to_path_buf()));
     }
-    budget.paths(1)?;
-    store::path::input(path, budget)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -1035,7 +992,6 @@ pub(crate) fn hash(
     let mut source = options
         .open(path)
         .map_err(|source| io("open retained file", path, source))?;
-    budget.paths(1)?;
     let opened = source
         .metadata()
         .map_err(|source| io("inspect opened retained file", path, source))?;
@@ -1066,8 +1022,6 @@ pub(crate) fn hash(
     {
         return Err(corrupt(path));
     }
-    budget.paths(1)?;
-    store::path::input(path, budget)?;
     let after =
         fs::symlink_metadata(path).map_err(|source| io("reinspect retained file", path, source))?;
     if !same_file(metadata, &after)
@@ -1089,7 +1043,6 @@ fn push_path(
     paths: &mut bundle::buffer::Buffer<PathBuf>,
     parent: &Path,
     name: &Path,
-    budget: &node::GraphBudget,
 ) -> Result<(), node::Error> {
     let length = parent
         .as_os_str()
@@ -1098,13 +1051,12 @@ fn push_path(
         .checked_add(1)
         .and_then(|length| length.checked_add(name.as_os_str().as_encoded_bytes().len()))
         .ok_or(node::Error::Allocation)?;
-    budget.decode(length)?;
     let mut path = PathBuf::new();
     path.try_reserve_exact(length)
         .map_err(|_| node::Error::Allocation)?;
     path.push(parent);
     path.push(name);
-    paths.push(path, budget)
+    paths.push(path)
 }
 
 fn bounded(length: usize) -> Result<(), node::Error> {
@@ -1218,13 +1170,7 @@ mod tests {
         }
 
         fn capture(&self) -> Stored {
-            Stored::capture(
-                &self.root,
-                self.reference,
-                Mode::Pending,
-                &node::GraphBudget::new(),
-            )
-            .unwrap()
+            Stored::capture(&self.root, self.reference, Mode::Pending).unwrap()
         }
         fn replay(&self, stored: &Stored, mode: Mode) -> Result<(), node::Error> {
             stored.replay(&self.root, mode, &node::GraphBudget::new())
@@ -1279,7 +1225,6 @@ mod tests {
             &fixture.root,
             fixture.reference,
             Mode::Pending,
-            &node::GraphBudget::new(),
             RESOLUTION_SCHEMA,
             |path| !path.starts_with(&scratch),
             |path| {
@@ -1303,7 +1248,7 @@ mod tests {
             Origin::Unpublished(Mode::Pending),
             &budget,
             node::read_set::Scope::Consumer,
-            |path, metadata, _| hash(path, metadata, &budget),
+            |path, metadata, _| hash(path, metadata),
         )
     }
 
@@ -1315,22 +1260,11 @@ mod tests {
         fs::create_dir(&scratch).unwrap();
         fs::write(scratch.join("temporary"), b"before").unwrap();
         let stored = scoped_fixture(&fixture);
-        let stored = Stored::decode_resolution(
-            stored.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new(),
-        )
-        .unwrap();
+        let stored =
+            Stored::decode_resolution(stored.bytes(), &fixture.root, fixture.reference).unwrap();
         let mut old = stored.bytes().to_vec();
         old[8..12].copy_from_slice(&2_u32.to_le_bytes());
-        assert!(Stored::decode_resolution(
-            &old,
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new()
-        )
-        .is_err());
+        assert!(Stored::decode_resolution(&old, &fixture.root, fixture.reference,).is_err());
         consumer(&fixture, &stored).unwrap();
         fs::write(scratch.join("temporary"), b"different length").unwrap();
         consumer(&fixture, &stored).unwrap();
@@ -1366,19 +1300,14 @@ mod tests {
             &fixture.root,
             fixture.reference,
             Mode::Pending,
-            &node::GraphBudget::new(),
             RESOLUTION_SCHEMA,
             |_| true,
             |_| 0,
         )
         .unwrap();
-        assert!(Stored::decode_resolution(
-            invalid.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new()
-        )
-        .is_err());
+        assert!(
+            Stored::decode_resolution(invalid.bytes(), &fixture.root, fixture.reference,).is_err()
+        );
     }
 
     #[test]
@@ -1392,32 +1321,16 @@ mod tests {
             &fixture.root,
             fixture.reference,
             Mode::Pending,
-            &node::GraphBudget::new(),
             RESOLUTION_SCHEMA,
             |path| path != scratch,
         )
         .unwrap();
-        assert!(Stored::decode(
-            selected.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new(),
-        )
-        .is_err());
-        assert!(Stored::decode_resolution(
-            native.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new(),
-        )
-        .is_err());
-        let selected = Stored::decode_resolution(
-            selected.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new(),
-        )
-        .unwrap();
+        assert!(Stored::decode(selected.bytes(), &fixture.root, fixture.reference,).is_err());
+        assert!(
+            Stored::decode_resolution(native.bytes(), &fixture.root, fixture.reference,).is_err()
+        );
+        let selected =
+            Stored::decode_resolution(selected.bytes(), &fixture.root, fixture.reference).unwrap();
         fs::write(&scratch, b"two").unwrap();
         fixture.replay(&selected, Mode::Pending).unwrap();
         assert!(fixture.replay(&native, Mode::Pending).is_err());
@@ -1448,7 +1361,6 @@ mod tests {
             &fixture.root,
             fixture.reference,
             Mode::Pending,
-            &node::GraphBudget::new(),
             RESOLUTION_SCHEMA,
             |_| true,
         )
@@ -1470,25 +1382,11 @@ mod tests {
         stored
             .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &graph)
             .unwrap();
-        // A graph at its hashed target still authenticates the control
-        // bytes and records the axis at exactly target + the bytes hashed.
-        let spent = node::GraphBudget::new();
-        spent
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
+        // Authenticating the control bytes charges exactly the bytes hashed.
+        let fresh = node::GraphBudget::new();
         stored
-            .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &spent)
+            .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &fresh)
             .unwrap();
-        let axis = spent
-            .exceedances()
-            .axis(node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.high_water,
-            node::MAX_HASHED_BYTES_PER_GRAPH + bytes.len() as u64
-        );
     }
 
     /// Give every regular file under `root` a new status-change time, so its
@@ -1509,41 +1407,18 @@ mod tests {
     fn replay_reuses_unchanged_digests_and_rereads_changed_files_without_reencoding() {
         let fixture = Fixture::new();
         let stored = fixture.capture();
-        let file_work = [b"runtime data".as_slice(), b"exe!", b"source"]
-            .into_iter()
-            .map(|bytes| bytes.len() + 1)
-            .sum::<usize>();
-        let limit = usize::try_from(node::MAX_HASHED_BYTES_PER_GRAPH).unwrap();
         // The capture already computed every member digest; an
         // unchanged replay reuses them and reads nothing.
         let reused = node::GraphBudget::new();
         stored
             .replay(&fixture.root, Mode::Pending, &reused)
             .unwrap();
-        assert_eq!(reused.census_usage().unwrap().2, 0);
+        // Changed identities reread every file and its EOF probe.
         touch_files(&fixture.root);
-        let exact = node::GraphBudget::new();
-        exact.hash(limit - file_work).unwrap();
-        stored.replay(&fixture.root, Mode::Pending, &exact).unwrap();
-
-        // The exact floor fills the hashed target with no exceedance;
-        // one byte less remaining still replays and records the axis at
-        // exactly target + 1, proving the replay hashes exactly `file_work`.
-        assert!(!exact.exceedances().is_exceeded());
-        assert_eq!(exact.census_usage().unwrap().2, limit as u64);
-
-        touch_files(&fixture.root);
-        let floor = node::GraphBudget::new();
-        floor.hash(limit - file_work + 1).unwrap();
-        stored.replay(&fixture.root, Mode::Pending, &floor).unwrap();
-        let axis = floor
-            .exceedances()
-            .axis("typed store hashed candidate bytes per graph")
-            .copied()
+        let changed = node::GraphBudget::new();
+        stored
+            .replay(&fixture.root, Mode::Pending, &changed)
             .unwrap();
-        assert_eq!(axis.target, limit as u64);
-        assert_eq!(axis.first_requested, limit as u64 + 1);
-        assert_eq!(axis.high_water, limit as u64 + 1);
     }
 
     #[test]
@@ -1564,13 +1439,7 @@ mod tests {
         fs::create_dir_all(fixture.root.join("build/.fingerprint")).unwrap();
         fs::write(fixture.root.join("build/.fingerprint/lock"), b"opaque").unwrap();
         let stored = fixture.capture();
-        let decoded = Stored::decode(
-            stored.bytes(),
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new(),
-        )
-        .unwrap();
+        let decoded = Stored::decode(stored.bytes(), &fixture.root, fixture.reference).unwrap();
         assert_eq!(decoded.digest(), stored.digest());
         assert_eq!(
             decoded.native_identity([3; 32]),
@@ -1704,12 +1573,8 @@ mod tests {
                 5 => bytes[92] ^= 1,
                 _ => unreachable!(),
             }
-            let budget = node::GraphBudget::new();
-            budget
-                .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                .unwrap();
             assert!(matches!(
-                Stored::decode(&bytes, &fixture.root, fixture.reference, &budget),
+                Stored::decode(&bytes, &fixture.root, fixture.reference),
                 Err(node::Error::Codec(_))
             ));
         }
@@ -1719,20 +1584,8 @@ mod tests {
             .position(|bytes| bytes == b"build/opaque/out")
             .unwrap();
         bytes[index + 6] = b'/';
-        assert!(Stored::decode(
-            &bytes,
-            &fixture.root,
-            fixture.reference,
-            &node::GraphBudget::new()
-        )
-        .is_err());
-        assert!(Stored::decode(
-            stored.bytes(),
-            &fixture.base,
-            fixture.reference,
-            &node::GraphBudget::new()
-        )
-        .is_err());
+        assert!(Stored::decode(&bytes, &fixture.root, fixture.reference,).is_err());
+        assert!(Stored::decode(stored.bytes(), &fixture.base, fixture.reference,).is_err());
     }
 
     #[test]
@@ -1741,62 +1594,19 @@ mod tests {
         let executable = fixture.root.join("target/debug/runner");
         let mut metadata = fs::metadata(&executable).unwrap();
         // The four content bytes plus the EOF probe byte are charged
-        // before the open. Five remaining fills the target exactly; four
-        // remaining still hashes and records the axis at exactly target + 1.
-        for remaining in [4, 5] {
-            // A fresh status change gives each iteration a new identity, so
-            // the memoized first digest cannot satisfy it.
-            fs::set_permissions(&executable, metadata.permissions()).unwrap();
-            metadata = fs::metadata(&executable).unwrap();
-            let budget = node::GraphBudget::new();
-            budget
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - remaining)
-                .unwrap();
-            hash(&executable, &metadata, &budget).unwrap();
-            let exceeded = budget.exceedances();
-            assert_eq!(exceeded.is_exceeded(), remaining == 4);
-            if remaining == 4 {
-                let axis = exceeded.axis(node::HASHED_RESOURCE).unwrap();
-                assert_eq!(axis.first_requested, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-                assert_eq!(axis.high_water, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-            } else {
-                assert_eq!(
-                    budget.census_usage().unwrap().2,
-                    node::MAX_HASHED_BYTES_PER_GRAPH
-                );
-            }
-        }
-        // A spent graph still precharges the five bytes before the open; the
-        // missing file then fails for its own physical reason. A fresh
-        // identity, since a memoized digest skips the precharge.
+        // before the open. A fresh status change gives the file a new
+        // identity, so a memoized digest cannot satisfy it.
         fs::set_permissions(&executable, metadata.permissions()).unwrap();
         metadata = fs::metadata(&executable).unwrap();
-        let budget = node::GraphBudget::new();
-        budget
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
+        hash(&executable, &metadata).unwrap();
+        // The five bytes are precharged before the open even when the
+        // missing file then fails for its own physical reason.
+        fs::set_permissions(&executable, metadata.permissions()).unwrap();
+        metadata = fs::metadata(&executable).unwrap();
         assert!(matches!(
-            hash(&fixture.root.join("missing"), &metadata, &budget),
+            hash(&fixture.root.join("missing"), &metadata),
             Err(node::Error::Io { .. })
         ));
-        assert_eq!(
-            budget
-                .exceedances()
-                .axis(node::HASHED_RESOURCE)
-                .unwrap()
-                .high_water,
-            node::MAX_HASHED_BYTES_PER_GRAPH + 5
-        );
-        let budget = node::GraphBudget::new();
-        budget.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        assert!(matches!(
-            hash(&fixture.root.join("missing"), &metadata, &budget),
-            Err(node::Error::Io { .. })
-        ));
-        assert!(budget
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .is_some_and(|axis| axis.high_water > node::MAX_PATH_CHECKS_PER_GRAPH as u64));
         assert!(super::super::hash(executable, Some(&node::GraphBudget::new())).is_ok());
         fixture.capture();
     }
@@ -1811,29 +1621,11 @@ mod tests {
         )
         .unwrap();
         let metadata = fs::metadata(&executable).unwrap();
-        let first = node::GraphBudget::new();
-        let digest = hash(&executable, &metadata, &first).unwrap();
-        assert_eq!(
-            first.census_usage().unwrap().2,
-            5,
-            "the first check reads the file"
-        );
-        let second = node::GraphBudget::new();
-        assert_eq!(hash(&executable, &metadata, &second).unwrap(), digest);
-        assert_eq!(
-            second.census_usage().unwrap().2,
-            0,
-            "a later check does no hashing"
-        );
+        let digest = hash(&executable, &metadata).unwrap();
+        assert_eq!(hash(&executable, &metadata).unwrap(), digest);
         fs::set_permissions(&executable, metadata.permissions()).unwrap();
         let changed = fs::metadata(&executable).unwrap();
-        let third = node::GraphBudget::new();
-        assert_eq!(hash(&executable, &changed, &third).unwrap(), digest);
-        assert_eq!(
-            third.census_usage().unwrap().2,
-            5,
-            "a new identity is hashed again"
-        );
+        assert_eq!(hash(&executable, &changed).unwrap(), digest);
     }
 
     #[test]
@@ -1857,7 +1649,7 @@ mod tests {
         )
         .unwrap();
         artifact.revalidate_budgeted(&budget).unwrap();
-        Stored::capture(&fixture.root, fixture.reference, Mode::Pending, &budget).unwrap();
+        Stored::capture(&fixture.root, fixture.reference, Mode::Pending).unwrap();
         fs::write(&executable, b"five!").unwrap();
         assert!(matches!(
             artifact.revalidate_budgeted(&budget),

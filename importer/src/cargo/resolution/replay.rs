@@ -147,14 +147,14 @@ impl Request {
         )?;
         let namespace = match record.decode_namespace(budget)? {
             Some(namespace) => {
-                cargo::ControlAccount::current(allocation, budget.graph())
+                cargo::ControlAccount::current(allocation)
                     .holder(Decoded::NAMESPACE_HOLDER_BYTES)?;
                 Some(Arc::new(namespace))
             }
             None => None,
         };
         let stored = stored::Stored::decode(record.input(), budget)?;
-        cargo::ControlAccount::current(allocation, budget.graph()).holder(Decoded::HOLDER_BYTES)?;
+        cargo::ControlAccount::current(allocation).holder(Decoded::HOLDER_BYTES)?;
         Ok(Arc::new(Decoded {
             metadata,
             graph,

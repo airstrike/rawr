@@ -123,11 +123,7 @@ fn environment(
         let record = record.map_err(|error| match error {
             scan::Error::Malformed(_) => policy("malformed-env-dep"),
         })?;
-        let limit = budget.limits.string_bytes;
-        budget.limited("rustc env-dep key", limit, record.key.len())?;
-        if let Some(value) = record.value {
-            budget.limited("rustc env-dep value", limit, value.len())?;
-        }
+        budget.check()?;
         let key = budget.owned_text(record.key)?;
         let value = record
             .value
@@ -153,11 +149,7 @@ fn source(
     base: &Path,
     budget: &mut Budget<'_>,
 ) -> stored::Result<()> {
-    budget.limited(
-        "dep-info source paths",
-        budget.limits.items,
-        sources.as_slice().len().saturating_add(1),
-    )?;
+    budget.check()?;
     let raw = Path::new(token);
     let candidate = if raw.is_absolute() {
         let length = raw.as_os_str().len();

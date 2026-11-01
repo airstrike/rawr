@@ -90,7 +90,6 @@ pub(super) fn promote_owned_pair<A: Value, B: Value>(
     second
         .read_set()
         .require_successor(first.read_set(), second.action())?;
-    second.read_set().charge_copy()?;
     Fragment::seal(store, [second.read_set().clone()])?;
     fn current<K>(value: Owned<K>) -> Validated<K> {
         match value {
@@ -112,9 +111,6 @@ pub(super) fn promote_three<A: Value, B: Value, C: Value>(
     use super::content::Edge;
     use super::staging::Owned;
     let fragments = [first.read_set(), second.read_set(), third.read_set()];
-    for fragment in fragments {
-        fragment.charge_copy()?;
-    }
     Fragment::seal(store, fragments.into_iter().cloned())?;
     fn current<K>(value: Owned<K>) -> Validated<K> {
         match value {
@@ -140,9 +136,6 @@ pub(super) fn promote_four<A: Value, B: Value, C: Value, D: Value>(
         third.read_set(),
         fourth.read_set(),
     ];
-    for fragment in fragments {
-        fragment.charge_copy()?;
-    }
     Fragment::seal(store, fragments.into_iter().cloned())?;
     fn current<K>(value: Owned<K>) -> Validated<K> {
         match value {
@@ -176,9 +169,6 @@ pub(super) fn promote_five<A: Value, B: Value, C: Value, D: Value, E: Value>(
         fourth.read_set(),
         fifth.read_set(),
     ];
-    for fragment in fragments {
-        fragment.charge_copy()?;
-    }
     Fragment::seal(store, fragments.into_iter().cloned())?;
     fn current<K>(value: Owned<K>) -> Validated<K> {
         match value {

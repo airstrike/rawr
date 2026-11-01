@@ -241,41 +241,6 @@ struct Measured {
     overflow: bool,
 }
 
-/// One classification-stage account: accounting targets crossed by a
-/// classification pass, a cached-contract decode, a checked-profile capture or
-/// an import-context capture are recorded here and published, never refused.
-pub(crate) struct Account {
-    id: u64,
-    exceeded: Cell<crate::exceedance::Record>,
-}
-
-impl Account {
-    pub(crate) fn new() -> Self {
-        Self {
-            id: crate::exceedance::next_id(),
-            exceeded: Cell::new(crate::exceedance::Record::new()),
-        }
-    }
-
-    /// The axes this account crossed so far.
-    #[cfg_attr(not(test), allow(dead_code, reason = "exceedance inspection"))]
-    pub(crate) fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded.get()
-    }
-
-    /// Record one measurement against its target; the work continues.
-    pub(crate) fn exceeded(&self, resource: &'static str, target: usize, actual: usize) {
-        if actual <= target {
-            return;
-        }
-        let mut record = self.exceeded.get();
-        if record.exceeded(resource, target as u64, actual as u64, None) {
-            self.exceeded.set(record);
-            crate::exceedance::publish(crate::exceedance::Account::Classify, self.id, &record);
-        }
-    }
-}
-
 /// Checked-arithmetic overflow is a genuine failure and stays terminal.
 fn arithmetic() -> Error {
     Error::Node(Box::new(crate::node::Error::Allocation))
@@ -286,7 +251,6 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     support: SupportLedger,
     item_limit: usize,
     byte_limit: usize,
-    scratch_limit: usize,
     retained_items: Cell<usize>,
     retained_bytes: Cell<usize>,
     scratch_bytes: Cell<usize>,
@@ -297,8 +261,6 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// its output's late-bound lifetimes are the frame's, as its early
     /// ones are `'static`, and are written by neither.
     scope_lifetimes: Cell<bool>,
-    /// The classification account the retained and scratch targets record on.
-    account: Account,
     /// The crate type aliases that are the only name of the type they
     /// name, by definition index (`instance_aliases`).
     instance_aliases: std::cell::OnceCell<Box<[usize]>>,
@@ -336,7 +298,6 @@ pub(crate) const EVIDENCE_RETAINED_BYTES: usize = 3_221_225_472;
 struct Authority {
     items: usize,
     bytes: usize,
-    scratch_bytes: usize,
 }
 
 impl Authority {
@@ -344,16 +305,14 @@ impl Authority {
         Self {
             items: limits.classified_contract_items,
             bytes: limits.classified_contract_bytes,
-            scratch_bytes: limits.json_bytes,
         }
     }
 
     #[cfg(feature = "rustc-driver")]
-    const fn evidence(limits: &crate::cargo::Limits) -> Self {
+    const fn evidence() -> Self {
         Self {
             items: EVIDENCE_RETAINED_ITEMS,
             bytes: EVIDENCE_RETAINED_BYTES,
-            scratch_bytes: limits.json_bytes,
         }
     }
 }
@@ -608,13 +567,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             },
             item_limit: authority.items,
             byte_limit: authority.bytes,
-            scratch_limit: authority.scratch_bytes,
             retained_items: Cell::new(graph.allocation().items),
             retained_bytes: Cell::new(graph.allocation().bytes),
             scratch_bytes: Cell::new(0),
             trait_self: Cell::new(None),
             scope_lifetimes: Cell::new(false),
-            account: Account::new(),
             instance_aliases: std::cell::OnceCell::new(),
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
@@ -642,9 +599,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
 
     fn observe_result<T>(&self, _result: &Result<T, Error>) {}
 
-    /// The classified retained targets are accounting targets recorded
-    /// on the classification account; the charge continues. Only checked
-    /// overflow is terminal.
+    /// Charge classified retained items and bytes; only checked overflow is
+    /// terminal.
     fn retain(&self, items: usize, bytes: usize) -> Result<(), Error> {
         let actual_items = self
             .retained_items
@@ -658,10 +614,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .ok_or_else(arithmetic)?;
         self.retained_items.set(actual_items);
         self.retained_bytes.set(actual_bytes);
-        self.account
-            .exceeded("classified retained items", self.item_limit, actual_items);
-        self.account
-            .exceeded("classified retained bytes", self.byte_limit, actual_bytes);
         Ok(())
     }
 
@@ -676,14 +628,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         self.retain(0, bytes)
     }
 
-    /// The scratch target is recorded, never a gate; the peak is kept.
+    /// Keep the scratch peak.
     fn scratch_arrays<T>(&self, count: usize, arrays: usize) -> Result<(), Error> {
         let bytes = std::mem::size_of::<T>()
             .checked_mul(count)
             .and_then(|bytes| bytes.checked_mul(arrays))
             .ok_or_else(arithmetic)?;
-        self.account
-            .exceeded("classification scratch bytes", self.scratch_limit, bytes);
         self.scratch_bytes.set(self.scratch_bytes.get().max(bytes));
         Ok(())
     }
@@ -3062,13 +3012,6 @@ impl<P: api::Phase> api::Graph<P> {
     ) -> Result<(ClassifiedParts, usize), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
         let context = Context::new(self, authority)?;
-        // The outcome count is an accounting target recorded on the
-        // classification account; every export is still classified.
-        context.account.exceeded(
-            "classification outcomes",
-            authority.items,
-            self.exports().len(),
-        );
         let result = (|| {
             let mut outcomes = Vec::new();
             context.retain_array::<OutcomeRecord>(self.exports().len())?;
@@ -3117,9 +3060,6 @@ impl<P: api::Phase> api::Graph<P> {
                 return Err(arithmetic());
             }
             result.map_err(|_| Error::Encoding)?;
-            context
-                .account
-                .exceeded("canonical contract bytes", authority.bytes, measured.bytes);
             context.retain(0, measured.bytes)?;
             // The retained targets were measured above; the cardinality proof
             // alone remains a gate.
@@ -3196,18 +3136,8 @@ impl ClassifiedParts {
         bytes: &[u8],
         graph: &api::Graph<impl api::Phase>,
         policy: &Policy,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        // The cached contract's size and recounted usage are accounting
-        // targets recorded on one classification account, never refusals.
-        let account = Account::new();
-
         (|| {
-            account.exceeded(
-                "cached classified contract bytes",
-                limits.classified_contract_bytes,
-                bytes.len(),
-            );
             let stored: StoredCanonical =
                 serde_json::from_slice(bytes).map_err(|_| Error::Canonical)?;
             let exact = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
@@ -3248,16 +3178,6 @@ impl ClassifiedParts {
             let retained =
                 recount_retained_usage(graph, &definitions, &outcomes, &support, bytes.len())
                     .ok_or(Error::Cardinality)?;
-            account.exceeded(
-                "classified retained items",
-                limits.classified_contract_items,
-                retained.0,
-            );
-            account.exceeded(
-                "classified retained bytes",
-                limits.classified_contract_bytes,
-                retained.1,
-            );
             let allocation = contract::Usage::classified(
                 graph,
                 &definitions,
@@ -3467,17 +3387,13 @@ impl SupportLedger {
     reason = "called only by an explicitly selected private evidence attempt"
 )]
 impl EvidenceCapability {
-    pub(crate) fn measure(
-        self,
-        policy: &Policy,
-        limits: &crate::cargo::Limits,
-    ) -> Result<ClassificationEvidence, EvidenceError> {
+    pub(crate) fn measure(self, policy: &Policy) -> Result<ClassificationEvidence, EvidenceError> {
         let session = crate::process::EvidenceSession::new();
         let mut classified = None;
         session.observe_inline(crate::process::EvidenceInlineStage::Classification, || {
             classified = Some(
                 self.graph
-                    .classify_with_scratch(policy, Authority::evidence(limits)),
+                    .classify_with_scratch(policy, Authority::evidence()),
             );
             Ok(())
         })?;
@@ -9800,43 +9716,12 @@ mod tests {
         crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &exact)
             .expect("the exact retained-item boundary accepts");
-        let mut short = crate::cargo::Limits::fixture(
-            usize::MAX,
-            expected_items
-                .checked_sub(1)
-                .expect("fixture retains at least one item"),
-            usize::MAX,
-        );
-        short.classified_contract_items = expected_items - 1;
-        // The one-short retained-item target is recorded on the
-        // classification account, never refused; the output is byte-identical.
-        let short_contract = crate::test_fixture::support_outcomes()
-            .classify(&Policy::standard(), &short)
-            .expect("the one-item-short retained boundary records and continues");
-        assert_eq!(contract.canonical_bytes(), short_contract.canonical_bytes());
-        assert_eq!(contract.fingerprint(), short_contract.fingerprint());
 
         let mut exact_bytes = crate::cargo::Limits::fixture(expected_bytes, usize::MAX, usize::MAX);
         exact_bytes.classified_contract_bytes = expected_bytes;
         crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &exact_bytes)
             .expect("the exact retained-byte boundary accepts");
-        let mut short_bytes = crate::cargo::Limits::fixture(
-            expected_bytes
-                .checked_sub(1)
-                .expect("fixture retains at least one byte"),
-            usize::MAX,
-            usize::MAX,
-        );
-        short_bytes.classified_contract_bytes = expected_bytes - 1;
-        let short_bytes_contract = crate::test_fixture::support_outcomes()
-            .classify(&Policy::standard(), &short_bytes)
-            .expect("the one-byte-short retained boundary records and continues");
-        assert_eq!(
-            contract.canonical_bytes(),
-            short_bytes_contract.canonical_bytes()
-        );
-        assert_eq!(contract.fingerprint(), short_bytes_contract.fingerprint());
 
         let repeated = crate::test_fixture::support_outcomes()
             .classify(&Policy::standard(), &standard)
@@ -11203,115 +11088,12 @@ mod tests {
         }
     }
 
-    /// The classified item and retained byte targets are accounting
-    /// targets. Crossing them records on the classification account and the
-    /// pass continues, producing a contract byte-identical to the one the
-    /// standard limits produce.
-    #[test]
-    fn classification_records_item_and_retained_byte_targets_and_continues() {
-        let standard = crate::test_fixture::graph()
-            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
-            .expect("fixture classifies under the standard limits");
-
-        let mut short_items = crate::cargo::Limits::fixture(usize::MAX, usize::MAX, usize::MAX);
-        short_items.classified_contract_items = 5;
-        let recorded_items = crate::test_fixture::graph()
-            .classify(&Policy::standard(), &short_items)
-            .expect("five classified items against seven exports records and continues");
-        assert_eq!(standard.canonical_bytes(), recorded_items.canonical_bytes());
-        assert_eq!(standard.fingerprint(), recorded_items.fingerprint());
-
-        let mut short_bytes = crate::cargo::Limits::fixture(usize::MAX, usize::MAX, usize::MAX);
-        short_bytes.classified_contract_bytes = 8;
-        let recorded_bytes = crate::test_fixture::graph()
-            .classify(&Policy::standard(), &short_bytes)
-            .expect("eight classified bytes records and continues");
-        assert_eq!(standard.canonical_bytes(), recorded_bytes.canonical_bytes());
-        assert_eq!(standard.fingerprint(), recorded_bytes.fingerprint());
-
-        // The outcome-count target is recorded on the classification account
-        // inside `classify_parts`; every export is still classified.
-        let graph = crate::test_fixture::graph();
-        let exports = graph.exports().len();
-        assert_eq!(exports, 7);
-        let unbounded = super::Authority {
-            items: usize::MAX,
-            bytes: usize::MAX,
-            scratch_bytes: usize::MAX,
-        };
-        let (reference, _) = graph
-            .classify_parts(&Policy::standard(), unbounded)
-            .expect("fixture classifies under an unbounded authority");
-        let (recorded_outcomes, _) = graph
-            .classify_parts(
-                &Policy::standard(),
-                super::Authority {
-                    items: exports - 1,
-                    ..unbounded
-                },
-            )
-            .expect("one outcome short of the export count records and continues");
-        assert_eq!(reference.canonical, recorded_outcomes.canonical);
-        assert_eq!(reference.fingerprint, recorded_outcomes.fingerprint);
-        assert_eq!(recorded_outcomes.outcomes.len(), exports);
-
-        // Driving the context directly exposes the account: the exact target
-        // admits silently, one short records the truthful high water.
-        let settled = super::Context::new(&graph, unbounded)
-            .expect("fixture context initializes unbounded")
-            .retained_items
-            .get();
-        let exact = super::Context::new(
-            &graph,
-            super::Authority {
-                items: settled,
-                ..unbounded
-            },
-        )
-        .expect("the exact classified item target initializes");
-        assert_eq!(exact.retained_items.get(), settled);
-        assert!(!exact.account.exceedances().is_exceeded());
-
-        let short = super::Context::new(
-            &graph,
-            super::Authority {
-                items: settled - 1,
-                ..unbounded
-            },
-        )
-        .expect("one classified item short of the settled usage initializes");
-        assert_eq!(short.retained_items.get(), settled);
-        let record = short.account.exceedances();
-        let axis = record
-            .axis("classified retained items")
-            .expect("the item target records on the classification account");
-        assert_eq!(axis.target, (settled - 1) as u64);
-        assert_eq!(axis.first_requested, settled as u64);
-        assert_eq!(axis.high_water, settled as u64);
-        assert!(record.axis("classified retained bytes").is_none());
-        assert!(record.axis("classification scratch bytes").is_none());
-
-        short
-            .retain_items(1)
-            .expect("retaining past a recorded target continues");
-        assert_eq!(short.retained_items.get(), settled + 1);
-        let axis = *short
-            .account
-            .exceedances()
-            .axis("classified retained items")
-            .expect("the item axis persists");
-        assert_eq!(axis.target, (settled - 1) as u64);
-        assert_eq!(axis.first_requested, settled as u64);
-        assert_eq!(axis.high_water, (settled + 1) as u64);
-    }
-
     #[test]
     fn production_contract_authority_is_exact_atomic_and_stage_isolated() {
         let limits = crate::cargo::Limits::standard();
         let authority = super::Authority::production(&limits);
         assert_eq!(authority.items, 6_500_000);
         assert_eq!(authority.bytes, 671_088_640);
-        assert_eq!(authority.scratch_bytes, 33_554_432);
 
         let graph = crate::test_fixture::graph();
         let context = super::Context::new(&graph, authority).expect("fixture context is bounded");
@@ -11321,21 +11103,6 @@ mod tests {
             .expect("the exact classified item boundary succeeds");
         let retained_items = context.retained_items.get();
         assert_eq!(retained_items, 6_500_000);
-        assert!(!context.account.exceedances().is_exceeded());
-        // One past the exact target records on the classification
-        // account with the truthful high water; the charge continues.
-        context
-            .retain_items(1)
-            .expect("one item past the classified item target records and continues");
-        assert_eq!(context.retained_items.get(), retained_items + 1);
-        let record = context.account.exceedances();
-        let items_axis = record
-            .axis("classified retained items")
-            .expect("the item target records on the classification account");
-        assert_eq!(items_axis.target, 6_500_000);
-        assert_eq!(items_axis.first_requested, 6_500_001);
-        assert_eq!(items_axis.high_water, 6_500_001);
-        assert!(record.axis("classified retained bytes").is_none());
 
         let context = super::Context::new(&graph, authority).expect("fixture context is bounded");
         let remaining_bytes = authority.bytes - context.retained_bytes.get();
@@ -11344,19 +11111,6 @@ mod tests {
             .expect("the exact classified byte boundary succeeds");
         let retained_bytes = context.retained_bytes.get();
         assert_eq!(retained_bytes, 671_088_640);
-        assert!(!context.account.exceedances().is_exceeded());
-        context
-            .retain(0, 1)
-            .expect("one byte past the classified byte target records and continues");
-        assert_eq!(context.retained_bytes.get(), retained_bytes + 1);
-        let record = context.account.exceedances();
-        let bytes_axis = record
-            .axis("classified retained bytes")
-            .expect("the byte target records on the classification account");
-        assert_eq!(bytes_axis.target, 671_088_640);
-        assert_eq!(bytes_axis.first_requested, 671_088_641);
-        assert_eq!(bytes_axis.high_water, 671_088_641);
-        assert!(record.axis("classified retained items").is_none());
 
         let mut graph_only = limits;
         graph_only.retained_graph_items -= 1;
@@ -11364,8 +11118,8 @@ mod tests {
         let unchanged = super::Authority::production(&graph_only);
         assert_eq!(unchanged.items, authority.items);
         assert_eq!(unchanged.bytes, authority.bytes);
-        assert_eq!(super::Authority::evidence(&limits).items, 6_000_000);
-        assert_eq!(super::Authority::evidence(&limits).bytes, 3_221_225_472);
+        assert_eq!(super::Authority::evidence().items, 6_000_000);
+        assert_eq!(super::Authority::evidence().bytes, 3_221_225_472);
     }
 
     #[cfg(feature = "rustc-driver")]
@@ -11422,14 +11176,12 @@ mod tests {
     #[cfg(feature = "rustc-driver")]
     #[test]
     fn classification_evidence_is_scalar_exact_and_nonpublishing() {
-        let production = crate::cargo::Limits::standard();
-        let authority = super::Authority::evidence(&production);
+        let authority = super::Authority::evidence();
         assert_eq!(authority.items, super::EVIDENCE_RETAINED_ITEMS);
         assert_eq!(authority.bytes, super::EVIDENCE_RETAINED_BYTES);
-        assert_eq!(authority.scratch_bytes, production.json_bytes);
         let evidence = crate::test_fixture::support_outcomes()
             .into_classification_evidence()
-            .measure(&Policy::standard(), &production)
+            .measure(&Policy::standard())
             .expect("the fixture classification evidence completes");
 
         let classifier_new = 1_usize
@@ -11481,7 +11233,7 @@ mod tests {
     fn classification_evidence_streams_exact_implementation_and_associated_counts() {
         let zero = crate::test_fixture::representability_families()
             .into_classification_evidence()
-            .measure(&Policy::standard(), &crate::cargo::Limits::standard())
+            .measure(&Policy::standard())
             .expect("zero-implementation classification evidence completes");
         assert_eq!(zero.implementations, 0);
         assert_eq!(zero.implementation_ledgers, 0);
@@ -11489,7 +11241,7 @@ mod tests {
 
         let evidence = crate::test_fixture::classification_implementation_outcomes()
             .into_classification_evidence()
-            .measure(&Policy::standard(), &crate::cargo::Limits::standard())
+            .measure(&Policy::standard())
             .expect("implementation classification evidence completes");
 
         assert!(evidence.implementations > 0);

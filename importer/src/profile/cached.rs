@@ -26,7 +26,7 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
     let authority = authority(identity, version, Some(&observations))?;
     let product = parent
         .direct::<Product>(&authority, || {
-            let contract = super::classify_direct(definition, graph, limits)
+            let contract = super::classify_direct(definition, graph)
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
             Product::capture(&contract, limits.node_output_bytes())
                 .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
@@ -166,10 +166,7 @@ mod tests {
 
     impl crate::profile::Definition<Checked> for Definition {
         fn identity(&self) -> crate::profile::Identity {
-            crate::profile::Identity::new(
-                "rawr.profile.cached-test",
-                &crate::cargo::Limits::standard(),
-            )
+            crate::profile::Identity::new("rawr.profile.cached-test")
         }
 
         fn version(&self) -> crate::profile::Version {
@@ -206,7 +203,7 @@ mod tests {
     fn profile_product_roundtrips_and_rejects_empty_payload() {
         let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
-        let contract = crate::profile::classify_direct(&Definition, &graph, &limits)
+        let contract = crate::profile::classify_direct(&Definition, &graph)
             .expect("the empty profile contract seals");
         let product = Product::capture(&contract, limits.node_output_bytes())
             .expect("the profile product captures");
@@ -232,10 +229,9 @@ mod tests {
         let definition = Definition;
         let identity = definition.identity();
         let version = definition.version();
-        let direct = crate::profile::classify_direct(&definition, &graph, &limits)
+        let direct = crate::profile::classify_direct(&definition, &graph)
             .expect("the conservative profile contract seals");
-        let mut builder =
-            crate::profile::contract::Builder::new(identity, version, &graph, &limits);
+        let mut builder = crate::profile::contract::Builder::new(identity, version, &graph);
         definition
             .classify(&graph, &mut builder)
             .expect("classification succeeds");
@@ -261,7 +257,7 @@ mod tests {
         let stale = |result: Result<crate::profile::contract::Parts, crate::profile::Error>| {
             matches!(result, Err(crate::profile::Error::Stale))
         };
-        let foreign = crate::profile::Identity::new("foreign.profile", &limits);
+        let foreign = crate::profile::Identity::new("foreign.profile");
         assert!(stale(product.owned(foreign, version, &graph, &limits)));
         assert!(stale(product.owned(
             identity,

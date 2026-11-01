@@ -13,7 +13,6 @@ pub(crate) struct Overlay {
 
 impl Overlay {
     pub(crate) fn from_current(chain: node::Chain) -> Result<Self, node::Error> {
-        chain.parent().read_set().charge_copy()?;
         Ok(Self {
             context: chain.context().clone(),
             fragment: chain.parent().read_set().clone(),
@@ -45,7 +44,6 @@ impl Overlay {
                 initial.extend_staged(value)?,
             ),
         };
-        fragment.charge_copy()?;
         Ok(Self {
             context: chain.context().clone(),
             fragment: fragment.clone(),

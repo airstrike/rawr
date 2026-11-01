@@ -257,10 +257,6 @@ impl Sink for Inner {
             .record_scalar(scalar, value, self.limit);
     }
 
-    fn graph(&self, graph: super::accounting::Graph) {
-        lock(&self.state).accounting.record_graph(graph, self.limit);
-    }
-
     fn node(&self, kind: NodeKind, event: NodeEvent) {
         let kind_index = node_index(kind);
         let event_index = event_index(event);
@@ -341,10 +337,6 @@ impl Sink for Recorder {
 
     fn scalar(&self, scalar: super::accounting::Scalar, value: u64) {
         self.inner.scalar(scalar, value);
-    }
-
-    fn graph(&self, graph: super::accounting::Graph) {
-        self.inner.graph(graph);
     }
 
     fn node(&self, kind: NodeKind, event: NodeEvent) {

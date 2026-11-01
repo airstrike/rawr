@@ -26,16 +26,7 @@ pub(super) fn require(
     artifacts: &[build::Artifact],
     budget: &mut Budget<'_>,
 ) -> Result<()> {
-    budget.limited(
-        "Build compiler artifact units",
-        budget.limits.units,
-        expected.len(),
-    )?;
-    budget.limited(
-        "Cargo compiler artifacts",
-        budget.limits.units,
-        artifacts.len(),
-    )?;
+    budget.check()?;
     let bytes = expected
         .len()
         .checked_mul(std::mem::size_of::<(&unit::Output, bool)>())

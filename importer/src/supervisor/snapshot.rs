@@ -29,8 +29,6 @@ pub struct Capture {
     bytes: usize,
     item_limit: usize,
     byte_limit: usize,
-    string_limit: usize,
-    account: crate::surface::account::Account,
 }
 
 impl Bytes {
@@ -39,22 +37,8 @@ impl Bytes {
     }
 
     /// Decode already-framed bytes and bind them to exact snapshot evidence.
-    pub fn decode(
-        expected: crate::surface::Snapshot,
-        framed: Box<[u8]>,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Self, Error> {
-        let mut account = crate::surface::account::Account::supervisor();
-        Self::decode_accounted(expected, framed, limits, &mut account)
-    }
-
-    fn decode_accounted(
-        expected: crate::surface::Snapshot,
-        framed: Box<[u8]>,
-        limits: &crate::cargo::Limits,
-        account: &mut crate::surface::account::Account,
-    ) -> Result<Self, Error> {
-        validate(&framed, limits, account)?;
+    pub fn decode(expected: crate::surface::Snapshot, framed: Box<[u8]>) -> Result<Self, Error> {
+        validate(&framed)?;
         let digest: [u8; 32] = Sha256::digest(&framed).into();
         if digest != *expected.as_bytes() {
             return Err(Error::Mismatch);
@@ -74,8 +58,6 @@ impl Bytes {
             bytes: 0,
             item_limit: limits.items,
             byte_limit: limits.json_bytes,
-            string_limit: limits.string_bytes,
-            account: crate::surface::account::Account::supervisor(),
         }
     }
 
@@ -89,19 +71,11 @@ impl Bytes {
 }
 
 impl Capture {
-    /// The accounting axes this capture crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
-    }
-
     /// Frame the exact application entry before any file.
     pub fn entry(&mut self, path: &str) -> Result<(), Error> {
         if self.entry || self.items != 0 {
             return Err(Error::Order);
         }
-        self.check_path(path);
         let charge = self.charged(1, path.len())?;
         self.reserve(ENTRY_DOMAIN.len() + 8 + path.len())?;
         self.framed.extend_from_slice(ENTRY_DOMAIN);
@@ -117,7 +91,6 @@ impl Capture {
         if !self.entry {
             return Err(Error::MissingEntry);
         }
-        self.check_path(path);
         if self.previous.as_ref().is_some_and(|range| {
             self.framed
                 .get(range.clone())
@@ -157,11 +130,7 @@ impl Capture {
     }
 
     /// Move the sole retained buffer into transport proof if its digest is exact.
-    pub fn bind(
-        mut self,
-        expected: crate::surface::Snapshot,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Bytes, Error> {
+    pub fn bind(mut self, expected: crate::surface::Snapshot) -> Result<Bytes, Error> {
         if !self.entry {
             return Err(Error::MissingEntry);
         }
@@ -169,19 +138,11 @@ impl Capture {
             return Err(Error::EmptySnapshot);
         }
         let framed = std::mem::take(&mut self.framed).into_boxed_slice();
-        Bytes::decode_accounted(expected, framed, limits, &mut self.account)
+        Bytes::decode(expected, framed)
     }
 
-    /// The path length is an accounting target recorded on the
-    /// supervisor account, never a refusal.
-    fn check_path(&mut self, path: &str) {
-        self.account
-            .exceeded("snapshot path bytes", self.string_limit, path.len());
-    }
-
-    /// Charge items and bytes cumulatively. Crossing the item or byte
-    /// target is recorded on the supervisor account and the charge proceeds;
-    /// checked-arithmetic overflow stays terminal. The physical bound on the
+    /// Charge items and bytes cumulatively; checked-arithmetic overflow is
+    /// terminal. The physical bound on the
     /// retained buffer is the IPC frame ceiling enforced by `reserve`.
     fn charged(&mut self, items: usize, bytes: usize) -> Result<(usize, usize), Error> {
         let items = self.items.checked_add(items).ok_or(Error::Limit {
@@ -194,10 +155,6 @@ impl Capture {
             limit: self.byte_limit,
             actual: usize::MAX,
         })?;
-        self.account
-            .exceeded("snapshot retained items", self.item_limit, items);
-        self.account
-            .exceeded("snapshot retained bytes", self.byte_limit, bytes);
         Ok((items, bytes))
     }
 
@@ -225,11 +182,7 @@ impl Capture {
 /// Prove the framing. The IPC frame ceiling is the physical bound and refuses;
 /// the path, item and byte targets are accounting comparisons recorded on
 /// `account` while validation continues over the whole transport.
-fn validate(
-    framed: &[u8],
-    limits: &crate::cargo::Limits,
-    account: &mut crate::surface::account::Account,
-) -> Result<(), Error> {
+fn validate(framed: &[u8]) -> Result<(), Error> {
     if framed.len() > frame_limit() {
         return Err(Error::Oversized {
             limit: frame_limit(),
@@ -239,14 +192,13 @@ fn validate(
     let Some(mut cursor) = framed.strip_prefix(ENTRY_DOMAIN) else {
         return Err(Error::Malformed);
     };
-    let entry = take_string(&mut cursor, limits.string_bytes, account)?;
+    let entry = take_string(&mut cursor)?;
     let mut items = 1_usize;
     let mut retained = entry.len();
     let mut files = 0_usize;
     let mut previous: Option<&str> = None;
-    account.exceeded("snapshot retained bytes", limits.json_bytes, retained);
     while !cursor.is_empty() {
-        let path = take_string(&mut cursor, limits.string_bytes, account)?;
+        let path = take_string(&mut cursor)?;
         if previous.is_some_and(|prior| prior >= path) {
             return Err(Error::Order);
         }
@@ -256,8 +208,6 @@ fn validate(
             .checked_add(path.len())
             .and_then(|bytes| bytes.checked_add(contents.len()))
             .ok_or(Error::Malformed)?;
-        account.exceeded("snapshot retained items", limits.items, items);
-        account.exceeded("snapshot retained bytes", limits.json_bytes, retained);
         previous = Some(path);
         files = files.checked_add(1).ok_or(Error::Malformed)?;
     }
@@ -267,13 +217,8 @@ fn validate(
     Ok(())
 }
 
-fn take_string<'a>(
-    cursor: &mut &'a [u8],
-    string_limit: usize,
-    account: &mut crate::surface::account::Account,
-) -> Result<&'a str, Error> {
+fn take_string<'a>(cursor: &mut &'a [u8]) -> Result<&'a str, Error> {
     let bytes = take_bytes(cursor)?;
-    account.exceeded("snapshot path bytes", string_limit, bytes.len());
     std::str::from_utf8(bytes).map_err(|_| Error::Malformed)
 }
 
@@ -354,67 +299,19 @@ mod tests {
         capture
     }
 
-    /// A snapshot whose retained bytes exceed the configured JSON target
-    /// (the Gallery hot-reload case between 32 MiB + 1 and 256 MiB, modelled
-    /// with a small configured target) captures, binds and decodes whole,
-    /// recording the axis with its truthful cumulative figure; exactly at the
-    /// target admits silently. The physical bound stays the IPC frame ceiling.
+    /// A captured snapshot binds and decodes whole; a digest mismatch refuses.
     #[test]
-    fn snapshot_transport_past_its_targets_binds_and_records() {
-        let retained = PATH.len() + PATH.len() + CONTENTS.len();
+    fn snapshot_transport_binds_decodes_and_refuses_a_mismatch() {
         let standard = crate::cargo::Limits::standard();
         let expected = snapshot(&standard);
-
-        let mut exact = standard;
-        exact.json_bytes = retained;
-        exact.items = 2;
-        let capture_exact = capture(&exact);
-        assert!(!capture_exact.exceedances().is_exceeded());
-        let bound = capture_exact
-            .bind(expected, &exact)
-            .expect("exact targets bind");
-
-        let mut small = standard;
-        small.json_bytes = retained - 1;
-        small.items = 1;
-        let past = capture(&small);
-        let record = past.exceedances();
-        let bytes = *record
-            .axis("snapshot retained bytes")
-            .expect("the byte target records its axis");
-        assert_eq!(
-            (bytes.target, bytes.first_requested, bytes.high_water),
-            ((retained - 1) as u64, retained as u64, retained as u64)
-        );
-        let items = *record
-            .axis("snapshot retained items")
-            .expect("the item target records its axis");
-        assert_eq!(
-            (items.target, items.first_requested, items.high_water),
-            (1, 2, 2)
-        );
-        let past = past
-            .bind(expected, &small)
-            .expect("a transport past its targets binds");
-        assert_eq!(past.digest(), bound.digest());
-        let decoded = Bytes::decode(expected, past.into_inner(), &small)
-            .expect("already-framed bytes past the targets decode");
+        let bound = capture(&standard)
+            .bind(expected)
+            .expect("the transport binds");
+        let decoded =
+            Bytes::decode(expected, bound.into_inner()).expect("already-framed bytes decode");
         assert!(decoded.matches(expected));
 
-        let mut strings = standard;
-        strings.string_bytes = PATH.len() - 1;
-        let paths = capture(&strings);
-        let axis = *paths
-            .exceedances()
-            .axis("snapshot path bytes")
-            .expect("the path target records its axis");
-        assert_eq!(
-            (axis.target, axis.high_water),
-            ((PATH.len() - 1) as u64, PATH.len() as u64)
-        );
-        paths.bind(expected, &strings).expect("long paths bind");
-
-        // A terminal cause is still terminal: a digest mismatch refuses.
+        // A digest mismatch refuses.
         let other = {
             let mut digest = crate::surface::Snapshot::builder(&standard);
             digest.entry(PATH).unwrap();
@@ -422,7 +319,7 @@ mod tests {
             digest.seal().unwrap()
         };
         assert!(matches!(
-            capture(&small).bind(other, &small),
+            capture(&standard).bind(other),
             Err(super::Error::Mismatch)
         ));
     }

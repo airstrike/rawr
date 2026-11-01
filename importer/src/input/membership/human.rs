@@ -40,7 +40,7 @@ impl<'projection> Expected<'projection> {
     /// `output_limit` is physical: the retained `cargo package` stdout is
     /// captured under `process::CAPTURE_BYTES`, and an expected
     /// rendering longer than the captured bound can never match, so it is
-    /// refused rather than recorded. It is never an accounting target.
+    /// refused.
     pub(super) fn from_projection(
         projection: &'projection archive::Projection,
         mode: mode::Mode,

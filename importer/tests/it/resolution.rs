@@ -103,7 +103,7 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
     Request::builder(&project.root, &project.cache(), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("catalog", fixture, limits)
@@ -143,7 +143,7 @@ fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
     let error = Request::builder(&project.root, &project.cache(), &limits)
         .expect("the limits-bound request builder seals")
         .environment(Environment::empty())
-        .policy(Policy::manifest(&limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .target("x86_64-unknown-linux-gnu")
         .expect("the triple is syntactically valid")

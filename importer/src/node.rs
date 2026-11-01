@@ -1,7 +1,7 @@
 //! Typed content-addressed importer transformations.
 
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -198,15 +198,8 @@ impl<K: Value> Direct<K> {
         semantic_inputs: &[u8],
         output_limit: usize,
         parents: &[Parent],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
-        Self::capture_edges(
-            context,
-            semantic_inputs,
-            output_limit,
-            parents,
-            parent_limit,
-        )
+        Self::capture_edges(context, semantic_inputs, output_limit, parents)
     }
 
     fn capture_edges(
@@ -214,7 +207,6 @@ impl<K: Value> Direct<K> {
         semantic_inputs: &[u8],
         output_limit: usize,
         parents: &[impl content::Edge],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
         if K::SCHEMA == 0 {
             return Err(Error::Codec("node output schema zero is reserved"));
@@ -236,7 +228,6 @@ impl<K: Value> Direct<K> {
                 actual: output_limit,
             });
         }
-        record_parents(parents.len(), parent_limit);
         let mut retained_parents = Vec::new();
         retained_parents
             .try_reserve_exact(parents.len())
@@ -291,14 +282,8 @@ impl<K: Value> Discoverable<K> {
         fixed_inputs: &[u8],
         output_limit: usize,
         parents: &[Parent],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
-        validate_recipe_bounds::<K>(
-            fixed_inputs.len(),
-            output_limit,
-            parents.len(),
-            parent_limit,
-        )?;
+        validate_recipe_bounds::<K>(fixed_inputs.len(), output_limit)?;
         let mut retained_inputs = Vec::new();
         retained_inputs
             .try_reserve_exact(fixed_inputs.len())
@@ -354,7 +339,6 @@ impl<K: Value> Discoverable<K> {
             &semantic_inputs,
             self.output_limit,
             &self.parents,
-            self.parents.len(),
         )
     }
 
@@ -390,25 +374,7 @@ impl<K: Value> Discoverable<K> {
     }
 }
 
-/// The direct-parent count is measured against the `edges` accounting
-/// target (`parent_limit`) and only recorded; the node envelope's physical
-/// parent bound (`codec::MAX_PARENTS`) still refuses at encoding.
-fn record_parents(parents: usize, parent_limit: usize) {
-    if parents > parent_limit {
-        crate::surface::account::Account::new(crate::exceedance::Account::Graph).exceeded(
-            "direct node parents",
-            parent_limit,
-            parents,
-        );
-    }
-}
-
-fn validate_recipe_bounds<K: Value>(
-    recipe_bytes: usize,
-    output_limit: usize,
-    parents: usize,
-    parent_limit: usize,
-) -> Result<(), Error> {
+fn validate_recipe_bounds<K: Value>(recipe_bytes: usize, output_limit: usize) -> Result<(), Error> {
     if K::SCHEMA == 0 {
         return Err(Error::Codec("node output schema zero is reserved"));
     }
@@ -429,7 +395,6 @@ fn validate_recipe_bounds<K: Value>(
             actual: output_limit,
         });
     }
-    record_parents(parents, parent_limit);
     Ok(())
 }
 
@@ -460,329 +425,22 @@ impl Miss {
 }
 
 const MAX_DEEP_VALIDATIONS_PER_LOOKUP: usize = 2;
-pub(crate) const MAX_DEEP_VALIDATIONS_PER_GRAPH: usize = 8;
-pub(crate) const MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH: usize = 4;
-pub(crate) const MAX_CANDIDATE_COMPARISONS_PER_GRAPH: usize = 64;
-pub(crate) const MAX_DECODED_BYTES_PER_GRAPH: u64 = 32 * 1024 * 1024;
 
-#[cfg(test)]
-thread_local! {
-    /// Graph decode charges on this test thread: call site → (calls, bytes).
-    pub(crate) static DECODE_SITES: std::cell::RefCell<
-        std::collections::BTreeMap<String, (usize, u64)>,
-    > = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-    /// Graph path-check charges on this test thread: call site → (calls, checks).
-    pub(crate) static PATH_SITES: std::cell::RefCell<
-        std::collections::BTreeMap<String, (usize, u64)>,
-    > = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-}
-pub(crate) const MAX_PATH_CHECKS_PER_GRAPH: usize = 65_536;
-pub(crate) const MAX_HASHED_BYTES_PER_GRAPH: u64 = 8 * 1024 * 1024 * 1024;
-
-pub(crate) const LOOKUPS_RESOURCE: &str = "typed store discoverable lookups per graph";
-pub(crate) const COMPARISONS_RESOURCE: &str = "typed store candidate comparisons per graph";
-pub(crate) const DEEP_RESOURCE: &str = "typed store deep candidate validations per graph";
-pub(crate) const DECODED_RESOURCE: &str = "typed store decoded candidate bytes per graph";
-pub(crate) const PATHS_RESOURCE: &str = "typed store candidate path checks per graph";
-pub(crate) const HASHED_RESOURCE: &str = "typed store hashed candidate bytes per graph";
-
-/// Per-graph accounting targets. Crossing one is recorded and warned,
-/// never refused; the standard values are the targets the implementation
-/// optimizes toward.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GraphTargets {
-    pub(crate) lookups: usize,
-    pub(crate) comparisons: usize,
-    pub(crate) deep: usize,
-    pub(crate) decoded: u64,
-    pub(crate) paths: usize,
-    pub(crate) hashed: u64,
-}
-
-impl GraphTargets {
-    /// The standard per-graph targets.
-    pub const STANDARD: Self = Self {
-        lookups: MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH,
-        comparisons: MAX_CANDIDATE_COMPARISONS_PER_GRAPH,
-        deep: MAX_DEEP_VALIDATIONS_PER_GRAPH,
-        decoded: MAX_DECODED_BYTES_PER_GRAPH,
-        paths: MAX_PATH_CHECKS_PER_GRAPH,
-        hashed: MAX_HASHED_BYTES_PER_GRAPH,
-    };
-}
-
-impl Default for GraphTargets {
-    fn default() -> Self {
-        Self::STANDARD
-    }
-}
-
+/// The identity of one graph evaluation and its typed scratch accounts.
 #[derive(Clone)]
 pub(crate) struct GraphBudget {
-    usage: Arc<Mutex<GraphUsage>>,
     accounts: Arc<account::Registry>,
-    targets: GraphTargets,
-    /// Process-unique account identity shared by every clone of this graph.
-    id: u64,
-}
-
-#[derive(Clone, Copy, Default)]
-struct GraphUsage {
-    lookups: usize,
-    comparisons: usize,
-    deep: usize,
-    decoded: u64,
-    paths: usize,
-    hashed: u64,
-    exceeded: crate::exceedance::Record,
 }
 
 impl GraphBudget {
-    #[cfg(test)]
-    pub(crate) fn census_vector(&self) -> Result<[u64; 6], Error> {
-        let usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::State("graph census lock poisoned"))?;
-        let count =
-            |value| u64::try_from(value).map_err(|_| Error::State("graph census count overflow"));
-        Ok([
-            count(usage.lookups)?,
-            count(usage.comparisons)?,
-            count(usage.deep)?,
-            usage.decoded,
-            count(usage.paths)?,
-            usage.hashed,
-        ])
-    }
-
-    #[cfg(test)]
-    pub(crate) fn census_usage(&self) -> Result<(u64, usize, u64), Error> {
-        let usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::State("graph census lock poisoned"))?;
-        Ok((usage.decoded, usage.paths, usage.hashed))
-    }
-
     pub(crate) fn shares_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.usage, &other.usage)
+        Arc::ptr_eq(&self.accounts, &other.accounts)
     }
 
-    #[cfg(test)]
     pub(crate) fn new() -> Self {
-        Self::with_targets(GraphTargets::STANDARD)
-    }
-
-    pub(crate) fn with_targets(targets: GraphTargets) -> Self {
         Self {
-            usage: Arc::new(Mutex::new(GraphUsage::default())),
             accounts: Arc::new(account::Registry::default()),
-            targets,
-            id: crate::exceedance::next_id(),
         }
-    }
-
-    /// The accounting targets this graph is measured against.
-    pub(crate) const fn targets(&self) -> GraphTargets {
-        self.targets
-    }
-
-    /// Process-unique identity of this graph account.
-    #[cfg(test)]
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// The axes of this graph that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) fn exceedances(&self) -> crate::exceedance::Record {
-        self.usage
-            .lock()
-            .map(|usage| usage.exceeded)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn lookup(&self) -> Result<(), Error> {
-        self.charge_usize(
-            |usage| &mut usage.lookups,
-            1,
-            self.targets.lookups,
-            LOOKUPS_RESOURCE,
-            None,
-        )
-    }
-
-    pub(crate) fn comparison(&self) -> Result<(), Error> {
-        self.charge_usize(
-            |usage| &mut usage.comparisons,
-            1,
-            self.targets.comparisons,
-            COMPARISONS_RESOURCE,
-            None,
-        )
-    }
-
-    fn deep(&self) -> Result<(), Error> {
-        self.charge_usize(
-            |usage| &mut usage.deep,
-            1,
-            self.targets.deep,
-            DEEP_RESOURCE,
-            None,
-        )
-    }
-
-    #[track_caller]
-    pub(crate) fn decode(&self, bytes: usize) -> Result<(), Error> {
-        let caller = std::panic::Location::caller();
-        #[cfg(test)]
-        DECODE_SITES.with(|sites| {
-            let mut sites = sites.borrow_mut();
-            let entry = sites
-                .entry(format!("{}:{}", caller.file(), caller.line()))
-                .or_default();
-            entry.0 += 1;
-            entry.1 += bytes as u64;
-        });
-        self.charge_u64(
-            |usage| &mut usage.decoded,
-            u64::try_from(bytes).map_err(|_| Error::Allocation)?,
-            self.targets.decoded,
-            DECODED_RESOURCE,
-            Some(caller),
-        )
-    }
-
-    #[track_caller]
-    pub(crate) fn paths(&self, paths: usize) -> Result<(), Error> {
-        let caller = std::panic::Location::caller();
-        #[cfg(test)]
-        PATH_SITES.with(|sites| {
-            let mut sites = sites.borrow_mut();
-            let entry = sites
-                .entry(format!("{}:{}", caller.file(), caller.line()))
-                .or_default();
-            entry.0 += 1;
-            entry.1 += paths as u64;
-        });
-        self.charge_usize(
-            |usage| &mut usage.paths,
-            paths,
-            self.targets.paths,
-            PATHS_RESOURCE,
-            Some(caller),
-        )
-    }
-
-    pub(crate) fn hash(&self, bytes: usize) -> Result<(), Error> {
-        self.charge_u64(
-            |usage| &mut usage.hashed,
-            u64::try_from(bytes).map_err(|_| Error::Allocation)?,
-            self.targets.hashed,
-            HASHED_RESOURCE,
-            None,
-        )
-    }
-
-    // An accounting axis never yields `Error::Limit`. Every charge is
-    // added to the original account; crossing the target records the axis,
-    // target, requested amount and call site, and the charge still succeeds.
-    // Only checked-arithmetic overflow remains terminal.
-    fn charge_usize(
-        &self,
-        select: impl FnOnce(&mut GraphUsage) -> &mut usize,
-        amount: usize,
-        target: usize,
-        resource: &'static str,
-        site: Option<&'static std::panic::Location<'static>>,
-    ) -> Result<(), Error> {
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::State("typed store graph budget lock was poisoned"))?;
-        let current = select(&mut usage);
-        let requested = current.checked_add(amount);
-        let (result, exceeded) = match requested {
-            None => (Err(Error::Allocation), false),
-            Some(actual) => {
-                *current = actual;
-                let exceeded = actual > target
-                    && usage
-                        .exceeded
-                        .exceeded(resource, target as u64, actual as u64, site);
-                (Ok(()), exceeded)
-            }
-        };
-        self.observe_charge(usage, result, exceeded)
-    }
-
-    fn charge_u64(
-        &self,
-        select: impl FnOnce(&mut GraphUsage) -> &mut u64,
-        amount: u64,
-        target: u64,
-        resource: &'static str,
-        site: Option<&'static std::panic::Location<'static>>,
-    ) -> Result<(), Error> {
-        let mut usage = self
-            .usage
-            .lock()
-            .map_err(|_| Error::State("typed store graph budget lock was poisoned"))?;
-        let current = select(&mut usage);
-        let requested = current.checked_add(amount);
-        let (result, exceeded) = match requested {
-            None => (Err(Error::Allocation), false),
-            Some(actual) => {
-                *current = actual;
-                let exceeded =
-                    actual > target && usage.exceeded.exceeded(resource, target, actual, site);
-                (Ok(()), exceeded)
-            }
-        };
-        self.observe_charge(usage, result, exceeded)
-    }
-
-    /// Release the account lock, then publish the exceedance record. A write-only sink is still arbitrary caller code:
-    /// never invoke it while the original account lock is held, and never
-    /// change the original result.
-    fn observe_charge(
-        &self,
-        usage: std::sync::MutexGuard<'_, GraphUsage>,
-        result: Result<(), Error>,
-        exceeded: bool,
-    ) -> Result<(), Error> {
-        let record = usage.exceeded;
-        drop(usage);
-        if exceeded {
-            crate::exceedance::publish(crate::exceedance::Account::Graph, self.id, &record);
-        }
-        result
-    }
-
-    /// Test helper: charge comparisons up to exactly the target.
-    #[cfg(test)]
-    pub(crate) fn exhaust_comparisons(&self) {
-        let spent = self.usage.lock().unwrap().comparisons;
-        for _ in spent..self.targets.comparisons {
-            self.comparison().unwrap();
-        }
-    }
-
-    /// Test helper: charge path checks up to exactly the target.
-    #[cfg(test)]
-    pub(crate) fn exhaust_paths(&self) {
-        let spent = self.usage.lock().unwrap().paths;
-        self.paths(self.targets.paths.saturating_sub(spent))
-            .unwrap();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn deep_validations(&self) -> usize {
-        self.usage
-            .lock()
-            .map(|usage| usage.deep)
-            .unwrap_or(usize::MAX)
     }
 }
 
@@ -1071,7 +729,7 @@ impl<'store> Evaluator<'store> {
         // Candidates found stale stay stale for this evaluation: the rechecks
         // under the leases look only for a concurrently published one.
         let mut stale = Vec::new();
-        let first = self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+        let first = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
         if let Some(hit) = first.hit {
             self.metrics
                 .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1086,8 +744,7 @@ impl<'store> Evaluator<'store> {
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
             self.store.with_heavy_lease(|| {
-                let after_heavy =
-                    self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+                let after_heavy = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
                 if let Some(hit) = after_heavy.hit {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1101,7 +758,7 @@ impl<'store> Evaluator<'store> {
 
                 self.store.with_execution_lease(recipe.execution, || {
                     let rechecked =
-                        self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+                        self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
                     if let Some(hit) = rechecked.hit {
                         self.metrics
                             .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1240,11 +897,10 @@ impl<'store> Evaluator<'store> {
         K: Value + Send + Sync + 'static,
     {
         let validate: read_set::ScopedValidator<K> = Arc::new(validate);
-        let budget = self.store.graph_budget();
         // Candidates found stale stay stale for this evaluation: the rechecks
         // under the leases look only for a concurrently published one.
         let mut stale = Vec::new();
-        let first = self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+        let first = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
         if let Some(hit) = first.hit {
             self.metrics
                 .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1259,8 +915,7 @@ impl<'store> Evaluator<'store> {
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
             self.store.with_heavy_lease(|| {
-                let after_heavy =
-                    self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+                let after_heavy = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
                 if let Some(hit) = after_heavy.hit {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1274,7 +929,7 @@ impl<'store> Evaluator<'store> {
 
                 self.store.with_execution_lease(recipe.execution, || {
                     let rechecked =
-                        self.lookup_discoverable_scoped(recipe, &validate, budget, &mut stale)?;
+                        self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
                     if let Some(hit) = rechecked.hit {
                         self.metrics
                             .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
@@ -1368,7 +1023,6 @@ impl<'store> Evaluator<'store> {
         &self,
         recipe: &Discoverable<K>,
         validate: &read_set::Validator<K>,
-        budget: &GraphBudget,
     ) -> Result<Discovery<K>, Error>
     where
         K: Value + Send + Sync + 'static,
@@ -1376,20 +1030,19 @@ impl<'store> Evaluator<'store> {
         let validate = Arc::clone(validate);
         let scoped: read_set::ScopedValidator<K> =
             Arc::new(move |value, budget, _| validate(value, budget));
-        self.lookup_discoverable_scoped(recipe, &scoped, budget, &mut Vec::new())
+        self.lookup_discoverable_scoped(recipe, &scoped, &mut Vec::new())
     }
 
     fn lookup_discoverable_scoped<K>(
         &self,
         recipe: &Discoverable<K>,
         validate: &read_set::ScopedValidator<K>,
-        budget: &GraphBudget,
         stale: &mut Vec<ActionKey>,
     ) -> Result<Discovery<K>, Error>
     where
         K: Value + Send + Sync + 'static,
     {
-        let candidates = self.store.candidates::<K>(recipe.lookup, budget)?;
+        let candidates = self.store.candidates::<K>(recipe.lookup)?;
         let mut admitted = None;
         let mut rejected = candidates.rejected;
         let mut rejected_actions = [None; MAX_DEEP_VALIDATIONS_PER_LOOKUP];
@@ -1406,7 +1059,6 @@ impl<'store> Evaluator<'store> {
                 rejected = true;
                 continue;
             }
-            budget.deep()?;
             // An ordinary input change rebuilds silently under the progress
             // bar; only damaged entries earn a line.
             let current = match Check::of(self.replay_discovered(recipe, validate, action))? {

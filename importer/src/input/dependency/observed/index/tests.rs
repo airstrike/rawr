@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use super::Index;
 use crate::cargo::Limits;
-use crate::input::stored::{Budget, Error};
+use crate::input::stored::Budget;
 use crate::input::{Allocation, Usage};
 use crate::node;
 
@@ -103,66 +103,4 @@ fn reverse_maximum_line_inventory_has_logarithmic_height_and_comparisons() {
     let before = allocation.usage();
     assert!(index.locate(&values, |value| value.cmp(&1)).is_err());
     assert_eq!(allocation.usage(), before);
-}
-
-#[test]
-fn index_growth_exceedance_is_prospective_cumulative_and_refusal_terminal() {
-    let prior = Usage {
-        items: 7,
-        bytes: 31,
-    };
-    let mut limits = Limits::standard();
-    limits.input_proof_bytes = prior.bytes + 3 * super::node_bytes();
-    let mut allocation = Allocation::for_proof(prior, &limits);
-    let graph = node::GraphBudget::new();
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    let mut index = Index::new();
-    let mut values = Vec::new();
-    for key in [3, 2] {
-        let vacant = index
-            .locate(&values, |value: &usize| value.cmp(&key))
-            .expect("unique");
-        values.push(key);
-        index
-            .insert(vacant, &mut budget)
-            .expect("one then two full node layouts");
-    }
-    assert!(!budget.exceedances().is_exceeded());
-    // The third insertion admits the whole four-node replacement layout
-    // prospectively, so the cumulative charge jumps from three to seven node
-    // layouts in one step; the target is crossed, recorded with that cumulative
-    // figure, and the insertion still completes.
-    let vacant = index
-        .locate(&values, |value| value.cmp(&1))
-        .expect("unique third key");
-    values.push(1);
-    index
-        .insert(vacant, &mut budget)
-        .expect("accounting targets never refuse index growth");
-    assert_eq!(index.nodes.as_slice().len(), 3);
-    let record = budget.exceedances();
-    let bytes = record
-        .axis(crate::input::INPUT_BYTES_RESOURCE)
-        .expect("the replacement layout crossed the byte target");
-    assert_eq!(bytes.target, (prior.bytes + 3 * super::node_bytes()) as u64);
-    assert_eq!(
-        bytes.first_requested,
-        (prior.bytes + 7 * super::node_bytes()) as u64
-    );
-    assert_eq!(bytes.high_water, bytes.first_requested);
-    // Only a genuine failure latches, and the latch is terminal: a further
-    // insertion does no work and the tree is not mutated.
-    budget.refuse();
-    let vacant = index
-        .locate(&values, |value| value.cmp(&0))
-        .expect("unique fourth key");
-    assert!(matches!(
-        index.insert(vacant, &mut budget),
-        Err(Error::Refused)
-    ));
-    assert_eq!(index.nodes.as_slice().len(), 3);
-    assert_eq!(
-        allocation.usage().bytes,
-        prior.bytes + 7 * super::node_bytes()
-    );
 }

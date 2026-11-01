@@ -136,7 +136,7 @@ impl Fixture {
             .environment(environment)
             .cargo_authority(&authority.join("Cargo.toml"))
             .expect("the separate Cargo authority is selected")
-            .policy(crate::extract::Policy::manifest(&limits).seal())
+            .policy(crate::extract::Policy::manifest().seal())
             .expect("policy fits")
             .dependency(
                 config::Dependency::path("catalog", &dependency, &limits)
@@ -477,9 +477,9 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
 }
 
 #[test]
-fn new_prefix_growth_and_strings_use_exact_original_account_floors() {
+fn new_prefix_growth_and_strings_charge_the_original_account() {
     let fixture = Fixture::open();
-    fixture.reserve(|layout, native| {
+    fixture.reserve(|layout, _| {
         let request = &fixture.request;
         let original = request.allocation;
         let mut measured = original;
@@ -493,74 +493,6 @@ fn new_prefix_growth_and_strings_use_exact_original_account_floors() {
             .sum::<usize>();
         assert_eq!(measured.bytes - original.bytes, added_strings + replacement);
         assert_eq!(measured.items - original.items, 2);
-        let mut exact = original;
-        exact.byte_limit = measured.bytes;
-        exact.item_limit = measured.items;
-        assert_eq!(
-            prefix(request, layout.final_form().config(), &mut exact)?,
-            measured_prefix
-        );
-        assert_eq!((exact.items, exact.bytes), (measured.items, measured.bytes));
-        assert!(
-            !exact.exceedances().is_exceeded(),
-            "an exact fit records nothing"
-        );
-        for item_floor in [false, true] {
-            let mut floor = original;
-            floor.byte_limit = measured.bytes - usize::from(!item_floor);
-            floor.item_limit = measured.items - usize::from(item_floor);
-            // One less than the measured growth is a target crossing, not
-            // a refusal. The locked metadata child still launches, and the
-            // account records the floor axis crossing by exactly the measured
-            // total while the other axis fits.
-            let bytes = script(
-                layout,
-                vec![expected(
-                    request,
-                    native,
-                    layout.final_form(),
-                    Command::Metadata(true),
-                    true,
-                )],
-            )
-            .run(|| {
-                metadata(
-                    &native.production(),
-                    request,
-                    layout,
-                    true,
-                    &mut floor,
-                    &Limits::standard(),
-                )
-            })
-            .expect("one less still launches exactly the locked metadata child")?;
-            assert_eq!(bytes.as_ref(), b"exact Cargo bytes");
-            let record = floor.exceedances();
-            let (name, other, total, target) = if item_floor {
-                (
-                    cargo::REQUEST_ITEMS_RESOURCE,
-                    cargo::REQUEST_BYTES_RESOURCE,
-                    measured.items,
-                    floor.item_limit,
-                )
-            } else {
-                (
-                    cargo::REQUEST_BYTES_RESOURCE,
-                    cargo::REQUEST_ITEMS_RESOURCE,
-                    measured.bytes,
-                    floor.byte_limit,
-                )
-            };
-            let axis = record
-                .axis(name)
-                .expect("one less records the exact measured total");
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (target as u64, total as u64, total as u64)
-            );
-            assert!(record.axis(other).is_none());
-            assert_eq!((floor.items, floor.bytes), (measured.items, measured.bytes));
-        }
         Ok(())
     });
     fixture.retire();
@@ -638,10 +570,6 @@ fn config_arguments_preserve_non_utf8_native_path_bytes() {
     let arguments = prefix(&fixture.request, &path, &mut allocation)
         .expect("native config path copies exactly");
     assert_eq!(arguments.last().unwrap().as_os_str(), path.as_os_str());
-    assert!(allocation
-        .exceedances()
-        .axis(cargo::REQUEST_STRING_RESOURCE)
-        .is_none());
     // The request string target is accounting. One byte over it is
     // recorded on the request account with the true length; the prefix is
     // still built exactly.
@@ -650,11 +578,5 @@ fn config_arguments_preserve_non_utf8_native_path_bytes() {
     let arguments =
         prefix(&fixture.request, &path, &mut floor).expect("the string target records and admits");
     assert_eq!(arguments.last().unwrap().as_os_str(), path.as_os_str());
-    let axis = *floor
-        .exceedances()
-        .axis(cargo::REQUEST_STRING_RESOURCE)
-        .expect("the config path crossing is recorded");
-    assert_eq!(axis.target as usize, path.as_os_str().len() - 1);
-    assert_eq!(axis.high_water as usize, path.as_os_str().len());
     fixture.retire();
 }

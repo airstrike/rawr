@@ -1,10 +1,7 @@
 use rawr_toml::document;
 
 use super::{exercise, Account, Url};
-use crate::input::membership::manifest::tests::admits_one_short;
 use crate::input::membership::manifest::{session, storage, Error, Stop};
-use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[test]
 fn every_admission_refusal_preserves_prior_requests_and_stops_new_trials() {
@@ -36,98 +33,6 @@ fn every_admission_refusal_preserves_prior_requests_and_stops_new_trials() {
         assert_eq!(account.requests, full.requests[..=refusal], "{refusal}");
         assert_eq!(storage::ALLOCATIONS.with(|count| count.get()), allocations);
     }
-}
-
-const STRING_RESOURCE: &str = "membership decoded TOML string bytes";
-
-/// A string target one short of the longest decoded string admits the
-/// same work, spends the same charge, and records only the string axis with
-/// that exact length as its high water. Returns the axis for closer checks.
-fn admits_one_short_string(
-    (okay, usage, exceeded): (bool, input::Usage, crate::exceedance::Record),
-    exact: input::Usage,
-    target: usize,
-    total: usize,
-) -> crate::exceedance::Axis {
-    assert!(okay, "a string target is not an admission gate");
-    assert_eq!(usage, exact, "the exact charge is still spent");
-    let mut axes = exceeded.axes();
-    let (Some(axis), None) = (axes.next(), axes.next()) else {
-        panic!("exactly one exceeded axis: {exceeded:?}")
-    };
-    assert_eq!(axis.name, STRING_RESOURCE);
-    assert_eq!(axis.target, target as u64);
-    assert_eq!(axis.high_water, total as u64);
-    assert!(axis.first_requested > axis.target);
-    assert!(axis.first_requested <= axis.high_water);
-    *axis
-}
-
-fn limited(
-    items: usize,
-    bytes: usize,
-    string: usize,
-) -> (bool, input::Usage, crate::exceedance::Record) {
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, string);
-    allocation.items(13).unwrap();
-    allocation.bytes(31).unwrap();
-    let mut budget = Budget {
-        graph: &graph,
-        allocation: &mut allocation,
-    };
-    let mut session = session::Session::new(&mut budget);
-    let result = exercise(&mut session);
-    let success = session.finish(result).is_ok();
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (success, allocation.usage, allocation.exceedances())
-}
-
-#[test]
-fn original_cumulative_item_layout_and_string_floors_are_exact() {
-    let (success, usage, _) = limited(usize::MAX, usize::MAX, usize::MAX);
-    assert!(success);
-    let mut account = Account::default();
-    let mut session = session::Session::new(&mut account);
-    let result = exercise(&mut session);
-    session.finish(result).unwrap();
-    let string = account
-        .requests
-        .iter()
-        .filter_map(|request| {
-            if let document::Request::String(length) = request {
-                Some(*length)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap();
-    assert_eq!(
-        limited(usage.items, usage.bytes, string),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        limited(usage.items - 1, usage.bytes, string),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        limited(usage.items, usage.bytes - 1, string),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-    // One short of the longest decoded string admits the same work and
-    // records only the string axis, whose high water is that exact length.
-    admits_one_short_string(
-        limited(usage.items, usage.bytes, string - 1),
-        usage,
-        string - 1,
-        string,
-    );
 }
 
 #[test]

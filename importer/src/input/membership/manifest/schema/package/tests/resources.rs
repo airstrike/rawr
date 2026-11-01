@@ -2,9 +2,6 @@ use rawr_toml::document;
 
 use super::super::super::super::{session, storage, Error};
 use super::{parse, Defaults, Package};
-use crate::input::membership::manifest::tests::admits_one_short;
-use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[derive(Default)]
 struct Account {
@@ -58,69 +55,6 @@ fn each_refusal_stops_package_allocations_and_cannot_be_discarded() {
             "request {refusal}"
         );
     }
-}
-
-fn budgeted(
-    document: &document::Document<'_>,
-    items: usize,
-    bytes: usize,
-    string: usize,
-) -> (bool, input::Usage, crate::exceedance::Record) {
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, string);
-    allocation.items(11).unwrap();
-    allocation.bytes(29).unwrap();
-    let mut budget = Budget {
-        graph: &graph,
-        allocation: &mut allocation,
-    };
-    let mut session = session::Session::new(&mut budget);
-    let result = Package::interpret(super::input(document), &mut session);
-    let okay = session.finish(result).is_ok();
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (okay, allocation.usage, allocation.exceedances())
-}
-
-#[test]
-fn package_uses_exact_original_aggregate_and_string_floors_with_prior_usage() {
-    let document = parse(FIXTURE);
-    let (okay, exact, _) = budgeted(&document, usize::MAX, usize::MAX, usize::MAX);
-    assert!(okay);
-    assert_eq!(
-        budgeted(&document, exact.items, exact.bytes, 17),
-        (true, exact, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        budgeted(&document, exact.items - 1, exact.bytes, 17),
-        exact,
-        input::INPUT_ITEMS_RESOURCE,
-        exact.items,
-    );
-    admits_one_short(
-        budgeted(&document, exact.items, exact.bytes - 1, 17),
-        exact,
-        input::INPUT_BYTES_RESOURCE,
-        exact.bytes,
-    );
-    // One short of the longest decoded string (17 bytes) admits the same
-    // work and records only the string axis; the account never latches.
-    let (okay, usage, exceeded) = budgeted(&document, exact.items, exact.bytes, 16);
-    assert!(okay, "a string target is not an admission gate");
-    assert_eq!(usage, exact, "the exact charge is still spent");
-    let mut axes = exceeded.axes();
-    let (Some(axis), None) = (axes.next(), axes.next()) else {
-        panic!("only the string axis is recorded: {exceeded:?}");
-    };
-    assert_eq!(
-        (
-            axis.name,
-            axis.target,
-            axis.first_requested,
-            axis.high_water
-        ),
-        ("membership decoded TOML string bytes", 16, 17, 17)
-    );
 }
 
 #[test]

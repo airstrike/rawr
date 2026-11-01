@@ -1,17 +1,15 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::storage::slots;
 use crate::input::membership::observed::discovery::{
     After, Attempt, Exists, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 
 fn budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -81,12 +79,10 @@ fn run(
         stored::Stored::decode(&image.encode(budget).unwrap(), budget).unwrap()
     });
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -210,7 +206,6 @@ fn missing_canonical_is_terminal_not_native_fallback() {
 
 #[test]
 fn successful_home_canonicalization_still_admits_eager_fallback_copy() {
-    use crate::input::membership::manifest::tests::one_short;
     let mut records = vec![
         env(None),
         discovery("/p/.cargo", false),
@@ -219,15 +214,13 @@ fn successful_home_canonicalization_still_admits_eager_fallback_copy() {
     ];
     records.sort_by(|a, b| a.query.cmp(&b.query));
     let image = budget(|budget| stored::Stored::from_records(&records, budget).unwrap());
-    let run = |byte_limit| {
+    let run = || {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(usize::MAX, byte_limit, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.bytes(31).unwrap();
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -250,21 +243,8 @@ fn successful_home_canonicalization_still_admits_eager_fallback_copy() {
         // Equality suppresses home discovery, so no later allocations follow
         // the eagerly evaluated raw-home fallback copy in this fixture.
         host.finish().unwrap();
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (result, allocation.usage().bytes, allocation.exceedances())
+        assert!(allocation.check().is_ok());
+        result
     };
-    let (result, complete, _) = run(usize::MAX);
-    assert!(result.is_ok());
-    let (result, exact, exceeded) = run(complete);
-    assert!(result.is_ok());
-    assert_eq!(exact, complete);
-    assert!(!exceeded.is_exceeded());
-    // One byte short admits the eager raw-home fallback copy, the last
-    // charge, and records it as the first and only exceeding charge.
-    let (result, spent, exceeded) = run(complete - 1);
-    assert!(result.is_ok());
-    assert_eq!(spent, complete);
-    assert!(one_short(&exceeded, input::INPUT_BYTES_RESOURCE, complete));
-    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-    assert_eq!(axis.first_requested, complete as u64);
+    assert!(run().is_ok());
 }

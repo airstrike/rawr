@@ -65,7 +65,7 @@ impl Corruption {
         fact: Fact,
         budget: &GraphBudget,
     ) -> Result<Self, Error> {
-        let record = Record::read_bundle_budgeted(root, budget)?;
+        let record = Record::read_bundle_budgeted(root)?;
         record.validate_bundle_descriptor(
             kind,
             schema,

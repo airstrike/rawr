@@ -37,7 +37,6 @@ pub(super) fn acquire(
     // As with directory transfer/file scratch, this is fixed stack storage,
     // not a hidden heap allocation or an input-length restriction.
     let mut buffer = [0; rawr_canonical::BUFFER_BYTES];
-    budget.graph.paths(1)?;
     let value = match system.canonicalize(native, &mut buffer) {
         Ok(value) => Ok(observed::Path::from_bytes(value.to_bytes(), budget)?),
         Err(rawr_canonical::Error::Native(error)) => {

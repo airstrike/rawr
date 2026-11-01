@@ -2,17 +2,15 @@ use crate::input::membership::manifest::{
     load, schema::manifest::Original, session::Session, value, Error, Stop,
 };
 use crate::input::membership::{host, observed, stored, Budget, Error as InputError};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 mod canonical;
 mod environment;
 
 fn image(values: &[(&[u8], observed::Value, bool)]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = values
@@ -73,12 +71,10 @@ fn predicates_preserve_all_present_kinds_absence_and_recorded_os_errors() {
         let directory = matches!(&value, observed::Value::Metadata(metadata) if metadata.kind == observed::Kind::Directory);
         let image = image(&[(b"/native/\xff", value, false)]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -96,12 +92,10 @@ fn predicates_preserve_all_present_kinds_absence_and_recorded_os_errors() {
 fn missing_observation_is_terminal_and_not_an_absent_file() {
     let image = image(&[(b"/known", metadata(observed::Kind::File), false)]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -129,12 +123,10 @@ fn whole_file_read_error_precedes_utf8_and_syntax_and_stays_terminal() {
             true,
         )]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -155,7 +147,6 @@ fn whole_file_read_error_precedes_utf8_and_syntax_and_stays_terminal() {
 
 #[test]
 fn complete_document_original_initial_configuration_and_probe_share_original_accounts() {
-    use crate::input::membership::manifest::tests::admits_one_short;
     let source = b"cargo-features=['edition']\nworkspace={}\n";
     let image = image(&[
         (
@@ -168,24 +159,19 @@ fn complete_document_original_initial_configuration_and_probe_share_original_acc
         ),
         (b"/build.rs", metadata(observed::Kind::File), false),
     ]);
-    let run = |items, bytes, paths_exhausted| {
+    let run = || {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        if paths_exhausted {
-            graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        }
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
             Ok(host) => host,
-            Err(_) => return (false, allocation.usage(), allocation.exceedances()),
+            Err(_) => return false,
         };
         let mut session = Session::new(&mut host);
         let result = (|| {
@@ -213,54 +199,16 @@ fn complete_document_original_initial_configuration_and_probe_share_original_acc
             Ok(())
         })();
         let result = session.finish(result);
-        if paths_exhausted {
-            // Every path check past the exhausted target is recorded,
-            // one at a time, and none refuses.
-            assert!(result.is_ok());
-            let exceeded = graph.exceedances();
-            let axis = exceeded
-                .axis(node::PATHS_RESOURCE)
-                .expect("exhausted path target recorded");
-            assert_eq!(
-                axis.first_requested,
-                node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            assert_eq!(axis.high_water, graph.census_usage().unwrap().1 as u64);
-        } else {
-            assert!(!graph.exceedances().is_exceeded());
-        }
         let success = result.is_ok();
         if success {
             host.finish().unwrap();
         } else {
             drop(host);
         }
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (success, allocation.usage(), allocation.exceedances())
+        assert!(allocation.check().is_ok());
+        success
     };
-    let (success, usage, _) = run(usize::MAX, usize::MAX, false);
-    assert!(success);
-    assert_eq!(
-        run(usage.items, usage.bytes, false),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(usage.items - 1, usage.bytes, false),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(usage.items, usage.bytes - 1, false),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-    assert_eq!(
-        run(usage.items, usage.bytes, true),
-        (true, usage, crate::exceedance::Record::new())
-    );
+    assert!(run());
 }
 
 #[test]
@@ -280,12 +228,10 @@ fn absent_document_is_data_but_eof_parse_failures_are_terminal() {
         let encoding = matches!(&value, observed::Value::File { bytes, .. } if bytes == &[0xff]);
         let image = image(&[(b"/Cargo.toml", value, true)]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

@@ -118,7 +118,6 @@ pub(crate) struct Capture {
     /// Sealed replay decoded only the handshakes; `into_parts` decodes the
     /// complete document from the digest-checked sidecars.
     deferred: bool,
-    document_bytes: usize,
     invocations: Invocations,
     sidecars: Box<[(PathBuf, [u8; 32])]>,
     controls: Box<[(PathBuf, [u8; 32])]>,
@@ -218,9 +217,6 @@ impl Plan {
     ) -> Result<Self> {
         let units = graph.extraction();
         let mut allocation = Allocation::new(limits);
-        // The unit count is an accounting target recorded on the plan's
-        // canonical account; an empty selection is the correctness failure.
-        allocation.exceeded("extraction plan units", limits.packages, units.len());
         if units.is_empty() {
             return Err(extraction(
                 "missing-extraction-unit",
@@ -272,7 +268,7 @@ impl Plan {
             &mut allocation,
         )?;
 
-        let entries = prepare_entries(units, &run_nonce, limits, &mut allocation)?;
+        let entries = prepare_entries(units, &run_nonce, &mut allocation)?;
         let plan_file = join_path(&root, Path::new(PLAN_FILE), &mut allocation)?;
         let artifact_directory = allocation.clone_path(&target_directory)?;
         Ok(Self {
@@ -395,9 +391,6 @@ impl Plan {
     ) -> Result<Self> {
         let units = graph.extraction();
         let mut allocation = Allocation::new(limits);
-        // The unit count is an accounting target recorded on the plan's
-        // canonical account; an empty selection is the correctness failure.
-        allocation.exceeded("extraction plan units", limits.packages, units.len());
         if units.is_empty() {
             return Err(extraction(
                 "missing-extraction-unit",
@@ -455,7 +448,7 @@ impl Plan {
                 reason: "was moved or replaced during the build".into(),
             });
         }
-        let entries = prepare_entries(units, &run_nonce, limits, &mut allocation)?;
+        let entries = prepare_entries(units, &run_nonce, &mut allocation)?;
         let plan_file = allocation.clone_path(extraction.plan())?;
         Ok(Self {
             inventory: false,
@@ -784,7 +777,7 @@ impl Plan {
         graph: &unit::BuildGraph,
         limits: &cargo::Limits,
     ) -> Result<Probe> {
-        let selected = build.selected_artifacts(graph, limits, &mut self.allocation)?;
+        let selected = build.selected_artifacts(graph, &mut self.allocation)?;
         if selected.len() != self.entries.len() {
             return Err(extraction(
                 "selected-artifact-cardinality",
@@ -843,13 +836,12 @@ impl Plan {
                 path,
                 selected.length,
                 selected.digest,
-                limits,
                 &mut allocation,
             )?;
             entries.push(entry.seal(artifact));
         }
         artifacts.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-        let probe_directories = build.probe_directories(graph, limits, &mut allocation)?;
+        let probe_directories = build.probe_directories(graph, &mut allocation)?;
         let mut dependency_directories = Vec::new();
         allocation.reserve(&mut dependency_directories, probe_directories.len())?;
         for directory in &probe_directories {
@@ -876,13 +868,6 @@ impl Plan {
             code: "probe-plan-encoding",
             reason: error.to_string().into_boxed_str(),
         })?;
-        // The plan document size is an accounting target recorded on
-        // the canonical account, never a refusal.
-        allocation.exceeded(
-            "metadata probe plan bytes",
-            limits.json_bytes,
-            measured.bytes,
-        );
         allocation.items(1)?;
         allocation.bytes(measured.bytes)?;
         let mut plan_bytes = Vec::new();
@@ -929,22 +914,14 @@ impl Probe {
         &mut self,
         rustc: &Path,
     ) -> Result<(search::Search, Vec<PathBuf>, Vec<PathBuf>)> {
-        let graph = self
-            .graph_budget
-            .as_ref()
-            .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
         let search = search::Search::observe(
             rustc,
             &self.compiler_commit,
             &self.host,
             &self.selected_target,
             &mut self.allocation,
-            graph,
         )?;
         let mut roots = Vec::new();
-        graph
-            .decode((self.dependency_directories.len() + 1) * std::mem::size_of::<PathBuf>())
-            .map_err(artifact_graph_error)?;
         self.allocation
             .reserve(&mut roots, self.dependency_directories.len() + 1)?;
         for path in self
@@ -952,21 +929,12 @@ impl Probe {
             .iter()
             .chain(std::iter::once(&search.library))
         {
-            graph
-                .decode(path.as_os_str().len())
-                .map_err(artifact_graph_error)?;
             roots.push(self.allocation.clone_path(path)?);
         }
         let mut explicit = Vec::new();
-        graph
-            .decode(self.entries.len() * std::mem::size_of::<PathBuf>())
-            .map_err(artifact_graph_error)?;
         self.allocation.reserve(&mut explicit, self.entries.len())?;
         for entry in &self.entries {
             let path = Path::new(entry.state.artifact.path.as_ref());
-            graph
-                .decode(path.as_os_str().len())
-                .map_err(artifact_graph_error)?;
             explicit.push(self.allocation.clone_path(path)?);
         }
 
@@ -1047,8 +1015,7 @@ impl Probe {
             (&self.plan_file, self.plan_bytes.as_slice()),
             (&self.probe_source, PROBE_SOURCE),
         ] {
-            let bytes =
-                read_bounded_accounted(path, &mut self.allocation, self.graph_budget.as_ref())?;
+            let bytes = read_bounded_accounted(path, &mut self.allocation)?;
             if let Some((root, inventory)) = &inventory {
                 inventory
                     .require_bytes(
@@ -1110,11 +1077,6 @@ impl Probe {
         let mut artifacts = self.artifacts;
         let plan_bytes = self.plan_bytes;
         let mut names = BTreeSet::new();
-        if let Some(graph) = &self.graph_budget {
-            graph.paths(1).map_err(attempt_graph_error)?;
-            crate::store::path::input(&self.protocol_directory, graph)
-                .map_err(attempt_graph_error)?;
-        }
         let directory = fs::read_dir(&self.protocol_directory).map_err(|source| Error::Io {
             operation: "inspect extraction protocol directory",
             path: self.protocol_directory.clone(),
@@ -1131,16 +1093,7 @@ impl Probe {
                 path: self.protocol_directory.clone(),
                 source,
             })?;
-            if let Some(graph) = &self.graph_budget {
-                graph
-                    .decode(CANONICAL_PATH_BYTES + std::mem::size_of::<PathBuf>())
-                    .map_err(attempt_graph_error)?;
-            }
             let path = directory_entry_path(&item, &mut allocation)?;
-            if let Some(graph) = &self.graph_budget {
-                graph.paths(1).map_err(attempt_graph_error)?;
-                crate::store::path::input(&path, graph).map_err(attempt_graph_error)?;
-            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
                 operation: "inspect extraction protocol file",
                 path: path.clone(),
@@ -1160,7 +1113,6 @@ impl Probe {
                     code: "invalid-sidecar-name",
                     reason: "sidecar filename is not UTF-8".into(),
                 })?;
-            admit_protocol_name(name.len(), self.graph_budget.as_ref())?;
             allocation.items(1)?;
             if !names.insert(allocation.owned(name)?) {
                 return Err(extraction(
@@ -1170,20 +1122,11 @@ impl Probe {
             }
         }
         let mut expected_names = BTreeSet::new();
-        admit_protocol_name(ATTEMPTS_FILE.len(), self.graph_budget.as_ref())?;
         allocation.items(1)?;
         expected_names.insert(allocation.owned(ATTEMPTS_FILE)?);
         for entry in &entries {
-            admit_protocol_name(
-                entry.unit_correlation.len() + ".json".len(),
-                self.graph_budget.as_ref(),
-            )?;
             allocation.items(1)?;
-            expected_names.insert(sidecar_name(
-                &entry.unit_correlation,
-                limits,
-                &mut allocation,
-            )?);
+            expected_names.insert(sidecar_name(&entry.unit_correlation, &mut allocation)?);
         }
         if names != expected_names {
             return Err(extraction(
@@ -1195,18 +1138,18 @@ impl Probe {
         allocation.items(1)?;
         let mut document = Vec::new();
         let mut sidecars = Vec::new();
-        append_document_prefix(&mut document, limits, &mut allocation)?;
+        append_document_prefix(&mut document, &mut allocation)?;
         for (index, entry) in entries.iter().enumerate() {
             if index != 0 {
-                append(&mut document, b",", limits, &mut allocation)?;
+                append(&mut document, b",", &mut allocation)?;
             }
-            let name = sidecar_name(&entry.unit_correlation, limits, &mut allocation)?;
+            let name = sidecar_name(&entry.unit_correlation, &mut allocation)?;
             let path = join_path(
                 &self.protocol_directory,
                 Path::new(name.as_ref()),
                 &mut allocation,
             )?;
-            let bytes = read_bounded_accounted(&path, &mut allocation, self.graph_budget.as_ref())?;
+            let bytes = read_bounded_accounted(&path, &mut allocation)?;
             if let Some((root, inventory)) = inventory {
                 inventory
                     .require_bytes(
@@ -1224,9 +1167,9 @@ impl Probe {
             }
             allocation.reserve(&mut sidecars, 1)?;
             sidecars.push((path, Sha256::digest(&bytes).into()));
-            append(&mut document, &bytes, limits, &mut allocation)?;
+            append(&mut document, &bytes, &mut allocation)?;
         }
-        append(&mut document, b"]}", limits, &mut allocation)?;
+        append(&mut document, b"]}", &mut allocation)?;
         // Bytes the sealed inventory authenticated were fully decoded when they
         // were sealed; every check below reads only their handshakes.
         let deferred = inventory.is_some() && evidence.is_none();
@@ -1244,28 +1187,14 @@ impl Probe {
             &self.compiler_commit,
             &self.host,
             &self.selected_target,
-            limits,
             &mut allocation,
         )?;
-        if let Some(graph) = &self.graph_budget {
-            let path_bytes = self
-                .protocol_directory
-                .as_os_str()
-                .len()
-                .checked_add(1 + ATTEMPTS_FILE.len())
-                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<(PathBuf, [u8; 32])>()))
-                .ok_or_else(|| {
-                    extraction("compiler-attempt-completion", "path allocation overflow")
-                })?;
-            graph.decode(path_bytes).map_err(attempt_graph_error)?;
-        }
         let attempts_path = join_path(
             &self.protocol_directory,
             Path::new(ATTEMPTS_FILE),
             &mut allocation,
         )?;
-        let attempts_bytes =
-            read_attempts(&attempts_path, &mut allocation, self.graph_budget.as_ref())?;
+        let attempts_bytes = read_attempts(&attempts_path, &mut allocation)?;
         if let Some((root, inventory)) = inventory {
             inventory
                 .require_bytes(
@@ -1311,7 +1240,6 @@ impl Probe {
                     &self.host,
                     &self.selected_target,
                     &mut allocation,
-                    graph,
                 )?;
                 if before != after {
                     return Err(extraction(
@@ -1325,17 +1253,12 @@ impl Probe {
                 (Some(Arc::new(retained)), Some(after))
             }
             Some(Namespace::Replay(before, retained)) => {
-                let graph = self
-                    .graph_budget
-                    .as_ref()
-                    .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
                 let after = search::Search::observe(
                     &before.rustc,
                     &self.compiler_commit,
                     &self.host,
                     &self.selected_target,
                     &mut allocation,
-                    graph,
                 )?;
                 if before != after {
                     return Err(extraction(
@@ -1343,7 +1266,7 @@ impl Probe {
                         "compiler search selector changed",
                     ));
                 }
-                retained.require_selection(&completion, &mut allocation, graph)?;
+                retained.require_selection(&completion, &mut allocation)?;
                 // validate_retained immediately calls Capture::revalidate for
                 // this replay's current membership/content check.
                 (Some(retained), Some(after))
@@ -1395,14 +1318,7 @@ impl Probe {
                     }
                     let (length, digest) =
                         artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
-                    insert_artifact(
-                        &mut artifacts,
-                        path,
-                        length,
-                        digest,
-                        limits,
-                        &mut allocation,
-                    )?;
+                    insert_artifact(&mut artifacts, path, length, digest, &mut allocation)?;
                 }
             }
         }
@@ -1452,14 +1368,13 @@ impl Probe {
         allocation.reserve(&mut controls, 2)?;
         controls.push((self.plan_file, Sha256::digest(&plan_bytes).into()));
         controls.push((self.probe_source, Sha256::digest(PROBE_SOURCE).into()));
-        let invocations = Invocations::seal_document_with_allocation(&decoded, allocation, limits)?
-            .bind_external(external, limits)?;
+        let invocations = Invocations::seal_document_with_allocation(&decoded, allocation)?
+            .bind_external(external)?;
         Ok(Capture {
             search,
             namespace,
             document: decoded,
             deferred,
-            document_bytes: document.len(),
             invocations,
             sidecars: sidecars.into_boxed_slice(),
             controls: controls.into_boxed_slice(),
@@ -1548,7 +1463,6 @@ fn insert_artifact(
     path: PathBuf,
     length: u64,
     digest: [u8; 32],
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<()> {
     if let Some((_, previous_length, previous_digest)) =
@@ -1562,23 +1476,13 @@ fn insert_artifact(
         }
         return Ok(());
     }
-    allocation.exceeded(
-        "loaded compiler artifacts",
-        limits.units,
-        artifacts.len().saturating_add(1),
-    );
     allocation.reserve(artifacts, 1)?;
     artifacts.push((path, length, digest));
     Ok(())
 }
 
-fn sidecar_name(
-    correlation: &str,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<Box<str>> {
+fn sidecar_name(correlation: &str, allocation: &mut Allocation) -> Result<Box<str>> {
     let length = correlation.len().saturating_add(".json".len());
-    allocation.exceeded("compiler sidecar filename", limits.string_bytes, length);
     allocation.items(1)?;
     allocation.bytes(length)?;
     let mut name = String::new();
@@ -1624,23 +1528,7 @@ impl Capture {
             .map(|(path, _, digest)| (path.as_path(), digest))
     }
 
-    pub(crate) fn artifact_inputs(
-        &mut self,
-        limits: &cargo::Limits,
-    ) -> Result<Vec<(PathBuf, [u8; 32])>> {
-        self.invocations.allocation.exceeded(
-            "probe artifact input items",
-            limits.items,
-            self.artifacts.len(),
-        );
-        let bytes = self.artifacts.iter().fold(0_usize, |total, (path, _, _)| {
-            total.saturating_add(path.as_os_str().len())
-        });
-        self.invocations.allocation.exceeded(
-            "probe artifact input bytes",
-            limits.json_bytes,
-            bytes,
-        );
+    pub(crate) fn artifact_inputs(&mut self) -> Result<Vec<(PathBuf, [u8; 32])>> {
         let mut inputs = Vec::new();
         self.invocations
             .allocation
@@ -1664,11 +1552,7 @@ impl Capture {
         inventory: Option<(&Path, resolution::bundle::Inventory<'_>)>,
     ) -> Result<()> {
         if let Some(search) = &self.search {
-            let graph = self
-                .graph_budget
-                .as_ref()
-                .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
-            search.revalidate(&mut self.invocations.allocation, graph)?;
+            search.revalidate(&mut self.invocations.allocation)?;
         }
         if let Some((root, inventory)) = inventory {
             let graph = self
@@ -1682,18 +1566,10 @@ impl Capture {
                 graph,
             )?;
         } else if let Some(namespace) = &self.namespace {
-            let graph = self
-                .graph_budget
-                .as_ref()
-                .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
-            namespace.revalidate(&mut self.invocations.allocation, graph)?;
+            namespace.revalidate(&mut self.invocations.allocation)?;
         }
         for (path, expected) in &self.controls {
-            let bytes = read_bounded_accounted(
-                path,
-                &mut self.invocations.allocation,
-                self.graph_budget.as_ref(),
-            )?;
+            let bytes = read_bounded_accounted(path, &mut self.invocations.allocation)?;
             let actual: [u8; 32] = Sha256::digest(bytes).into();
             if &actual != expected {
                 return Err(extraction(
@@ -1704,17 +1580,9 @@ impl Capture {
         }
         for (path, expected) in &self.sidecars {
             let bytes = if path.file_name() == Some(std::ffi::OsStr::new(ATTEMPTS_FILE)) {
-                read_attempts(
-                    path,
-                    &mut self.invocations.allocation,
-                    self.graph_budget.as_ref(),
-                )?
+                read_attempts(path, &mut self.invocations.allocation)?
             } else {
-                read_bounded_accounted(
-                    path,
-                    &mut self.invocations.allocation,
-                    self.graph_budget.as_ref(),
-                )?
+                read_bounded_accounted(path, &mut self.invocations.allocation)?
             };
             let actual: [u8; 32] = Sha256::digest(bytes).into();
             if &actual != expected {
@@ -1836,11 +1704,6 @@ impl Capture {
         mut self,
         limits: &cargo::Limits,
     ) -> Result<(protocol::Document, Invocations)> {
-        self.invocations.allocation.exceeded(
-            "compiler sidecar document bytes",
-            limits.json_bytes,
-            self.document_bytes,
-        );
         if self.deferred {
             self.document = self.decode_sidecars(limits)?;
         }
@@ -1888,25 +1751,25 @@ impl Capture {
     fn decode_sidecars(&mut self, limits: &cargo::Limits) -> Result<protocol::Document> {
         let allocation = &mut self.invocations.allocation;
         let mut document = Vec::new();
-        append_document_prefix(&mut document, limits, allocation)?;
+        append_document_prefix(&mut document, allocation)?;
         let sidecars = self
             .sidecars
             .iter()
             .filter(|(path, _)| path.file_name() != Some(std::ffi::OsStr::new(ATTEMPTS_FILE)));
         for (index, (path, expected)) in sidecars.enumerate() {
             if index != 0 {
-                append(&mut document, b",", limits, allocation)?;
+                append(&mut document, b",", allocation)?;
             }
-            let bytes = read_bounded_accounted(path, allocation, self.graph_budget.as_ref())?;
+            let bytes = read_bounded_accounted(path, allocation)?;
             if <[u8; 32]>::from(Sha256::digest(&bytes)) != *expected {
                 return Err(extraction(
                     "compiler-sidecar-drift",
                     &path.display().to_string(),
                 ));
             }
-            append(&mut document, &bytes, limits, allocation)?;
+            append(&mut document, &bytes, allocation)?;
         }
-        append(&mut document, b"]}", limits, allocation)?;
+        append(&mut document, b"]}", allocation)?;
         protocol::decode_accounted(&document, limits, allocation)
     }
 }
@@ -1914,13 +1777,12 @@ impl Capture {
 fn prepare_entries(
     units: &[unit::Extraction],
     run_nonce: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Vec<Entry<Prepared>>> {
     let mut entries = Vec::new();
     allocation.reserve(&mut entries, units.len())?;
     for unit in units {
-        entries.push(entry(unit, run_nonce, limits, allocation)?);
+        entries.push(entry(unit, run_nonce, allocation)?);
     }
     entries.sort_unstable();
     if entries.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -1948,7 +1810,6 @@ fn prepare_entries(
 fn entry(
     unit: &unit::Extraction,
     run_nonce: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Entry<Prepared>> {
     allocation.items(1)?;
@@ -1969,23 +1830,6 @@ fn entry(
     frame(&mut invocation, run_nonce.as_bytes(), allocation)?;
     frame(&mut invocation, correlation.as_bytes(), allocation)?;
     let invocation_nonce = allocation.hex(Sha256::digest(&invocation))?;
-    for value in [
-        unit.package_id(),
-        unit.package_name(),
-        unit.package_version(),
-        unit.package_source(),
-        unit.target(),
-        unit.target_kinds().first().map_or("", AsRef::as_ref),
-        unit.crate_name(),
-        unit.edition(),
-        unit.semantic_key(),
-    ] {
-        allocation.exceeded(
-            "metadata probe plan string",
-            limits.string_bytes,
-            value.len(),
-        );
-    }
     let mut dependency_keys = Vec::new();
     allocation.reserve(&mut dependency_keys, unit.dependencies().len())?;
     for dependency in unit.dependencies() {
@@ -2061,10 +1905,8 @@ fn validate_fragments(
     compiler_commit: &str,
     host: &str,
     selected_target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<()> {
-    allocation.exceeded("extraction fragments", limits.packages, fragments.len());
     if fragments.len() != entries.len() {
         return Err(extraction(
             "missing-unit-correlation",
@@ -2414,12 +2256,10 @@ fn artifact_digest(
     allocation: &mut Allocation,
     graph: Option<&crate::node::GraphBudget>,
 ) -> Result<(u64, [u8; 32])> {
-    let Some(graph) = graph else {
-        let bytes = read_bounded_accounted(path, allocation, None)?;
+    if graph.is_none() {
+        let bytes = read_bounded_accounted(path, allocation)?;
         return Ok((bytes.len() as u64, Sha256::digest(bytes).into()));
-    };
-    graph.paths(1).map_err(artifact_graph_error)?;
-    crate::store::path::input(path, graph).map_err(artifact_graph_error)?;
+    }
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect compiler artifact",
         path: path.to_path_buf(),
@@ -2432,15 +2272,14 @@ fn artifact_digest(
         ));
     }
     let parent = path.parent().unwrap_or(path);
-    if crate::runner::artifact::retained::directory(parent, graph).map_err(artifact_graph_error)?
-        != parent
+    if crate::runner::artifact::retained::directory(parent).map_err(artifact_graph_error)? != parent
     {
         return Err(artifact_graph_error(crate::node::Error::OutsideRoot(
             path.to_path_buf(),
         )));
     }
-    let digest = crate::runner::artifact::retained::hash(path, &metadata, graph)
-        .map_err(artifact_graph_error)?;
+    let digest =
+        crate::runner::artifact::retained::hash(path, &metadata).map_err(artifact_graph_error)?;
     Ok((metadata.len(), digest))
 }
 
@@ -2451,52 +2290,16 @@ fn artifact_graph_error(source: crate::node::Error) -> Error {
     }
 }
 
-fn read_bounded_accounted(
-    path: &Path,
-    allocation: &mut Allocation,
-    graph: Option<&crate::node::GraphBudget>,
-) -> Result<Box<[u8]>> {
-    let result = read_bounded_with_graph(path, Some(&mut *allocation), graph);
+fn read_bounded_accounted(path: &Path, allocation: &mut Allocation) -> Result<Box<[u8]>> {
+    let result = read_bounded_with_graph(path, Some(&mut *allocation));
     result.map_err(|error| allocation.failure(error))
 }
 
-fn admit_protocol_name(length: usize, graph: Option<&crate::node::GraphBudget>) -> Result<()> {
-    if let Some(graph) = graph {
-        // Conservatively admit one entire pinned B-tree node for each insertion,
-        // including key slots and edge/header storage, before the owned name.
-        graph
-            .decode(
-                length + std::mem::size_of::<[Box<str>; 12]>() + std::mem::size_of::<[usize; 14]>(),
-            )
-            .map_err(attempt_graph_error)?;
-    }
-    Ok(())
+fn read_attempts(path: &Path, allocation: &mut Allocation) -> Result<Box<[u8]>> {
+    read_bounded_accounted(path, allocation)
 }
 
-fn attempt_graph_error(source: crate::node::Error) -> Error {
-    Error::Node {
-        operation: "compiler attempt completion",
-        source: Box::new(source),
-    }
-}
-
-fn read_attempts(
-    path: &Path,
-    allocation: &mut Allocation,
-    graph: Option<&crate::node::GraphBudget>,
-) -> Result<Box<[u8]>> {
-    read_bounded_accounted(path, allocation, graph)
-}
-
-fn read_bounded_with_graph(
-    path: &Path,
-    allocation: Option<&mut Allocation>,
-    graph: Option<&crate::node::GraphBudget>,
-) -> Result<Box<[u8]>> {
-    if let Some(graph) = graph {
-        graph.paths(1).map_err(attempt_graph_error)?;
-        crate::store::path::input(path, graph).map_err(attempt_graph_error)?;
-    }
+fn read_bounded_with_graph(path: &Path, allocation: Option<&mut Allocation>) -> Result<Box<[u8]>> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect compiler sidecar",
         path: path.to_path_buf(),
@@ -2513,12 +2316,6 @@ fn read_bounded_with_graph(
     if let Some(allocation) = allocation {
         allocation.items(1)?;
         allocation.bytes(length)?;
-    }
-    if let Some(graph) = graph {
-        graph.decode(length).map_err(attempt_graph_error)?;
-        graph.hash(length).map_err(attempt_graph_error)?;
-        graph.paths(1).map_err(attempt_graph_error)?;
-        crate::store::path::input(path, graph).map_err(attempt_graph_error)?;
     }
     let mut bytes = Vec::new();
     bytes
@@ -2561,21 +2358,8 @@ fn read_bounded_with_graph(
     Ok(bytes.into_boxed_slice())
 }
 
-/// Join one fragment into the sidecar document. The configurable `json_bytes`
-/// target is recorded on the account.
-fn append(
-    bytes: &mut Vec<u8>,
-    value: &[u8],
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<()> {
-    let Some(actual) = bytes.len().checked_add(value.len()) else {
-        return Err(allocation.failure(extraction(
-            "sidecar-document-overflow",
-            "the sidecar document length overflowed",
-        )));
-    };
-    allocation.exceeded("compiler sidecar document bytes", limits.json_bytes, actual);
+/// Join one fragment into the sidecar document, charging its bytes.
+fn append(bytes: &mut Vec<u8>, value: &[u8], allocation: &mut Allocation) -> Result<()> {
     allocation.bytes(value.len())?;
     bytes
         .try_reserve_exact(value.len())
@@ -2587,12 +2371,8 @@ fn append(
     Ok(())
 }
 
-fn append_document_prefix(
-    bytes: &mut Vec<u8>,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<()> {
-    append(bytes, b"{\"schema\":", limits, allocation)?;
+fn append_document_prefix(bytes: &mut Vec<u8>, allocation: &mut Allocation) -> Result<()> {
+    append(bytes, b"{\"schema\":", allocation)?;
     let mut decimal = [0_u8; 10];
     let mut cursor = decimal.len();
     let mut schema = protocol::SCHEMA;
@@ -2606,8 +2386,8 @@ fn append_document_prefix(
             break;
         }
     }
-    append(bytes, &decimal[cursor..], limits, allocation)?;
-    append(bytes, b",\"fragments\":[", limits, allocation)
+    append(bytes, &decimal[cursor..], allocation)?;
+    append(bytes, b",\"fragments\":[", allocation)
 }
 
 fn frame(bytes: &mut Vec<u8>, value: &[u8], allocation: &mut Allocation) -> Result<()> {
@@ -2739,9 +2519,6 @@ mod tests {
             observed,
             (bytes.len() as u64, Sha256::digest(&bytes).into())
         );
-        // Streamed artifact bytes charge nothing on the canonical
-        // account, so even a zero-target account records no axis.
-        assert!(!allocation.exceedances().is_exceeded());
         assert_eq!(allocation.usage(), (0, 0));
         // An unchanged artifact reuses its digest without a read; a new
         // status-change time gives it a new identity that is read again.
@@ -2750,27 +2527,13 @@ mod tests {
             super::artifact_digest(&path, &mut allocation, Some(&reused)).unwrap(),
             observed
         );
-        assert_eq!(reused.census_usage().unwrap().2, 0);
         fs::set_permissions(&path, fs::metadata(&path).unwrap().permissions()).unwrap();
-        // A graph at its hashed target still streams the artifact and
-        // records the axis at exactly target + content bytes + the EOF probe.
-        let spent = crate::node::GraphBudget::new();
-        spent
-            .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
+        // A new identity streams the artifact again and charges its content
+        // bytes plus the EOF probe.
+        let fresh = crate::node::GraphBudget::new();
         assert_eq!(
-            super::artifact_digest(&path, &mut allocation, Some(&spent)).unwrap(),
+            super::artifact_digest(&path, &mut allocation, Some(&fresh)).unwrap(),
             observed
-        );
-        let axis = spent
-            .exceedances()
-            .axis(crate::node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, crate::node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.high_water,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + bytes.len() as u64 + 1
         );
         let linked = root.join("linked.rmeta");
         fs::hard_link(&path, &linked).unwrap();
@@ -2861,41 +2624,16 @@ mod tests {
         let mut exact = Allocation::with_limits(items, bytes);
         paths(&mut exact).expect("the exact fixed path boundary accepts");
         assert_eq!(exact.usage(), (items, bytes));
-        assert!(!exact.exceedances().is_exceeded());
         // One short of the cumulative charge still completes the fixed
         // path fanout and records the crossed axis at its truthful high water.
         let mut item_short = Allocation::with_limits(items - 1, usize::MAX);
         paths(&mut item_short).expect("an item target records instead of refusing");
         assert_eq!(item_short.usage(), (items, bytes));
         assert!(!item_short.is_refused());
-        let axis = *item_short
-            .exceedances()
-            .axis("canonical allocation items")
-            .expect("the item axis records");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((items - 1) as u64, items as u64, items as u64)
-        );
-        assert!(item_short
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .is_none());
         let mut byte_short = Allocation::with_limits(usize::MAX, bytes - 1);
         paths(&mut byte_short).expect("a byte target records instead of refusing");
         assert_eq!(byte_short.usage(), (items, bytes));
         assert!(!byte_short.is_refused());
-        let axis = *byte_short
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .expect("the byte axis records");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((bytes - 1) as u64, bytes as u64, bytes as u64)
-        );
-        assert!(byte_short
-            .exceedances()
-            .axis("canonical allocation items")
-            .is_none());
         // Terminal only through a genuine cause: a latched account owns no path.
         assert!(matches!(
             paths(&mut Allocation::refused()),
@@ -2910,131 +2648,15 @@ mod tests {
             std::env::temp_dir().join(format!("rawr-attempt-account-{}", std::process::id()));
         fs::write(&path, b"attempt").unwrap();
         let length = 7;
-        let mut allocation = Allocation::with_limits(2, length + 3);
+        let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);
         allocation.items(1).unwrap();
         allocation.bytes(3).unwrap();
-        let graph = crate::node::GraphBudget::new();
-        graph
-            .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize - length)
-            .unwrap();
-        let bytes = super::read_attempts(&path, &mut allocation, Some(&graph)).unwrap();
+        let bytes = super::read_attempts(&path, &mut allocation).unwrap();
         assert_eq!(&*bytes, b"attempt");
-        // The exact floor fills the hashed target with no exceedance;
-        // one more byte records the axis at exactly target + 1.
-        assert!(!graph.exceedances().is_exceeded());
-        assert_eq!(
-            graph.census_usage().unwrap().2,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH
-        );
-        graph.hash(1).unwrap();
-        assert_eq!(
-            graph
-                .exceedances()
-                .axis(crate::node::HASHED_RESOURCE)
-                .unwrap()
-                .high_water,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1
-        );
         assert_eq!(allocation.usage(), (2, length + 3));
-        assert!(!allocation.exceedances().is_exceeded());
-
-        let short = crate::node::GraphBudget::new();
-        short
-            .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize - length + 1)
-            .unwrap();
-        super::read_attempts(
-            &path,
-            &mut Allocation::new(&Limits::standard()),
-            Some(&short),
-        )
-        .unwrap();
-        let axis = short
-            .exceedances()
-            .axis(crate::node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(
-            axis.first_requested,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1
-        );
-        assert_eq!(axis.high_water, crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-        // The read charges exactly two path checks: one before inspection and
-        // one before the open.
-        let short = crate::node::GraphBudget::new();
-        short
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 1)
-            .unwrap();
-        super::read_attempts(
-            &path,
-            &mut Allocation::new(&Limits::standard()),
-            Some(&short),
-        )
-        .unwrap();
-        let axis = short
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(
-            axis.high_water,
-            crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert!(short
-            .exceedances()
-            .axis(crate::node::HASHED_RESOURCE)
-            .is_none());
-        // The canonical account's items and bytes are accounting
-        // targets. One short of the exact floor still reads the attempt and
-        // records the crossed axis at its truthful high water; the read's own
-        // bound is the physical `MAX_WIRE_BYTES`.
-        let mut short = Allocation::with_limits(2, length + 2);
-        short.items(1).unwrap();
-        short.bytes(3).unwrap();
-        assert_eq!(
-            &*super::read_attempts(&path, &mut short, None).unwrap(),
-            b"attempt"
-        );
-        assert_eq!(short.usage(), (2, length + 3));
-        assert!(!short.is_refused());
-        let axis = *short
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .expect("the byte axis records");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (length + 2) as u64,
-                (length + 3) as u64,
-                (length + 3) as u64
-            )
-        );
-        assert!(short
-            .exceedances()
-            .axis("canonical allocation items")
-            .is_none());
-        let mut short = Allocation::with_limits(1, length + 3);
-        short.items(1).unwrap();
-        short.bytes(3).unwrap();
-        assert_eq!(
-            &*super::read_attempts(&path, &mut short, None).unwrap(),
-            b"attempt"
-        );
-        assert_eq!(short.usage(), (2, length + 3));
-        let axis = *short
-            .exceedances()
-            .axis("canonical allocation items")
-            .expect("the item axis records");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (1, 2, 2)
-        );
-        assert!(short
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .is_none());
         // Terminal only through a genuine cause: a latched account reads nothing.
         assert!(matches!(
-            super::read_attempts(&path, &mut Allocation::refused(), None),
+            super::read_attempts(&path, &mut Allocation::refused()),
             Err(Error::Node { operation, .. })
                 if operation == crate::extract::REFUSED_ACCOUNT_OPERATION
         ));
@@ -3057,9 +2679,6 @@ mod tests {
         let digest = |bytes: &[u8]| <[u8; 32]>::from(Sha256::digest(bytes));
         let limits = Limits::standard();
         let graph = crate::node::GraphBudget::new();
-        graph
-            .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize - 28)
-            .unwrap();
         let mut capture = Capture {
             search: None,
             namespace: None,
@@ -3068,7 +2687,6 @@ mod tests {
                 fragments: Vec::new(),
             },
             deferred: false,
-            document_bytes: 0,
             invocations: Invocations {
                 authority: InvocationAuthority {
                     expected: BTreeMap::new(),
@@ -3086,33 +2704,8 @@ mod tests {
         capture.revalidate(&limits).unwrap();
         capture.revalidate(&limits).unwrap();
         assert_eq!(capture.invocations.allocation.usage(), (4, 28));
-        // Two revalidations hash exactly 28 bytes against the original
-        // graph (no exceedance); one more byte, then a third revalidation,
-        // record the hashed axis at exactly target + 1 + 14.
-        assert!(!graph.exceedances().is_exceeded());
-        assert_eq!(
-            graph.census_usage().unwrap().2,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH
-        );
-        graph.hash(1).unwrap();
-        assert_eq!(
-            graph
-                .exceedances()
-                .axis(crate::node::HASHED_RESOURCE)
-                .unwrap()
-                .high_water,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1
-        );
         capture.revalidate(&limits).unwrap();
         assert_eq!(capture.invocations.allocation.usage(), (6, 42));
-        assert_eq!(
-            graph
-                .exceedances()
-                .axis(crate::node::HASHED_RESOURCE)
-                .unwrap()
-                .high_water,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 15
-        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3140,7 +2733,6 @@ mod tests {
                 fragments: Vec::new(),
             },
             deferred: false,
-            document_bytes: 0,
             invocations: Invocations {
                 authority: InvocationAuthority {
                     expected: BTreeMap::new(),
@@ -3221,9 +2813,9 @@ mod tests {
         let limits = Limits::standard();
         let mut allocation = Allocation::new(&limits);
         let mut document = Vec::new();
-        append_document_prefix(&mut document, &limits, &mut allocation).unwrap();
-        append(&mut document, &bytes, &limits, &mut allocation).unwrap();
-        append(&mut document, b"]}", &limits, &mut allocation).unwrap();
+        append_document_prefix(&mut document, &mut allocation).unwrap();
+        append(&mut document, &bytes, &mut allocation).unwrap();
+        append(&mut document, b"]}", &mut allocation).unwrap();
         let full = protocol::decode(&document, &limits).unwrap();
         let handshakes = protocol::decode_handshakes(&document).unwrap();
         assert_eq!(handshakes, full);
@@ -3232,7 +2824,6 @@ mod tests {
             namespace: None,
             document: handshakes.clone(),
             deferred: true,
-            document_bytes: document.len(),
             invocations: Invocations {
                 authority: InvocationAuthority {
                     expected: BTreeMap::new(),
@@ -3299,7 +2890,6 @@ mod tests {
                     fragments: Vec::new(),
                 },
                 deferred: true,
-                document_bytes: 0,
                 invocations: Invocations {
                     authority: InvocationAuthority {
                         expected: BTreeMap::new(),
@@ -3351,26 +2941,14 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// The sidecar document size is an accounting target recorded on
-    /// the canonical account, and sidecar reads never bind to the JSON target.
+    /// Sidecar documents append and read without a JSON bound.
     #[test]
-    fn sidecar_document_bytes_record_the_json_target_and_reads_are_unbounded() {
+    fn sidecar_documents_append_and_read_unbounded() {
         assert_eq!(crate::process::CAPTURE_BYTES, 256 * 1024 * 1024);
-        let mut limits = Limits::standard();
-        limits.json_bytes = 1;
-        let mut allocation = Allocation::new(&limits);
+        let mut allocation = Allocation::new(&Limits::standard());
         let mut bytes = Vec::new();
-        append(&mut bytes, b"]}", &limits, &mut allocation)
-            .expect("a document above the JSON target still appends");
+        append(&mut bytes, b"]}", &mut allocation).expect("the document appends");
         assert_eq!(bytes, b"]}");
-        let axis = *allocation
-            .exceedances()
-            .axis("compiler sidecar document bytes")
-            .expect("the document size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (1, 2, 2)
-        );
         assert!(!allocation.is_refused());
 
         let root = std::env::temp_dir().join(format!(
@@ -3381,8 +2959,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join("fragment.json");
         fs::write(&path, b"{}\n").unwrap();
-        let read = super::read_bounded_with_graph(&path, Some(&mut allocation), None)
-            .expect("a sidecar above the JSON target reads");
+        let read = super::read_bounded_with_graph(&path, Some(&mut allocation))
+            .expect("the sidecar reads");
         assert_eq!(&*read, b"{}\n");
         fs::remove_dir_all(root).unwrap();
     }
@@ -3414,7 +2992,6 @@ mod tests {
             .unwrap(),
             (bytes.len() as u64, Sha256::digest(&bytes).into())
         );
-        assert!(!allocation.exceedances().is_exceeded());
         let roots = vec![root.clone()];
         super::namespace::Snapshot::capture(
             &roots,
@@ -3423,7 +3000,6 @@ mod tests {
             &crate::node::GraphBudget::new(),
         )
         .expect("a candidate above the JSON target captures");
-        assert!(!allocation.exceedances().is_exceeded());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3432,10 +3008,8 @@ mod tests {
         let limits = Limits::standard();
         let mut allocation = Allocation::new(&limits);
         let mut bytes = Vec::new();
-        append_document_prefix(&mut bytes, &limits, &mut allocation)
-            .expect("the Capture prefix is bounded");
-        append(&mut bytes, b"]}", &limits, &mut allocation)
-            .expect("the empty Capture document closes");
+        append_document_prefix(&mut bytes, &mut allocation).expect("the Capture prefix is bounded");
+        append(&mut bytes, b"]}", &mut allocation).expect("the empty Capture document closes");
         let decoded = protocol::decode(&bytes, &limits)
             .expect("the Capture encoder and protocol decoder share one schema authority");
         assert_eq!(decoded.schema, protocol::SCHEMA);

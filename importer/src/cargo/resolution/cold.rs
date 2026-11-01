@@ -164,9 +164,7 @@ impl Request {
         harness
             .workspace
             .require(&mut crate::input::workspace::Account::borrow(
-                allocation,
-                cached.context.graph_budget(),
-                limits,
+                allocation, limits,
             ))?;
         let (bytes, environment) = build(&native, self, layout, environment, allocation, limits)?;
         let (build, initial) = self.check_build(
@@ -184,7 +182,6 @@ impl Request {
             limits,
             cargo_limits,
             &harness.workspace,
-            cached.context.graph_budget(),
             allocation,
             // The harness files and workspace manifests were revalidated
             // around the build and the inputs are captured after it: Cargo's
@@ -309,7 +306,7 @@ impl Request {
             .expect("a reserved harness belongs to a request with a resolution universe");
         let provisional_manifest =
             cargo::render_manifest_accounted(self, None, limits, allocation)?;
-        let placement = cargo::select_placement(self, catalog, &provisional_manifest, limits)?;
+        let placement = cargo::select_placement(self, catalog, &provisional_manifest)?;
         assert!(
             !fresh_only || matches!(placement.state, cargo::PlacementState::Fresh),
             "a fresh-only harness is prepared only for a Fresh placement"
@@ -405,8 +402,7 @@ impl Request {
             }
             cargo::PlacementState::Persisted { lock, receipt } => {
                 // File reads are I/O retention bounded by physical
-                // constants (manifest class: tail; lock class: capture), never
-                // by an accounting target.
+                // constants (manifest class: tail; lock class: capture).
                 let manifest = cargo::read_bounded_budgeted(
                     "selected persisted manifest",
                     &placement.root.join(cargo::HARNESS_MANIFEST),
@@ -481,8 +477,7 @@ impl Request {
             crate::process::TAIL_BYTES,
         )?);
         let lock = candidate_lock.digest();
-        let workspace =
-            self.capture_workspace(&metadata, allocation, cached.context.graph_budget(), limits)?;
+        let workspace = self.capture_workspace(&metadata, allocation, limits)?;
         let bytes = match &reuse {
             Some(reuse) => reuse.units.clone(),
             None => units(&native, self, layout, allocation, limits)?,
@@ -733,13 +728,6 @@ pub(in crate::cargo) fn prefix(
     config: &Path,
     allocation: &mut RequestAllocation,
 ) -> Result<Vec<OsString>> {
-    // The request string target is an accounting target; a longer
-    // config path is recorded on the request account and the build continues.
-    allocation.exceeded(
-        cargo::REQUEST_STRING_RESOURCE,
-        allocation.string_limit,
-        config.as_os_str().len(),
-    );
     allocation.string("--config")?;
     allocation.path(config)?;
     let mut prefix = cargo::config_arguments(request.config.explicit_configs());

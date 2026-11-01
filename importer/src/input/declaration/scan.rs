@@ -1,8 +1,7 @@
 //! Borrowed emission of the pinned saved-output grammar.
 //!
-//! The scanner imposes no size or count ceilings. Accounting targets
-//! (`string_bytes`) are never consulted here: each caller measures every emitted payload against
-//! its own account, which records a crossing and continues.
+//! The scanner imposes no size or count ceilings: each caller charges every
+//! emitted payload to its own account.
 
 /// One ordered observation; the payload borrows the supplied file bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

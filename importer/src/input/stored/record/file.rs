@@ -30,22 +30,11 @@ impl Record<'_> {
             if !layout.budget().shares_with(budget.graph()) {
                 return Err(Error::Encoding("resolution record graph account differs"));
             }
-            budget.limited(
-                "retained resolution record bytes",
-                budget.limits.input_proof_bytes,
-                self.encoded.len(),
-            )?;
-            for (resource, bytes) in [
-                ("retained Cargo metadata bytes", self.metadata),
-                ("retained Cargo unit bytes", self.units),
-            ] {
-                budget.limited(resource, budget.limits.json_bytes, bytes.len())?;
-            }
             let digest = budget.digest(self.encoded)?;
             let path = layout.paths().record();
             admit_path(path, budget)?;
             // Reserve close before opening. Each write and sync is charged below.
-            budget.paths(2)?;
+            budget.check()?;
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -54,7 +43,7 @@ impl Record<'_> {
                 .map_err(|error| io("create retained resolution record", error))?;
             let mut remaining = self.encoded;
             while !remaining.is_empty() {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.write(remaining) {
                     Ok(0) => {
                         return Err(io(
@@ -67,7 +56,7 @@ impl Record<'_> {
                     Err(error) => return Err(io("write retained resolution record", error)),
                 }
             }
-            budget.paths(1)?;
+            budget.check()?;
             file.sync_all()
                 .map_err(|error| io("sync retained resolution record", error))?;
             Ok(Commitment {
@@ -88,9 +77,7 @@ impl Commitment {
     }
 
     /// Decode the bundle's record commitment. The record extent is a store
-    /// payload bound by the physical content ceiling, like the bundle seal;
-    /// the `input_proof_bytes` accounting target is measured against it by
-    /// `read`, on the account that spends the read.
+    /// payload bound by the physical content ceiling, like the bundle seal.
     pub(crate) fn decode(bytes: &[u8; 40]) -> Result<Self> {
         let mut length = [0; 8];
         length.copy_from_slice(&bytes[..8]);
@@ -113,14 +100,9 @@ impl Commitment {
     pub(crate) fn read(&self, paths: &layout::Paths, budget: &mut Budget<'_>) -> Result<Vec<u8>> {
         let result = (|| {
             budget.check()?;
-            budget.limited(
-                "retained resolution record bytes",
-                budget.limits.input_proof_bytes,
-                self.length,
-            )?;
             let path = paths.record();
             admit_path(path, budget)?;
-            budget.paths(2)?;
+            budget.check()?;
             // NONBLOCK prevents a substituted FIFO from stalling before fstat.
             let mut file = OpenOptions::new()
                 .read(true)
@@ -132,7 +114,7 @@ impl Commitment {
             bytes.resize(self.length, 0);
             let mut remaining = bytes.as_mut_slice();
             while !remaining.is_empty() {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.read(remaining) {
                     Ok(0) => return Err(Error::Encoding("retained resolution record shortened")),
                     Ok(count) => remaining = &mut remaining[count..],
@@ -141,7 +123,7 @@ impl Commitment {
                 }
             }
             loop {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.read(&mut [0]) {
                     Ok(0) => break,
                     Ok(_) => return Err(Error::Encoding("retained resolution record grew")),
@@ -160,7 +142,7 @@ impl Commitment {
 }
 
 fn require_file(file: &File, length: usize, budget: &mut Budget<'_>) -> Result<()> {
-    budget.paths(1)?;
+    budget.check()?;
     let metadata = file
         .metadata()
         .map_err(|error| io("inspect retained resolution record", error))?;

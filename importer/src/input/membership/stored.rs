@@ -58,7 +58,6 @@ impl Stored {
     }
 
     pub(super) fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> Result<Self> {
-        budget.graph.decode(bytes.len())?;
         let mut decoder = Decoder {
             bytes,
             cursor: 0,

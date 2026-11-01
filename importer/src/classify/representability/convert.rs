@@ -169,18 +169,7 @@ impl Constant {
 
     /// Transform one checked finite const substitution into canonical tokens.
     #[doc(hidden)]
-    pub fn checked(
-        ty: &str,
-        value: &str,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Self, crate::surface::Error> {
-        // The token size is an accounting target recorded on a
-        // classification-stage account; the conversion continues.
-        crate::classify::Account::new().exceeded(
-            "surface constant token bytes",
-            limits.string_bytes,
-            ty.len().max(value.len()),
-        );
+    pub fn checked(ty: &str, value: &str) -> Result<Self, crate::surface::Error> {
         let safe_type = !ty.is_empty()
             && ty
                 .bytes()

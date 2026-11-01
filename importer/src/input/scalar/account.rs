@@ -34,12 +34,6 @@ pub(crate) trait Account: sealed::Sealed {
         path: &'path Path,
     ) -> Result<&'path str, Self::Error>;
     fn executable_path<'path>(&mut self, path: &'path Path) -> Result<&'path str, Self::Error>;
-    fn bounded(
-        &mut self,
-        resource: &'static str,
-        limit: usize,
-        actual: usize,
-    ) -> Result<(), Self::Error>;
     fn failure(&mut self, failure: Failure) -> Self::Error;
 }
 
@@ -78,19 +72,6 @@ impl Account for Allocation {
             code: "toolchain-executable-path-encoding",
             reason: path.display().to_string().into_boxed_str(),
         })
-    }
-
-    /// Every scalar `bounded` comparison is an accounting target
-    /// (`string_bytes`); record a crossing on this input account and continue.
-    fn bounded(
-        &mut self,
-        resource: &'static str,
-        limit: usize,
-        actual: usize,
-    ) -> Result<(), Error> {
-        Allocation::check(self)?;
-        self.exceeded(resource, limit, actual);
-        Ok(())
     }
 
     fn failure(&mut self, failure: Failure) -> Error {

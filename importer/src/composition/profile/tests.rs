@@ -156,10 +156,7 @@ impl profile::trusted::Operations for &Definition {
     }
 }
 fn identity() -> profile::Identity {
-    profile::Identity::new(
-        "rawr.composition.downstream",
-        &crate::cargo::Limits::standard(),
-    )
+    profile::Identity::new("rawr.composition.downstream")
 }
 fn version() -> profile::Version {
     profile::Version::new(1)
@@ -488,7 +485,6 @@ fn downstream_rebuilds_evicted_demand_and_reuses_surviving_generated_output() {
             prefix.profile.rules_digest(),
             &prefix.checked.checked_fingerprint(),
             prefix.checked.checked_payload(),
-            &limits,
             Some(&prefix.profile.graph_fingerprint()),
         )
         .expect("demand authority"),
@@ -643,56 +639,6 @@ fn historical_checked_mutation_rejects_at_profile_promotion() {
     )
     .expect("owned output does not claim current ancestry");
     assert!(super::evaluate_retained(&adapter, &prefix.profile, &prefix.checked, &limits).is_err());
-}
-
-#[test]
-fn historical_checked_rejects_foreign_profile_and_records_original_budget_exceedance() {
-    let limits = crate::cargo::Limits::standard();
-    let source = snapshot(&limits);
-    let witnesses = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::new(Calls::default());
-    let definition = Definition(Arc::clone(&calls));
-    let adapter = profile::trusted::Adapter::trusted(&definition, identity(), version(), false);
-    let first = Root::new();
-    let second = Root::new();
-    let build = |root: &Root| {
-        crate::composition::evaluate_retained(
-            graph(&root.0, &witnesses, &limits),
-            &adapter,
-            &crate::classify::Policy::standard(),
-            source,
-            &limits,
-            |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
-        )
-        .unwrap()
-    };
-    let first = build(&first);
-    let second = build(&second);
-    assert!(super::evaluate_retained(&adapter, &second.profile, &first.checked, &limits).is_err());
-    assert_eq!(calls.demand.load(Ordering::Relaxed), 0);
-    // The historical evaluation keeps charging the checked context's
-    // original cumulative graph account. Exhausting that account's decoded
-    // target never refuses the evaluation: it runs to completion, computing
-    // the trusted demand exactly once, and every charge it makes is recorded
-    // past the target on that same account.
-    let budget = first.checked.context.graph_budget();
-    let (decoded, _, _) = budget.census_usage().unwrap();
-    budget
-        .decode((crate::node::MAX_DECODED_BYTES_PER_GRAPH - decoded) as usize)
-        .unwrap();
-    assert!(!budget.exceedances().is_exceeded());
-    super::evaluate_retained(&adapter, &first.profile, &first.checked, &limits)
-        .expect("an accounting axis never refuses the historical evaluation");
-    let (decoded_after, _, _) = budget.census_usage().unwrap();
-    assert!(decoded_after > crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-    assert_eq!(
-        budget
-            .exceedances()
-            .axis(crate::node::DECODED_RESOURCE)
-            .map(|axis| axis.high_water),
-        Some(decoded_after)
-    );
-    assert_eq!(calls.demand.load(Ordering::Relaxed), 1);
 }
 
 #[test]

@@ -265,9 +265,8 @@ fn complete_spec_refusal_never_falls_back_or_restarts_after_prior_spend() {
 }
 
 #[test]
-fn complete_spec_uses_original_account_at_exact_item_and_byte_floors() {
-    use crate::input::membership::manifest::tests::one_short;
-    use crate::{cargo, input, node};
+fn complete_spec_charges_the_original_account_after_prior_usage() {
+    use crate::{cargo, input};
     let text = "git+https://例え.jp/pkg?rev=a%20b#other@1.2.3-pre+build";
     let mut observed = Account::default();
     assert!(parse(text, &mut observed).is_ok());
@@ -280,52 +279,24 @@ fn complete_spec_uses_original_account_at_exact_item_and_byte_floors() {
             _ => {}
         }
     }
-    for (item_floor, byte_floor) in [(0, 0), (1, 0), (0, 1)] {
-        let limits = cargo::Limits::standard();
-        let mut allocation = input::Allocation::new(&limits);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        allocation.item_limit = 7 + items - item_floor;
-        allocation.byte_limit = 31 + bytes - byte_floor;
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        let mut budget = input::membership::Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let result = Spec::parse(text, Some(Span { start: 7, end: 9 }), &mut session);
-        let result = session.finish(result);
-        // A one-short item or byte target still admits the complete spec
-        // and records only that axis at the exact total; nothing latches.
-        assert_eq!(result.unwrap().name(), "other");
-        let exact = input::Usage {
-            items: 7 + items,
-            bytes: 31 + bytes,
-        };
-        assert_eq!(allocation.usage(), exact);
-        assert!(!allocation.refused);
-        let exceeded = allocation.exceedances();
-        match (item_floor, byte_floor) {
-            (0, 0) => assert!(!exceeded.is_exceeded()),
-            (1, 0) => assert!(one_short(
-                &exceeded,
-                input::INPUT_ITEMS_RESOURCE,
-                exact.items
-            )),
-            _ => assert!(one_short(
-                &exceeded,
-                input::INPUT_BYTES_RESOURCE,
-                exact.bytes
-            )),
-        }
-    }
+    let limits = cargo::Limits::standard();
+    let mut allocation = input::Allocation::new(&limits);
+    allocation.items(7).unwrap();
+    allocation.bytes(31).unwrap();
+    let mut budget = input::membership::Budget {
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let result = Spec::parse(text, Some(Span { start: 7, end: 9 }), &mut session);
+    let result = session.finish(result);
+    // The spec charges exactly what the recording account observed.
+    assert_eq!(result.unwrap().name(), "other");
+    let exact = input::Usage {
+        items: 7 + items,
+        bytes: 31 + bytes,
+    };
+    assert_eq!(allocation.usage(), exact);
+    assert!(!allocation.refused);
 }
 
 #[test]
