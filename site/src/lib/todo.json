@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A method of a crate's generic impl whose type names the impl's parameters in another order now runs, as `Widget::_boxed` of iced's `widget::Map<W, F, A>` does, so `column![grid.view().map(..), controls]` checks.","issues":[425]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.38",
@@ -928,7 +933,7 @@
     {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","release":"0.3.30"},
     {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"open","category":"No glue (D593)"},
-    {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"open","category":"No glue (D593)"},
+    {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)"},
     {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
     {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"open","category":"Divergences from rustc"},
