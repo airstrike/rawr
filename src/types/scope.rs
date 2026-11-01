@@ -58,8 +58,9 @@ pub const MIN_SCOPE_ENTRIES: usize = 8;
 // [`Dynamic`] is reasonably small so packing it tightly improves cache performance.
 #[derive(Debug, Hash, Default)]
 pub struct Scope<'a> {
-    /// Current value of the entry.
-    values: ThinVec<Dynamic>,
+    /// Current value of the entry. A `Vec`, not a `ThinVec`: a debugger
+    /// finds where each value is without borrowing the others (`places`).
+    values: Vec<Dynamic>,
     /// Name of the entry.
     names: ThinVec<ImmutableString>,
     /// Aliases of the entry.
@@ -168,7 +169,7 @@ impl Scope<'_> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            values: ThinVec::new(),
+            values: Vec::new(),
             names: ThinVec::new(),
             aliases: ThinVec::new(),
             dummy: PhantomData,
@@ -190,7 +191,7 @@ impl Scope<'_> {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            values: ThinVec::with_capacity(capacity),
+            values: Vec::with_capacity(capacity),
             names: ThinVec::with_capacity(capacity),
             aliases: ThinVec::new(),
             dummy: PhantomData,
@@ -912,6 +913,18 @@ impl Scope<'_> {
             .iter()
             .zip(self.values.iter())
             .map(|(name, value)| (name, value.is_read_only(), value))
+    }
+    /// The entries' names, each with where its value is, for a debugger
+    /// that must not read a value a running call holds (#540). Reading a
+    /// name or an address reads no value: `Vec::as_ptr` borrows none of
+    /// them.
+    #[cfg(feature = "debugging")]
+    pub(crate) fn places(&self) -> impl Iterator<Item = (&ImmutableString, *const Dynamic)> {
+        let values = self.values.as_ptr();
+        self.names
+            .iter()
+            .enumerate()
+            .map(move |(index, name)| (name, values.wrapping_add(index)))
     }
     /// Get a reverse iterator to entries in the [`Scope`].
     /// Shared values are not expanded.

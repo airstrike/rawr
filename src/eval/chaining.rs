@@ -30,6 +30,51 @@ fn hash_idx() -> (u64, u64) {
     })
 }
 
+/// What a chain's method calls are lent of the code running the chain,
+/// for a debugger to read its bindings while a call runs (#540): what the
+/// chain's start took before it borrowed its root, and the root the calls
+/// hold by reference. A call takes the scope passed down the chain when
+/// the start took none.
+#[derive(Debug, Clone, Copy, Default)]
+struct ChainLent {
+    #[cfg(feature = "debugging")]
+    scope: Option<std::ptr::NonNull<Scope<'static>>>,
+    #[cfg(feature = "debugging")]
+    this: Option<std::ptr::NonNull<Dynamic>>,
+    #[cfg(feature = "debugging")]
+    held: Option<crate::eval::Held>,
+}
+
+impl ChainLent {
+    /// A chain on the receiver, which its calls hold.
+    fn this_held() -> Self {
+        #[cfg_attr(not(feature = "debugging"), allow(unused_mut))]
+        let mut lent = Self::default();
+        #[cfg(feature = "debugging")]
+        {
+            lent.held = Some(crate::eval::Held::This);
+        }
+        lent
+    }
+    /// A chain on the local `target`, which the start found through
+    /// `scope` and `this`.
+    #[allow(unused_variables)]
+    fn local(
+        scope: std::ptr::NonNull<Scope>,
+        this: Option<std::ptr::NonNull<Dynamic>>,
+        target: &Target,
+    ) -> Self {
+        Self {
+            #[cfg(feature = "debugging")]
+            scope: Some(scope.cast()),
+            #[cfg(feature = "debugging")]
+            this,
+            #[cfg(feature = "debugging")]
+            held: target.held_address().map(crate::eval::Held::Local),
+        }
+    }
+}
+
 /// Method of chaining.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ChainType {
@@ -571,8 +616,9 @@ impl Engine {
                     |this_ptr| {
                         let target = &mut this_ptr.try_into()?;
                         let scope = Some(scope);
+                        let lent = ChainLent::this_held();
                         self.eval_dot_index_chain_raw(
-                            global, caches, scope, None, lhs, expr, target, rhs, idx_values,
+                            lent, global, caches, scope, None, lhs, expr, target, rhs, idx_values,
                             new_val,
                         )
                     },
@@ -585,9 +631,24 @@ impl Engine {
                 #[cfg(feature = "debugging")]
                 self.dbg(global, caches, scope, this_ptr.as_deref_mut(), lhs)?;
 
-                let target = &mut self.search_namespace(global, caches, scope, this_ptr, lhs)?;
+                // The search borrows the scope and receiver through the
+                // pointers the chain's calls are lent, so they stay the most
+                // recent borrows while the chain runs (#540).
+                let scope_ptr = std::ptr::NonNull::from(&mut *scope);
+                let this_lent = this_ptr.map(std::ptr::NonNull::from);
+                // SAFETY: the pointers are this function's own borrows of
+                // `scope` and `this_ptr`, which nothing else uses while the
+                // target lives, until the chain returns.
+                let target = &mut self.search_namespace(
+                    global,
+                    caches,
+                    unsafe { &mut *scope_ptr.as_ptr() },
+                    this_lent.map(|this| unsafe { &mut *this.as_ptr() }),
+                    lhs,
+                )?;
+                let lent = ChainLent::local(scope_ptr, this_lent, target);
                 self.eval_dot_index_chain_raw(
-                    global, caches, None, None, lhs, expr, target, rhs, idx_values, new_val,
+                    lent, global, caches, None, None, lhs, expr, target, rhs, idx_values, new_val,
                 )
             }
             // {expr}.??? = ??? or {expr}[???] = ???
@@ -599,9 +660,10 @@ impl Engine {
                     .flatten();
                 let item_ptr = &mut value.into();
                 let scope = Some(scope);
+                let lent = ChainLent::default();
                 self.eval_dot_index_chain_raw(
-                    global, caches, scope, this_ptr, lhs_expr, expr, item_ptr, rhs, idx_values,
-                    None,
+                    lent, global, caches, scope, this_ptr, lhs_expr, expr, item_ptr, rhs,
+                    idx_values, None,
                 )
             }
         }
@@ -675,8 +737,10 @@ impl Engine {
             part.clone()
         };
         idx_values.truncate(idx_values.len() - steps);
+        let lent = ChainLent::default();
         let result = Target::try_from(&mut cell).and_then(|mut target| {
             self.eval_dot_index_chain_raw(
+                lent,
                 global,
                 caches,
                 Some(scope),
@@ -795,8 +859,35 @@ impl Engine {
     }
 
     /// Chain-evaluate a dot/index chain.
+    /// Lend a method call in a chain what the code running the chain keeps
+    /// its bindings in (#540): what the chain's start took, or the scope
+    /// passed down the chain, taken here after its last use before the
+    /// call. A call on a temporary value holds no binding.
+    #[cfg(feature = "debugging")]
+    fn lend_chain_call(
+        &self,
+        global: &mut GlobalRuntimeState,
+        lent: ChainLent,
+        scope: Option<&mut Scope>,
+        target: &Target,
+    ) {
+        let scope = lent
+            .scope
+            .map(std::ptr::NonNull::cast)
+            .or_else(|| scope.map(std::ptr::NonNull::from));
+        let held = if target.is_temp_value() {
+            None
+        } else {
+            lent.held
+        };
+        self.lend_bindings(global, scope, lent.this, held);
+    }
+
+    // Without `debugging`, `lent` is empty and only passed down the chain.
+    #[cfg_attr(not(feature = "debugging"), allow(clippy::only_used_in_recursion))]
     fn eval_dot_index_chain_raw(
         &self,
+        lent: ChainLent,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: Option<&mut Scope>,
@@ -856,6 +947,7 @@ impl Engine {
                                 &mut |child| {
                                     let mut child = Target::TempValue(child);
                                     let evaluated = self.eval_dot_index_chain_raw(
+                                        lent,
                                         global,
                                         caches,
                                         s.as_deref_mut(),
@@ -901,7 +993,7 @@ impl Engine {
                             let item_ptr = &mut item;
 
                             match self.eval_dot_index_chain_raw(
-                                global, caches, s, this_ptr, root, rhs, item_ptr, &x.rhs,
+                                lent, global, caches, s, this_ptr, root, rhs, item_ptr, &x.rhs,
                                 idx_values, new_val,
                             ) {
                                 Ok((result, true)) if is_item_temp_val => {
@@ -1097,9 +1189,14 @@ impl Engine {
                         let call_args = &mut idx_values[offset..];
                         let arg1_pos = args.first().map_or(Position::NONE, Expr::position);
 
-                        self.make_method_call(
+                        #[cfg(feature = "debugging")]
+                        self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                        let result = self.make_method_call(
                             global, caches, name, *hashes, target, call_args, arg1_pos, *pos,
-                        )
+                        );
+                        #[cfg(feature = "debugging")]
+                        self.unlend_bindings(global);
+                        result
                     }
                     // {xxx:map}.id op= ???
                     (Expr::Property(x, pos), Some((new_val, op_info)), true) => {
@@ -1302,18 +1399,21 @@ impl Engine {
                                 let call_args = &mut idx_values[offset..];
                                 let arg1_pos = args.first().map_or(Position::NONE, Expr::position);
 
-                                self.make_method_call(
+                                #[cfg(feature = "debugging")]
+                                self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                                let result = self.make_method_call(
                                     global, caches, name, *hashes, target, call_args, arg1_pos, pos,
-                                )?
-                                .0
-                                .into()
+                                );
+                                #[cfg(feature = "debugging")]
+                                self.unlend_bindings(global);
+                                result?.0.into()
                             }
                             // Others - syntax error
                             ref expr => unreachable!("invalid dot expression: {:?}", expr),
                         };
 
                         self.eval_dot_index_chain_raw(
-                            global, caches, s, this_ptr, root, rhs, item, &x.rhs, idx_values,
+                            lent, global, caches, s, this_ptr, root, rhs, item, &x.rhs, idx_values,
                             new_val,
                         )
                     }
@@ -1360,7 +1460,7 @@ impl Engine {
                                 let val = &mut (&mut val).try_into()?;
 
                                 let (result, may_be_changed) = self.eval_dot_index_chain_raw(
-                                    global, caches, s, _this_ptr, root, rhs, val, &x.rhs,
+                                    lent, global, caches, s, _this_ptr, root, rhs, val, &x.rhs,
                                     idx_values, new_val,
                                 )?;
 
@@ -1424,16 +1524,20 @@ impl Engine {
                                     let call_args = &mut idx_values[offset..];
                                     let pos1 = args.first().map_or(Position::NONE, Expr::position);
 
-                                    self.make_method_call(
+                                    #[cfg(feature = "debugging")]
+                                    self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                                    let result = self.make_method_call(
                                         global, caches, name, *hashes, target, call_args, pos1, pos,
-                                    )?
-                                    .0
+                                    );
+                                    #[cfg(feature = "debugging")]
+                                    self.unlend_bindings(global);
+                                    result?.0
                                 };
 
                                 let val = &mut val.into();
 
                                 self.eval_dot_index_chain_raw(
-                                    global, caches, s, _this_ptr, root, rhs, val, &x.rhs,
+                                    lent, global, caches, s, _this_ptr, root, rhs, val, &x.rhs,
                                     idx_values, new_val,
                                 )
                             }

@@ -3,9 +3,7 @@
 
 use super::{Caches, EvalContext, GlobalRuntimeState};
 use crate::ast::{ASTNode, Expr, Stmt};
-use crate::{
-    Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResultOf, Scope, ThinVec,
-};
+use crate::{Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResultOf, Scope};
 use std::{fmt, mem};
 
 /// Callback function to initialize the debugger.
@@ -245,50 +243,68 @@ impl BreakPoint {
 pub struct CallStackFrame {
     /// Function name.
     pub fn_name: ImmutableString,
-    /// Copies of a native function call's arguments, if any. A script
-    /// function's arguments are its bindings, read where its call keeps
-    /// them (#513).
-    pub args: ThinVec<Dynamic>,
     /// Source of the function.
     pub source: Option<ImmutableString>,
     /// [Position][`Position`] of the function call.
     pub pos: Position,
-    /// Where a script function's bindings are while its call runs (#511).
+    /// A script function's bindings: where they start in its scope and its
+    /// receiver's name (#511).
     pub(crate) bindings: Option<FrameBindings>,
+    /// Where the caller keeps its own bindings while this call runs, as the
+    /// caller's call site lent them (#540).
+    pub(crate) caller: Option<Lent>,
 }
 
-/// Where a script function's call keeps its bindings: the scope its
-/// parameters went into, from `start`, and its receiver, which the program
-/// named `this_name` (a `&mut` parameter or `self`, #534).
-///
-/// The pointers are the call's own, valid while the call runs, which is
-/// while its frame is on the call stack. They are read only there, on the
-/// thread that runs the call, by the debugger callback of a step the call
-/// led to (`crate::inspect`). A copy of the call stack that can outlive the
-/// calls (`NativeCallContext::store_data`) drops them.
+/// A script function's bindings: its parameters went into its scope from
+/// `start`, and its receiver is the one the program named `this_name` (a
+/// `&mut` parameter or `self`, #534).
 #[derive(Debug, Clone, Hash)]
 pub(crate) struct FrameBindings {
-    pub(crate) scope: std::ptr::NonNull<Scope<'static>>,
     pub(crate) start: usize,
-    pub(crate) this: Option<std::ptr::NonNull<Dynamic>>,
     pub(crate) this_name: Option<ImmutableString>,
 }
 
+/// What a call site lends the call it makes, so the debugger can read the
+/// caller's bindings while the call runs (#540).
+///
+/// The call site takes these pointers from its own borrows of its scope
+/// and receiver after its last use of them before the call, and uses
+/// neither again until the call returns. They are the most recent
+/// borrows, so reading through them while the call runs aliases no live
+/// `&mut`. The one place the call holds by reference, `held`, is never
+/// read through them. They are read only on the thread that runs the
+/// call, while its frame is on the call stack, by the debugger callback
+/// of a step it led to (`crate::inspect`). A copy of the call stack that
+/// can outlive the calls (`NativeCallContext::store_data`) drops them.
+#[derive(Debug, Clone, Hash)]
+pub(crate) struct Lent {
+    /// The caller's scope, or `None` when the call extends it.
+    pub(crate) scope: Option<std::ptr::NonNull<Scope<'static>>>,
+    /// The caller's receiver, when the call doesn't hold it.
+    pub(crate) this: Option<std::ptr::NonNull<Dynamic>>,
+    /// The caller's binding the call holds by reference: its receiver, or
+    /// the local at this address. Never dereferenced.
+    pub(crate) held: Option<Held>,
+}
+
+/// A caller's binding a call holds by reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Held {
+    /// The caller's receiver.
+    This,
+    /// The caller's local whose value is at this address.
+    Local(*const Dynamic),
+}
+
 // SAFETY: the pointers are dereferenced only on the thread that runs the
-// call they point into, while it runs (see `FrameBindings`).
-unsafe impl Send for FrameBindings {}
+// call they were lent to, while it runs (see `Lent`).
+unsafe impl Send for Lent {}
 // SAFETY: as for `Send`.
-unsafe impl Sync for FrameBindings {}
+unsafe impl Sync for Lent {}
 
 impl fmt::Display for CallStackFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut fp = f.debug_tuple(&self.fn_name);
-
-        for arg in &self.args {
-            fp.field(arg);
-        }
-
-        fp.finish()?;
+        f.write_str(&self.fn_name)?;
 
         if !self.pos.is_none() {
             if let Some(ref source) = self.source {
@@ -310,6 +326,8 @@ pub struct Debugger {
     break_points: Vec<BreakPoint>,
     /// The current function call stack.
     call_stack: Vec<CallStackFrame>,
+    /// What the call about to be made was lent, for its frame.
+    lent: Option<Lent>,
     /// The current state.
     state: Dynamic,
 }
@@ -323,6 +341,7 @@ impl Debugger {
             status,
             break_points: Vec::new(),
             call_stack: Vec::new(),
+            lent: None,
             state: Dynamic::UNIT,
         }
     }
@@ -337,25 +356,41 @@ impl Debugger {
     pub(crate) fn rewind_call_stack(&mut self, len: usize) {
         self.call_stack.truncate(len);
     }
-    /// Add a new frame to the function call stack.
+    /// Lend the call about to be made where the caller keeps its
+    /// bindings. The call's frame takes it; [`Self::unlend`] drops it when
+    /// the call made no frame.
+    #[inline(always)]
+    pub(crate) fn lend(&mut self, lent: Lent) {
+        self.lent = Some(lent);
+    }
+    /// Drop what [`Self::lend`] lent, once the call it was for returned.
+    #[inline(always)]
+    pub(crate) fn unlend(&mut self) {
+        self.lent = None;
+    }
+    /// Add a native function's frame: its name and position only (#513).
+    /// `holds_first` is whether the call holds its first argument by
+    /// reference.
     #[inline(always)]
     pub(crate) fn push_call_stack_frame(
         &mut self,
         fn_name: ImmutableString,
-        args: impl IntoIterator<Item = Dynamic>,
         source: Option<ImmutableString>,
         pos: Position,
+        holds_first: bool,
     ) {
+        let caller = self.take_lent(holds_first);
         self.call_stack.push(CallStackFrame {
             fn_name,
-            args: args.into_iter().collect(),
             source,
             pos,
             bindings: None,
+            caller,
         });
     }
-    /// Add a script function's frame, whose bindings stay where its call
-    /// keeps them.
+    /// Add a script function's frame. Its bindings stay where its call
+    /// keeps them, and are read there. `holds_this` is whether the call
+    /// holds a receiver by reference.
     #[inline(always)]
     pub(crate) fn push_script_frame(
         &mut self,
@@ -363,20 +398,33 @@ impl Debugger {
         source: Option<ImmutableString>,
         pos: Position,
         bindings: FrameBindings,
+        holds_this: bool,
     ) {
+        let caller = self.take_lent(holds_this);
         self.call_stack.push(CallStackFrame {
             fn_name,
-            args: ThinVec::new(),
             source,
             pos,
             bindings: Some(bindings),
+            caller,
         });
     }
-    /// Forget where each call keeps its bindings, for a copy of this
+    /// What the call being pushed was lent. A local it was lent by
+    /// reference stays held only when the call holds it, not a copy. A
+    /// receiver stays held either way: the call site lent no pointer to it.
+    fn take_lent(&mut self, holds: bool) -> Option<Lent> {
+        let mut lent = self.lent.take()?;
+        if !holds && matches!(lent.held, Some(Held::Local(..))) {
+            lent.held = None;
+        }
+        Some(lent)
+    }
+    /// Forget where each caller keeps its bindings, for a copy of this
     /// debugger that can outlive the calls.
     pub(crate) fn forget_bindings(&mut self) {
+        self.lent = None;
         for frame in &mut self.call_stack {
-            frame.bindings = None;
+            frame.caller = None;
         }
     }
     /// Change the current status to [`CONTINUE`][DebuggerStatus::CONTINUE] and return the previous status.
@@ -473,6 +521,35 @@ impl Debugger {
 }
 
 impl Engine {
+    /// Lend the call about to be made where its caller keeps its bindings
+    /// (#540), while a debugger is registered: `scope`, or `None` when the
+    /// call extends the caller's scope, its receiver `this`, and the place
+    /// the call is given by reference, `held`. The caller passes its most
+    /// recent borrows and uses neither again until the call returns, then
+    /// calls [`Self::unlend_bindings`].
+    #[inline(always)]
+    pub(crate) fn lend_bindings(
+        &self,
+        global: &mut GlobalRuntimeState,
+        scope: Option<std::ptr::NonNull<Scope>>,
+        this: Option<std::ptr::NonNull<Dynamic>>,
+        held: Option<Held>,
+    ) {
+        if self.is_debugger_registered() {
+            global.debugger_mut().lend(Lent {
+                scope: scope.map(std::ptr::NonNull::cast),
+                this,
+                held,
+            });
+        }
+    }
+    /// Drop what [`Self::lend`] lent, once the call returned.
+    #[inline(always)]
+    pub(crate) fn unlend_bindings(&self, global: &mut GlobalRuntimeState) {
+        if self.is_debugger_registered() {
+            global.debugger_mut().unlend();
+        }
+    }
     /// Run the debugger callback if there is a debugging interface registered.
     #[inline(always)]
     pub(crate) fn dbg<'a>(
