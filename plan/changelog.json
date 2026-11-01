@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`==` and `!=` choose the `PartialEq` impl rustc chooses: references compare through what they refer to, `String`, `str` and `&str` compare with each other, and `Vec`s, slices and arrays compare element by element. `&String == &str`, `&str == String`, `Vec<u8> == [u8; 3]` and `names.iter().position(|name| name == \"Serif\")` compile, and `&a < &b` compares what the references point to. A comparison rustc refuses gets its E0277, \"can't compare `X` with `Y`\", at the operator, with rustc's help and note.","issues":[699]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.94",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"`==` and `!=` choose the `PartialEq` impl rustc chooses: references compare through what they refer to, `String`, `str` and `&str` compare with each other, and `Vec`s, slices and arrays compare element by element. `&String == &str`, `&str == String`, `Vec<u8> == [u8; 3]` and `names.iter().position(|name| name == \"Serif\")` compile, and `&a < &b` compares what the references point to. A comparison rustc refuses gets its E0277, \"can't compare `X` with `Y`\", at the operator, with rustc's help and note.","issues":[699]}
+      ]
+    },
     {
       "version": "0.3.93",
       "date": "2026-11-01",
