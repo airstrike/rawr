@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.79",
+  "version": "0.3.80",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A crate struct's field that holds no native value, such as a `String`, is read without moving the struct: `format!`, method calls, `&` and `==` on `x.f` leave `x` whole, and a by-value use moves only that field, as rustc's partial move does.","issues":[648]},
-        {"text":"A crate's `async fn` that borrows its arguments, such as fount's `async fn load(font: &Font)`, runs: each argument is leased to the future for its life, shared or mutably, with no copy, and is whole again after the await.","issues":[649]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.80",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A crate struct's field that holds no native value, such as a `String`, is read without moving the struct: `format!`, method calls, `&` and `==` on `x.f` leave `x` whole, and a by-value use moves only that field, as rustc's partial move does.","issues":[648]},
+          {"text":"A crate's `async fn` that borrows its arguments, such as fount's `async fn load(font: &Font)`, runs: each argument is leased to the future for its life, shared or mutably, with no copy, and is whole again after the await.","issues":[649]}
+        ]
+      },
       {
         "version": "0.3.79",
         "date": "2026-11-01",
@@ -1501,8 +1503,8 @@
     {"issue":645,"title":"std::env::var and VarError","state":"open","category":"Divergences from rustc"},
     {"issue":646,"title":"std::fs::read_dir, metadata, File and OpenOptions","state":"open","category":"Divergences from rustc"},
     {"issue":647,"title":"Decide whether stdin and stdout are granted like files","state":"open","category":"Platforms"},
-    {"issue":648,"title":"Read a crate struct's plain-value field without moving the struct","state":"open","category":"No glue (D593)"},
-    {"issue":649,"title":"Lease an async fn's borrowed arguments to its future","state":"open","category":"No glue (D593)"},
+    {"issue":648,"title":"Read a crate struct's plain-value field without moving the struct","state":"closed","category":"No glue (D593)","release":"0.3.80"},
+    {"issue":649,"title":"Lease an async fn's borrowed arguments to its future","state":"closed","category":"No glue (D593)","release":"0.3.80"},
     {"issue":650,"title":"Lend a crate struct's field in place with no copy (D683.1)","state":"open","category":"No glue (D593)"},
     {"issue":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc"},
     {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"open","category":"No glue (D593)"},
