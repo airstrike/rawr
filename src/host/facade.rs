@@ -702,6 +702,33 @@ impl Builder {
         shape: crate::Shared<host::type_def::Shape>,
         allocation: &mut impl host::ImportAllocation,
     ) -> Result<&mut Self, host::Error> {
+        self.imported_opaque_type(
+            path,
+            identity,
+            implemented,
+            parameters,
+            defaults,
+            Box::default(),
+            shape,
+            allocation,
+        )
+    }
+
+    /// [`imported_type`](Self::imported_type) of an opaque `impl Trait`
+    /// type, with the associated types it binds.
+    #[cfg(feature = "rust-import")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn imported_opaque_type(
+        &mut self,
+        path: &str,
+        identity: host::type_def::import::Identity,
+        implemented: &[crate::capability::Kind],
+        parameters: Box<[ImmutableString]>,
+        defaults: Box<[Option<host::type_ref::Type>]>,
+        associated: Box<[host::type_def::Associated]>,
+        shape: crate::Shared<host::type_def::Shape>,
+        allocation: &mut impl host::ImportAllocation,
+    ) -> Result<&mut Self, host::Error> {
         let relative = host::path::Path::parse_imported(path, allocation)?;
         let path = host::path::Path::qualify_imported(&self.root, relative, allocation)?;
         self.ensure_vacant(&path, "type")?;
@@ -712,7 +739,8 @@ impl Builder {
             parameters,
             defaults,
             shape,
-        )?;
+        )?
+        .with_associated(associated);
         self.insert_type(definition)?;
         Ok(self)
     }

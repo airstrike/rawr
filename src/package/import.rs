@@ -1700,7 +1700,7 @@ fn install(
             .chain(
                 opaque_types(contract, &facade)
                     .into_iter()
-                    .map(|(_, definition, _)| definition),
+                    .map(|(_, definition, ..)| definition),
             )
             .collect::<std::collections::BTreeSet<_>>();
         let (definition, families) = build(contract, facade, &declared, &mut shapes, allocation)?;
@@ -1824,14 +1824,15 @@ fn build(
 
     // An opaque `impl Trait` type a function gives is a type of its own,
     // declared beside the function, at the type arguments its caller fixes.
-    for (path, definition, parameters) in opaque_types(contract, &facade) {
+    for (path, definition, parameters, associated) in opaque_types(contract, &facade) {
         let shape = crate::Shared::new(host::type_def::Shape::Opaque);
-        match builder.imported_type(
+        match builder.imported_opaque_type(
             &path,
             imported_identity(definition),
             &[],
             parameters,
             Box::default(),
+            associated,
             shape,
             allocation,
         ) {
@@ -2471,6 +2472,15 @@ fn names_declared(
         })
 }
 
+/// An opaque type a facade declares: its path, its definition, the names
+/// of its parameters, and the associated types it binds.
+type OpaqueType = (
+    String,
+    rawr_import::surface::identity::Definition,
+    Box<[ImmutableString]>,
+    Box<[host::type_def::Associated]>,
+);
+
 /// The opaque `impl Trait` types the facade's functions and methods give:
 /// each one's path beside each function that gives it, its definition,
 /// and its type parameters, named as the function's parameters its
@@ -2478,11 +2488,7 @@ fn names_declared(
 fn opaque_types(
     contract: &rawr_import::Contract<rawr_import::Classified>,
     facade: &Facade<'_>,
-) -> Vec<(
-    String,
-    rawr_import::surface::identity::Definition,
-    Box<[ImmutableString]>,
-)> {
+) -> Vec<OpaqueType> {
     fn walk<'t>(
         ty: &'t representability::convert::Type,
         opaque: &std::collections::BTreeSet<[u8; 32]>,
@@ -2524,11 +2530,7 @@ fn opaque_types(
     if opaque.is_empty() {
         return Vec::new();
     }
-    let mut types: Vec<(
-        String,
-        rawr_import::surface::identity::Definition,
-        Box<[ImmutableString]>,
-    )> = Vec::new();
+    let mut types: Vec<OpaqueType> = Vec::new();
     // `member` marks a member's output, which only names a type: one already
     // declared beside a function isn't declared again.
     let mut visit = |path: &str, outcome: rawr_import::classify::Outcome<'_>, member: bool| {
@@ -2547,7 +2549,7 @@ fn opaque_types(
             let path = rawr_import::surface::opaque::path(path, index);
             if types
                 .iter()
-                .any(|(known, declared, _)| *known == path || (member && *declared == definition))
+                .any(|(known, declared, ..)| *known == path || (member && *declared == definition))
             {
                 continue;
             }
@@ -2560,13 +2562,33 @@ fn opaque_types(
                         .iter()
                         .find(|parameter| parameter.index() == *index)
                         .map_or_else(
-                            || ImmutableString::from(format!("T{position}")),
-                            |parameter| ImmutableString::from(parameter.name()),
+                            || format!("T{position}").into_boxed_str(),
+                            |parameter| parameter.name().into(),
                         ),
-                    _ => ImmutableString::from(format!("T{position}")),
+                    _ => format!("T{position}").into_boxed_str(),
                 })
                 .collect();
-            types.push((path, definition, names));
+            // The associated types it binds, each one of its arguments.
+            let bound = signature
+                .opaques()
+                .iter()
+                .find(|opaque| opaque.definition() == definition.as_bytes())
+                .map_or(&[][..], |opaque| opaque.associated());
+            let names = rawr_import::surface::opaque::parameters(names, bound)
+                .iter()
+                .map(|name| ImmutableString::from(&**name))
+                .collect();
+            let associated = bound
+                .iter()
+                .map(|(associated, position)| {
+                    (
+                        associated.trait_identity(),
+                        ImmutableString::from(associated.name()),
+                        *position as usize,
+                    )
+                })
+                .collect();
+            types.push((path, definition, names, associated));
         }
     };
     for entry in &facade.entries {
@@ -2964,6 +2986,15 @@ fn signature_with(
     if let Some(instance) = fixed_instance(types, signature, allocation)? {
         builder.instance(instance);
     }
+    relations(&mut builder, signature)?;
+    Ok(builder.finish())
+}
+
+/// The signature's relations, each a relation of `builder`'s.
+fn relations(
+    builder: &mut host::signature::Builder,
+    signature: &representability::signature::Signature,
+) -> Result<(), Error> {
     let parameters = signature.parameters();
     for source in signature.relations() {
         let Some(parameter) = parameters
@@ -2980,22 +3011,27 @@ fn signature_with(
                 .iter()
                 .map(|case| (case.this(), case.arguments())),
             source.trait_identity(),
+            source
+                .associated()
+                .map(|associated| (associated.trait_identity(), associated.name())),
             |ty| converted_pattern(ty, parameters),
         ) {
             builder.relation(relation)?;
         }
     }
-    Ok(builder.finish())
+    Ok(())
 }
 
 /// A relation on `parameter`, its types made patterns by `pattern`: `None`
 /// when one of its trait arguments can't be one. A case that can't be is
-/// dropped, and a relation without cases or a trait is none.
+/// dropped, and a relation without cases, a trait or an associated type is
+/// none.
 pub(crate) fn relation<'a, T: 'a>(
     parameter: &str,
     arguments: &'a [T],
     cases: impl Iterator<Item = (&'a T, &'a [T])>,
     trait_identity: Option<[u8; 32]>,
+    associated: Option<([u8; 32], &str)>,
     pattern: impl Fn(&T) -> Option<host::signature::Pattern>,
 ) -> Option<host::signature::Relation> {
     let arguments = arguments
@@ -3013,8 +3049,10 @@ pub(crate) fn relation<'a, T: 'a>(
             ))
         })
         .collect::<Box<[_]>>();
-    (!cases.is_empty() || trait_identity.is_some()).then(|| {
-        host::signature::Relation::new(parameter, arguments, cases).of_trait(trait_identity)
+    (!cases.is_empty() || trait_identity.is_some() || associated.is_some()).then(|| {
+        host::signature::Relation::new(parameter, arguments, cases)
+            .of_trait(trait_identity)
+            .of_associated(associated.map(|(identity, name)| (identity, name.into())))
     })
 }
 
@@ -3147,6 +3185,9 @@ fn callable_signature(
     if let Some(instance) = fixed_instance(types, signature, allocation)? {
         builder.instance(instance);
     }
+    // A closure's input the receiver fixes, as `P::State` of
+    // `.subscription(|state| ..)`, as the facade's signature keeps them.
+    relations(&mut builder, signature)?;
     Ok(builder.finish())
 }
 

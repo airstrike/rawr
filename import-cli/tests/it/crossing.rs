@@ -498,6 +498,23 @@ fn closures_that_borrow_the_programs_state_cross_as_its_methods_do() {
     );
 }
 
+/// iced's `.subscription(|state| ..)` and `.scale_factor(|_| 2.0)` with no
+/// annotations. Each closure's input is `&P::State` of the opaque program
+/// that `application(..)` returns, and the opaque type's `State = Inferred`
+/// binding fills it in, as rustc reads it. The output is `cargo run`'s.
+#[test]
+fn an_unannotated_closure_takes_its_input_from_the_opaque_programs_state() {
+    let (rawr, cargo) = both_printed("crossing-inferred", "inferred.rs", "Dark,Dark");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("update Ticked(2) after 1")
+            && rawr.contains("1 theme Light")
+            && rawr.contains("2 theme Dark")
+            && rawr.contains("2 scale 2"),
+        "{rawr}"
+    );
+}
+
 /// iced's stopwatch: the crate's `time` re-exports std's `Duration` and
 /// `Instant`, and the script imports them through it and writes
 /// `time::Duration` through the module. `time::every(milliseconds(10))`

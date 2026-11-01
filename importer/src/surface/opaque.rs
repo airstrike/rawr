@@ -63,3 +63,32 @@ pub fn path(function: &str, index: usize) -> String {
         None => name,
     }
 }
+
+/// The names of an opaque type's parameters, `named` as the function's
+/// parameters its arguments are, with each that is the value of an
+/// associated type it binds named after that type, as `State` of `impl
+/// Program<State = S>`, so no two share a name.
+#[must_use]
+pub fn parameters(
+    named: Box<[Box<str>]>,
+    associated: &[(
+        crate::classify::representability::signature::Associated,
+        u32,
+    )],
+) -> Box<[Box<str>]> {
+    let mut names = named.into_vec();
+    for (associated, position) in associated {
+        let Some(at) = usize::try_from(*position)
+            .ok()
+            .filter(|at| *at < names.len())
+        else {
+            continue;
+        };
+        let mut name = associated.name().to_owned();
+        while names.iter().any(|known| **known == *name) {
+            name.push('_');
+        }
+        names[at] = name.into_boxed_str();
+    }
+    names.into_boxed_slice()
+}

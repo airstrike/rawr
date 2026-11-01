@@ -42,7 +42,17 @@ pub struct Definition {
     /// Each parameter's default (`Hsl<S = Srgb, T = f32>`), which a type
     /// written without the argument takes. Empty when none has one.
     defaults: Box<[Option<host::type_ref::Type>]>,
+    /// Each associated type an opaque `impl Trait` type binds, by its
+    /// trait's definition identity and its name, with the position of the
+    /// parameter that is its value: `application(..)`'s `impl Program<State
+    /// = S>` gives `P::State` to a call its value fills `P` of.
+    associated: Box<[Associated]>,
 }
+
+/// An associated type an opaque type binds: its trait's definition
+/// identity, its name, and the position of the type's parameter that is
+/// its value.
+pub type Associated = ([u8; 32], ImmutableString, usize);
 
 /// The exact structural contract of one facade type.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -259,6 +269,7 @@ impl Definition {
             projections: projections.into_boxed_slice(),
             exact_arity: self.exact_arity,
             defaults: self.defaults.clone(),
+            associated: self.associated.clone(),
         })
     }
 
@@ -301,6 +312,7 @@ impl Definition {
             projections: Box::default(),
             exact_arity: true,
             defaults: Box::default(),
+            associated: Box::default(),
         })
     }
 
@@ -318,6 +330,7 @@ impl Definition {
             projections: Box::default(),
             exact_arity: false,
             defaults: Box::default(),
+            associated: Box::default(),
         }
     }
 
@@ -364,6 +377,7 @@ impl Definition {
             projections: Box::default(),
             exact_arity: true,
             defaults,
+            associated: Box::default(),
         })
     }
 
@@ -447,6 +461,23 @@ impl Definition {
     #[must_use]
     pub const fn projections(&self) -> &[Projection] {
         &self.projections
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_associated(mut self, associated: Box<[Associated]>) -> Self {
+        self.associated = associated;
+        self
+    }
+
+    /// The parameter that is the value of the associated type `name` of
+    /// the trait whose definition identity is `trait_identity`, when this
+    /// opaque type binds it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn associated(&self, trait_identity: &[u8; 32], name: &str) -> Option<usize> {
+        self.associated
+            .iter()
+            .find(|(identity, known, _)| identity == trait_identity && known.as_str() == name)
+            .map(|(_, _, position)| *position)
     }
 
     pub(crate) fn with_shape(mut self, shape: Shape) -> Self {

@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 70;
+const CLASSIFIER_VERSION: u32 = 71;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -275,6 +275,9 @@ struct Context<'graph, P: api::Phase = api::Extracted> {
     /// While a trait's method is classified as a member of an opaque type a
     /// function gives: that `impl Trait` type, which the method's `Self` is.
     opaque_self: std::cell::RefCell<Option<model::Type>>,
+    /// While a function's output is converted: the associated types each
+    /// opaque `impl Trait` type it gives binds, as arguments of that type.
+    opaque_associated: std::cell::RefCell<Vec<representability::signature::Opaque>>,
     /// The implementations of each `core` trait, by the trait's name, in
     /// graph order (`core_implementations`).
     core_traits: std::cell::OnceCell<HashMap<&'graph str, Box<[usize]>>>,
@@ -576,6 +579,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             sole_aliases: std::cell::OnceCell::new(),
             opaque_output: std::cell::RefCell::new(None),
             opaque_self: std::cell::RefCell::new(None),
+            opaque_associated: std::cell::RefCell::new(Vec::new()),
             core_traits: std::cell::OnceCell::new(),
             callable_traits: std::cell::OnceCell::new(),
         };
@@ -1623,6 +1627,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 model::Type::Slice(element) | model::Type::Array { element, .. } if deep => {
                     find(element, deep, found);
                 }
+                // What an opaque type's bounds bind, as `.subscription(..)`
+                // gives `impl Program<State = P::State>`.
+                model::Type::ImplTrait { bounds, .. } if deep => {
+                    for predicate in bounds.iter() {
+                        if let model::Predicate::ProjectionEquality { ty, .. } = predicate {
+                            find(ty, deep, found);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1881,17 +1894,27 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 }
                 cases.push(Case::new(this, Box::new([value])));
             }
-            if cases.is_empty() || cases.len() > CASES {
-                continue;
+            if cases.len() > CASES {
+                cases.clear();
             }
+            // Without a case, the relation still names the associated type,
+            // which an opaque type that fills the parameter gives from its
+            // own bound, as `application(..)`'s `impl Program<State = S>`.
             self.retain_array::<Case>(cases.len())?;
-            relations.push(Relation::new(
-                projection.parameter,
-                Box::new([representability::convert::Type::Parameter(
-                    projection.synthetic,
-                )]),
-                cases.into_boxed_slice(),
-            ));
+            self.retain_str(&projection.name)?;
+            relations.push(
+                Relation::new(
+                    projection.parameter,
+                    Box::new([representability::convert::Type::Parameter(
+                        projection.synthetic,
+                    )]),
+                    cases.into_boxed_slice(),
+                )
+                .of_associated(representability::signature::Associated::new(
+                    *crate::surface::identity::Definition::of(&projection.trait_id).as_bytes(),
+                    projection.name.as_str().into(),
+                )),
+            );
         }
         Ok(relations)
     }
@@ -6365,6 +6388,7 @@ impl<P: api::Phase> Context<'_, P> {
         // at the type parameters the caller fixes (`iced::widget::iced`).
         // A parameter a value fills where another form takes a callable is
         // left out as the callable is, so both forms give the one type.
+        self.opaque_associated.borrow_mut().clear();
         *self.opaque_output.borrow_mut() = Some(
             call.iter()
                 .map(|(parameter, ..)| *parameter)
@@ -6399,6 +6423,7 @@ impl<P: api::Phase> Context<'_, P> {
             _ => self.convert_value(&rewritten),
         };
         *self.opaque_output.borrow_mut() = None;
+        let opaques = std::mem::take(&mut *self.opaque_associated.borrow_mut());
         let mut guard = None;
         let output = match output {
             Ok(output) => output,
@@ -6537,7 +6562,8 @@ impl<P: api::Phase> Context<'_, P> {
         )
         .with_relations(relations)
         .with_guard(guard)
-        .with_scope(scope);
+        .with_scope(scope)
+        .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.
         let signature_plan = match signature.receiver() {
@@ -6838,7 +6864,11 @@ impl<P: api::Phase> Context<'_, P> {
             // Renderer>(..) -> impl Widget<Message, Theme, Renderer>`: a
             // type of its own, named by its compiler definition, at the
             // type arguments it captures that a caller's types fix.
-            model::Type::ImplTrait { id, captures, .. } => {
+            model::Type::ImplTrait {
+                id,
+                bounds,
+                captures,
+            } => {
                 let excluded = self.opaque_output.borrow().clone();
                 let Some(excluded) = excluded else {
                     return Err(representability::reject::Kind::OpaqueType.into());
@@ -6854,8 +6884,62 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     arguments.push(self.convert(ty)?);
                 }
+                // Each associated type its bounds bind, as `impl Program<
+                // State = S>` binds `State`, is one more argument, so a
+                // call that takes the opaque type's value reads `P::State`
+                // from it, as rustc does. A std trait's, as an iterator's
+                // `Item`, keeps its own reading, as `projections` does.
+                let mut associated = Vec::new();
+                for predicate in bounds.iter() {
+                    let model::Predicate::ProjectionEquality {
+                        projection:
+                            model::Type::Projection {
+                                trait_id,
+                                associated: item,
+                                ..
+                            },
+                        ty,
+                    } = predicate
+                    else {
+                        continue;
+                    };
+                    if trait_id.unit().authority().sysroot().is_some() {
+                        continue;
+                    }
+                    let Some(name) = self.definition_name(item) else {
+                        continue;
+                    };
+                    let Ok(value) = self.convert(ty) else {
+                        continue;
+                    };
+                    let Ok(position) = u32::try_from(arguments.len()) else {
+                        continue;
+                    };
+                    self.retain_str(name)?;
+                    associated.push((
+                        representability::signature::Associated::new(
+                            *crate::surface::identity::Definition::of(trait_id).as_bytes(),
+                            name.into(),
+                        ),
+                        position,
+                    ));
+                    arguments.push(value);
+                }
+                let definition = crate::surface::identity::Definition::of(id);
+                if !associated.is_empty() {
+                    let mut opaques = self.opaque_associated.borrow_mut();
+                    if !opaques
+                        .iter()
+                        .any(|opaque| opaque.definition() == definition.as_bytes())
+                    {
+                        opaques.push(representability::signature::Opaque::new(
+                            *definition.as_bytes(),
+                            associated.into_boxed_slice(),
+                        ));
+                    }
+                }
                 Type::Nominal {
-                    definition: crate::surface::identity::Definition::of(id),
+                    definition,
                     arguments: arguments.into_boxed_slice(),
                 }
             }
@@ -9425,6 +9509,28 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
         model::Type::Array { element, length } => model::Type::Array {
             element: Box::new(projected_parameters(element, projected)),
             length: length.clone(),
+        },
+        // What an opaque type's bounds bind, as `impl Program<State =
+        // P::State>` of `.subscription(..)`.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds
+                .iter()
+                .map(|predicate| match predicate {
+                    model::Predicate::ProjectionEquality { projection, ty } => {
+                        model::Predicate::ProjectionEquality {
+                            projection: projection.clone(),
+                            ty: projected_parameters(ty, projected),
+                        }
+                    }
+                    other => other.clone(),
+                })
+                .collect(),
+            captures: captures.clone(),
         },
         ty => ty.clone(),
     }

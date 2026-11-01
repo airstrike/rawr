@@ -103,6 +103,42 @@ pub struct Signature {
     /// path names them, as `<_ as Widget<Part>>::map` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     through: Option<super::convert::Type>,
+    /// The associated types each opaque `impl Trait` type the output names
+    /// binds, as `application(..)`'s `impl Program<State = S, Message =
+    /// M>` binds `State` and `Message`: each is one of the opaque type's
+    /// arguments, after the ones it captures.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    opaques: Box<[Opaque]>,
+}
+
+/// The associated types an opaque `impl Trait` type binds, each at the
+/// position of the type's argument that is its value.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Opaque {
+    definition: [u8; 32],
+    associated: Box<[(Associated, u32)]>,
+}
+
+impl Opaque {
+    pub(crate) const fn new(definition: [u8; 32], associated: Box<[(Associated, u32)]>) -> Self {
+        Self {
+            definition,
+            associated,
+        }
+    }
+
+    /// The opaque type, by its definition identity.
+    #[must_use]
+    pub const fn definition(&self) -> &[u8; 32] {
+        &self.definition
+    }
+
+    /// Each associated type it binds, with the position of the argument
+    /// that is its value.
+    #[must_use]
+    pub const fn associated(&self) -> &[(Associated, u32)] {
+        &self.associated
+    }
 }
 
 /// How an item's output borrows (D558 tier 1). The call opens a native
@@ -158,6 +194,40 @@ pub struct Relation {
     /// `Column<W>` has its own `W: Widget<M, T, R>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trait_identity: Option<[u8; 32]>,
+    /// The associated type a projection's synthetic parameter stands for,
+    /// as `P::State` of iced's `Application<P>::subscription`: an opaque
+    /// type that fills `P` gives it from its own bound (`State = S`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    associated: Option<Associated>,
+}
+
+/// An associated type of a trait, by the trait's definition identity and
+/// the associated type's name: `Program::State`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Associated {
+    trait_identity: [u8; 32],
+    name: Box<str>,
+}
+
+impl Associated {
+    pub(crate) const fn new(trait_identity: [u8; 32], name: Box<str>) -> Self {
+        Self {
+            trait_identity,
+            name,
+        }
+    }
+
+    /// The trait, by its definition identity.
+    #[must_use]
+    pub const fn trait_identity(&self) -> [u8; 32] {
+        self.trait_identity
+    }
+
+    /// The associated type's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// One implementation of a [`Relation`]'s trait: its self type and its
@@ -180,6 +250,7 @@ impl Relation {
             arguments,
             cases,
             trait_identity: None,
+            associated: None,
         }
     }
 
@@ -187,6 +258,19 @@ impl Relation {
     pub(crate) const fn of_trait(mut self, identity: [u8; 32]) -> Self {
         self.trait_identity = Some(identity);
         self
+    }
+
+    /// The relation of a projection's synthetic parameter, which stands
+    /// for `associated` of the parameter.
+    pub(crate) fn of_associated(mut self, associated: Associated) -> Self {
+        self.associated = Some(associated);
+        self
+    }
+
+    /// The associated type a projection's synthetic parameter stands for.
+    #[must_use]
+    pub const fn associated(&self) -> Option<&Associated> {
+        self.associated.as_ref()
     }
 
     /// The bound's trait, by its definition identity, when known.
@@ -328,7 +412,19 @@ impl Signature {
             scope: None,
             instance: None,
             through: None,
+            opaques: Box::new([]),
         }
+    }
+
+    pub(crate) fn with_opaques(mut self, opaques: Box<[Opaque]>) -> Self {
+        self.opaques = opaques;
+        self
+    }
+
+    /// The associated types each opaque type the output names binds.
+    #[must_use]
+    pub const fn opaques(&self) -> &[Opaque] {
+        &self.opaques
     }
 
     pub(crate) fn with_through(mut self, through: Option<super::convert::Type>) -> Self {
