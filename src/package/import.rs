@@ -376,7 +376,7 @@ impl crate::Engine {
                         .try_reserve_exact(retained.len())
                         .map_err(|_| super::Error::import(Error::Allocation))?;
                     outcomes.extend(retained);
-                    let report = augment_external(report.clone(), outcomes)
+                    let report = augment_external(report.clone(), outcomes, &paths)
                         .map_err(super::Error::diagnostic)?
                         .unwrap_or(report);
                     return Err(super::Error::import_diagnostic(report));
@@ -711,7 +711,7 @@ fn imported_resolution_report(
             .cloned();
         let report =
             diagnostic::Report::from_resolution(primary.clone(), secondary, &failure.error)?;
-        return augment_external(report, outcomes);
+        return augment_external(report, outcomes, paths);
     };
     let outcomes = paths.outcomes(path.as_str());
     if outcomes.len() == 0 {
@@ -951,6 +951,7 @@ fn rust_miss(
         R::UnknownImport { path, .. } => path.to_string(),
         R::UnknownType { name, .. } => name.to_string(),
         R::UnknownMember { owner, member, .. } => format!("{owner}::{member}"),
+        R::NotInModule { module, item, .. } => format!("{module}::{item}"),
         _ => return None,
     };
     if !path.contains("::") {
@@ -995,6 +996,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         // A module's path called as a function, as iced's `combo_box`: the
         // function beside it says why rawr can't call it.
         R::UnknownImport { path, .. } => Some((path.to_string(), ImportedNamespace::Either)),
+        R::NotInModule { module, item, .. } => {
+            Some((format!("{module}::{item}"), ImportedNamespace::Either))
+        }
         R::ArgumentCount { name, .. } => Some((name.to_string(), ImportedNamespace::Value)),
         R::InvalidMethodCall { owner, method, .. }
         | R::InvalidMethodSignature { owner, method, .. } => Some((
@@ -1075,12 +1079,13 @@ fn imported_lowering_report(
         }
         crate::resolve::LoweringEvidence::Unmapped(_) => return Ok(None),
     };
-    augment_external(report, outcomes)
+    augment_external(report, outcomes, paths)
 }
 
 fn augment_external(
     report: diagnostic::Report,
     outcomes: Vec<rawr_import::classify::Outcome<'_>>,
+    paths: &ImportedPaths<'_>,
 ) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
     let mut spans = Vec::new();
     let span_capacity = outcomes
@@ -1113,6 +1118,13 @@ fn augment_external(
                 if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
             {
                 Some(representability::reject::Kind::CallableProtocol.describe())
+            }
+            // An item whose signature names a type its crate's facade does
+            // not declare, as a program module's `fn describe(version:
+            // &semver::Version)` names another crate's type, is left out of
+            // the facade (`names_declared`).
+            _ if !names_declared(outcome, &paths.declared(outcome.export().root_alias())) => {
+                Some("its signature names a Rust type that Rawr can't name yet")
             }
             _ => None,
         };
@@ -2949,13 +2961,33 @@ impl Types {
         parameters: &[representability::signature::Parameter],
         allocation: &mut rawr_import::contract::Allocation,
     ) -> Result<host::type_ref::Type, Error> {
-        let converted = self.convert(ty, parameters, allocation)?;
+        let (items, bytes) = type_usage(ty, parameters)?;
+        allocation.retain(items, bytes)?;
+        Self::input_charged(ty, parameters)
+    }
+
+    /// `convert_input` of a charged type. A `&str` that an input holds, as
+    /// a future's `Option<&str>` or `(&str, &Catalog)` does, is a borrow
+    /// there too (#677).
+    fn input_charged(
+        ty: &representability::convert::Type,
+        parameters: &[representability::signature::Parameter],
+    ) -> Result<host::type_ref::Type, Error> {
+        use representability::convert::{Builtin, Type};
         Ok(match ty {
-            representability::convert::Type::Builtin(
-                representability::convert::Builtin::Str
-                | representability::convert::Builtin::StaticStr,
-            ) => host::type_ref::Type::reference(false, converted),
-            _ => converted,
+            Type::Builtin(Builtin::Str | Builtin::StaticStr) => {
+                host::type_ref::Type::reference(false, Self::convert_charged(ty, parameters)?)
+            }
+            Type::Option(element) => {
+                host::type_ref::Type::option(Self::input_charged(element, parameters)?)
+            }
+            Type::Tuple(members) => host::type_ref::Type::tuple(
+                members
+                    .iter()
+                    .map(|member| Self::input_charged(member, parameters))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?,
+            _ => Self::convert_charged(ty, parameters)?,
         })
     }
 

@@ -32,3 +32,39 @@ pub async fn rename(font: &mut Font, family: String) {
     tokio::task::yield_now().await;
     font.family = family;
 }
+
+/// A catalog of families, as fount's `google` module has.
+pub mod google {
+    /// The families a catalog lists, as fount's `google::Catalog`.
+    #[derive(Debug, Clone)]
+    pub struct Catalog {
+        /// The families' names.
+        pub families: Vec<String>,
+    }
+
+    /// A catalog of `families`.
+    pub fn catalog(families: Vec<String>) -> Catalog {
+        Catalog { families }
+    }
+
+    /// A family's name and its catalog's size after a yield, through the
+    /// tuple of borrows its future holds.
+    pub async fn pair(pair: (&str, &Catalog)) -> usize {
+        tokio::task::yield_now().await;
+        pair.0.len() + pair.1.families.len()
+    }
+
+    /// Where `family` comes from after a yield, as fount's `async fn
+    /// load(family: &str, catalog: Option<&Catalog>)`: its future borrows
+    /// the string and, when there is one, the catalog.
+    pub async fn load(family: &str, catalog: Option<&Catalog>) -> String {
+        tokio::task::yield_now().await;
+        match catalog {
+            Some(catalog) if catalog.families.iter().any(|listed| listed == family) => {
+                format!("{family} listed")
+            }
+            Some(catalog) => format!("{family} unlisted of {}", catalog.families.len()),
+            None => format!("{family} uncataloged"),
+        }
+    }
+}

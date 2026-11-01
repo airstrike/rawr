@@ -20422,6 +20422,7 @@ impl<'a> Parser<'a> {
         };
         let missed = match &error {
             Error::UnknownMember { .. }
+            | Error::NotInModule { .. }
             | Error::UnknownType { .. }
             | Error::UnknownImport { .. } => true,
             Error::ImportedApplicationRequired { miss, .. } => miss.is_some(),
@@ -45117,8 +45118,24 @@ impl<'a> Parser<'a> {
                 return Err(error);
             }
             // A library module or type that exists lacks only the member:
-            // `iced::widget::Column::missing`.
-            let error = if self.models.host.entry(&owner).is_some() {
+            // `iced::widget::Column::missing`. A module is rustc's E0425,
+            // `fount::google::load` naming no item of `fount::google`; a
+            // crate's trait, which Rawr also names as a module, is a type.
+            let error = if matches!(
+                self.models.host.entry(&owner),
+                Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+            ) && owner
+                .rsplit("::")
+                .next()
+                .and_then(|name| name.chars().next())
+                .is_some_and(|first| first.is_lowercase() || first == '_')
+            {
+                Error::NotInModule {
+                    module: owner,
+                    item: member.clone(),
+                    reference: member_span,
+                }
+            } else if self.models.host.entry(&owner).is_some() {
                 Error::UnknownMember {
                     owner,
                     member: member.clone(),

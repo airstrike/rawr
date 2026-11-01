@@ -362,6 +362,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownMember { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
+                crate::resolve::Error::NotInModule { module, item, .. } => {
+                    write!(f, "Cannot find '{item}' in module '{module}'")
+                }
                 crate::resolve::Error::MemberKind {
                     owner, member, field: true, ..
                 } => write!(f, "Field '{owner}::{member}' called like a method"),
