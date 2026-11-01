@@ -440,15 +440,9 @@ impl Type {
         export: host::type_def::Export,
         arguments: impl IntoIterator<Item = Self>,
     ) -> Result<Self, host::Error> {
+        // The item that names it checks its arity when its facade is
+        // finished, where the error can name the item.
         let arguments = collect_types(arguments)?;
-        if export.parameters().len() != arguments.len() {
-            return Err(host::Error::InvalidFacadeTypeArguments {
-                item: "<external signature>".into(),
-                ty: export.path().into(),
-                expected: export.parameters().len(),
-                actual: arguments.len(),
-            });
-        }
         Ok(Self(Shape::External {
             export: Box::new(export),
             arguments,
@@ -556,12 +550,11 @@ impl Type {
                 identity,
                 arguments,
             } => {
-                let Some(expected) = _imported.parameters(identity) else {
-                    return Err(host::Error::UnknownImportedType {
-                        item: item.to_string().into(),
-                        identity: *identity.as_bytes(),
-                    });
-                };
+                // The importer declares each crate type its bindings' items
+                // name.
+                let expected = _imported.parameters(identity).unwrap_or_else(|| {
+                    panic!("the bindings declare each crate type `{item}`'s signature names")
+                });
                 // The importer writes each of a crate type's uses with its
                 // declared parameters.
                 assert_eq!(
@@ -675,12 +668,11 @@ impl Type {
                 identity,
                 arguments,
             } => {
-                let Some(expected) = imported.parameters(identity) else {
-                    return Err(host::Error::UnknownImportedType {
-                        item: item.to_string().into(),
-                        identity: *identity.as_bytes(),
-                    });
-                };
+                // The importer declares each crate type its bindings' items
+                // name.
+                let expected = imported.parameters(identity).unwrap_or_else(|| {
+                    panic!("the bindings declare each crate type `{item}`'s signature names")
+                });
                 // The importer writes each of a crate type's uses with its
                 // declared parameters.
                 assert_eq!(

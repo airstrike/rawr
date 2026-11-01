@@ -2163,16 +2163,6 @@ impl ProjectionSourceSite {
 }
 
 impl AbiSite {
-    pub(crate) fn checked(
-        export: &crate::api::ledger::Export,
-        definition: &crate::api::model::Definition,
-    ) -> Result<Option<Self>, super::Error> {
-        if export.target() != definition.id() {
-            return Ok(None);
-        }
-        abi_site_from_definition(export, definition)
-    }
-
     /// Return the selected facade root.
     pub fn root(&self) -> &str {
         &self.root
@@ -2222,13 +2212,6 @@ impl AbiSite {
 }
 
 impl OperationSite {
-    pub(crate) fn checked(
-        export: &crate::api::ledger::Export,
-        definition: &crate::api::model::Definition,
-    ) -> Result<Option<Self>, super::Error> {
-        operation_site_from_definition(export, definition)
-    }
-
     /// Return the selected facade root.
     pub fn root(&self) -> &str {
         &self.root

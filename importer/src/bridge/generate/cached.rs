@@ -217,9 +217,7 @@ impl Product {
             &self.source_map,
         )?;
         if expected.aggregate != self.aggregate || expected.entries != self.entries {
-            return Err(super::request::Error::Drift {
-                field: "cached normalized generated product",
-            });
+            return Err(super::request::drift("cached normalized generated product"));
         }
         let rendered = super::Product {
             manifest: clone_bytes(&self.manifest)?,

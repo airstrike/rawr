@@ -1149,11 +1149,10 @@ mod tests {
                 "rawr.profile.fresh-process",
                 &super::super::Limits::standard(),
             )
-            .expect("the fresh-process profile identity seals")
         }
 
         fn version(&self) -> crate::profile::Version {
-            crate::profile::Version::new(1).expect("the fresh-process profile version seals")
+            crate::profile::Version::new(1)
         }
 
         fn classify(

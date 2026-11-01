@@ -353,6 +353,9 @@ impl fmt::Display for ParseErrorType {
                     f,
                     "Cannot derive '{capability}' for '{owner}': {reason}"
                 ),
+                crate::resolve::Error::DuplicateMember { owner, member, .. } if owner.is_empty() => {
+                    write!(f, "The name '{member}' is already used for a generic parameter")
+                }
                 crate::resolve::Error::DuplicateMember { owner, member, .. } => {
                     write!(f, "Duplicate member '{owner}::{member}'")
                 }
@@ -397,7 +400,11 @@ impl fmt::Display for ParseErrorType {
                     method,
                     reason,
                     ..
-                } => write!(f, "Invalid call to '{owner}::{method}': {reason}"),
+                } => write!(
+                    f,
+                    "Invalid call to '{}': {reason}",
+                    crate::resolve::Qualified(owner, method)
+                ),
                 crate::resolve::Error::InvalidHostOperation { item, reason, .. } => {
                     write!(f, "Invalid host operation '{item}': {reason}")
                 }
@@ -418,7 +425,11 @@ impl fmt::Display for ParseErrorType {
                     method,
                     reason,
                     ..
-                } => write!(f, "Invalid signature for '{owner}::{method}': {reason}"),
+                } => write!(
+                    f,
+                    "Invalid signature for '{}': {reason}",
+                    crate::resolve::Qualified(owner, method)
+                ),
                 crate::resolve::Error::MissingCapability {
                     owner, capability, ..
                 } => write!(f, "'{owner}' does not provide '{capability}'"),
@@ -435,6 +446,10 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::AsyncMain { .. } => {
                     f.write_str(crate::resolve::ASYNC_MAIN)
                 }
+                crate::resolve::Error::TypeAnnotationsNeeded { parameter, .. } => write!(
+                    f,
+                    "Type annotations needed: cannot infer the type of the type parameter '{parameter}'"
+                ),
             }
             Self::PropertyExpected => f.write_str("Expecting name of a property"),
             Self::VariableExpected => f.write_str("Expecting name of a variable"),

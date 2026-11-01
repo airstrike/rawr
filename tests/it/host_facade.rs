@@ -402,11 +402,14 @@ fn facade_finish_rejects_missing_modules_types_parameters_and_owners() {
 fn failed_signature_registration_does_not_replace_the_prior_parameter_contract() {
     let mut signature = signature::Builder::new();
     signature.type_parameter("Message", &[capability::Kind::Clone]).unwrap();
-    assert!(matches!(
-        signature.type_parameter("Message", &[capability::Kind::Send]),
-        Err(host::Error::DuplicateTypeParameter { parameter, .. })
-            if parameter == "Message"
-    ));
+    // A signature is built before its item names it, so the error says
+    // what rustc says (E0403), with no placeholder for the item (#539).
+    let duplicate = signature
+        .type_parameter("Message", &[capability::Kind::Send])
+        .map(|_| ())
+        .expect_err("a parameter named twice is refused");
+    assert_eq!(duplicate, host::Error::DuplicateTypeParameter { item: None, parameter: "Message".into() });
+    assert_eq!(duplicate.to_string(), "the name `Message` is already used for a generic parameter (E0403)");
 
     let signature = signature.finish();
     let requirements = signature.requirements("Message").unwrap();
@@ -764,6 +767,36 @@ fn widget_facade(projected: bool, abi: facade::Abi) -> facade::Definition {
         builder.project("widget::Column", "Element", &["Message"]).unwrap();
     }
     builder.finish().unwrap()
+}
+
+/// An external type's arity is checked where its item is known, so the
+/// error names the item, not a placeholder (#539).
+#[test]
+fn external_type_arity_names_the_item_that_uses_it() {
+    let exported = widget_facade(false, facade::Abi::new(1).unwrap()).export_type("Element").unwrap();
+    let mut signature = signature::Builder::new();
+    signature.output(type_ref::Type::external(exported, []).unwrap());
+    let mut builder = facade::Builder::new("controls", facade::Abi::new(1).unwrap()).unwrap();
+    builder.item(item::Definition::function("view", signature.finish()).unwrap()).unwrap();
+    let error = builder.finish().map(|_| ()).expect_err("`Element` takes one argument");
+    assert_eq!(
+        error,
+        host::Error::InvalidFacadeTypeArguments {
+            item: "controls::view".into(),
+            ty: "iced::Element".into(),
+            expected: 1,
+            actual: 0,
+        }
+    );
+    assert!(!error.to_string().contains('<'), "{error}");
+}
+
+/// Rawr exports only the types its facades declare: another is a rawr bug,
+/// which panics naming the invariant (D664).
+#[test]
+#[should_panic(expected = "a facade exports only a type it declares, not `iced::Missing`")]
+fn exporting_an_undeclared_type_panics() {
+    let _ = widget_facade(false, facade::Abi::new(1).unwrap()).export_type("Missing");
 }
 
 fn charts_facade(value: host::type_def::Export) -> facade::Definition {

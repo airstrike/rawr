@@ -30,9 +30,9 @@ impl Profile {
     pub(crate) fn into_current(self) -> Result<crate::profile::Proof, super::request::Error> {
         match self {
             Self::Current(value) => Ok(value),
-            Self::Historical(_) => Err(super::request::Error::Drift {
-                field: "historical profile escaped renderer boundary",
-            }),
+            Self::Historical(_) => Err(super::request::drift(
+                "historical profile escaped renderer boundary",
+            )),
         }
     }
 }

@@ -20,14 +20,14 @@ pub fn evaluate<T: crate::profile::trusted::Operations>(
     limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
     let parent = checked.node_chain();
-    if parent.output_limit() != limits.node_output_bytes() {
-        return Err(Error::DefinitionDrift);
-    }
+    same_limits(parent.output_limit(), limits);
     evaluate_parts(
         adapter,
         contract,
         parent.context(),
-        parent.retention().ok_or(Error::ForeignEvidence)?,
+        parent
+            .retention()
+            .expect("a checked program's node retains its ancestry"),
         node::staging::Input::current(parent.current_parent()),
         checked.checked_fingerprint(),
         checked.checked_payload(),
@@ -42,9 +42,7 @@ pub fn evaluate_retained<T: crate::profile::trusted::Operations>(
     checked: &crate::checked::Retained,
     limits: &crate::cargo::Limits,
 ) -> Result<(Demand, Proof), Error> {
-    if checked.context.limits().node_output_bytes() != limits.node_output_bytes() {
-        return Err(Error::DefinitionDrift);
-    }
+    same_limits(checked.context.limits().node_output_bytes(), limits);
     evaluate_parts(
         adapter,
         contract,
@@ -64,9 +62,7 @@ pub fn prepare_retained<T: crate::profile::trusted::Operations>(
     checked: &crate::checked::Retained,
     limits: &crate::cargo::Limits,
 ) -> Result<Pair, Error> {
-    if checked.context.limits().node_output_bytes() != limits.node_output_bytes() {
-        return Err(Error::DefinitionDrift);
-    }
+    same_limits(checked.context.limits().node_output_bytes(), limits);
     evaluate_parts(
         adapter,
         contract,
@@ -93,10 +89,13 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
     payload: &[u8],
     limits: &crate::cargo::Limits,
 ) -> Result<O, Error> {
-    if adapter.identity() != contract.identity() || adapter.version() != contract.version() {
-        return Err(Error::DefinitionDrift);
-    }
-    let profile_parent = contract.node_chain().ok_or(Error::ForeignEvidence)?;
+    assert!(
+        adapter.identity() == contract.identity() && adapter.version() == contract.version(),
+        "rawr demands a profile's hooks under the profile that classified its contract"
+    );
+    let profile_parent = contract
+        .node_chain()
+        .expect("rawr demands a profile's hooks under its contract's node");
     initial
         .covers_parents(std::slice::from_ref(profile_parent.current_parent()))
         .map_err(node_error)?;
@@ -124,7 +123,8 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
         Outcome::Hit(demand) => {
             let parts = demand
                 .value()
-                .owned(contract, fingerprint, payload, limits)?;
+                .owned(contract, fingerprint, payload, limits)
+                .map_err(Error::fresh)?;
             let recipe = generated_recipe(context, adapter, demand, parts.value(), limits)?;
             let generated = recipe.lookup_owned(&evaluator).map_err(node_error)?;
             Some((recipe, generated, parts))
@@ -136,7 +136,10 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
             Outcome::Hit(Owned::Current(demand)),
             Some((_, Outcome::Hit(Owned::Current(generated)), parts)),
         ) => {
-            let proof = generated.value().owned(parts.value(), lifecycle, limits)?;
+            let proof = generated
+                .value()
+                .owned(parts.value(), lifecycle, limits)
+                .map_err(Error::fresh)?;
             let retained_demand = initial.extend_current(&demand).map_err(node_error)?;
             let retained_generated = retained_demand
                 .extend_current(&generated)
@@ -172,7 +175,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                         let parts = demand
                             .value()
                             .owned(contract, fingerprint, payload, limits)
-                            .map_err(failure)?;
+                            .map_err(|error| failure(error.fresh()))?;
                         let recipe =
                             generated_recipe(context, adapter, &demand, parts.value(), limits)
                                 .map_err(failure)?;
@@ -195,7 +198,7 @@ fn evaluate_parts<T: crate::profile::trusted::Operations, O: pair::Output>(
                 let proof = generated
                     .value()
                     .owned(parts.value(), lifecycle, limits)
-                    .map_err(failure)?;
+                    .map_err(|error| failure(error.fresh()))?;
                 let retained_generated = batch.retention().try_clone()?;
                 O::complete(
                     Pair {
@@ -256,6 +259,16 @@ fn finish(
         parts.into_current(demand_chain),
         proof.into_current(generated_chain),
     ))
+}
+
+/// The checked program and its profile were built under the same limits:
+/// their nodes share one context.
+fn same_limits(output: usize, limits: &crate::cargo::Limits) {
+    assert_eq!(
+        output,
+        limits.node_output_bytes(),
+        "rawr demands a profile under its checked program's own limits"
+    );
 }
 
 fn failure(error: impl std::fmt::Display) -> node::Error {

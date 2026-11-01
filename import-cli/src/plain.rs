@@ -60,7 +60,7 @@ const VERSION: u32 = 1;
 fn adapter(
     limits: &rawr_import::cargo::Limits,
     facts: Option<&[u8; 32]>,
-) -> Result<trusted::Adapter<Operations>, profile::Error> {
+) -> trusted::Adapter<Operations> {
     let identity = match facts {
         Some(facts) => {
             let hex = facts
@@ -71,13 +71,13 @@ fn adapter(
         }
         None => IDENTITY.to_owned(),
     };
-    Ok(trusted::Adapter::trusted(
+    trusted::Adapter::trusted(
         Operations,
-        profile::Identity::new(&identity, limits)?,
-        profile::Version::new(VERSION)?,
+        profile::Identity::new(&identity, limits),
+        profile::Version::new(VERSION),
         false,
     )
-    .semantic_api())
+    .semantic_api()
 }
 
 /// The profile that adds nothing to the runner.
@@ -393,8 +393,7 @@ fn prepare(
         let api = prepared.retain_api(&limits).map_err(Error::other)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
-        let adapter =
-            &*current_adapter.insert(adapter(&limits, keyed.as_ref()).map_err(Error::other)?);
+        let adapter = &*current_adapter.insert(adapter(&limits, keyed.as_ref()));
         let snapshot = snapshot
             .take()
             .unwrap_or_else(|| rawr::reload::source::Snapshot::from_graph(&source));

@@ -117,9 +117,7 @@ pub(super) fn around(
 /// The descriptor for an exact native value, with generated codecs only for
 /// real ownership transfers. Merely lending its storage invokes neither codec.
 pub(super) fn policy(ty: &convert::Type) -> Result<String, request::Error> {
-    let drift = || request::Error::Drift {
-        field: "a native place descriptor's concrete type",
-    };
+    let drift = || request::drift("a native place descriptor's concrete type");
     match ty {
         convert::Type::Builtin(convert::Builtin::String) => {
             return Ok("__rawr_internal::place::text::Text".into());

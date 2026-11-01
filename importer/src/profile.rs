@@ -410,7 +410,7 @@ impl Proof {
             endpoints: &proof.endpoints,
             projections: &proof.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a profile proof serializes");
         account.exceeded(
             "fixture lifecycle profile proof bytes",
             limits.json_bytes,
@@ -443,9 +443,10 @@ impl Proof {
         demand: &Demand,
         limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        if definition.identity() != demand.identity() || definition.version() != demand.version() {
-            return Err(Error::DefinitionDrift);
-        }
+        assert!(
+            definition.identity() == demand.identity() && definition.version() == demand.version(),
+            "rawr generates a profile's source under the profile that demanded it"
+        );
         let mut output = demand::Generator::new(demand, limits);
         definition.generate(demand, &mut output)?;
         output.seal(definition.owns_product_lifecycle())
@@ -465,7 +466,7 @@ impl Proof {
             endpoints: &self.endpoints,
             projections: &self.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a generated profile proof serializes");
         if canonical.len() > limit {
             return Err(Error::Limit {
                 resource: "generated profile proof bytes",
@@ -473,9 +474,11 @@ impl Proof {
                 actual: canonical.len(),
             });
         }
-        if owner_digest(&canonical) != self.owner {
-            return Err(Error::Canonical);
-        }
+        assert_eq!(
+            owner_digest(&canonical),
+            self.owner,
+            "a generated profile proof encodes to the bytes it was sealed from"
+        );
         Ok(canonical.into_boxed_slice())
     }
 
@@ -517,8 +520,8 @@ impl Proof {
             bytes.len(),
         );
         let stored: StoredOwnerCanonical =
-            serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
-        let canonical = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
+            serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
+        let canonical = serde_json::to_vec(&stored).expect("a generated profile proof serializes");
         let items = stored
             .aliases
             .len()
@@ -581,10 +584,10 @@ impl Proof {
                 .iter()
                 .any(|projection| !demand.contains_projection(projection))
         {
-            return Err(Error::Canonical);
+            return Err(Error::Stale);
         }
         let owner = owner_digest(bytes);
-        let application = application_semantic(demand)?;
+        let application = application_semantic(demand).ok_or(Error::Stale)?;
         Ok(Parts(Self {
             digest: proof_digest(demand, owner, application, product_lifecycle),
             owner,
@@ -692,14 +695,13 @@ impl Proof {
     }
 }
 
-fn application_semantic(demand: &Demand) -> Result<[u8; 32], Error> {
+/// The application identity a demand's checked payload carries: none when
+/// it demands nothing, or else the payload's 32 bytes.
+fn application_semantic(demand: &Demand) -> Option<[u8; 32]> {
     if demand.hooks().len() == 0 && demand.checked_payload().is_empty() {
-        return Ok([0; 32]);
+        return Some([0; 32]);
     }
-    demand
-        .checked_payload()
-        .try_into()
-        .map_err(|_| Error::ForeignEvidence)
+    demand.checked_payload().try_into().ok()
 }
 
 fn owner_digest(canonical: &[u8]) -> [u8; 32] {
@@ -777,9 +779,10 @@ fn demand_direct<C: Checked, D: Definition<C>>(
     checked: &C,
     limits: &crate::cargo::Limits,
 ) -> Result<Demand, Error> {
-    if definition.identity() != contract.identity() || definition.version() != contract.version() {
-        return Err(Error::DefinitionDrift);
-    }
+    assert!(
+        definition.identity() == contract.identity() && definition.version() == contract.version(),
+        "rawr demands a profile's hooks under the profile that classified its contract"
+    );
     let mut output = demand::Builder::new(
         contract,
         checked.profile_fingerprint(),

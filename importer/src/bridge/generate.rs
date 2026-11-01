@@ -5034,7 +5034,7 @@ pub(crate) fn semantic_digest<B: crate::surface::Runner>(
         &mut entries,
         &crate::surface::UniqueIdentities(&request.entries),
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     digest.update(entries.0.finalize());
     Ok(digest.finalize().into())
 }
@@ -5084,17 +5084,13 @@ fn assemble_accounted<B: crate::surface::Runner>(
     ];
     contents.extend(decode_sources(&product.source)?);
     if contents.len() != actual.files.len() {
-        return Err(request::Error::Drift {
-            field: "generated file cardinality",
-        });
+        return Err(request::drift("generated file cardinality"));
     }
     let mut files = Vec::new();
     let mut file_records = Vec::new();
     for ((path, bytes), (expected, (digest, length))) in contents.into_iter().zip(&actual.files) {
         if path != &**expected {
-            return Err(request::Error::Drift {
-                field: "generated file paths",
-            });
+            return Err(request::drift("generated file paths"));
         }
         files.push(crate::runner::manifest::File::new(
             path,
@@ -5126,10 +5122,7 @@ fn assemble_accounted<B: crate::surface::Runner>(
         key.profile.value(),
         limits.json_bytes,
         account,
-    )
-    .map_err(|error| request::Error::Manifest {
-        reason: error.to_string().into_boxed_str(),
-    })?;
+    )?;
     // The files and the inventory share the one JSON target (previously the
     // inventory received only the remainder after `total`). Each side can
     // stay under it while together they pass it, so the combined retained
@@ -5165,11 +5158,9 @@ fn assemble_accounted<B: crate::surface::Runner>(
         product.source_map.into_boxed_slice(),
         actual.source_map.0,
     );
-    generated
-        .validate(&files)
-        .map_err(|error| request::Error::Manifest {
-            reason: error.to_string().into_boxed_str(),
-        })?;
+    generated.validate(&files).unwrap_or_else(|error| {
+        panic!("rawr's generated runner manifest matches its files: {error}")
+    });
     Ok(crate::runner::Manifest {
         request: key.request,
         native: key.native,
@@ -5240,9 +5231,7 @@ fn expected<B>(
     product: &Product,
 ) -> Result<Expected, request::Error> {
     if product.spans.len() != request.plans.len() {
-        return Err(request::Error::Drift {
-            field: "adapter span cardinality",
-        });
+        return Err(request::drift("adapter span cardinality"));
     }
     expected_parts(
         request,
@@ -5432,9 +5421,7 @@ fn alias_crates(
     let main = sources
         .iter_mut()
         .find(|(path, _)| path.as_ref() == SOURCE_PATH)
-        .ok_or(request::Error::Drift {
-            field: "generated runner root",
-        })?;
+        .ok_or_else(|| request::drift("generated runner root"))?;
     let first = main
         .1
         .iter()
@@ -5446,7 +5433,7 @@ fn alias_crates(
             lines,
             "#[allow(unused_extern_crates)]\nextern crate {existing} as {required};"
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     main.1.splice(first..first, lines);
     Ok(())
@@ -5466,27 +5453,20 @@ fn runner_manifest_aliased(
     lock: &[u8],
 ) -> Result<(Vec<u8>, Aliases), request::Error> {
     let mut aliases = Vec::new();
-    let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
-        reason: error.to_string().into_boxed_str(),
-    })?;
+    let text = std::str::from_utf8(bytes).map_err(request::misread)?;
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let mut document =
-        normalized
-            .parse::<DocumentMut>()
-            .map_err(|error| request::Error::Manifest {
-                reason: error.to_string().into_boxed_str(),
-            })?;
+    let mut document = normalized
+        .parse::<DocumentMut>()
+        .map_err(request::misread)?;
     if !document.contains_key("workspace") {
-        return Err(request::Error::Manifest {
-            reason: "final-form harness has no standalone workspace".into(),
-        });
+        return Err(request::misread(
+            "final-form harness has no standalone workspace",
+        ));
     }
     let package = document
         .get_mut("package")
         .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| request::Error::Manifest {
-            reason: "final-form harness has no package table".into(),
-        })?;
+        .ok_or_else(|| request::misread("final-form harness has no package table"))?;
     package.insert("name", value("rawr-generated-runner"));
     package.insert("version", value("0.0.0"));
     package.insert("edition", value("2024"));
@@ -5495,15 +5475,13 @@ fn runner_manifest_aliased(
     // Rawr's own crate is a build dependency of the harness, which builds no
     // unit of it. The runner links it, and its build script must not.
     if let Some(item) = document.remove(crate::cargo::BUILD_DEPENDENCIES) {
-        let build = item.into_table().map_err(|_| request::Error::Manifest {
-            reason: "final-form harness build dependencies are not a table".into(),
+        let build = item.into_table().map_err(|_| {
+            request::misread("final-form harness build dependencies are not a table")
         })?;
         let dependencies = document
             .get_mut("dependencies")
             .and_then(Item::as_table_mut)
-            .ok_or_else(|| request::Error::Manifest {
-                reason: "final-form harness has no dependencies table".into(),
-            })?;
+            .ok_or_else(|| request::misread("final-form harness has no dependencies table"))?;
         for (key, item) in build {
             let package = dependency_package(&key, &item).to_owned();
             if let Some((existing, _)) = dependencies
@@ -5525,9 +5503,7 @@ fn runner_manifest_aliased(
         let dependencies = document
             .get_mut("dependencies")
             .and_then(Item::as_table_like_mut)
-            .ok_or_else(|| request::Error::Manifest {
-                reason: "final-form harness has no dependencies table".into(),
-            })?;
+            .ok_or_else(|| request::misread("final-form harness has no dependencies table"))?;
         for hidden in hidden {
             // `hidden_crate` found exactly one locked package of this name,
             // so a project dependency on it is the same package.
@@ -5566,22 +5542,15 @@ fn runner_manifest_aliased(
 }
 
 fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request::Error> {
-    let text = std::str::from_utf8(bytes).map_err(|error| request::Error::Manifest {
-        reason: error.to_string().into_boxed_str(),
-    })?;
+    let text = std::str::from_utf8(bytes).map_err(request::misread)?;
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let mut document =
-        normalized
-            .parse::<DocumentMut>()
-            .map_err(|error| request::Error::Manifest {
-                reason: error.to_string().into_boxed_str(),
-            })?;
+    let mut document = normalized
+        .parse::<DocumentMut>()
+        .map_err(request::misread)?;
     let packages = document
         .get_mut("package")
         .and_then(Item::as_array_of_tables_mut)
-        .ok_or_else(|| request::Error::Manifest {
-            reason: "final-form harness lock has no package array".into(),
-        })?;
+        .ok_or_else(|| request::misread("final-form harness lock has no package array"))?;
     let mut roots = 0_usize;
     for package in packages.iter_mut() {
         if package.get("name").and_then(Item::as_str) == Some("rawr-resolution-harness")
@@ -5595,8 +5564,8 @@ fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request:
                     .entry("dependencies")
                     .or_insert(toml_edit::value(toml_edit::Array::new()))
                     .as_array_mut()
-                    .ok_or_else(|| request::Error::Manifest {
-                        reason: "final-form harness lock root dependencies are not a list".into(),
+                    .ok_or_else(|| {
+                        request::misread("final-form harness lock root dependencies are not a list")
                     })?;
                 for hidden in hidden {
                     if !dependencies
@@ -5621,10 +5590,9 @@ fn runner_lock(bytes: &[u8], hidden: &[HiddenCrate]) -> Result<Vec<u8>, request:
         }
     }
     if roots != 1 {
-        return Err(request::Error::Manifest {
-            reason: format!("expected one final-form harness lock root, found {roots}")
-                .into_boxed_str(),
-        });
+        return Err(request::misread(format!(
+            "expected one final-form harness lock root, found {roots}"
+        )));
     }
     Ok(normalize(document.to_string().as_bytes()))
 }
@@ -5668,17 +5636,12 @@ fn render_source(
     let mut main = Vec::new();
     let output = &mut main;
     if !profile.projections().is_empty() && facade_plan.is_none() {
-        return Err(request::Error::Drift {
-            field: "generated profile bindings plan",
-        });
+        return Err(request::drift("generated profile bindings plan"));
     }
     let facade = facade_plan
         .map(|bytes| {
-            crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard()).map_err(
-                |_| request::Error::Drift {
-                    field: "generated profile bindings plan",
-                },
-            )
+            crate::surface::facade::Plan::decode(bytes, &crate::cargo::Limits::standard())
+                .map_err(|_| request::drift("generated profile bindings plan"))
         })
         .transpose()?;
     output
@@ -5686,17 +5649,17 @@ fn render_source(
             b"#![forbid(unsafe_code)]\n\
               static GENERATED_MANIFEST: &[u8] = include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rawr-generated-manifest.bin\"));\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     // The per-generation stamps change with every demand change; their own
     // module keeps `src/main.rs` byte-identical across such edits.
     let mut stamps = Vec::new();
     stamps
         .write_all(b"pub(super) static COMPILED_SURFACE: [u8; 32] = ")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     byte_array(&mut stamps, surface.as_bytes())?;
     stamps
         .write_all(b";\npub(super) static PROFILE_FINGERPRINT: [u8; 32] = ")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     byte_array(&mut stamps, profile.owner_fingerprint())?;
     writeln!(
         stamps,
@@ -5704,7 +5667,7 @@ fn render_source(
          #[allow(dead_code)]\npub(super) static UNIVERSE: bool = {};",
         crate::universe::enabled()
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     // An operator needs no import in Rust: its trait is in scope for every
     // adapter, which calls the impl's method (`receiver.sub(argument)`).
     writeln!(
@@ -5716,7 +5679,7 @@ fn render_source(
             .collect::<Vec<_>>()
             .join(", ")
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
     let _type_paths = TypePaths::install(facade.as_ref());
@@ -5750,7 +5713,7 @@ fn render_source(
                         stamps,
                         "#[allow(unused_imports, deprecated)]\npub(super) use ::{segment}::{rest} as _;"
                     )
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                     continue;
                 }
                 writeln!(
@@ -5758,7 +5721,7 @@ fn render_source(
                     "#[allow(unused_imports, deprecated)]\npub(super) use {}::{path} as _;",
                     facade.root()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
         }
     }
@@ -5766,25 +5729,25 @@ fn render_source(
         .write_all(
             b"mod rawr_surface;\nuse rawr_surface::{COMPILED_SURFACE, COMPILE_SNAPSHOT, PROFILE_FINGERPRINT};\n#[allow(unused_imports)]\nuse rawr_surface::*;\nmod rawr_families;\n#[allow(unused_imports)]\nuse rawr_families::*;\ninclude!(\"rawr_proxies.rs\");\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     // The facade plan is megabytes of data: rustc reads it with
     // `include_bytes!` instead of parsing it as an integer array literal.
     output
         .write_all(
             b"static IMPORTED_BINDINGS: &[u8] = include_bytes!(\"imported_bindings.bin\");\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     let embedded = match &facade {
-        Some(plan) => plan.runner_bytes().map_err(|_| request::Error::Encoding)?,
+        Some(plan) => plan.runner_bytes().map_err(request::unwritable)?,
         None => Vec::new(),
     };
     sources.push((BINDINGS_PATH.into(), embedded));
     output
         .write_all(RUNTIME_SOURCE)
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     output
         .write_all(TOP_LEVEL_SOURCE)
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     let profile_source = if profile.has_generated_projections() {
         profile.generated_source()
     } else {
@@ -5792,7 +5755,7 @@ fn render_source(
     };
     output
         .write_all(profile_source)
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     render_profile_projection_bindings(profile, facade.as_ref(), output)?;
     let mut modules = std::collections::BTreeMap::<String, Vec<usize>>::new();
     for (index, plan) in plans.iter().enumerate() {
@@ -5800,47 +5763,43 @@ fn render_source(
     }
     output
         .write_all(b"\nstatic ADAPTER_MODULES: &[&[Adapter]] = &[\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for module in modules.keys() {
-        writeln!(output, "    {module}::ADAPTERS,").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "    {module}::ADAPTERS,").map_err(request::unwritable)?;
     }
     output
         .write_all(
             b"];\n\nfn adapters() -> impl Iterator<Item = &'static Adapter> {\n    ADAPTER_MODULES.iter().flat_map(|rows| rows.iter())\n}\n\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     render_imported_defaults(facade.as_ref(), output)?;
     output
         .write_all(
             b"static STRUCTURAL_ROWS: &[__rawr_internal::package::import::runner::StructuralRow] = &[\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     // Structural rows bind to installed facades; without a facade plan there
     // are none, so no row could be admitted.
     for plan in plans.iter().filter(|_| facade_plan.is_some()) {
         let Some(kind) = structural_kind(plan) else {
             continue;
         };
-        let selector = plan.selector().ok_or(request::Error::Drift {
-            field: "generated structural selector",
-        })?;
+        let selector = plan
+            .selector()
+            .ok_or_else(|| request::drift("generated structural selector"))?;
         write!(
             output,
             "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",
             plan.export().root_alias(),
             structural_owner(plan),
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
         byte_array(output, selector)?;
-        output
-            .write_all(b", ")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b", ").map_err(request::unwritable)?;
         byte_array(output, plan.identity().as_bytes())?;
-        output
-            .write_all(b", ")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b", ").map_err(request::unwritable)?;
         byte_array(output, &signature(plan)?)?;
-        write!(output, ", {}, {kind})", arguments(plan)?).map_err(|_| request::Error::Encoding)?;
+        write!(output, ", {}, {kind})", arguments(plan)?).map_err(request::unwritable)?;
         render_structural_instance(plan, output)?;
         if has_matcher(plan) {
             write!(
@@ -5849,21 +5808,17 @@ fn render_source(
                 plan.export().root_alias(),
                 structural_owner(plan),
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             byte_array(output, selector)?;
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &matcher_identity(plan))?;
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &signature(plan)?)?;
             writeln!(
                 output,
                 ", 1, __rawr_internal::package::import::runner::StructuralKind::Match)"
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             render_structural_instance(plan, output)?;
         }
         if has_store(plan) {
@@ -5873,27 +5828,21 @@ fn render_source(
                 plan.export().root_alias(),
                 structural_owner(plan),
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             byte_array(output, selector)?;
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &store_identity(plan))?;
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
             byte_array(output, &signature(plan)?)?;
             writeln!(
                 output,
                 ", 2, __rawr_internal::package::import::runner::StructuralKind::Store)"
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             render_structural_instance(plan, output)?;
         }
     }
-    output
-        .write_all(b"];\n\n")
-        .map_err(|_| request::Error::Encoding)?;
+    output.write_all(b"];\n\n").map_err(request::unwritable)?;
     render_event_rows(plans, profile, output)?;
     render_execution_tests(modules.keys(), output)?;
     let runner = if profile.owns_product_lifecycle() {
@@ -5903,21 +5852,17 @@ fn render_source(
     } else {
         RUNNER_MAIN
     };
-    output
-        .write_all(runner)
-        .map_err(|_| request::Error::Encoding)?;
-    output
-        .write_all(b"\n")
-        .map_err(|_| request::Error::Encoding)?;
+    output.write_all(runner).map_err(request::unwritable)?;
+    output.write_all(b"\n").map_err(request::unwritable)?;
     for module in modules.keys() {
-        writeln!(output, "mod {module};").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "mod {module};").map_err(request::unwritable)?;
     }
     output
         .write_all(b"mod rawr_applications;\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     output
         .write_all(b"include!(\"rawr_impls.rs\");\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     sources.push((SOURCE_PATH.into(), main));
     let primitive = plans.iter().position(|plan| {
         matches!(
@@ -5933,16 +5878,16 @@ fn render_source(
     for (module, indices) in &modules {
         let mut file = Vec::new();
         file.write_all(b"use super::*;\n\npub(super) static ADAPTERS: &[Adapter] = &[\n")
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         for index in indices {
             let plan = &plans[*index];
-            write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+            write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
             byte_array(&mut file, plan.identity().as_bytes())?;
-            write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+            write!(file, ", signature: ").map_err(request::unwritable)?;
             byte_array(&mut file, &signature(plan)?)?;
-            write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+            write!(file, ", selector: ").map_err(request::unwritable)?;
             byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-            write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+            write!(file, ", instance: ").map_err(request::unwritable)?;
             byte_array(&mut file, &instance_key(plan))?;
             write!(
                 file,
@@ -5952,22 +5897,22 @@ fn render_source(
                 plan.export().root_alias(),
                 witness_mode(plan) | if returns_values(plan) { 0x80 } else { 0 }
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             writeln!(
                 file,
                 ", arguments: {}, invoke: {} }},",
                 arguments(plan)?,
                 adapter_name(plan)
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             if has_matcher(plan) {
-                write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &matcher_identity(plan))?;
-                write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", signature: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &signature(plan)?)?;
-                write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", selector: ").map_err(request::unwritable)?;
                 byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-                write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", instance: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
@@ -5975,16 +5920,16 @@ fn render_source(
                     plan.export().root_alias(),
                     matcher_name(plan)
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
             if has_store(plan) {
-                write!(file, "    Adapter {{ identity: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, "    Adapter {{ identity: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &store_identity(plan))?;
-                write!(file, ", signature: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", signature: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &signature(plan)?)?;
-                write!(file, ", selector: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", selector: ").map_err(request::unwritable)?;
                 byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
-                write!(file, ", instance: ").map_err(|_| request::Error::Encoding)?;
+                write!(file, ", instance: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &[0; 32])?;
                 writeln!(
                     file,
@@ -5992,11 +5937,10 @@ fn render_source(
                     plan.export().root_alias(),
                     store_name(plan)
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
         }
-        file.write_all(b"];\n\n")
-            .map_err(|_| request::Error::Encoding)?;
+        file.write_all(b"];\n\n").map_err(request::unwritable)?;
         let path: Box<str> = format!("src/{module}.rs").into();
         for index in indices {
             let plan = &plans[*index];
@@ -6153,7 +6097,7 @@ const APPLICATIONS_PATH: &str = "src/rawr_applications.rs";
 /// module imports exactly the recorded prelude and traits of the source
 /// call's lexical scope, so method lookup sees what the source saw.
 fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mut applications = Vec::new();
     for plan in plans {
         let Some(invocation) = plan.application_invocation() else {
@@ -6186,7 +6130,7 @@ fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), reque
         output.write_all(b" {\n        ").map_err(encoding)?;
         let mut arguments = Vec::new();
         argument_list(invocation.native_inputs.len(), 0, &mut arguments)?;
-        let arguments = String::from_utf8(arguments).map_err(|_| request::Error::Encoding)?;
+        let arguments = String::from_utf8(arguments).map_err(request::unwritable)?;
         match &invocation.expression {
             crate::surface::application::Expression::Method { name } if lent.is_empty() => {
                 writeln!(output, "receiver.{name}({arguments})").map_err(encoding)?;
@@ -6209,7 +6153,7 @@ fn render_applications(plans: &[Plan], output: &mut Vec<u8>) -> Result<(), reque
         output.write_all(b"    }\n}\n\n").map_err(encoding)?;
     }
     let encoded = crate::surface::application::Application::encode_all(&applications)
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     output
         .write_all(b"pub(crate) static APPLICATIONS: &[u8] = &")
         .map_err(encoding)?;
@@ -6222,7 +6166,7 @@ fn render_native(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     use crate::surface::application::Type;
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     match ty {
         Type::Primitive(name) => output.write_all(name.as_bytes()).map_err(encoding),
         Type::Export { path, arguments } => {
@@ -6335,25 +6279,19 @@ fn length(bytes: &mut &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, request::Error> {
-    let drift = request::Error::Drift {
-        field: "generated source framing",
-    };
+    let drift = || request::drift("generated source framing");
     if take(&mut bytes, SOURCES_MAGIC.len()) != Some(SOURCES_MAGIC.as_slice()) {
-        return Err(drift);
+        return Err(drift());
     }
     let mut sources = Vec::new();
     while !bytes.is_empty() {
         let path = length(&mut bytes)
             .and_then(|path| take(&mut bytes, path))
             .and_then(|path| std::str::from_utf8(path).ok())
-            .ok_or(request::Error::Drift {
-                field: "generated source framing",
-            })?;
+            .ok_or_else(|| request::drift("generated source framing"))?;
         let source = length(&mut bytes)
             .and_then(|source| take(&mut bytes, source))
-            .ok_or(request::Error::Drift {
-                field: "generated source framing",
-            })?;
+            .ok_or_else(|| request::drift("generated source framing"))?;
         if sources
             .last()
             .is_some_and(|(previous, _): &(&str, &[u8])| *previous >= path)
@@ -6362,16 +6300,12 @@ pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, req
                     && path.ends_with(".rs")
                     && !path[4..path.len() - 3].contains(['/', '\\', '.']))
         {
-            return Err(request::Error::Drift {
-                field: "generated source paths",
-            });
+            return Err(request::drift("generated source paths"));
         }
         sources.push((path, source));
     }
     if !sources.iter().any(|(path, _)| *path == SOURCE_PATH) {
-        return Err(request::Error::Drift {
-            field: "generated source paths",
-        });
+        return Err(request::drift("generated source paths"));
     }
     Ok(sources)
 }
@@ -6385,7 +6319,7 @@ fn render_event_rows(
         output,
         "static EVENT_ROWS: &[__rawr_internal::package::import::runner::EventRow] = &["
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     for plan in plans {
         let Some(mapper) = event_mapper(plan)? else {
             continue;
@@ -6396,35 +6330,27 @@ fn render_event_rows(
             .projections()
             .iter()
             .find(|projection| projection.selector() == witness.profile_projection())
-            .ok_or(request::Error::Drift {
-                field: "event runtime projection",
-            })?;
+            .ok_or_else(|| request::drift("event runtime projection"))?;
         let target = profile
             .alias_targets()
             .iter()
             .find(|target| target.selector() == projection.alias_selector())
-            .ok_or(request::Error::Drift {
-                field: "event runtime target",
-            })?;
-        let selector = plan.selector().ok_or(request::Error::Drift {
-            field: "event runtime producer",
-        })?;
+            .ok_or_else(|| request::drift("event runtime target"))?;
+        let selector = plan
+            .selector()
+            .ok_or_else(|| request::drift("event runtime producer"))?;
         write!(
             output,
             "    __rawr_internal::package::import::runner::EventRow::new({:?}, ",
             plan.export().root_alias()
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
         byte_array(output, selector)?;
-        output
-            .write_all(b", ")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b", ").map_err(request::unwritable)?;
         byte_array(output, plan.identity().as_bytes())?;
-        output
-            .write_all(b", ")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b", ").map_err(request::unwritable)?;
         byte_array(output, &signature(plan)?)?;
-        write!(output, ", {}, ", arguments(plan)?).map_err(|_| request::Error::Encoding)?;
+        write!(output, ", {}, ", arguments(plan)?).map_err(request::unwritable)?;
         byte_array(output, witness.source().as_bytes())?;
         write!(
             output,
@@ -6432,11 +6358,11 @@ fn render_event_rows(
             target.root(),
             format!("{}::{}", target.root(), target.path())
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
         byte_array(output, mapper.seal())?;
-        writeln!(output, "),").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "),").map_err(request::unwritable)?;
     }
-    writeln!(output, "];\n").map_err(|_| request::Error::Encoding)
+    writeln!(output, "];\n").map_err(request::unwritable)
 }
 
 fn render_profile_projection_bindings(
@@ -6452,41 +6378,35 @@ fn render_profile_projection_bindings(
               ) -> Result<(), __rawr_internal::host::runtime::Error> {\n\
               \x20   let _ = (&definitions, &builders);\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     if profile.projections().is_empty() {
         output
             .write_all(b"    let _ = (definitions, builders);\n    Ok(())\n}\n")
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         return Ok(());
     }
-    let facade = facade.ok_or(request::Error::Drift {
-        field: "generated projection bindings plan",
-    })?;
+    let facade = facade.ok_or_else(|| request::drift("generated projection bindings plan"))?;
     let mut support_attestation = false;
     for projection in profile.projections() {
         let source = profile
             .source_for_projection(projection)
-            .ok_or(request::Error::Drift {
-                field: "generated projection source site",
-            })?;
+            .ok_or_else(|| request::drift("generated projection source site"))?;
         let mut targets = profile
             .alias_targets()
             .iter()
             .filter(|alias| alias.selector() == projection.alias_selector());
-        let target = targets.next().ok_or(request::Error::Drift {
-            field: "generated projection alias target",
-        })?;
+        let target = targets
+            .next()
+            .ok_or_else(|| request::drift("generated projection alias target"))?;
         if targets.next().is_some() {
-            return Err(request::Error::Drift {
-                field: "generated projection alias target",
-            });
+            return Err(request::drift("generated projection alias target"));
         }
         let mut sites = facade
             .aliases()
             .filter(|site| site.selector() == target.site_selector());
-        let site = sites.next().ok_or(request::Error::Drift {
-            field: "generated projection alias site",
-        })?;
+        let site = sites
+            .next()
+            .ok_or_else(|| request::drift("generated projection alias site"))?;
         if sites.next().is_some()
             || site.root() != target.root()
             || site.path() != target.path()
@@ -6494,18 +6414,16 @@ fn render_profile_projection_bindings(
             || site.alias_identity() != target.alias_identity()
             || site.target_identity() != target.target_identity()
         {
-            return Err(request::Error::Drift {
-                field: "generated projection alias site",
-            });
+            return Err(request::drift("generated projection alias site"));
         }
         let runtime_source = facade.facades().any(|owner| {
             owner.root() == source.root() && owner.types().any(|ty| ty.path() == source.path())
         });
         if !runtime_source {
             if support_attestation {
-                return Err(request::Error::Drift {
-                    field: "generated support projection attestation cardinality",
-                });
+                return Err(request::drift(
+                    "generated support projection attestation cardinality",
+                ));
             }
             support_attestation = true;
             writeln!(
@@ -6513,13 +6431,13 @@ fn render_profile_projection_bindings(
                 "    let owner = definitions.iter().position(|definition| definition.root() == {:?})\n        .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(\"generated support projection owner\"))?;",
                 target.root(),
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             writeln!(
                 output,
                 "    builders.get_mut(owner)\n        .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(\"generated support projection builder\"))?\n        .bind_type_attestation({:?}, |value, expected| {{\n            native_attestation(value, expected)\n                .or_else(|| __rawr_profile::attest_support_endpoint(value, expected))\n        }})?;",
                 format!("{}::{}", target.root(), target.path()),
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             continue;
         }
         writeln!(
@@ -6527,18 +6445,18 @@ fn render_profile_projection_bindings(
             "    let owner = definitions.iter().position(|definition| definition.root() == {:?})\n        .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(\"generated projection owner\"))?;",
             source.root(),
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
         writeln!(
             output,
             "    builders.get_mut(owner)\n        .ok_or_else(|| __rawr_internal::host::runtime::Error::profile(\"generated projection builder\"))?\n        .bind_projection_with_context({:?}, {:?}, runtime_project)?;",
             format!("{}::{}", source.root(), source.path()),
             format!("{}::{}", target.root(), target.path()),
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     output
         .write_all(b"    Ok(())\n}\n")
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 /// Whether the plan's output, outside a future, holds a script value an
@@ -6705,7 +6623,7 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
         matcher_name(plan)
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     // A value in a scope frame's region (D558 tier 1): its fields that
     // carry the region's lifetime stay there.
     if let Some(family) = container_family(&path, &path) {
@@ -6734,7 +6652,7 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         .map_err(|error| Error::Lent(scoped.name(), error))?;
     }}"
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     // A value native code lent the script function that matches it, as a
     // canvas program's `update` takes `&Event` (D558.3), is reached through
@@ -6761,25 +6679,24 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
     }};
     let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     if fields.is_empty() {
         output
             .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         return Ok(());
     }
     output
         .write_all(b"    let mut values = Vec::new();\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for (index, field) in fields.iter().enumerate() {
         let mut converted = String::new();
         render_to_dynamic(field.ty(), &format!("fields.{index}"), 0, &mut converted)?;
-        writeln!(output, "    values.push(({converted})?);")
-            .map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "    values.push(({converted})?);").map_err(request::unwritable)?;
     }
     output
         .write_all(b"    Ok(__rawr_internal::option::some(Dynamic::from_array(values)))\n}\n\n")
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 /// Key a structural row by the same concrete arguments as its adapter.
@@ -6788,15 +6705,11 @@ fn render_structural_instance(plan: &Plan, output: &mut Vec<u8>) -> Result<(), r
     if !types.is_empty() {
         output
             .write_all(b".with_instance(")
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         byte_array(output, &crate::surface::instance::key(types))?;
-        output
-            .write_all(b")")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b")").map_err(request::unwritable)?;
     }
-    output
-        .write_all(b",\n")
-        .map_err(|_| request::Error::Encoding)
+    output.write_all(b",\n").map_err(request::unwritable)
 }
 
 fn structural_type(plan: &Plan) -> String {
@@ -6855,7 +6768,7 @@ fn render_store(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error>
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
         store_name(plan)
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     render_take(0, 1, field.ty(), output)?;
     writeln!(
         output,
@@ -6885,7 +6798,7 @@ fn render_store(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Error>
 }}
 "
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// The path below the crate root of the type a structural adapter
@@ -6915,18 +6828,14 @@ fn structural_kind(plan: &Plan) -> Option<String> {
 }
 
 fn byte_slice(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> {
-    output
-        .write_all(b"[")
-        .map_err(|_| request::Error::Encoding)?;
+    output.write_all(b"[").map_err(request::unwritable)?;
     for (index, byte) in bytes.iter().enumerate() {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
-        write!(output, "{byte}").map_err(|_| request::Error::Encoding)?;
+        write!(output, "{byte}").map_err(request::unwritable)?;
     }
-    output.write_all(b"]").map_err(|_| request::Error::Encoding)
+    output.write_all(b"]").map_err(request::unwritable)
 }
 
 fn render_adapter(
@@ -6936,7 +6845,7 @@ fn render_adapter(
     facade: Option<&crate::surface::facade::Plan>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let name = adapter_name(plan);
     // A call that takes a value whose type holds an opaque `impl Trait`
     // type runs what the call that made the value compiled for it.
@@ -6944,9 +6853,7 @@ fn render_adapter(
         let index = opaque_consumers(cohort, &key)?
             .iter()
             .position(|consumer| std::ptr::eq(*consumer, plan))
-            .ok_or(request::Error::Drift {
-                field: "an opaque type's consumer",
-            })?;
+            .ok_or_else(|| request::drift("an opaque type's consumer"))?;
         return writeln!(
             output,
             "fn {name}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
@@ -7296,7 +7203,7 @@ fn opaque_table_source(
                     "    if let Some(scoped) = [{indices}].into_iter().find_map(|index| scoped_value(arguments, index).or_else(|| scoped_item(arguments, index))) {{
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{"
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 {
                     let _region = InRegion::enter();
                     let _arguments = RegionArguments::enter();
@@ -7308,10 +7215,10 @@ fn opaque_table_source(
     }
 ",
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
-            String::from_utf8(body).map_err(|_| request::Error::Encoding)?
+            String::from_utf8(body).map_err(request::unwritable)?
         };
         // The operand is taken at the type of the value this call made.
         let body = body.replace(
@@ -7393,17 +7300,16 @@ fn render_adapter_body(
                 output,
                 "    let _ = core::mem::size_of::<{path}>();\n    Ok(Dynamic::from(()))"
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         }
         Operation::StructConstructor { form, fields, .. } => {
             render_fields(fields, 0, output)?;
             let ty = structural_type(plan);
-            write!(output, "    let output: {ty} = {path}")
-                .map_err(|_| request::Error::Encoding)?;
+            write!(output, "    let output: {ty} = {path}").map_err(request::unwritable)?;
             render_constructor(*form, fields, output)?;
             output
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
         }
         Operation::StructField { field, .. } => {
             let path = structural_type(plan);
@@ -7428,7 +7334,7 @@ fn render_adapter_body(
     }}",
                     field.name()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
             if copy_scalar(field.ty()) {
                 let mut converted = String::new();
@@ -7441,24 +7347,24 @@ fn render_adapter_body(
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
         let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
         return {converted};
-    }}", field.name()).map_err(|_| request::Error::Encoding)?;
+    }}", field.name()).map_err(request::unwritable)?;
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 writeln!(
                     output,
                     "    let output = arguments.arena.shared::<{path}, _>(handle, |input| input.{})?;",
                     field.name()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             } else {
                 writeln!(
                     output,
                     "    let input: {path} = take_native(arguments, 0)?;"
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 writeln!(output, "    let output = input.{};", field.name())
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
             }
             render_give(field.ty(), "output", output)?;
         }
@@ -7466,12 +7372,11 @@ fn render_adapter_body(
             name, form, fields, ..
         } => {
             render_fields(fields, 0, output)?;
-            write!(output, "    let output = {path}::{name}")
-                .map_err(|_| request::Error::Encoding)?;
+            write!(output, "    let output = {path}::{name}").map_err(request::unwritable)?;
             render_constructor(*form, fields, output)?;
             output
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
         }
         Operation::Function {
             signature,
@@ -7486,9 +7391,9 @@ fn render_adapter_body(
             crossings,
         } => {
             if !mappers.is_empty() && replay.is_none() {
-                return Err(request::Error::Drift {
-                    field: "profile event mapper invocation lacks replay projection",
-                });
+                return Err(request::drift(
+                    "profile event mapper invocation lacks replay projection",
+                ));
             }
             let crossed = Crossed { slots, crossings };
             let opens = instance_opens(signature, substitutions);
@@ -7551,7 +7456,7 @@ fn render_adapter_body(
             } else if let Some(replay) = replay {
                 output
                     .write_all(b"    let output = __rawr_profile::Replay::new(move |_context| ")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_function_path(
                     plan,
                     signature,
@@ -7568,9 +7473,7 @@ fn render_adapter_body(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 function_argument_list(
                     signature,
                     substitutions,
@@ -7580,9 +7483,7 @@ fn render_adapter_body(
                     crossed,
                     output,
                 )?;
-                output
-                    .write_all(b"));\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"));\n").map_err(request::unwritable)?;
                 render_replay_insert(replay, facade, output)?;
             } else {
                 // A Rust future is made when its task first runs, on
@@ -7609,7 +7510,7 @@ fn render_adapter_body(
                     *container_parameters,
                     &mut call,
                 )?;
-                call.write_all(b"(").map_err(|_| request::Error::Encoding)?;
+                call.write_all(b"(").map_err(request::unwritable)?;
                 function_argument_list(
                     signature,
                     substitutions,
@@ -7619,8 +7520,8 @@ fn render_adapter_body(
                     crossed,
                     &mut call,
                 )?;
-                call.write_all(b")").map_err(|_| request::Error::Encoding)?;
-                let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+                call.write_all(b")").map_err(request::unwritable)?;
+                let call = String::from_utf8(call).map_err(request::unwritable)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 if !lazy && !lifetime_inputs(signature, substitutions)? {
                     render_anchored_output(returned, &call, output)?;
@@ -7635,7 +7536,7 @@ fn render_adapter_body(
                 } else {
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
                 }
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 if let Some((sipped, progress)) = sipper_output(returned) {
                     render_give_sipper(sipped, progress, "output", output)?;
                 } else if let Some(element) = facade_task_output(returned, facade, profile) {
@@ -7717,7 +7618,7 @@ fn render_adapter_body(
                 for (position, ty) in signature.inputs().iter().enumerate() {
                     if crossed.slot_at(position, ty).is_some() {
                         writeln!(output, "    let argument_{position} = slot_{position};")
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                     }
                 }
             } else {
@@ -7726,7 +7627,7 @@ fn render_adapter_body(
             if let Some(convert::Type::ProfileMessage { mapper, payload }) = continuation {
                 output
                     .write_all(b"    __rawr_profile::map_projectable::<")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_container_path(
                     &path,
                     signature,
@@ -7736,26 +7637,22 @@ fn render_adapter_body(
                     true,
                     output,
                 )?;
-                output
-                    .write_all(b", ")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b", ").map_err(request::unwritable)?;
                 render_rust_type(
                     payload,
-                    facade.ok_or(request::Error::Drift {
-                        field: "event continuation bindings",
-                    })?,
+                    facade.ok_or_else(|| request::drift("event continuation bindings"))?,
                     output,
                 )?;
                 output
                     .write_all(b">(arguments, &")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 byte_slice(output, mapper)?;
                 write!(
                     output,
                     ", move |receiver, _context| receiver.{}",
                     plan.name()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 render_item_turbofish(
                     signature,
                     substitutions,
@@ -7763,17 +7660,13 @@ fn render_adapter_body(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 replay_argument_list(signature, substitutions, profile, output)?;
-                output
-                    .write_all(b"))\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"))\n").map_err(request::unwritable)?;
             } else if let (Receiver::Owned, Some(replay)) = (receiver, replay) {
                 output
                     .write_all(b"    let receiver: __rawr_profile::Replay<")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_container_path(
                     &path,
                     signature,
@@ -7785,13 +7678,13 @@ fn render_adapter_body(
                 )?;
                 output
                     .write_all(b"> = take_native(arguments, 0)?;\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 write!(
                     output,
                     "    let output = __rawr_profile::Replay::new(move |_context| receiver.run(_context).{}",
                     plan.name()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 render_item_turbofish(
                     signature,
                     substitutions,
@@ -7799,13 +7692,9 @@ fn render_adapter_body(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 replay_argument_list(signature, substitutions, profile, output)?;
-                output
-                    .write_all(b"));\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"));\n").map_err(request::unwritable)?;
                 render_replay_insert(replay, facade, output)?;
             } else if !matches!(receiver, Receiver::Owned)
                 && is_future(substitute(signature.output(), signature, substitutions)?)
@@ -7818,10 +7707,10 @@ fn render_adapter_body(
                     output,
                     "    let receiver = native_handle(arguments, 0, false)?;"
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 output
                     .write_all(b"    let held: Held<")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_container_path(
                     &path,
                     signature,
@@ -7837,7 +7726,7 @@ fn render_adapter_body(
                             b"> = arguments.arena.lease(receiver)?;
 ",
                         )
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 } else {
                     output
                         .write_all(
@@ -7848,7 +7737,7 @@ fn render_adapter_body(
     };
 ",
                         )
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 }
                 write!(
                     output,
@@ -7857,7 +7746,7 @@ fn render_adapter_body(
         held.get_mut().{}",
                     plan.name()
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
                 render_item_turbofish(
                     signature,
                     substitutions,
@@ -7865,18 +7754,14 @@ fn render_adapter_body(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 argument_list(signature.inputs().len(), 1, output)?;
                 output
                     .write_all(b").await\n    });\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
-                let element =
-                    facade_task_output(returned, facade, profile).ok_or(request::Error::Drift {
-                        field: "borrowed async method output",
-                    })?;
+                let element = facade_task_output(returned, facade, profile)
+                    .ok_or_else(|| request::drift("borrowed async method output"))?;
                 render_give_task(element, "output", output)?;
             } else if let Some(guard) = signature.guard()
                 && !matches!(receiver, Receiver::Owned)
@@ -7905,7 +7790,7 @@ fn render_adapter_body(
                             .write_all(
                                 b"    let receiver: &'static str = static_pins().pin(take_primitive::<ImmutableString>(arguments, 0)?);\n",
                             )
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                         let annotation = concrete_type(&substituted(
                             signature.output(),
                             signature,
@@ -7917,7 +7802,7 @@ fn render_adapter_body(
                             output,
                             "    let output{annotation} = lend(arguments.arena, || "
                         )
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                         render_method_head(
                             plan.name(),
                             *receiver,
@@ -7928,9 +7813,7 @@ fn render_adapter_body(
                             output,
                         )?;
                         argument_list(signature.inputs().len(), 1, output)?;
-                        output
-                            .write_all(b"));\n")
-                            .map_err(|_| request::Error::Encoding)?;
+                        output.write_all(b"));\n").map_err(request::unwritable)?;
                     }
                     Receiver::Owned => {
                         render_scoped_receiver(
@@ -7959,12 +7842,12 @@ fn render_adapter_body(
                                 "    Err(Error::Lent({:?}, __rawr_internal::scope::Error::Mismatch))",
                                 format!("{}::{}", rust_path(plan), plan.name())
                             )
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                             return Ok(());
                         }
                         output
                             .write_all(b"    let receiver: ")
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                         render_container_path(
                             &path,
                             signature,
@@ -7976,7 +7859,7 @@ fn render_adapter_body(
                         )?;
                         output
                             .write_all(b" = take_native(arguments, 0)?;\n")
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                         // An implementation's parameter the call infers, as
                         // `Renderer` of iced's `Widget` for `Button`, is
                         // named by the output's type.
@@ -8005,13 +7888,13 @@ fn render_adapter_body(
                                 identity_name("application", plan),
                                 if signature.inputs().is_empty() { "" } else { ", " },
                             )
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                         } else {
                             write!(
                                 output,
                                 "    let output{annotation} = lend(arguments.arena, || "
                             )
-                            .map_err(|_| request::Error::Encoding)?;
+                            .map_err(request::unwritable)?;
                             render_method_head(
                                 plan.name(),
                                 *receiver,
@@ -8023,9 +7906,7 @@ fn render_adapter_body(
                             )?;
                         }
                         argument_list(signature.inputs().len(), 1, output)?;
-                        output
-                            .write_all(b"));\n")
-                            .map_err(|_| request::Error::Encoding)?;
+                        output.write_all(b"));\n").map_err(request::unwritable)?;
                     }
                     Receiver::Shared | Receiver::Mutable => {
                         render_borrowed_receiver(
@@ -8057,8 +7938,7 @@ fn render_adapter_body(
             } else {
                 path
             };
-            writeln!(output, "    let output = {constant};")
-                .map_err(|_| request::Error::Encoding)?;
+            writeln!(output, "    let output = {constant};").map_err(request::unwritable)?;
             render_give(ty, "output", output)?;
         }
         Operation::Builder { steps } => {
@@ -8066,11 +7946,11 @@ fn render_adapter_body(
                 render_builder_inputs(steps, profile, output)?;
                 output
                     .write_all(b"    let output = __rawr_profile::Replay::new(move |_context| {\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_builder(steps, true, Some(profile), output)?;
                 output
                     .write_all(b"        output\n    });\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_replay_insert(replay, facade, output)?;
             } else {
                 render_builder(steps, false, None, output)?;
@@ -8131,7 +8011,7 @@ fn render_opening(
     associated: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mut call = Vec::new();
     render_function_path(
         plan,
@@ -8160,7 +8040,7 @@ fn render_opening(
         &mut call,
     )?;
     call.write_all(b")").map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
     let returned = substituted(signature.output(), signature, substitutions)?;
     let converted = {
         let _region = InRegion::enter();
@@ -8259,7 +8139,7 @@ fn render_anchored_opening(
     associated: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     // A script closure, as `table::column(header, |event| ..)` takes with
     // its `&str` header, is made by the call's own slot, outside this path.
     if !functions.is_empty()
@@ -8298,7 +8178,7 @@ fn render_anchored_opening(
         &mut call,
     )?;
     call.write_all(b")").map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
     let returned = substituted(signature.output(), signature, substitutions)?;
     let converted = {
         let _region = InRegion::enter();
@@ -8330,7 +8210,7 @@ fn render_anchored_opening(
             )?;
         }
     }
-    let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
     // An input that carries a lifetime, as a widget `view` made, is in a
     // region. In the slot's own region, which pins strings, the output
     // goes there too, at the lifetime the input has.
@@ -8373,7 +8253,7 @@ fn render_imported_defaults(
     facade: Option<&crate::surface::facade::Plan>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     output
         .write_all(b"fn register_defaults() {\n")
         .map_err(encoding)?;
@@ -8405,7 +8285,7 @@ fn render_imported_defaults(
                 byte_array(&mut identity, ty.identity())?;
                 format!(
                     "let handle = insert_native!(arguments.arena, output)?;\n        arguments.arena.made_by_default(&handle, {});\n        Ok(Dynamic::from(handle))",
-                    String::from_utf8(identity).map_err(|_| request::Error::Encoding)?
+                    String::from_utf8(identity).map_err(request::unwritable)?
                 )
             };
             output
@@ -8453,7 +8333,7 @@ fn render_anchored_output(
         .map_err(|error| Error::Lent(\"a slot's region\", error))?;
     }}"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// Whether an input of the call is a native value that carries a lifetime,
@@ -8557,7 +8437,7 @@ fn render_method_opening(
     container_parameters: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mut container = Vec::new();
     render_container_path(
         path,
@@ -8568,7 +8448,7 @@ fn render_method_opening(
         true,
         &mut container,
     )?;
-    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
     let mut call = Vec::new();
     render_method_head(
         plan.name(),
@@ -8581,14 +8461,14 @@ fn render_method_opening(
     )?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
     let (access, reach) = match receiver {
         Receiver::Shared => ("shared", "get"),
         Receiver::Mutable => ("mutable", "get_mut"),
         Receiver::Owned => {
-            return Err(request::Error::Drift {
-                field: "a scope frame's call that takes its receiver",
-            });
+            return Err(request::drift(
+                "a scope frame's call that takes its receiver",
+            ));
         }
     };
     let scoped = match container_family(path, &container) {
@@ -8722,7 +8602,7 @@ fn render_scoped_receiver(
     container_parameters: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mut container = Vec::new();
     render_container_path(
         path,
@@ -8733,7 +8613,7 @@ fn render_scoped_receiver(
         true,
         &mut container,
     )?;
-    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
     let Some(family) = container_family(path, &container) else {
         return Ok(());
     };
@@ -8762,7 +8642,7 @@ fn render_scoped_receiver(
     call.write_all(b")").map_err(encoding)?;
     call.write_all(lent_copy(signature).as_bytes())
         .map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
     let reach = match receiver {
         Receiver::Owned => "take",
         Receiver::Shared => "get",
@@ -8832,7 +8712,7 @@ fn render_borrowed_receiver(
     container_parameters: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mutable = matches!(receiver, Receiver::Mutable);
     let mut call = if plan.application_invocation().is_some() {
         // A proof-backed application calls its isolated helper, whose
@@ -8863,7 +8743,7 @@ fn render_borrowed_receiver(
     call.write_all(b")").map_err(encoding)?;
     call.write_all(lent_copy(signature).as_bytes())
         .map_err(encoding)?;
-    let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
     let mut container = Vec::new();
     render_container_path(
         path,
@@ -8874,7 +8754,7 @@ fn render_borrowed_receiver(
         true,
         &mut container,
     )?;
-    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
     render_scoped_receiver(
         plan,
         path,
@@ -8889,7 +8769,7 @@ fn render_borrowed_receiver(
     let borrow = if mutable { "&mut " } else { "&" };
     let mut taken = Vec::new();
     argument_list(signature.inputs().len(), 1, &mut taken)?;
-    let taken = String::from_utf8(taken).map_err(|_| request::Error::Encoding)?;
+    let taken = String::from_utf8(taken).map_err(request::unwritable)?;
     let taken = if taken.is_empty() {
         String::from("()")
     } else {
@@ -8952,7 +8832,7 @@ fn render_scoped_guard(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     use crate::classify::representability::signature::Guard;
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let mut container = Vec::new();
     render_container_path(
         path,
@@ -8963,7 +8843,7 @@ fn render_scoped_guard(
         true,
         &mut container,
     )?;
-    let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
     let Some(family) = container_family(path, &container) else {
         return Ok(());
     };
@@ -8979,7 +8859,7 @@ fn render_scoped_guard(
     method.write_all(b"(").map_err(encoding)?;
     argument_list(signature.inputs().len(), 1, &mut method)?;
     method.write_all(b")").map_err(encoding)?;
-    let method = String::from_utf8(method).map_err(|_| request::Error::Encoding)?;
+    let method = String::from_utf8(method).map_err(request::unwritable)?;
     // The guard on the receiver in its region, inside `with`.
     let reach = format!(
         "__rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<_, Error> {{
@@ -8992,7 +8872,7 @@ fn render_scoped_guard(
         .and_then(|output| output)";
     let mut give = Vec::new();
     render_give(&target, "output", &mut give)?;
-    let give = String::from_utf8(give).map_err(|_| request::Error::Encoding)?;
+    let give = String::from_utf8(give).map_err(request::unwritable)?;
     match guard {
         // A receiver in a region lends no optional borrow yet.
         Guard::OptionShared | Guard::OptionMutable => Ok(()),
@@ -9009,7 +8889,7 @@ fn render_scoped_guard(
         Guard::Mutable => {
             let mut take = Vec::new();
             render_take(0, 0, &target, &mut take)?;
-            let take = String::from_utf8(take).map_err(|_| request::Error::Encoding)?;
+            let take = String::from_utf8(take).map_err(request::unwritable)?;
             let give = format!(
                 "let read: Result<Dynamic, Error> = {{\n{give}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))"
             );
@@ -9094,7 +8974,7 @@ fn render_guard(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     use crate::classify::representability::signature::Guard;
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let borrow = if matches!(receiver, Receiver::Mutable) {
         "arguments.arena.mutable"
     } else {
@@ -9220,13 +9100,11 @@ fn render_guard(
         // `Some` of a place whose accesses call the method again, or `None`.
         Guard::OptionMutable => {
             let convert::Type::Option(element) = &target else {
-                return Err(request::Error::Drift {
-                    field: "an optional borrow's output is no option",
-                });
+                return Err(request::drift("an optional borrow's output is no option"));
             };
             let mut given = Vec::new();
             render_give(element, "output", &mut given)?;
-            let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+            let given = String::from_utf8(given).map_err(request::unwritable)?;
             let give = format!(
                 "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
             )
@@ -9326,13 +9204,13 @@ fn render_guard(
         }
         Guard::Mutable => {
             if !signature.inputs().is_empty() {
-                return Err(request::Error::Drift {
-                    field: "a mutable borrow guard's method takes inputs",
-                });
+                return Err(request::drift(
+                    "a mutable borrow guard's method takes inputs",
+                ));
             }
             let mut given = Vec::new();
             render_give(&target, "output", &mut given)?;
-            let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+            let given = String::from_utf8(given).map_err(request::unwritable)?;
             // A read is attested as the guard's call's output is.
             let give = format!(
                 "let read: Result<Dynamic, Error> = {{\n{given}}};\nread.and_then(|value| attest_read(&mut *arguments.arena, value, &witness))\n"
@@ -9479,9 +9357,9 @@ fn render_builder(
                 ..
             } if step.is_construct() => {
                 if !functions.is_empty() {
-                    return Err(request::Error::Drift {
-                        field: "static function item entered builder replay",
-                    });
+                    return Err(request::drift(
+                        "static function item entered builder replay",
+                    ));
                 }
                 if !replay {
                     render_builder_function_arguments(
@@ -9492,7 +9370,7 @@ fn render_builder(
                         output,
                     )?;
                 }
-                write!(output, "    let {binding} = ").map_err(|_| request::Error::Encoding)?;
+                write!(output, "    let {binding} = ").map_err(request::unwritable)?;
                 render_function_path(
                     step.plan(),
                     signature,
@@ -9509,9 +9387,7 @@ fn render_builder(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 builder_function_argument_list(
                     signature.inputs(),
                     mappers,
@@ -9520,9 +9396,7 @@ fn render_builder(
                     profile,
                     output,
                 )?;
-                output
-                    .write_all(b");\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b");\n").map_err(request::unwritable)?;
                 if final_step && !replay {
                     render_give_with(signature, substitutions, "output", output)?;
                 }
@@ -9533,17 +9407,15 @@ fn render_builder(
                     render_builder_arguments_iter(types, step.arguments(), output)?;
                 }
                 write!(output, "    let {binding} = {}", rust_path(step.plan()))
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_builder_constructor(*form, fields, step.arguments(), replay, output)?;
-                output
-                    .write_all(b";\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b";\n").map_err(request::unwritable)?;
                 if final_step && !replay {
                     output
                         .write_all(
                             b"    insert_native!(arguments.arena, output).map(Dynamic::from)\n",
                         )
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 }
             }
             Operation::Method {
@@ -9558,7 +9430,7 @@ fn render_builder(
                     render_builder_arguments(signature.inputs(), step.arguments(), output)?;
                 }
                 write!(output, "    let {binding} = builder.{}", step.plan().name())
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
                 render_item_turbofish(
                     signature,
                     substitutions,
@@ -9566,21 +9438,15 @@ fn render_builder(
                     *container_parameters,
                     output,
                 )?;
-                output
-                    .write_all(b"(")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"(").map_err(request::unwritable)?;
                 builder_typed_argument_list(signature.inputs(), step.arguments(), replay, output)?;
-                output
-                    .write_all(b");\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b");\n").map_err(request::unwritable)?;
                 if final_step && !replay {
                     render_give_with(signature, substitutions, "output", output)?;
                 }
             }
             _ => {
-                return Err(request::Error::Drift {
-                    field: "consuming builder operation",
-                });
+                return Err(request::drift("consuming builder operation"));
             }
         }
     }
@@ -9632,9 +9498,7 @@ fn render_builder_inputs(
                 )?;
             }
             _ => {
-                return Err(request::Error::Drift {
-                    field: "consuming replay input operation",
-                });
+                return Err(request::drift("consuming replay input operation"));
             }
         }
     }
@@ -9656,30 +9520,25 @@ fn render_builder_function_arguments(
             .is_some_and(|mapper| usize::try_from(mapper.position()).ok() == Some(position));
         if mapped_here {
             if !matches!(ty, convert::Type::FunctionItem { .. }) {
-                return Err(request::Error::Drift {
-                    field: "builder profile mapper position",
-                });
+                return Err(request::drift("builder profile mapper position"));
             }
-            let mapper = mappers.next().ok_or(request::Error::Drift {
-                field: "builder profile mapper cardinality",
-            })?;
+            let mapper = mappers
+                .next()
+                .ok_or_else(|| request::drift("builder profile mapper cardinality"))?;
             validate_event_projection(
                 mapper,
-                profile.ok_or(request::Error::Drift {
-                    field: "builder profile mapper proof",
-                })?,
+                profile.ok_or_else(|| request::drift("builder profile mapper proof"))?,
             )?;
             continue;
         }
-        let argument = *arguments.next().ok_or(request::Error::Drift {
-            field: "consuming builder argument cardinality",
-        })? as usize;
+        let argument = *arguments
+            .next()
+            .ok_or_else(|| request::drift("consuming builder argument cardinality"))?
+            as usize;
         render_take(argument, argument, ty, output)?;
     }
     if arguments.next().is_some() || mappers.next().is_some() {
-        return Err(request::Error::Drift {
-            field: "consuming builder argument cardinality",
-        });
+        return Err(request::drift("consuming builder argument cardinality"));
     }
     Ok(())
 }
@@ -9696,47 +9555,38 @@ fn builder_function_argument_list(
     let mut arguments = arguments.iter();
     for (position, ty) in inputs.iter().enumerate() {
         if position != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
         let mapped_here = mappers
             .peek()
             .is_some_and(|mapper| usize::try_from(mapper.position()).ok() == Some(position));
         if mapped_here {
             if !matches!(ty, convert::Type::FunctionItem { .. }) {
-                return Err(request::Error::Drift {
-                    field: "builder profile mapper position",
-                });
+                return Err(request::drift("builder profile mapper position"));
             }
-            let mapper = mappers.next().ok_or(request::Error::Drift {
-                field: "builder profile mapper cardinality",
-            })?;
+            let mapper = mappers
+                .next()
+                .ok_or_else(|| request::drift("builder profile mapper cardinality"))?;
             validate_event_projection(
                 mapper,
-                profile.ok_or(request::Error::Drift {
-                    field: "builder profile mapper proof",
-                })?,
+                profile.ok_or_else(|| request::drift("builder profile mapper proof"))?,
             )?;
             output
                 .write_all(b"__rawr_profile::payload")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
         } else {
-            let argument = arguments.next().ok_or(request::Error::Drift {
-                field: "consuming builder argument cardinality",
-            })?;
+            let argument = arguments
+                .next()
+                .ok_or_else(|| request::drift("consuming builder argument cardinality"))?;
             if replay && !copy_scalar(ty) {
-                write!(output, "argument_{argument}.clone()")
-                    .map_err(|_| request::Error::Encoding)?;
+                write!(output, "argument_{argument}.clone()").map_err(request::unwritable)?;
             } else {
-                write!(output, "argument_{argument}").map_err(|_| request::Error::Encoding)?;
+                write!(output, "argument_{argument}").map_err(request::unwritable)?;
             }
         }
     }
     if arguments.next().is_some() || mappers.next().is_some() {
-        return Err(request::Error::Drift {
-            field: "consuming builder argument cardinality",
-        });
+        return Err(request::drift("consuming builder argument cardinality"));
     }
     Ok(())
 }
@@ -9747,9 +9597,7 @@ fn render_builder_arguments_iter<'a>(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     if inputs.len() != arguments.len() {
-        return Err(request::Error::Drift {
-            field: "consuming builder argument cardinality",
-        });
+        return Err(request::drift("consuming builder argument cardinality"));
     }
     for (ty, position) in inputs.zip(arguments) {
         let position = *position as usize;
@@ -9761,11 +9609,9 @@ fn render_builder_arguments_iter<'a>(
 fn builder_argument_list(arguments: &[u32], output: &mut Vec<u8>) -> Result<(), request::Error> {
     for (index, position) in arguments.iter().enumerate() {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
-        write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+        write!(output, "argument_{position}").map_err(request::unwritable)?;
     }
     Ok(())
 }
@@ -9777,20 +9623,16 @@ fn builder_typed_argument_list(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     if inputs.len() != arguments.len() {
-        return Err(request::Error::Drift {
-            field: "consuming builder argument cardinality",
-        });
+        return Err(request::drift("consuming builder argument cardinality"));
     }
     for (index, (ty, position)) in inputs.iter().zip(arguments).enumerate() {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
         if replay && !copy_scalar(ty) {
-            write!(output, "argument_{position}.clone()").map_err(|_| request::Error::Encoding)?;
+            write!(output, "argument_{position}.clone()").map_err(request::unwritable)?;
         } else {
-            write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+            write!(output, "argument_{position}").map_err(request::unwritable)?;
         }
     }
     Ok(())
@@ -9806,9 +9648,7 @@ fn render_builder_constructor(
     match form {
         crate::api::model::FieldForm::Unit => Ok(()),
         crate::api::model::FieldForm::Tuple => {
-            output
-                .write_all(b"(")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"(").map_err(request::unwritable)?;
             if replay {
                 builder_typed_argument_list(
                     &fields
@@ -9822,29 +9662,23 @@ fn render_builder_constructor(
             } else {
                 builder_argument_list(arguments, output)?;
             }
-            output.write_all(b")").map_err(|_| request::Error::Encoding)
+            output.write_all(b")").map_err(request::unwritable)
         }
         crate::api::model::FieldForm::Record => {
-            output
-                .write_all(b" { ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b" { ").map_err(request::unwritable)?;
             for (index, (field, position)) in fields.iter().zip(arguments).enumerate() {
                 if index != 0 {
-                    output
-                        .write_all(b", ")
-                        .map_err(|_| request::Error::Encoding)?;
+                    output.write_all(b", ").map_err(request::unwritable)?;
                 }
                 if replay && !copy_scalar(field.ty()) {
                     write!(output, "{}: argument_{position}.clone()", field.name())
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 } else {
                     write!(output, "{}: argument_{position}", field.name())
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 }
             }
-            output
-                .write_all(b" }")
-                .map_err(|_| request::Error::Encoding)
+            output.write_all(b" }").map_err(request::unwritable)
         }
     }
 }
@@ -9893,35 +9727,25 @@ fn render_constructor(
     match form {
         crate::api::model::FieldForm::Unit => Ok(()),
         crate::api::model::FieldForm::Tuple => {
-            output
-                .write_all(b"(")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"(").map_err(request::unwritable)?;
             for (index, field) in fields.iter().enumerate() {
                 if index != 0 {
-                    output
-                        .write_all(b", ")
-                        .map_err(|_| request::Error::Encoding)?;
+                    output.write_all(b", ").map_err(request::unwritable)?;
                 }
                 render_field_value(index, field, output)?;
             }
-            output.write_all(b")").map_err(|_| request::Error::Encoding)
+            output.write_all(b")").map_err(request::unwritable)
         }
         crate::api::model::FieldForm::Record => {
-            output
-                .write_all(b" { ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b" { ").map_err(request::unwritable)?;
             for (index, field) in fields.iter().enumerate() {
                 if index != 0 {
-                    output
-                        .write_all(b", ")
-                        .map_err(|_| request::Error::Encoding)?;
+                    output.write_all(b", ").map_err(request::unwritable)?;
                 }
-                write!(output, "{}: ", field.name()).map_err(|_| request::Error::Encoding)?;
+                write!(output, "{}: ", field.name()).map_err(request::unwritable)?;
                 render_field_value(index, field, output)?;
             }
-            output
-                .write_all(b" }")
-                .map_err(|_| request::Error::Encoding)
+            output.write_all(b" }").map_err(request::unwritable)
         }
     }
 }
@@ -9942,7 +9766,7 @@ fn render_field_value(
     } else {
         write!(output, "argument_{index}")
     }
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 #[derive(Clone, Copy)]
@@ -9984,19 +9808,18 @@ fn replay<'a>(
         return Ok(Some(Replay::Message(message)));
     };
     let [argument] = projection.arguments() else {
-        return Err(request::Error::Drift {
-            field: "generated projection target argument cardinality",
-        });
+        return Err(request::drift(
+            "generated projection target argument cardinality",
+        ));
     };
     let Some(source) = argument.source_index() else {
         return Ok(Some(Replay::Visual));
     };
-    let source = usize::try_from(source).map_err(|_| request::Error::Drift {
-        field: "generated projection source argument",
-    })?;
-    let message = arguments.get(source).ok_or(request::Error::Drift {
-        field: "generated projection source argument",
-    })?;
+    let source = usize::try_from(source)
+        .map_err(|_| request::drift("generated projection source argument"))?;
+    let message = arguments
+        .get(source)
+        .ok_or_else(|| request::drift("generated projection source argument"))?;
     Ok(Some(Replay::Message(substitute(
         message,
         signature,
@@ -10035,17 +9858,13 @@ fn method_message<'a>(
         if matches!(argument, convert::Type::ProfileMessage { .. })
             && message.replace(argument).is_some()
         {
-            return Err(request::Error::Drift {
-                field: "event continuation Message cardinality",
-            });
+            return Err(request::drift("event continuation Message cardinality"));
         }
     }
     let Some(message @ convert::Type::ProfileMessage { mapper, .. }) = message else {
         return Ok(None);
     };
-    let fail = || request::Error::Drift {
-        field: "event continuation receiver proof",
-    };
+    let fail = || request::drift("event continuation receiver proof");
     let facade = facade.ok_or_else(fail)?;
     let mut owners = facade
         .facades()
@@ -10106,16 +9925,12 @@ fn method_message<'a>(
             continue;
         }
         if selected.is_some_and(|previous| previous != witness.projection()) {
-            return Err(request::Error::Drift {
-                field: "ambiguous event continuation producer",
-            });
+            return Err(request::drift("ambiguous event continuation producer"));
         }
         selected = Some(witness.projection());
     }
     if selected.is_none() {
-        return Err(request::Error::Drift {
-            field: "missing event continuation producer",
-        });
+        return Err(request::drift("missing event continuation producer"));
     }
     Ok(Some(message))
 }
@@ -10134,14 +9949,12 @@ fn projected_event_message<'a>(
             continue;
         }
         if selected.replace(argument).is_some() {
-            return Err(request::Error::Drift {
-                field: "generated event projection Message cardinality",
-            });
+            return Err(request::drift(
+                "generated event projection Message cardinality",
+            ));
         }
     }
-    selected.ok_or(request::Error::Drift {
-        field: "generated event projection Message",
-    })
+    selected.ok_or_else(|| request::drift("generated event projection Message"))
 }
 
 fn event_mapper(
@@ -10153,9 +9966,9 @@ fn event_mapper(
     ) -> Result<(), request::Error> {
         for mapper in mappers {
             if selected.replace(mapper).is_some() {
-                return Err(request::Error::Drift {
-                    field: "generated event projection mapper cardinality",
-                });
+                return Err(request::drift(
+                    "generated event projection mapper cardinality",
+                ));
             }
         }
         Ok(())
@@ -10238,33 +10051,29 @@ fn render_replay_insert(
             .write_all(
                 b"    __rawr_profile::insert_visual(arguments.arena, output).map(Dynamic::from)\n",
             )
-            .map_err(|_| request::Error::Encoding),
+            .map_err(request::unwritable),
         Replay::Message(message) => {
             output
                 .write_all(b"    __rawr_profile::insert_projectable::<_, ")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             render_rust_type(
                 match message {
                     convert::Type::ProfileMessage { payload, .. } => payload,
                     message => message,
                 },
-                facade.ok_or(request::Error::Drift {
-                    field: "generated projection bindings plan",
-                })?,
+                facade.ok_or_else(|| request::drift("generated projection bindings plan"))?,
                 output,
             )?;
             output
                 .write_all(b">(arguments.arena, output")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             if let convert::Type::ProfileMessage { mapper, .. } = message {
-                output
-                    .write_all(b", &")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b", &").map_err(request::unwritable)?;
                 byte_slice(output, mapper)?;
             }
             output
                 .write_all(b").map(Dynamic::from)\n")
-                .map_err(|_| request::Error::Encoding)
+                .map_err(request::unwritable)
         }
     }
 }
@@ -10278,30 +10087,26 @@ fn render_rust_type(
         convert::Type::Script { .. } => output
             .write_all(
                 concrete_type(ty)
-                    .ok_or(request::Error::Drift {
-                        field: "a script type's proxy",
-                    })?
+                    .ok_or_else(|| request::drift("a script type's proxy"))?
                     .as_bytes(),
             )
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Inferred => output.write_all(b"_").map_err(|_| request::Error::Encoding),
-        convert::Type::Unit => output
-            .write_all(b"()")
-            .map_err(|_| request::Error::Encoding),
+            .map_err(request::unwritable),
+        convert::Type::Inferred => output.write_all(b"_").map_err(request::unwritable),
+        convert::Type::Unit => output.write_all(b"()").map_err(request::unwritable),
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => output
             .write_all(b"std::ops::RangeInclusive<i64>")
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => output
-            .write_all(b"String")
-            .map_err(|_| request::Error::Encoding),
-        convert::Type::Builtin(convert::Builtin::Str) => output
-            .write_all(b"&str")
-            .map_err(|_| request::Error::Encoding),
+            .map_err(request::unwritable),
+        convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
+            output.write_all(b"String").map_err(request::unwritable)
+        }
+        convert::Type::Builtin(convert::Builtin::Str) => {
+            output.write_all(b"&str").map_err(request::unwritable)
+        }
         convert::Type::Builtin(builtin) => output
             .write_all(builtin.rust_name().unwrap_or_default().as_bytes())
-            .map_err(|_| request::Error::Encoding),
+            .map_err(request::unwritable),
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => {
-            output.write_all(b"_").map_err(|_| request::Error::Encoding)
+            output.write_all(b"_").map_err(request::unwritable)
         }
         convert::Type::Nominal {
             definition,
@@ -10311,27 +10116,19 @@ fn render_rust_type(
                 .facades()
                 .flat_map(crate::surface::facade::Facade::types)
                 .find(|ty| ty.identity() == definition.as_bytes())
-                .ok_or(request::Error::Drift {
-                    field: "generated projection message type",
-                })?;
+                .ok_or_else(|| request::drift("generated projection message type"))?;
             output
                 .write_all(ty.path().as_bytes())
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             if !arguments.is_empty() {
-                output
-                    .write_all(b"<")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"<").map_err(request::unwritable)?;
                 for (index, argument) in arguments.iter().enumerate() {
                     if index != 0 {
-                        output
-                            .write_all(b", ")
-                            .map_err(|_| request::Error::Encoding)?;
+                        output.write_all(b", ").map_err(request::unwritable)?;
                     }
                     render_rust_type(argument, facade, output)?;
                 }
-                output
-                    .write_all(b">")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b">").map_err(request::unwritable)?;
             }
             Ok(())
         }
@@ -10339,80 +10136,62 @@ fn render_rust_type(
             input,
             output: result,
         } => {
-            output
-                .write_all(b"fn(")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"fn(").map_err(request::unwritable)?;
             render_rust_type(input, facade, output)?;
-            output
-                .write_all(b") -> ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b") -> ").map_err(request::unwritable)?;
             render_rust_type(result, facade, output)
         }
         convert::Type::ProfileMessage { payload, .. } => render_rust_type(payload, facade, output),
         convert::Type::Borrowed { mutable, ty } => {
             output
                 .write_all(if *mutable { b"&mut " } else { b"&" })
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             render_rust_type(ty, facade, output)
         }
         convert::Type::Option(element) => {
-            output
-                .write_all(b"Option<")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"Option<").map_err(request::unwritable)?;
             render_rust_type(element, facade, output)?;
-            output.write_all(b">").map_err(|_| request::Error::Encoding)
+            output.write_all(b">").map_err(request::unwritable)
         }
         convert::Type::Range(element) => {
             output
                 .write_all(b"std::ops::Range<")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             render_rust_type(element, facade, output)?;
-            output.write_all(b">").map_err(|_| request::Error::Encoding)
+            output.write_all(b">").map_err(request::unwritable)
         }
         convert::Type::Result(ok, err) => {
-            output
-                .write_all(b"Result<")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"Result<").map_err(request::unwritable)?;
             render_rust_type(ok, facade, output)?;
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
             render_rust_type(err, facade, output)?;
-            output.write_all(b">").map_err(|_| request::Error::Encoding)
+            output.write_all(b">").map_err(request::unwritable)
         }
         convert::Type::Sequence {
             element,
             length: Some(length),
             ..
         } => {
-            output
-                .write_all(b"[")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"[").map_err(request::unwritable)?;
             render_rust_type(element, facade, output)?;
-            write!(output, "; {length}]").map_err(|_| request::Error::Encoding)
+            write!(output, "; {length}]").map_err(request::unwritable)
         }
         convert::Type::Sequence { element, .. } => {
-            output
-                .write_all(b"Vec<")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"Vec<").map_err(request::unwritable)?;
             render_rust_type(element, facade, output)?;
-            output.write_all(b">").map_err(|_| request::Error::Encoding)
+            output.write_all(b">").map_err(request::unwritable)
         }
         convert::Type::Tuple(members) => {
-            output
-                .write_all(b"(")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"(").map_err(request::unwritable)?;
             for member in members {
                 render_rust_type(member, facade, output)?;
-                output
-                    .write_all(b", ")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b", ").map_err(request::unwritable)?;
             }
-            output.write_all(b")").map_err(|_| request::Error::Encoding)
+            output.write_all(b")").map_err(request::unwritable)
         }
-        convert::Type::Parameter(_) => Err(request::Error::Drift {
-            field: "unconstrained generated projection message",
-        }),
+        convert::Type::Parameter(_) => {
+            Err(request::drift("unconstrained generated projection message"))
+        }
     }
 }
 
@@ -10464,9 +10243,7 @@ fn dynamic_function_arity(
             | (_, true, true)
             | (_, true, false)
             | (_, false, true) => {
-                return Err(request::Error::Drift {
-                    field: "generated static operand position",
-                });
+                return Err(request::drift("generated static operand position"));
             }
             _ => {
                 dynamic = dynamic.checked_add(1).ok_or(request::Error::Limit {
@@ -10478,9 +10255,7 @@ fn dynamic_function_arity(
         }
     }
     if selected.next().is_some() || mapped.next().is_some() {
-        return Err(request::Error::Drift {
-            field: "generated static operand cardinality",
-        });
+        return Err(request::drift("generated static operand cardinality"));
     }
     Ok(dynamic)
 }
@@ -10536,7 +10311,7 @@ fn render_slot(
     substitutions: &[convert::Type],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let drift = |field| request::Error::Drift { field };
+    let drift = request::drift;
     let inputs = call
         .inputs()
         .iter()
@@ -10813,7 +10588,7 @@ fn render_slot(
     }}",
         parameters.join(", ")
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -10846,34 +10621,27 @@ fn render_function_arguments(
             // closure would, as `.style(container::rounded_box)`: the Rust
             // function itself, with no runtime argument.
             (ty, true, false) if callable_parameter(ty, signature) => {
-                let function = selected.next().ok_or(request::Error::Drift {
-                    field: "generated static function item cardinality",
-                })?;
-                write!(output, "    let argument_{position} = ")
-                    .map_err(|_| request::Error::Encoding)?;
+                let function = selected
+                    .next()
+                    .ok_or_else(|| request::drift("generated static function item cardinality"))?;
+                write!(output, "    let argument_{position} = ").map_err(request::unwritable)?;
                 render_function_callable(function.plan(), output)?;
-                output
-                    .write_all(b";\n")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b";\n").map_err(request::unwritable)?;
             }
             (convert::Type::FunctionItem { .. }, false, true) => {
-                let mapper = mapped.next().ok_or(request::Error::Drift {
-                    field: "generated profile mapper cardinality",
-                })?;
+                let mapper = mapped
+                    .next()
+                    .ok_or_else(|| request::drift("generated profile mapper cardinality"))?;
                 validate_event_projection(
                     mapper,
-                    profile.ok_or(request::Error::Drift {
-                        field: "generated profile mapper proof",
-                    })?,
+                    profile.ok_or_else(|| request::drift("generated profile mapper proof"))?,
                 )?;
             }
             (convert::Type::FunctionItem { .. }, false, false)
             | (_, true, true)
             | (_, true, false)
             | (_, false, true) => {
-                return Err(request::Error::Drift {
-                    field: "generated static operand position",
-                });
+                return Err(request::drift("generated static operand position"));
             }
             _ => {
                 if let Some(slot) = crossed.slot_at(position, ty) {
@@ -10918,9 +10686,7 @@ fn render_function_arguments(
         }
     }
     if selected.next().is_some() || mapped.next().is_some() {
-        return Err(request::Error::Drift {
-            field: "generated static operand cardinality",
-        });
+        return Err(request::drift("generated static operand cardinality"));
     }
     Ok(())
 }
@@ -10938,9 +10704,7 @@ fn function_argument_list(
     let mut mapped = mappers.iter().peekable();
     for (position, ty) in signature.inputs().iter().enumerate() {
         if position != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
         let selected_here = selected
             .peek()
@@ -10950,68 +10714,61 @@ fn function_argument_list(
             .is_some_and(|mapper| usize::try_from(mapper.position()).ok() == Some(position));
         match (ty, selected_here, mapped_here) {
             (convert::Type::FunctionItem { .. }, true, false) => {
-                let function = selected.next().ok_or(request::Error::Drift {
-                    field: "generated static function item cardinality",
-                })?;
+                let function = selected
+                    .next()
+                    .ok_or_else(|| request::drift("generated static function item cardinality"))?;
                 render_function_callable(function.plan(), output)?;
             }
             // A crate function filling a callable parameter, which
             // `render_function_arguments` bound to its local.
             (ty, true, false) if callable_parameter(ty, signature) => {
                 selected.next();
-                write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+                write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
             (convert::Type::FunctionItem { .. }, false, true) => {
-                let mapper = mapped.next().ok_or(request::Error::Drift {
-                    field: "generated profile mapper cardinality",
-                })?;
+                let mapper = mapped
+                    .next()
+                    .ok_or_else(|| request::drift("generated profile mapper cardinality"))?;
                 validate_event_projection(
                     mapper,
-                    profile.ok_or(request::Error::Drift {
-                        field: "generated profile mapper proof",
-                    })?,
+                    profile.ok_or_else(|| request::drift("generated profile mapper proof"))?,
                 )?;
                 output
                     .write_all(b"__rawr_profile::payload")
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
             }
             (convert::Type::FunctionItem { .. }, false, false)
             | (_, true, true)
             | (_, true, false)
             | (_, false, true) => {
-                return Err(request::Error::Drift {
-                    field: "generated static operand position",
-                });
+                return Err(request::drift("generated static operand position"));
             }
             // A script function, as a slot (D594).
             _ if crossed.slot_at(position, ty).is_some() => {
-                write!(output, "slot_{position}").map_err(|_| request::Error::Encoding)?;
+                write!(output, "slot_{position}").map_err(request::unwritable)?;
             }
             // A script closure, made a Rust closure (D513.7 b), or an
             // `Option` of one.
             _ if callable_parameter(ty, signature)
                 || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature)) =>
             {
-                write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+                write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
             _ => {
                 let ty = substitute(ty, signature, substitutions)?;
                 if profile.is_some_and(|proof| is_projection_target(ty, proof)) {
                     write!(output, "argument_{position}.lower(_context)")
-                        .map_err(|_| request::Error::Encoding)?;
+                        .map_err(request::unwritable)?;
                 } else if profile.is_some() && !copy_scalar(ty) {
-                    write!(output, "argument_{position}.clone()")
-                        .map_err(|_| request::Error::Encoding)?;
+                    write!(output, "argument_{position}.clone()").map_err(request::unwritable)?;
                 } else {
-                    write!(output, "argument_{position}").map_err(|_| request::Error::Encoding)?;
+                    write!(output, "argument_{position}").map_err(request::unwritable)?;
                 }
             }
         }
     }
     if selected.next().is_some() || mapped.next().is_some() {
-        return Err(request::Error::Drift {
-            field: "generated static operand cardinality",
-        });
+        return Err(request::drift("generated static operand cardinality"));
     }
     Ok(())
 }
@@ -11025,26 +10782,22 @@ fn validate_event_projection(
         || witness.profile_version() != profile.version().get()
         || witness.profile_rules() != profile.rules_digest()
     {
-        return Err(request::Error::Drift {
-            field: "generated profile mapper identity",
-        });
+        return Err(request::drift("generated profile mapper identity"));
     }
     let mut projections = profile
         .projections()
         .iter()
         .filter(|projection| projection.selector() == witness.profile_projection());
-    let projection = projections.next().ok_or(request::Error::Drift {
-        field: "generated profile mapper projection",
-    })?;
+    let projection = projections
+        .next()
+        .ok_or_else(|| request::drift("generated profile mapper projection"))?;
     if projections.next().is_some()
         || projection.target_identity() != witness.target().as_bytes()
         || profile
             .source_for_projection(projection)
             .is_none_or(|source| source.selector() != witness.profile_source())
     {
-        return Err(request::Error::Drift {
-            field: "generated profile mapper projection",
-        });
+        return Err(request::drift("generated profile mapper projection"));
     }
     Ok(())
 }
@@ -11061,15 +10814,11 @@ fn render_function_callable(plan: &Plan, output: &mut Vec<u8>) -> Result<(), req
         ..
     } = plan.operation()
     else {
-        return Err(request::Error::Drift {
-            field: "generated static function item plan",
-        });
+        return Err(request::drift("generated static function item plan"));
     };
     // A generic function's turbofish names its instance's types.
     if !constants.is_empty() || !functions.is_empty() || !mappers.is_empty() {
-        return Err(request::Error::Drift {
-            field: "generated nested static function item",
-        });
+        return Err(request::drift("generated nested static function item"));
     }
     render_function_path(
         plan,
@@ -11101,14 +10850,14 @@ fn render_take_profile(
             output,
             "    let argument_{local}: __rawr_profile_host::widget::Value = take_primitive(arguments, {index})?;"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     if matches!(ty, convert::Type::Builtin(convert::Builtin::InclusiveRange)) {
         return writeln!(
             output,
             "    let argument_{local}: std::ops::RangeInclusive<i64> = take_primitive(arguments, {index})?;"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     render_take(local, index, ty, output)
 }
@@ -11131,18 +10880,15 @@ fn replay_argument_list(
 ) -> Result<(), request::Error> {
     for (index, ty) in signature.inputs().iter().enumerate() {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
         let ty = substitute(ty, signature, substitutions)?;
         if is_projection_target(ty, profile) {
-            write!(output, "argument_{index}.lower(_context)")
-                .map_err(|_| request::Error::Encoding)?;
+            write!(output, "argument_{index}.lower(_context)").map_err(request::unwritable)?;
         } else if copy_scalar(ty) {
-            write!(output, "argument_{index}").map_err(|_| request::Error::Encoding)?;
+            write!(output, "argument_{index}").map_err(request::unwritable)?;
         } else {
-            write!(output, "argument_{index}.clone()").map_err(|_| request::Error::Encoding)?;
+            write!(output, "argument_{index}.clone()").map_err(request::unwritable)?;
         }
     }
     Ok(())
@@ -11192,9 +10938,8 @@ fn render_take_input(
         let mut converted = String::new();
         render_from_dynamic(element, "value", 0, &mut converted)?;
         if LENT_ARGUMENTS.get() && place::available(element) {
-            let rust = concrete_type(element).ok_or(request::Error::Drift {
-                field: "a copied or native borrowed input's type",
-            })?;
+            let rust = concrete_type(element)
+                .ok_or_else(|| request::drift("a copied or native borrowed input's type"))?;
             return writeln!(
                 output,
                 "    let argument_{local}_place = (**arguments.values.get({index}).ok_or(Error::MissingArgument)?).clone();
@@ -11208,13 +10953,13 @@ fn render_take_input(
         }}
     }};"
             )
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
         }
         return writeln!(
             output,
             "    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     // `&[T]` or `&(A, B)` of Rawr's array or tuple, as voronator's
     // `from_tuple` and image's `save_buffer` take: the Rust value made from
@@ -11228,9 +10973,8 @@ fn render_take_input(
         let mut converted = String::new();
         render_from_dynamic(lent, "value", 0, &mut converted)?;
         if LENT_ARGUMENTS.get() && place::available(lent) {
-            let rust = concrete_type(lent).ok_or(request::Error::Drift {
-                field: "a shared native sequence input's type",
-            })?;
+            let rust = concrete_type(lent)
+                .ok_or_else(|| request::drift("a shared native sequence input's type"))?;
             return writeln!(
                 output,
                 "    let argument_{local}_made: {rust};
@@ -11243,13 +10987,13 @@ fn render_take_input(
         }}
     }};"
             )
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
         }
         return writeln!(
             output,
             "    let argument_{local}_made = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    let argument_{local} = &argument_{local}_made;"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
@@ -11276,9 +11020,8 @@ fn render_take_input(
         // iced's `Text<'a>` is through `Theme::Class<'a>`, can't be: Rust
         // makes each element of a view at the view's lifetime, as Rawr
         // makes it in the region, and one made before can't join them.
-        let rust = concrete_type(&element).ok_or(request::Error::Drift {
-            field: "a region array's element",
-        })?;
+        let rust =
+            concrete_type(&element).ok_or_else(|| request::drift("a region array's element"))?;
         let arena = if shortens(&element) {
             format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
         } else {
@@ -11291,7 +11034,7 @@ fn render_take_input(
             output,
             "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     // A value of a scope frame's region, moved out of it into the call
     // (D558 tier 1), as `push_html` takes a `Parser`.
@@ -11302,7 +11045,7 @@ fn render_take_input(
             output,
             "    let argument_{local} = {{ let scoped = scoped_value(arguments, {index}).ok_or(Error::TypeMismatch)?; region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? }};"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     // A type parameter a `&str` fills, as a string literal fills iced's
     // `button(content: W)`: a `&str` input.
@@ -11347,12 +11090,10 @@ fn render_take_input(
         .flatten()
         .filter(|annotation| !is_value(ty) && annotation != "_");
     let Some(annotation) = annotation else {
-        return output
-            .write_all(&taken)
-            .map_err(|_| request::Error::Encoding);
+        return output.write_all(&taken).map_err(request::unwritable);
     };
     let taken = String::from_utf8(taken)
-        .map_err(|_| request::Error::Encoding)?
+        .map_err(request::unwritable)?
         .replacen(
             &format!("let argument_{local} = "),
             &format!("let argument_{local}: {annotation} = "),
@@ -11360,7 +11101,7 @@ fn render_take_input(
         );
     output
         .write_all(taken.as_bytes())
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 /// A `&T` or `&mut T` input of a value in the arena, as ratatui's
@@ -11374,13 +11115,9 @@ fn render_lease(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let convert::Type::Borrowed { mutable, ty } = ty else {
-        return Err(request::Error::Drift {
-            field: "a lease of other than a borrow",
-        });
+        return Err(request::drift("a lease of other than a borrow"));
     };
-    let rust = concrete_type(ty).ok_or(request::Error::Drift {
-        field: "borrowed input type",
-    })?;
+    let rust = concrete_type(ty).ok_or_else(|| request::drift("borrowed input type"))?;
     let borrow = if *mutable { "" } else { "&*" };
     if LENT_ARGUMENTS.get() && !carries_lifetime(ty) {
         // Or a value native code lent a marked function (D558.3), reached
@@ -11402,13 +11139,13 @@ fn render_lease(
         }}
     }};"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     writeln!(
         output,
         "    let mut argument_{local}_held: Held<{rust}> = {{ let handle = native_handle(arguments, {index}, false)?; arguments.arena.lease(handle)? }};\n    let argument_{local} = {borrow}argument_{local}_held.get_mut();"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// Whether `ty` is a callable type parameter of `signature`, as `F` of
@@ -11452,18 +11189,15 @@ fn render_take_callable(
     // gives `Map<Self, F, Message>`: the closure boxed as the `Box<dyn
     // Fn(..) -> ..>` the classifier wrote there (T417).
     if let Some(boxed) = boxed_callable(signature.output()) {
-        let rust = concrete_type(&substituted(boxed, signature, substitutions)?).ok_or(
-            request::Error::Drift {
-                field: "a boxed closure's type",
-            },
-        )?;
+        let rust = concrete_type(&substituted(boxed, signature, substitutions)?)
+            .ok_or_else(|| request::drift("a boxed closure's type"))?;
         return writeln!(
             output,
             "    let argument_{local}: {rust} = Box::new({closure});"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
-    writeln!(output, "    let argument_{local} = {closure};").map_err(|_| request::Error::Encoding)
+    writeln!(output, "    let argument_{local} = {closure};").map_err(request::unwritable)
 }
 
 /// The boxed closure type `ty` names, as `Map<W, Box<dyn Fn(A) -> B>, A>`
@@ -11513,7 +11247,7 @@ fn render_take_optional_callable(
         output,
         "    let argument_{local} = match __rawr_internal::option::take(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).ok_or(Error::TypeMismatch)? {{\n        None => None,\n        Some(inner) => Some({closure}),\n    }};"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// The block that makes a Rust closure calling the script callable
@@ -11545,9 +11279,7 @@ fn render_callable_closure(
     let mut values = Vec::new();
     let mut places = Vec::new();
     for (position, input) in inputs.iter().enumerate() {
-        let rust = concrete_type(input).ok_or(request::Error::Drift {
-            field: "closure input type",
-        })?;
+        let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
         parameters.push(format!("input_{position}: {rust}"));
         if let convert::Type::Borrowed { mutable, ty } = input
             && is_copied(ty)
@@ -11572,9 +11304,7 @@ fn render_callable_closure(
             format!("({converted}).unwrap_or_else(|error| panic!(\"rawr: a closure's input can't cross: {{error:?}}\"))")
         });
     }
-    let rust = concrete_type(&returned).ok_or(request::Error::Drift {
-        field: "closure output type",
-    })?;
+    let rust = concrete_type(&returned).ok_or_else(|| request::drift("closure output type"))?;
     let mut converted = String::new();
     render_from_dynamic(&returned, "value", 0, &mut converted)?;
     // A script value native code gives the closure is checked against the
@@ -11676,7 +11406,7 @@ fn render_take(
             output,
             "    let argument_{local} = static_pins().pin(take_primitive::<ImmutableString>(arguments, {index})?);"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     // A `&str` input lends the string taken from Rawr, which a region can
     // pin by its shared handle: no text is copied.
@@ -11685,7 +11415,7 @@ fn render_take(
             output,
             "    let argument_{local}_owned = take_primitive::<ImmutableString>(arguments, {index})?;\n    let argument_{local} = argument_{local}_owned.as_str();"
         )
-        .map_err(|_| request::Error::Encoding);
+        .map_err(request::unwritable);
     }
     let helper = match ty {
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
@@ -11697,14 +11427,12 @@ fn render_take(
         // A script value where native generic code takes a Rust type: the
         // runner's proxy for its type (D594).
         convert::Type::Script { .. } => {
-            let rust = concrete_type(ty).ok_or(request::Error::Drift {
-                field: "a script type's proxy",
-            })?;
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("a script type's proxy"))?;
             return writeln!(
                 output,
                 "    let argument_{local} = <{rust}>::from_proxy(__rawr_internal::crossing::Proxy::from_place(&mut **arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?));"
             )
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
         }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
@@ -11717,7 +11445,7 @@ fn render_take(
                 output,
                 "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
             )
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
         }
         convert::Type::Nominal { .. } | convert::Type::Parameter(_) => "take_native",
         // A slice of script values a type argument names, as an owned
@@ -11731,9 +11459,9 @@ fn render_take(
             return render_take(local, index, &owned, output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
-            return Err(request::Error::Drift {
-                field: "static function item entered runtime argument decoding",
-            });
+            return Err(request::drift(
+                "static function item entered runtime argument decoding",
+            ));
         }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_take(local, index, payload, output);
@@ -11753,12 +11481,12 @@ fn render_take(
                 output,
                 "    let argument_{local} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {converted} }}?;"
             )
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
         }
         convert::Type::Inferred => {
-            return Err(request::Error::Drift {
-                field: "an inferred type parameter reached a runtime value",
-            })
+            return Err(request::drift(
+                "an inferred type parameter reached a runtime value",
+            ))
         }
         convert::Type::Unit | convert::Type::Builtin(_) => "take_primitive",
     };
@@ -11766,7 +11494,7 @@ fn render_take(
         output,
         "    let argument_{local} = {helper}(arguments, {index})?;"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 fn render_give(
@@ -11783,9 +11511,7 @@ fn render_give(
         // A value that carries the lifetime of the scope frame's region the
         // call runs in stays there (D558 tier 1).
         convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
-            let family = family_of(ty).ok_or(request::Error::Drift {
-                field: "a scoped value's family",
-            })?;
+            let family = family_of(ty).ok_or_else(|| request::drift("a scoped value's family"))?;
             writeln!(
                 output,
                 "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
@@ -11831,9 +11557,7 @@ fn render_give(
         }
         // The unit type, or a `PhantomData` field, which Rawr holds as it.
         convert::Type::Inferred => {
-            return Err(request::Error::Drift {
-                field: "an inferred type parameter reached a runtime value",
-            })
+            return Err(request::drift("an inferred type parameter reached a runtime value"))
         }
         convert::Type::Unit => {
             writeln!(output, "    let _ = {value};\n    Ok(Dynamic::from(()))")
@@ -11866,13 +11590,11 @@ fn render_give(
         ) && **lent != convert::Type::Builtin(convert::Builtin::Str) =>
         {
             writeln!(output, "    let copied = Clone::clone({value});")
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             return render_give(lent, "copied", output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
-            return Err(request::Error::Drift {
-                field: "static function item entered runtime output encoding",
-            });
+            return Err(request::drift("static function item entered runtime output encoding"));
         }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_give(payload, value, output);
@@ -11887,7 +11609,7 @@ fn render_give(
             writeln!(output, "    {converted}")
         }
     }
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// A generated `Result<T, Error>` expression converting the owned `Dynamic`
@@ -11906,7 +11628,7 @@ fn render_from_dynamic(
         )
     };
     match ty {
-        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
+        convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
         convert::Type::Unit => cast(output, "()"),
         convert::Type::Builtin(convert::Builtin::Bool) => cast(output, "bool"),
         convert::Type::Builtin(convert::Builtin::Char) => cast(output, "char"),
@@ -11955,9 +11677,7 @@ fn render_from_dynamic(
                 )
             }
             _ => {
-                return Err(request::Error::Drift {
-                    field: "an inclusive range of a type that is not a number",
-                })
+                return Err(request::drift("an inclusive range of a type that is not a number"))
             }
         },
         convert::Type::Builtin(convert::Builtin::StaticStr) => write!(
@@ -11974,9 +11694,7 @@ fn render_from_dynamic(
         ),
         ty if let Some(time) = std_time(ty) => cast(output, time),
         ty if is_facade_value(ty) => {
-            let rust = concrete_type(ty).ok_or(request::Error::Drift {
-                field: "a host value's Rust type",
-            })?;
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("a host value's Rust type"))?;
             cast(output, &rust)
         }
         ty if is_value(ty) => write!(
@@ -11984,9 +11702,7 @@ fn render_from_dynamic(
             "Ok::<__rawr_internal::Value, Error>(__rawr_internal::Value::from({value}))"
         ),
         convert::Type::Script { .. } => {
-            let rust = concrete_type(ty).ok_or(request::Error::Drift {
-                field: "a script type's proxy",
-            })?;
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("a script type's proxy"))?;
             write!(
                 output,
                 "Ok::<{rust}, Error>(<{rust}>::from_proxy(__rawr_internal::crossing::Proxy::new({value})))"
@@ -12028,9 +11744,7 @@ fn render_from_dynamic(
                 "{value}.try_cast_result::<std::ops::Range<i64>>().map_err(|_| Error::TypeMismatch).and_then(|range| {{ let bound = |code: i64| u32::try_from(code).ok().and_then(char::from_u32).ok_or(Error::TypeMismatch); Ok::<_, Error>(bound(range.start)?..bound(range.end)?) }})"
             ),
             _ => {
-                return Err(request::Error::Drift {
-                    field: "a range of other than floats entered runtime argument decoding",
-                });
+                return Err(request::drift("a range of other than floats entered runtime argument decoding"));
             }
         },
         convert::Type::Result(ok, err) => {
@@ -12067,9 +11781,7 @@ fn render_from_dynamic(
             return render_from_dynamic(&owned, value, depth, output);
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
-            return Err(request::Error::Drift {
-                field: "static function item entered runtime argument decoding",
-            });
+            return Err(request::drift("static function item entered runtime argument decoding"));
         }
         // A Rawr tuple, an array of its members, as Rust's tuple of their
         // converted values.
@@ -12080,7 +11792,7 @@ fn render_from_dynamic(
                 "{value}.into_array().map_err(|_| Error::TypeMismatch).and_then(|{items}| {{ if {items}.len() != {} {{ return Err(Error::TypeMismatch); }} let mut {items} = {items}.into_iter(); Ok::<_, Error>((",
                 members.len()
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             for (member, ty) in members.iter().enumerate() {
                 let inner = format!("inner_{depth}_{member}");
                 let mut converted = String::new();
@@ -12089,7 +11801,7 @@ fn render_from_dynamic(
                     output,
                     "{{ let {inner} = {items}.next().ok_or(Error::TypeMismatch)?; ({converted})? }}, "
                 )
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
             }
             write!(output, ")) }})")
         }
@@ -12116,7 +11828,7 @@ fn render_from_dynamic(
             }
         }
     }
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// A generated `Result<Dynamic, Error>` expression converting the Rust value
@@ -12139,9 +11851,7 @@ fn render_to_dynamic(
         // A value that borrows, made in a scope frame: its region holds it
         // (D558 tier 1).
         convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
-            let family = family_of(ty).ok_or(request::Error::Drift {
-                field: "a scoped value's family",
-            })?;
+            let family = family_of(ty).ok_or_else(|| request::drift("a scoped value's family"))?;
             write!(
                 output,
                 "Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({value})))"
@@ -12161,7 +11871,7 @@ fn render_to_dynamic(
         convert::Type::Builtin(convert::Builtin::Text) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}.to_string()))")
         }
-        convert::Type::Inferred => return Err(request::Error::Drift { field: "an inferred type parameter reached a runtime value" }),
+        convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
         convert::Type::Unit | convert::Type::Builtin(_) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
@@ -12197,9 +11907,7 @@ fn render_to_dynamic(
                 "{{ let range = {value}; Ok::<Dynamic, Error>(Dynamic::from(<i64 as From<u32>>::from(<u32 as From<char>>::from(range.start))..<i64 as From<u32>>::from(<u32 as From<char>>::from(range.end)))) }}"
             ),
             _ => {
-                return Err(request::Error::Drift {
-                    field: "a range of other than floats entered runtime output encoding",
-                });
+                return Err(request::drift("a range of other than floats entered runtime output encoding"));
             }
         },
         convert::Type::Result(ok, err) => {
@@ -12233,11 +11941,11 @@ fn render_to_dynamic(
                 "(|| {{ let ({},) = {value}; Ok::<Dynamic, Error>(Dynamic::from_array(vec![",
                 names.join(", ")
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             for (member, name) in members.iter().zip(&names) {
                 let mut converted = String::new();
                 render_to_dynamic(member, name, depth + 1, &mut converted)?;
-                write!(output, "({converted})?, ").map_err(|_| request::Error::Encoding)?;
+                write!(output, "({converted})?, ").map_err(request::unwritable)?;
             }
             write!(output, "])) }})()")
         }
@@ -12268,12 +11976,10 @@ fn render_to_dynamic(
             )
         }
         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
-            return Err(request::Error::Drift {
-                field: "static function item entered runtime output encoding",
-            });
+            return Err(request::drift("static function item entered runtime output encoding"));
         }
     }
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// A Rust future, which no crate's type names.
@@ -12373,7 +12079,7 @@ fn render_give_sipper(
         output,
         "    Ok(__rawr_profile_host::task::sipper(\n        {value},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_progress})) }},\n        |value| -> __rawr_profile_host::task::Materialize {{ Box::new(move |witness| materialize(witness, move |arguments| {on_output})) }},\n    ))"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// The `T` of an output that is the iced facade's `Task<T>`.
@@ -12428,7 +12134,7 @@ fn render_give_task(
         output,
         "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 fn render_give_with(
@@ -12452,7 +12158,7 @@ fn render_give_with(
         value,
         &mut given,
     )?;
-    let given = String::from_utf8(given).map_err(|_| request::Error::Encoding)?;
+    let given = String::from_utf8(given).map_err(request::unwritable)?;
     let mut copied = String::new();
     for (position, element) in &copies {
         let mut converted = String::new();
@@ -12472,7 +12178,7 @@ fn render_give_with(
         output,
         "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// Each input `&mut Vec<T>` or `&mut String` a call takes as a copy of
@@ -12619,12 +12325,10 @@ fn substitute<'a>(
             parameter.kind() == crate::classify::representability::signature::Kind::Type
         })
         .position(|parameter| parameter.index() == *index)
-        .ok_or(request::Error::Drift {
-            field: "generic substitution index",
-        })?;
-    substitutions.get(position).ok_or(request::Error::Drift {
-        field: "generic substitution index",
-    })
+        .ok_or_else(|| request::drift("generic substitution index"))?;
+    substitutions
+        .get(position)
+        .ok_or_else(|| request::drift("generic substitution index"))
 }
 
 fn render_constant(
@@ -12637,13 +12341,11 @@ fn render_constant(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+'))
     {
-        return Err(request::Error::Drift {
-            field: "unsafe generated const substitution",
-        });
+        return Err(request::drift("unsafe generated const substitution"));
     }
     output
         .write_all(constant.value().as_bytes())
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 struct GenericPartition<'a> {
@@ -12664,9 +12366,7 @@ fn partition_generics<'a>(
     let (container, item) = signature
         .parameters()
         .split_at_checked(container_parameters)
-        .ok_or(request::Error::Drift {
-            field: "generated container parameter cardinality",
-        })?;
+        .ok_or_else(|| request::drift("generated container parameter cardinality"))?;
     let container_type_count = container
         .iter()
         .filter(|parameter| {
@@ -12694,9 +12394,7 @@ fn partition_generics<'a>(
         })
         .count();
     if total_type_count != substitutions.len() || total_constant_count != constants.len() {
-        return Err(request::Error::Drift {
-            field: "generated substitution cardinality",
-        });
+        return Err(request::drift("generated substitution cardinality"));
     }
     let (container_types, item_types) = substitutions.split_at(container_type_count);
     let (container_constants, item_constants) = constants.split_at(container_constant_count);
@@ -12729,15 +12427,15 @@ fn render_function_path(
             false,
             output,
         )?;
-        write!(output, "::{}", plan.name()).map_err(|_| request::Error::Encoding)
+        write!(output, "::{}", plan.name()).map_err(request::unwritable)
     } else if container_parameters == 0 {
         output
             .write_all(rust_path(plan).as_bytes())
-            .map_err(|_| request::Error::Encoding)
+            .map_err(request::unwritable)
     } else {
-        Err(request::Error::Drift {
-            field: "generated free function has container parameters",
-        })
+        Err(request::drift(
+            "generated free function has container parameters",
+        ))
     }
 }
 
@@ -12760,7 +12458,7 @@ fn render_container_path(
         };
         return output
             .write_all(instance.as_bytes())
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
     }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
     // An impl that fixes some of its type's arguments, as pane_grid's
@@ -12786,13 +12484,11 @@ fn render_container_path(
             })
             .collect::<Vec<_>>()
             .into_iter();
-        let substituted =
-            instance_substituted(instance, &mut types).ok_or(request::Error::Drift {
-                field: "an impl's fixed instance names a parameter it does not declare",
-            })?;
-        let instance = concrete_type(&substituted).ok_or(request::Error::Drift {
-            field: "an impl's fixed instance has no Rust name",
+        let substituted = instance_substituted(instance, &mut types).ok_or_else(|| {
+            request::drift("an impl's fixed instance names a parameter it does not declare")
         })?;
+        let instance = concrete_type(&substituted)
+            .ok_or_else(|| request::drift("an impl's fixed instance has no Rust name"))?;
         let instance = if type_position {
             instance
         } else {
@@ -12800,11 +12496,11 @@ fn render_container_path(
         };
         return output
             .write_all(instance.as_bytes())
-            .map_err(|_| request::Error::Encoding);
+            .map_err(request::unwritable);
     }
     output
         .write_all(path.as_bytes())
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     render_generic_arguments(
         partition.container_parameters,
         partition.container_types,
@@ -13257,16 +12953,14 @@ fn render_proxies(output: &mut Vec<u8>) -> Result<(), request::Error> {
     for (modules, proxies) in tree {
         while !modules.starts_with(&open) {
             open.pop();
-            output
-                .write_all(b"}\n")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b"}\n").map_err(request::unwritable)?;
         }
         for module in &modules[open.len()..] {
             writeln!(
                 output,
                 "pub mod {module} {{\n#[allow(unused_imports)]\nuse super::*;"
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
             open.push(module.clone());
         }
         for (path, name, arity) in proxies {
@@ -13331,13 +13025,11 @@ impl{bounds} std::fmt::Display for {name}{generics} {{
 }}
 "
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         }
     }
     for _ in open {
-        output
-            .write_all(b"}\n")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b"}\n").map_err(request::unwritable)?;
     }
     Ok(())
 }
@@ -13448,7 +13140,7 @@ fn render_impl(
     script: &crate::surface::instance::ScriptImpl,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let drift = |field| request::Error::Drift { field };
+    let drift = request::drift;
     let generics = script.generics();
     let owner = impl_type(script.owner(), generics).ok_or(drift("a script impl's owner"))?;
     let arguments = script
@@ -13495,7 +13187,7 @@ impl{parameters} {trait_} for {owner} {{
 {body}}}
 "
     )
-    .map_err(|_| request::Error::Encoding)
+    .map_err(request::unwritable)
 }
 
 /// One function of a script impl, as `render_impls` writes it.
@@ -13504,7 +13196,7 @@ fn render_impl_function(
     generics: &[Box<str>],
 ) -> Result<String, request::Error> {
     use crate::surface::instance::ImplReceiver;
-    let drift = |field| request::Error::Drift { field };
+    let drift = request::drift;
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     let mut mutable = Vec::new();
@@ -13772,7 +13464,7 @@ use super::*;
 
 ",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     let families = FAMILIES.with_borrow(|families| {
         families
             .iter()
@@ -13805,7 +13497,7 @@ use super::*;
             output,
             "pub(super) struct {name};\n\nimpl __rawr_internal::scope::Family for {name} {{\n    type Of<'x> = {text};\n}}\n\nimpl __rawr_internal::scope::Regional for {name} {{\n    fn name() -> &'static str {{\n        {shown:?}\n    }}{debug}{clone}{equal}\n}}\n"
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     Ok(())
 }
@@ -14257,7 +13949,7 @@ fn render_method_head(
     container_parameters: usize,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let encoding = |_| request::Error::Encoding;
+    let encoding = request::unwritable;
     let Some(through) = through_trait(signature, substitutions)? else {
         write!(output, "receiver.{name}").map_err(encoding)?;
         render_item_turbofish(
@@ -14365,9 +14057,7 @@ fn render_generic_arguments(
 ) -> Result<(), request::Error> {
     if parameters.is_empty() {
         if !substitutions.is_empty() || !constants.is_empty() {
-            return Err(request::Error::Drift {
-                field: "generated substitution cardinality",
-            });
+            return Err(request::drift("generated substitution cardinality"));
         }
         return Ok(());
     }
@@ -14390,13 +14080,13 @@ fn render_generic_arguments(
         }
         output
             .write_all(if written == 0 { opening } else { b", " })
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         written += 1;
         match parameter.kind() {
             crate::classify::representability::signature::Kind::Type => {
-                let ty = substitutions.get(type_index).ok_or(request::Error::Drift {
-                    field: "generated type substitution cardinality",
-                })?;
+                let ty = substitutions
+                    .get(type_index)
+                    .ok_or_else(|| request::drift("generated type substitution cardinality"))?;
                 type_index += 1;
                 let concrete = match ty {
                     convert::Type::Nominal { .. }
@@ -14433,10 +14123,9 @@ fn render_generic_arguments(
                             concrete.as_deref().unwrap_or("_").as_bytes()
                         }
                         convert::Type::FunctionItem { .. } | convert::Type::Borrowed { .. } => {
-                            return Err(request::Error::Drift {
-                                field:
-                                    "static function item or borrow used as generic substitution",
-                            });
+                            return Err(request::drift(
+                                "static function item or borrow used as generic substitution",
+                            ));
                         }
                         convert::Type::ProfileMessage { payload, .. } => match payload.as_ref() {
                             convert::Type::Unit => b"()",
@@ -14448,43 +14137,37 @@ fn render_generic_arguments(
                             }
                             convert::Type::Builtin(convert::Builtin::String) => b"String",
                             _ => {
-                                return Err(request::Error::Drift {
-                                    field: "non-scalar profile message payload substitution",
-                                });
+                                return Err(request::drift(
+                                    "non-scalar profile message payload substitution",
+                                ));
                             }
                         },
                         convert::Type::Parameter(_) => {
-                            return Err(request::Error::Drift {
-                                field: "unconstrained generated substitution",
-                            });
+                            return Err(request::drift("unconstrained generated substitution"));
                         }
                     })
-                    .map_err(|_| request::Error::Encoding)?;
+                    .map_err(request::unwritable)?;
             }
             crate::classify::representability::signature::Kind::Constant => {
-                let constant = constants.get(constant_index).ok_or(request::Error::Drift {
-                    field: "generated const substitution cardinality",
-                })?;
+                let constant = constants
+                    .get(constant_index)
+                    .ok_or_else(|| request::drift("generated const substitution cardinality"))?;
                 constant_index += 1;
                 render_constant(constant, output)?;
             }
             crate::classify::representability::signature::Kind::Callable
             | crate::classify::representability::signature::Kind::Future => {
-                output
-                    .write_all(b"_")
-                    .map_err(|_| request::Error::Encoding)?;
+                output.write_all(b"_").map_err(request::unwritable)?;
             }
         }
     }
     if type_index != substitutions.len() || constant_index != constants.len() {
-        return Err(request::Error::Drift {
-            field: "generated substitution cardinality",
-        });
+        return Err(request::drift("generated substitution cardinality"));
     }
     if written == 0 {
         return Ok(());
     }
-    output.write_all(b">").map_err(|_| request::Error::Encoding)
+    output.write_all(b">").map_err(request::unwritable)
 }
 
 enum ProducerInputs<'a> {
@@ -14556,15 +14239,15 @@ fn render_execution_tests<'a>(
               }\n\n\
               const PRODUCERS: &[&[fn(&mut Arena) -> Result<NativeHandle, Error>]] = &[\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for module in modules.clone() {
-        writeln!(output, "        {module}::PRODUCERS,").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "        {module}::PRODUCERS,").map_err(request::unwritable)?;
     }
     output
         .write_all(b"    ];\n\n    const ACCEPTS: &[&[([u8; 32], bool)]] = &[\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for module in modules {
-        writeln!(output, "        {module}::ACCEPTS,").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, "        {module}::ACCEPTS,").map_err(request::unwritable)?;
     }
     output
         .write_all(
@@ -14595,7 +14278,7 @@ fn render_execution_tests<'a>(
               }\n\
               }\n\n",
         )
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 /// One adapter module's execution-test rows: its producers, the receivers it
@@ -14617,30 +14300,30 @@ fn render_module_execution_tests(
             "#[cfg(test)]\nfn {}(arena: &mut Arena) -> Result<NativeHandle, Error> {{",
             identity_name("producer", plan)
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
         render_execution_values(&inputs.iter().collect::<Vec<_>>(), output)?;
         writeln!(
             output,
             "    let mut arguments = Arguments {{ values: &mut values, arena }};\n    let output = {}(&mut arguments)?;\n    if output.is::<NativeHandle>() {{ Ok(output.clone_cast::<NativeHandle>()) }} else {{ Err(Error::TypeMismatch) }}\n}}\n",
             adapter_name(plan)
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     output
         .write_all(
             b"#[cfg(test)]\npub(super) const PRODUCERS: &[fn(&mut Arena) -> Result<NativeHandle, Error>] = &[\n",
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for index in indices {
         let plan = &plans[*index];
         if producer_inputs(plan.operation()).is_some() {
             writeln!(output, "    {},", identity_name("producer", plan))
-                .map_err(|_| request::Error::Encoding)?;
+                .map_err(request::unwritable)?;
         }
     }
     output
         .write_all(b"];\n\n#[cfg(test)]\npub(super) const ACCEPTS: &[([u8; 32], bool)] = &[\n")
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     for index in indices {
         let plan = &plans[*index];
         let consumes = match plan.operation() {
@@ -14652,40 +14335,34 @@ fn render_module_execution_tests(
             } if signature.inputs().is_empty() => matches!(receiver, Receiver::Owned),
             _ => continue,
         };
-        output
-            .write_all(b"    (")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b"    (").map_err(request::unwritable)?;
         byte_array(output, plan.identity().as_bytes())?;
-        writeln!(output, ", {consumes}),").map_err(|_| request::Error::Encoding)?;
+        writeln!(output, ", {consumes}),").map_err(request::unwritable)?;
     }
-    output
-        .write_all(b"];\n")
-        .map_err(|_| request::Error::Encoding)?;
+    output.write_all(b"];\n").map_err(request::unwritable)?;
     if let Some(index) = primitive.filter(|index| indices.contains(index)) {
         writeln!(
             output,
             "\n#[cfg(test)]\n#[test]\nfn primitive_output_executes_without_an_arena_slot() {{\n    let mut arena = Arena::new([12; 32]);\n    let mut values: [&mut Dynamic; 0] = [];\n    let mut arguments = Arguments {{ values: &mut values, arena: &mut arena }};\n    let output = {}(&mut arguments).expect(\"primitive adapter\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}}",
             adapter_name(&plans[index])
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     if let Some(index) = builder.filter(|index| indices.contains(index)) {
-        let inputs =
-            builder_execution_inputs(plans[index].operation()).ok_or(request::Error::Drift {
-                field: "generated builder execution inputs",
-            })?;
+        let inputs = builder_execution_inputs(plans[index].operation())
+            .ok_or_else(|| request::drift("generated builder execution inputs"))?;
         output
             .write_all(
                 b"\n#[cfg(test)]\n#[test]\nfn consuming_builder_replays_in_one_native_invocation() {\n    let mut arena = Arena::new([13; 32]);\n",
             )
-            .map_err(|_| request::Error::Encoding)?;
+            .map_err(request::unwritable)?;
         render_execution_values(&inputs, output)?;
         writeln!(
             output,
             "    let mut arguments = Arguments {{ values: &mut values, arena: &mut arena }};\n    let output = {}(&mut arguments).expect(\"builder replay\");\n    assert!(output.is::<i64>());\n    assert!(arena.slots.is_empty());\n}}",
             adapter_name(&plans[index])
         )
-        .map_err(|_| request::Error::Encoding)?;
+        .map_err(request::unwritable)?;
     }
     Ok(())
 }
@@ -14695,30 +14372,23 @@ fn render_execution_values(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     for (argument, ty) in inputs.iter().enumerate() {
-        write!(output, "    let mut argument_{argument} = ")
-            .map_err(|_| request::Error::Encoding)?;
+        write!(output, "    let mut argument_{argument} = ").map_err(request::unwritable)?;
         render_default(ty, output)?;
-        output
-            .write_all(b";\n")
-            .map_err(|_| request::Error::Encoding)?;
+        output.write_all(b";\n").map_err(request::unwritable)?;
     }
     write!(
         output,
         "    let mut values: [&mut Dynamic; {}] = [",
         inputs.len()
     )
-    .map_err(|_| request::Error::Encoding)?;
+    .map_err(request::unwritable)?;
     for argument in 0..inputs.len() {
         if argument != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
-        write!(output, "&mut argument_{argument}").map_err(|_| request::Error::Encoding)?;
+        write!(output, "&mut argument_{argument}").map_err(request::unwritable)?;
     }
-    output
-        .write_all(b"];\n")
-        .map_err(|_| request::Error::Encoding)
+    output.write_all(b"];\n").map_err(request::unwritable)
 }
 
 fn builder_execution_inputs(operation: &Operation) -> Option<Vec<&convert::Type>> {
@@ -14789,9 +14459,9 @@ fn builder_execution_inputs(operation: &Operation) -> Option<Vec<&convert::Type>
 fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), request::Error> {
     let source = match ty {
         convert::Type::Inferred => {
-            return Err(request::Error::Drift {
-                field: "an inferred type parameter reached a runtime value",
-            })
+            return Err(request::drift(
+                "an inferred type parameter reached a runtime value",
+            ))
         }
         convert::Type::Unit => "Dynamic::from(())",
         convert::Type::Builtin(convert::Builtin::Bool) => "Dynamic::from(false)",
@@ -14836,9 +14506,7 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
         | convert::Type::FunctionItem { .. }
         | convert::Type::Borrowed { .. }
         | convert::Type::Parameter(_) => {
-            return Err(request::Error::Drift {
-                field: "generated execution producer input",
-            });
+            return Err(request::drift("generated execution producer input"));
         }
         convert::Type::ProfileMessage { payload, .. } => {
             return render_default(payload, output);
@@ -14846,39 +14514,33 @@ fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), reques
     };
     output
         .write_all(source.as_bytes())
-        .map_err(|_| request::Error::Encoding)
+        .map_err(request::unwritable)
 }
 
 fn argument_list(count: usize, _offset: usize, output: &mut Vec<u8>) -> Result<(), request::Error> {
     for index in 0..count {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
-        write!(output, "argument_{index}").map_err(|_| request::Error::Encoding)?;
+        write!(output, "argument_{index}").map_err(request::unwritable)?;
     }
     Ok(())
 }
 
 fn byte_array(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), request::Error> {
-    output
-        .write_all(b"[")
-        .map_err(|_| request::Error::Encoding)?;
+    output.write_all(b"[").map_err(request::unwritable)?;
     for (index, byte) in bytes.iter().enumerate() {
         if index != 0 {
-            output
-                .write_all(b", ")
-                .map_err(|_| request::Error::Encoding)?;
+            output.write_all(b", ").map_err(request::unwritable)?;
         }
-        write!(output, "0x{byte:02x}").map_err(|_| request::Error::Encoding)?;
+        write!(output, "0x{byte:02x}").map_err(request::unwritable)?;
     }
-    output.write_all(b"]").map_err(|_| request::Error::Encoding)
+    output.write_all(b"]").map_err(request::unwritable)
 }
 
 fn signature(plan: &Plan) -> Result<[u8; 32], request::Error> {
     let mut writer = Hashing(Sha256::new());
-    serde_json::to_writer(&mut writer, plan).map_err(|_| request::Error::Encoding)?;
+    serde_json::to_writer(&mut writer, plan).map_err(request::unwritable)?;
     Ok(writer.0.finalize().into())
 }
 
@@ -14908,6 +14570,29 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    /// rawr writes the runner's harness and Cargo writes its lock, so a lock
+    /// rawr can't read back is a rawr bug: it panics naming the invariant,
+    /// never an "internal error" message (#538, D664).
+    #[test]
+    #[should_panic(
+        expected = "rawr reads the runner's Cargo.toml and Cargo.lock as they were written: \
+                    expected one final-form harness lock root, found 0"
+    )]
+    fn a_runner_lock_rawr_cannot_read_back_is_a_rawr_bug() {
+        let _ = super::runner_lock(
+            b"version = 4\n\n[[package]]\nname = \"other\"\nversion = \"0.1.0\"\n",
+            &[],
+        );
+    }
+
+    /// Writing the runner's source in memory can't fail; if it did, that
+    /// is a rawr bug, which panics (#538, D664).
+    #[test]
+    #[should_panic(expected = "rawr writes the runner's generated source in memory")]
+    fn a_runner_source_rawr_cannot_write_is_a_rawr_bug() {
+        let _ = super::request::unwritable(std::fmt::Error);
+    }
 
     /// A type the root reaches through no path, as iced's
     /// `core::widget::Map`, is spelled from the crate that defines it, and
@@ -15038,15 +14723,15 @@ mod tests {
                 arguments: Box::default(),
             },
         );
-        assert!(super::render_take_callable(
-            0,
-            0,
-            &native,
-            &signature,
-            &[Type::Unit],
-            &mut Vec::new()
-        )
-        .is_err());
+        let unnamed = std::panic::catch_unwind(|| {
+            super::render_take_callable(0, 0, &native, &signature, &[Type::Unit], &mut Vec::new())
+                .map_err(|_| ())
+        })
+        .expect_err("a closure output Rust can't name panics");
+        assert_eq!(
+            unnamed.downcast_ref::<String>().map(String::as_str),
+            Some("rawr's generated Rust agrees with the crates on closure output type")
+        );
     }
 
     /// The runner of a program with no host profile: a Rust future is the
@@ -15586,11 +15271,21 @@ mod tests {
         ));
         let foreign_profile =
             crate::profile::Proof::neutral_with_chain(foreign_facade.node_chain().clone());
-        assert!(trusted.require_runner_profile(&foreign_profile).is_err());
+        let ancestry = |profile: &crate::profile::Proof| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                trusted.require_runner_profile(profile).map_err(|_| ())
+            }))
+            .expect_err("a profile from another build panics")
+            .downcast_ref::<String>()
+            .cloned()
+        };
+        let expected =
+            "rawr's generated Rust agrees with the crates on owned runner bindings ancestry";
+        assert_eq!(ancestry(&foreign_profile).as_deref(), Some(expected));
         let missing_facade = crate::profile::Proof::neutral_with_chain(
             contract.node_chain().expect("contract chain").clone(),
         );
-        assert!(trusted.require_runner_profile(&missing_facade).is_err());
+        assert_eq!(ancestry(&missing_facade).as_deref(), Some(expected));
 
         // The classified Contract limits are accounting targets. One
         // short on either axis still selects the trusted runner, charging the
@@ -15860,7 +15555,16 @@ mod tests {
         let selected = projected_event_message(arguments, &signature, &substitutions, &[9; 16])
             .expect("the exact mapper-bearing substitution is selected");
         assert_eq!(selected, &substitutions[0]);
-        assert!(projected_event_message(arguments, &signature, &substitutions, &[8; 16]).is_err());
+        // Another mapper's projection is a rawr bug, which panics naming
+        // the invariant (#538, D664).
+        let foreign = std::panic::catch_unwind(|| {
+            projected_event_message(arguments, &signature, &substitutions, &[8; 16]).map(|_| ())
+        })
+        .expect_err("a foreign mapper panics");
+        assert_eq!(
+            foreign.downcast_ref::<String>().map(String::as_str),
+            Some("rawr's generated Rust agrees with the crates on generated event projection Message")
+        );
     }
 
     #[test]
@@ -15914,9 +15618,19 @@ mod tests {
             .expect("item-owned arguments render only on the item");
         assert_eq!(item, b"::<bool, 7>");
 
-        assert!(
-            render_item_turbofish(&signature, &substitutions, &constants, 4, &mut Vec::new(),)
-                .is_err()
+        // More container parameters than the signature has is a rawr bug,
+        // which panics naming the invariant (#538, D664).
+        let partition = std::panic::catch_unwind(|| {
+            render_item_turbofish(&signature, &substitutions, &constants, 4, &mut Vec::new())
+                .map_err(|_| ())
+        })
+        .expect_err("a foreign partition panics");
+        assert_eq!(
+            partition.downcast_ref::<String>().map(String::as_str),
+            Some(
+                "rawr's generated Rust agrees with the crates on generated container parameter \
+                 cardinality"
+            )
         );
     }
 

@@ -26,6 +26,8 @@ mod copies_tests;
 #[cfg(test)]
 mod language_tests;
 #[cfg(test)]
+mod placeholder_tests;
+#[cfg(test)]
 mod rust_meaning_tests;
 
 use super::borrowck::{
@@ -2099,9 +2101,10 @@ fn method_without_call(member: &str) -> ImmutableString {
 }
 
 /// A crate item whose signature names a type, `ty` when it has a path, that
-/// the program's build doesn't reach. Overload selection tries each form
-/// and passes over one that fails this way.
-fn unnamed_signature_type(item: &str, ty: Option<&str>) -> Error {
+/// the program's build doesn't reach, at the `operation` that uses the item.
+/// Overload selection tries each form and passes over one that fails this
+/// way.
+fn unnamed_signature_type(item: &str, operation: Span, ty: Option<&str>) -> Error {
     Error::InvalidHostOperation {
         item: item.into(),
         reason: match ty {
@@ -2109,7 +2112,7 @@ fn unnamed_signature_type(item: &str, ty: Option<&str>) -> Error {
             None => "its signature names a type that is not supported in Rawr yet".into(),
         }
         .into(),
-        operation: Span::NONE,
+        operation,
     }
 }
 
@@ -11224,7 +11227,9 @@ struct Parser<'a> {
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     /// Each also says whether a reference's witness is its referent's.
-    pending_witnesses: Vec<(String, Ty, Span, bool)>,
+    /// Each witness placeholder with the type its parameter, named as
+    /// declared, takes at the call.
+    pending_witnesses: Vec<(String, ImmutableString, Ty, Span, bool)>,
     /// This body's generic parameters a signature names inside a host
     /// type, in declaration order: each host operation here takes their
     /// witnesses after its operands.
@@ -12080,6 +12085,7 @@ impl<'a> Parser<'a> {
                         default,
                         &mut parameters,
                         trait_name,
+                        super::type_span(written),
                         owner.as_ref(),
                         None,
                     )?,
@@ -12299,6 +12305,7 @@ impl<'a> Parser<'a> {
                             default,
                             &mut parameters,
                             &script.path,
+                            Span::NONE,
                             trait_owner.as_ref(),
                             None,
                         )
@@ -12337,14 +12344,21 @@ impl<'a> Parser<'a> {
         }
         let mut parameters = BTreeMap::new();
         let pattern = self
-            .instantiate_host_type(&header.self_type, &mut parameters, "impl", owner, None)
+            .instantiate_host_type(
+                &header.self_type,
+                &mut parameters,
+                "impl",
+                Span::NONE,
+                owner,
+                None,
+            )
             .ok()?;
         if !self.unify_type(&pattern, ty) {
             return None;
         }
         for (written, argument) in header.arguments.iter().zip(arguments) {
             let written = self
-                .instantiate_host_type(written, &mut parameters, "impl", owner, None)
+                .instantiate_host_type(written, &mut parameters, "impl", Span::NONE, owner, None)
                 .ok()?;
             if !self.unify_type(&written, argument) {
                 return None;
@@ -12355,14 +12369,28 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|bound| {
                 let bounded = self
-                    .instantiate_host_type(&bound.ty, &mut parameters, "impl", owner, None)
+                    .instantiate_host_type(
+                        &bound.ty,
+                        &mut parameters,
+                        "impl",
+                        Span::NONE,
+                        owner,
+                        None,
+                    )
                     .ok()?;
                 let arguments = bound
                     .arguments
                     .iter()
                     .map(|argument| {
-                        self.instantiate_host_type(argument, &mut parameters, "impl", owner, None)
-                            .ok()
+                        self.instantiate_host_type(
+                            argument,
+                            &mut parameters,
+                            "impl",
+                            Span::NONE,
+                            owner,
+                            None,
+                        )
+                        .ok()
                     })
                     .collect::<Option<Vec<_>>>()?;
                 Some((bounded, bound.trait_identity, arguments))
@@ -12863,7 +12891,7 @@ impl<'a> Parser<'a> {
             let placeholder = witness_placeholder(self.pending_witnesses.len());
             arguments.push(origin::Fragment::plain(placeholder.clone()));
             self.pending_witnesses
-                .push((placeholder, ty.clone(), span, forwarded));
+                .push((placeholder, name, ty.clone(), span, forwarded));
         }
         arguments
     }
@@ -12901,7 +12929,7 @@ impl<'a> Parser<'a> {
     /// The witness of a type a `Default`-bounded parameter takes: its script
     /// definition index, a negative code for a builtin, or the caller's own
     /// witness for one of its generic parameters.
-    fn witness(&self, ty: &Ty, span: Span) -> Result<String, Error> {
+    fn witness(&self, ty: &Ty, parameter: &str, span: Span) -> Result<String, Error> {
         if let Some(code) = builtin_code(ty) {
             return Ok(code.to_string());
         }
@@ -12909,12 +12937,9 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) => id.index().to_string(),
             Ty::Param(name) if self.has_witness(name) => witness_variable(name),
             Ty::Infer(_) => {
-                return Err(Error::InvalidMethodCall {
-                    owner: "<generic>".into(),
-                    method: "default".into(),
-                    reason: "type annotations needed: a generic call's type argument is unknown"
-                        .into(),
-                    call: span,
+                return Err(Error::TypeAnnotationsNeeded {
+                    parameter: parameter.into(),
+                    reference: span,
                 });
             }
             _ => {
@@ -13002,12 +13027,14 @@ impl<'a> Parser<'a> {
         }
         self.finish_instances()?;
         self.finish_defaults()?;
-        for (placeholder, ty, span, forwarded) in std::mem::take(&mut self.pending_witnesses) {
+        for (placeholder, parameter, ty, span, forwarded) in
+            std::mem::take(&mut self.pending_witnesses)
+        {
             let mut ty = self.inference.resolve(&ty);
             while forwarded && let Ty::Reference { target, .. } = &ty {
                 ty = self.inference.resolve(target);
             }
-            let witness = self.witness(&ty, span)?;
+            let witness = self.witness(&ty, &parameter, span)?;
             if witness.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a generic parameter name this long as a `Default` witness".into(),
@@ -16026,7 +16053,7 @@ impl<'a> Parser<'a> {
         for item in &host.forms {
             let checkpoint = self.inference.checkpoint();
             let fits = self
-                .instantiate_host_signature(item, Some(source), Some(&[]))
+                .instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)
                 .ok()
                 .filter(|signature| self.unify_type(&signature.output, target));
             let Some(signature) = fits else {
@@ -16074,7 +16101,12 @@ impl<'a> Parser<'a> {
             }
             let checkpoint = self.inference.checkpoint();
             let fits = self
-                .instantiate_host_signature(&item, None, Some(std::slice::from_ref(&argument)))
+                .instantiate_host_signature(
+                    &item,
+                    None,
+                    Some(std::slice::from_ref(&argument)),
+                    Span::NONE,
+                )
                 .ok()
                 .filter(|signature| {
                     matches!(&signature.inputs[..], [input] if self.unify_type(input, source))
@@ -17173,7 +17205,7 @@ impl<'a> Parser<'a> {
         };
         let checkpoint = self.inference.checkpoint();
         let fits = self
-            .instantiate_host_signature(item, receiver, None)
+            .instantiate_host_signature(item, receiver, None, Span::NONE)
             .is_ok_and(|signature| {
                 signature
                     .inputs
@@ -17356,7 +17388,8 @@ impl<'a> Parser<'a> {
         };
         let first = items.first().unwrap_or(first);
         if items.len() == 1 {
-            let signature = self.instantiate_host_signature(first, receiver, Some(arguments))?;
+            let signature =
+                self.instantiate_host_signature(first, receiver, Some(arguments), call)?;
             return Ok((first.clone(), signature));
         }
 
@@ -17365,13 +17398,14 @@ impl<'a> Parser<'a> {
         let mut match_count = 0;
         for item in items {
             let checkpoint = self.inference.checkpoint();
-            let signature = match self.instantiate_host_signature(item, receiver, Some(arguments)) {
-                Ok(signature) => signature,
-                Err(_) => {
-                    self.inference.rollback(checkpoint);
-                    continue;
-                }
-            };
+            let signature =
+                match self.instantiate_host_signature(item, receiver, Some(arguments), call) {
+                    Ok(signature) => signature,
+                    Err(_) => {
+                        self.inference.rollback(checkpoint);
+                        continue;
+                    }
+                };
             let matches_inputs = if repeated {
                 let [expected] = signature.inputs.as_slice() else {
                     self.inference.rollback(checkpoint);
@@ -17434,7 +17468,8 @@ impl<'a> Parser<'a> {
                 let mut forms = Vec::<String>::new();
                 for item in items {
                     let checkpoint = self.inference.checkpoint();
-                    if let Ok(signature) = self.instantiate_host_signature(item, receiver, None)
+                    if let Ok(signature) =
+                        self.instantiate_host_signature(item, receiver, None, Span::NONE)
                         && signature.inputs.len() == arguments.len()
                     {
                         let form = signature
@@ -17725,6 +17760,7 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
         receiver: Option<&Ty>,
         arguments: Option<&[ParsedExpr]>,
+        operation: Span,
     ) -> Result<InstantiatedHostSignature, Error> {
         let mut parameters = BTreeMap::<ImmutableString, Ty>::new();
         if let Some(types) = self.host_turbofish.clone() {
@@ -17737,7 +17773,7 @@ impl<'a> Parser<'a> {
                     ty: item.path().into(),
                     expected: names.len(),
                     actual: types.len(),
-                    reference: Span::NONE,
+                    reference: operation,
                 });
             }
             parameters.extend(names.into_iter().zip(types));
@@ -17774,7 +17810,7 @@ impl<'a> Parser<'a> {
                         definition.path()
                     )
                     .into(),
-                    operation: Span::NONE,
+                    operation,
                 });
             }
             // A method whose impl fixes its receiver's type names the impl's
@@ -17820,6 +17856,7 @@ impl<'a> Parser<'a> {
                 instance,
                 &mut parameters,
                 &item_path,
+                operation,
                 item_owner.as_ref(),
                 associated_origin.as_ref(),
             )?;
@@ -17832,7 +17869,7 @@ impl<'a> Parser<'a> {
                         self.inference.resolve(&instance).name(&self.models)
                     )
                     .into(),
-                    operation: Span::NONE,
+                    operation,
                 });
             }
         }
@@ -17862,6 +17899,7 @@ impl<'a> Parser<'a> {
                         element,
                         &mut parameters,
                         &item_path,
+                        operation,
                         item_owner.as_ref(),
                         originating,
                     )?;
@@ -17892,6 +17930,7 @@ impl<'a> Parser<'a> {
                         element,
                         &mut parameters,
                         &item_path,
+                        operation,
                         item_owner.as_ref(),
                         originating,
                     )?;
@@ -17922,6 +17961,7 @@ impl<'a> Parser<'a> {
                     ty,
                     &mut parameters,
                     &item_path,
+                    operation,
                     item_owner.as_ref(),
                     originating,
                 )
@@ -17948,11 +17988,12 @@ impl<'a> Parser<'a> {
             item.signature().output(),
             &mut parameters,
             &item_path,
+            operation,
             item_owner.as_ref(),
             output_origin,
         )?;
         if let Some(arguments) = arguments {
-            self.apply_relations(item, arguments, &mut parameters)?;
+            self.apply_relations(item, arguments, &mut parameters, operation)?;
         }
         // An imported iced item's `Theme` and `Renderer` are iced's, the ones
         // the facade declares, as its defaults name and its view uses (D558
@@ -18105,6 +18146,7 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
         arguments: &[ParsedExpr],
         parameters: &mut BTreeMap<ImmutableString, Ty>,
+        span: Span,
     ) -> Result<(), Error> {
         let signature = item.signature();
         // The facade a case's imported type is read through: the item's
@@ -18162,17 +18204,27 @@ impl<'a> Parser<'a> {
             // The one case the argument fits is its type, so its literals
             // take the case's kinds: `(35, 35, 35)` is `(u8, u8, u8)` where
             // the only three-tuple `Fill` comes from is.
-            let this =
-                self.pattern_type(case.this(), &mut bindings, parameters, &item_path, owner)?;
+            let this = self.pattern_type(
+                case.this(),
+                &mut bindings,
+                parameters,
+                (&item_path, span),
+                owner,
+            )?;
             let _ = self.unify_type(&actual, &this);
             for (implemented, declared) in case.arguments().iter().zip(relation.arguments()) {
-                let implemented =
-                    self.pattern_type(implemented, &mut bindings, parameters, &item_path, owner)?;
+                let implemented = self.pattern_type(
+                    implemented,
+                    &mut bindings,
+                    parameters,
+                    (&item_path, span),
+                    owner,
+                )?;
                 let declared = self.pattern_type(
                     declared,
                     &mut BTreeMap::new(),
                     parameters,
-                    &item_path,
+                    (&item_path, span),
                     owner,
                 )?;
                 // A mismatch is rustc's to report where it compiles the call.
@@ -18195,6 +18247,7 @@ impl<'a> Parser<'a> {
         &mut self,
         item: &crate::host::item::Definition,
         requirements: &[(ImmutableString, Ty, capability::Set)],
+        span: Span,
     ) -> Result<(), Error> {
         let signature = item.signature();
         if item.imported_identity().is_none()
@@ -18232,7 +18285,7 @@ impl<'a> Parser<'a> {
                     argument,
                     &mut BTreeMap::new(),
                     &mut parameters,
-                    &item_path,
+                    (&item_path, span),
                     owner.as_ref(),
                 )?);
             }
@@ -18294,7 +18347,14 @@ impl<'a> Parser<'a> {
             (Pattern::Type(expected), _) => {
                 let checkpoint = self.inference.checkpoint();
                 let fits = self
-                    .instantiate_host_type(expected, &mut BTreeMap::new(), "", owner, None)
+                    .instantiate_host_type(
+                        expected,
+                        &mut BTreeMap::new(),
+                        "",
+                        Span::NONE,
+                        owner,
+                        None,
+                    )
                     .is_ok_and(|expected| self.unify_type(&expected, &ty));
                 self.inference.rollback(checkpoint);
                 fits
@@ -18325,7 +18385,7 @@ impl<'a> Parser<'a> {
         pattern: &crate::host::signature::Pattern,
         bindings: &mut BTreeMap<u32, Ty>,
         parameters: &mut BTreeMap<ImmutableString, Ty>,
-        operation: &str,
+        (operation, span): (&str, Span),
         owner: Option<&crate::host::facade::Dependency>,
     ) -> Result<Ty, Error> {
         use crate::host::signature::Pattern;
@@ -18347,23 +18407,34 @@ impl<'a> Parser<'a> {
                 &crate::host::type_ref::Type::builtin(*builtin),
                 parameters,
                 operation,
+                span,
                 None,
                 None,
             )?,
-            Pattern::Range(element) => Ty::Range(Box::new(
-                self.pattern_type(element, bindings, parameters, operation, owner)?,
-            )),
-            Pattern::Option(element) => Ty::Option(Box::new(
-                self.pattern_type(element, bindings, parameters, operation, owner)?,
-            )),
+            Pattern::Range(element) => Ty::Range(Box::new(self.pattern_type(
+                element,
+                bindings,
+                parameters,
+                (operation, span),
+                owner,
+            )?)),
+            Pattern::Option(element) => Ty::Option(Box::new(self.pattern_type(
+                element,
+                bindings,
+                parameters,
+                (operation, span),
+                owner,
+            )?)),
             Pattern::Tuple(members) => Ty::Tuple(
                 members
                     .iter()
-                    .map(|member| self.pattern_type(member, bindings, parameters, operation, owner))
+                    .map(|member| {
+                        self.pattern_type(member, bindings, parameters, (operation, span), owner)
+                    })
                     .collect::<Result<_, _>>()?,
             ),
             Pattern::Type(ty) => {
-                self.instantiate_host_type(ty, &mut BTreeMap::new(), operation, owner, None)?
+                self.instantiate_host_type(ty, &mut BTreeMap::new(), operation, span, owner, None)?
             }
         })
     }
@@ -18392,6 +18463,7 @@ impl<'a> Parser<'a> {
                 default,
                 &mut parameters,
                 "type",
+                Span::NONE,
                 owner,
                 Some(definition),
             ) else {
@@ -18408,6 +18480,7 @@ impl<'a> Parser<'a> {
         ty: &crate::host::type_ref::Type,
         parameters: &mut BTreeMap<ImmutableString, Ty>,
         operation: &str,
+        span: Span,
         owner: Option<&crate::host::facade::Dependency>,
         originating: Option<&crate::host::type_def::Definition>,
     ) -> Result<Ty, Error> {
@@ -18428,6 +18501,7 @@ impl<'a> Parser<'a> {
                                 member,
                                 parameters,
                                 operation,
+                                span,
                                 owner,
                                 originating,
                             )
@@ -18437,6 +18511,7 @@ impl<'a> Parser<'a> {
                         input,
                         parameters,
                         operation,
+                        span,
                         owner,
                         originating,
                     )?]),
@@ -18445,6 +18520,7 @@ impl<'a> Parser<'a> {
                     output,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18456,6 +18532,7 @@ impl<'a> Parser<'a> {
                     input,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18463,6 +18540,7 @@ impl<'a> Parser<'a> {
                     output,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18498,7 +18576,7 @@ impl<'a> Parser<'a> {
                     .host
                     .type_(&path)
                     .cloned()
-                    .ok_or_else(|| unnamed_signature_type(operation, Some(&*path)))?;
+                    .ok_or_else(|| unnamed_signature_type(operation, span, Some(&*path)))?;
                 let alias = definition.identity().imported().map(|_| definition.clone());
                 Ty::Host {
                     proof: HostTyProof::new(
@@ -18513,6 +18591,7 @@ impl<'a> Parser<'a> {
                                 argument,
                                 parameters,
                                 operation,
+                                span,
                                 owner,
                                 originating,
                             )
@@ -18522,8 +18601,14 @@ impl<'a> Parser<'a> {
                 }
             }
             Shape::RangeInclusive(element) => {
-                let element =
-                    self.instantiate_host_type(element, parameters, operation, owner, originating)?;
+                let element = self.instantiate_host_type(
+                    element,
+                    parameters,
+                    operation,
+                    span,
+                    owner,
+                    originating,
+                )?;
                 self.inclusive_range_of(&element, None)
             }
             #[cfg(feature = "rust-import")]
@@ -18536,7 +18621,7 @@ impl<'a> Parser<'a> {
                 // type this program doesn't reach is one that doesn't fit.
                 let imported = owner
                     .and_then(|owner| self.models.host.imported_type(identity, owner, originating))
-                    .ok_or_else(|| unnamed_signature_type(operation, None))?;
+                    .ok_or_else(|| unnamed_signature_type(operation, span, None))?;
                 let definition = imported.definition.clone();
                 let alias = imported.alias.cloned();
                 let owner = imported.owner.cloned();
@@ -18549,6 +18634,7 @@ impl<'a> Parser<'a> {
                                 argument,
                                 parameters,
                                 operation,
+                                span,
                                 owner.as_ref(),
                                 alias.as_ref(),
                             )
@@ -18565,12 +18651,12 @@ impl<'a> Parser<'a> {
                     .host
                     .type_(&path)
                     .cloned()
-                    .ok_or_else(|| unnamed_signature_type(operation, Some(&*path)))?;
+                    .ok_or_else(|| unnamed_signature_type(operation, span, Some(&*path)))?;
                 let owner = self.models.host.type_owner(&path).cloned();
                 if definition.contract() != *export.contract()
                     || owner.as_ref() != Some(&export.dependency())
                 {
-                    return Err(unnamed_signature_type(operation, Some(&*path)));
+                    return Err(unnamed_signature_type(operation, span, Some(&*path)));
                 }
                 Ty::Host {
                     proof: HostTyProof::new(
@@ -18588,6 +18674,7 @@ impl<'a> Parser<'a> {
                                 argument,
                                 parameters,
                                 operation,
+                                span,
                                 writer,
                                 originating,
                             )
@@ -18600,6 +18687,7 @@ impl<'a> Parser<'a> {
                 element,
                 parameters,
                 operation,
+                span,
                 owner,
                 originating,
             )?)),
@@ -18615,6 +18703,7 @@ impl<'a> Parser<'a> {
                     target,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18623,6 +18712,7 @@ impl<'a> Parser<'a> {
                 element,
                 parameters,
                 operation,
+                span,
                 owner,
                 originating,
             )?)),
@@ -18630,6 +18720,7 @@ impl<'a> Parser<'a> {
                 element,
                 parameters,
                 operation,
+                span,
                 owner,
                 originating,
             )?)),
@@ -18638,6 +18729,7 @@ impl<'a> Parser<'a> {
                     ok,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18645,6 +18737,7 @@ impl<'a> Parser<'a> {
                     err,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18654,6 +18747,7 @@ impl<'a> Parser<'a> {
                     element,
                     parameters,
                     operation,
+                    span,
                     owner,
                     originating,
                 )?),
@@ -18669,6 +18763,7 @@ impl<'a> Parser<'a> {
                             member,
                             parameters,
                             operation,
+                            span,
                             owner,
                             originating,
                         )
@@ -18762,7 +18857,7 @@ impl<'a> Parser<'a> {
             }
         });
         #[cfg(feature = "rust-import")]
-        self.fix_bounds_by_impls(&item, &requirements)?;
+        self.fix_bounds_by_impls(&item, &requirements, call)?;
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -18818,7 +18913,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|parameter| {
                 symbolic_input_type(&parameter.ty).ok_or_else(|| Error::InvalidMethodCall {
-                    owner: "<module>".into(),
+                    owner: ImmutableString::new(),
                     method: function.definition.name.text.clone(),
                     reason: "symbolic callable inputs must be owned, runtime-supported types"
                         .into(),
@@ -18838,7 +18933,7 @@ impl<'a> Parser<'a> {
                 }
             })
             .ok_or_else(|| Error::InvalidMethodCall {
-                owner: "<module>".into(),
+                owner: ImmutableString::new(),
                 method: function.definition.name.text.clone(),
                 reason: "symbolic callable output must be one owned, runtime-supported type".into(),
                 call: expression,
@@ -19497,7 +19592,7 @@ impl<'a> Parser<'a> {
                 operation: expression,
             });
         }
-        let signature = self.instantiate_host_signature(item, None, None)?;
+        let signature = self.instantiate_host_signature(item, None, None, expression)?;
         let owner = owner.expect("guard proves one imported function owner");
         // One input is itself; none is `()`, and several are their tuple,
         // as a host callable's are (`checkbox::primary(&Theme, Status)`).
@@ -19788,7 +19883,7 @@ impl<'a> Parser<'a> {
                 operation: name_span,
             });
         }
-        let signature = self.instantiate_host_signature(&item, None, None)?;
+        let signature = self.instantiate_host_signature(&item, None, None, name_span)?;
         assert!(
             signature.inputs.is_empty(),
             "a host value or constant takes no inputs"
@@ -22542,6 +22637,7 @@ impl<'a> Parser<'a> {
             field_type,
             &mut parameters,
             path,
+            receiver.span,
             selected_owner.as_ref(),
             Some(definition),
         )
@@ -22594,6 +22690,7 @@ impl<'a> Parser<'a> {
             &field_type,
             &mut parameters,
             &path,
+            member_span,
             selected_owner.as_ref(),
             Some(&definition),
         )?;
@@ -28904,6 +29001,7 @@ impl<'a> Parser<'a> {
                 field.ty(),
                 &mut parameters,
                 &path,
+                at,
                 proof.owner.as_ref(),
                 Some(&definition),
             )?);
@@ -37527,7 +37625,7 @@ impl<'a> Parser<'a> {
         let call = span(name_span.start(), end);
         if arguments.len() != inputs.len() {
             return Err(Error::InvalidMethodCall {
-                owner: "<closure>".into(),
+                owner: ImmutableString::new(),
                 method: name,
                 reason: format!(
                     "expects {} argument(s), found {}",
@@ -37759,7 +37857,7 @@ impl<'a> Parser<'a> {
         for item in items {
             let checkpoint = self.inference.checkpoint();
             let hints: Vec<Option<ClosureHint>> = self
-                .instantiate_host_signature(item, receiver, None)
+                .instantiate_host_signature(item, receiver, None, Span::NONE)
                 .map(|signature| {
                     signature
                         .inputs
@@ -37913,7 +38011,7 @@ impl<'a> Parser<'a> {
     ) -> Option<Box<[Ty]>> {
         let checkpoint = self.inference.checkpoint();
         let hint = self
-            .instantiate_host_signature(item, receiver, None)
+            .instantiate_host_signature(item, receiver, None, Span::NONE)
             .ok()
             .and_then(|signature| {
                 let Ty::Callable { .. } = self
@@ -42127,7 +42225,7 @@ impl<'a> Parser<'a> {
             let call = span(name_span.start(), end);
             let [argument] = arguments.as_mut_slice() else {
                 return Err(Error::InvalidMethodCall {
-                    owner: "<module>".into(),
+                    owner: ImmutableString::new(),
                     method: name,
                     reason: format!("expects 1 argument, found {}", arguments.len()).into(),
                     call,
@@ -42198,7 +42296,7 @@ impl<'a> Parser<'a> {
         let output = if let Some(function) = function {
             if arguments.len() != function.definition.parameters.len() {
                 return Err(Error::InvalidMethodCall {
-                    owner: "<module>".into(),
+                    owner: ImmutableString::new(),
                     method: function.definition.name.text,
                     reason: format!(
                         "expects {} argument(s), found {}",
@@ -42404,7 +42502,7 @@ impl<'a> Parser<'a> {
             return Ok(function);
         }
         instance.ok_or_else(|| Error::InvalidMethodCall {
-            owner: "<module>".into(),
+            owner: ImmutableString::new(),
             method: function.definition.name.text.clone(),
             reason: format!(
                 "rawr compiles this generic function once per instantiation its callers \
@@ -42876,6 +42974,7 @@ impl<'a> Parser<'a> {
                     &declared,
                     &mut BTreeMap::new(),
                     field.as_str(),
+                    Span::NONE,
                     None,
                     Some(&definition),
                 )
@@ -42906,6 +43005,7 @@ impl<'a> Parser<'a> {
                         &own,
                         &mut BTreeMap::new(),
                         "struct base",
+                        Span::NONE,
                         None,
                         Some(&definition),
                     )
@@ -43214,6 +43314,7 @@ impl<'a> Parser<'a> {
                 field.ty(),
                 &mut parameters,
                 &path,
+                argument.span,
                 selected_owner.as_ref(),
                 Some(&definition),
             )?;
@@ -43228,6 +43329,7 @@ impl<'a> Parser<'a> {
                     default,
                     &mut parameters,
                     &path,
+                    name_span,
                     owner.as_ref(),
                     Some(&definition),
                 )?;
@@ -45585,6 +45687,7 @@ impl<'a> Parser<'a> {
                 field.ty(),
                 &mut parameters,
                 &path,
+                argument.span,
                 selected_owner.as_ref(),
                 Some(&definition),
             )?;

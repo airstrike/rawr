@@ -38,7 +38,7 @@ where
 {
     let profile_parent = profile
         .node_chain()
-        .ok_or(Evaluation::Cache(Error::ForeignEvidence))?;
+        .expect("rawr checks a program against its profile's current node");
     let observations = contract
         .raw_graph()
         .callback_observations(contract.raw_graph().freshness_fingerprint());
@@ -76,9 +76,10 @@ pub(crate) fn authority(
     snapshot: crate::surface::Snapshot,
     exact: Option<&[u8; 96]>,
 ) -> Result<Vec<u8>, Error> {
-    if graph != profile_graph {
-        return Err(Error::DefinitionDrift);
-    }
+    assert_eq!(
+        graph, profile_graph,
+        "rawr checks a program against the profile classified from the same crates"
+    );
     let mut authority = Vec::new();
     authority
         .try_reserve_exact(
@@ -214,9 +215,10 @@ impl Product {
         snapshot: crate::surface::Snapshot,
         limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        if demand.contract_fingerprint() != contract || demand.snapshot() != snapshot {
-            return Err(Error::DemandDrift);
-        }
+        assert!(
+            demand.contract_fingerprint() == contract && demand.snapshot() == snapshot,
+            "rawr checks the program it builds, against the bindings it builds it with"
+        );
         let payload = checked.profile_payload();
         // The payload size is an accounting target recorded on a
         // classification-stage account; the capture continues.
@@ -413,27 +415,12 @@ fn usize_at(bytes: &[u8], offset: usize, reason: &'static str) -> Result<usize, 
     usize::try_from(u64::from_le_bytes(encoded)).map_err(|_| node::Error::Codec(reason))
 }
 
-/// Checked-node construction, validation, or replay failure.
+/// Checked-node construction, validation, or replay failure. A checked
+/// program built against a profile from other crates, or a demand for
+/// another snapshot, is a rawr bug and panics naming the invariant, never
+/// one of these (#538, D664).
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// A required generic, facade, or profile parent was not DAG-validated.
-    #[error(
-        "internal error: rawr checked the program against out-of-date crate bindings. \
-         This is a rawr bug"
-    )]
-    ForeignEvidence,
-    /// Generic and profile classifications refer to different API graphs.
-    #[error(
-        "internal error: rawr read two different versions of the program's crates. \
-         This is a rawr bug"
-    )]
-    DefinitionDrift,
-    /// The cold transform returned demand for another contract or source snapshot.
-    #[error(
-        "internal error: rawr checked a different version of the program than it built. \
-         This is a rawr bug"
-    )]
-    DemandDrift,
     /// A checked-node payload exceeded its existing bounded authority.
     #[error("{resource} exceeded limit {limit} with observed size {actual}")]
     Limit {
@@ -478,11 +465,10 @@ mod tests {
     impl crate::profile::Definition<Checked> for Definition {
         fn identity(&self) -> crate::profile::Identity {
             crate::profile::Identity::new("rawr.checked.fixture", &crate::cargo::Limits::standard())
-                .expect("the checked fixture identity seals")
         }
 
         fn version(&self) -> crate::profile::Version {
-            crate::profile::Version::new(1).expect("the checked fixture version seals")
+            crate::profile::Version::new(1)
         }
 
         fn classify(
@@ -586,7 +572,9 @@ mod tests {
         assert_eq!(authority, expected);
         let mut foreign = *profile.graph_fingerprint().as_bytes();
         foreign[0] ^= 1;
-        assert!(matches!(
+        // A profile classified from other crates is a rawr bug, not an
+        // error the program sees (#538, D664).
+        let drift = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             super::authority(
                 contract.fingerprint(),
                 contract.raw_fingerprint(),
@@ -596,9 +584,14 @@ mod tests {
                 crate::api::Fingerprint::from_bytes(foreign),
                 source,
                 None,
-            ),
-            Err(super::Error::DefinitionDrift)
-        ));
+            )
+        }))
+        .expect_err("graph drift panics");
+        assert!(drift
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains(
+                "rawr checks a program against the profile classified from the same crates"
+            )));
     }
 
     #[test]

@@ -12,10 +12,10 @@ pub struct Version(pub(super) u32);
 
 impl Identity {
     /// Transform one bounded canonical profile name into its stable identity.
-    pub fn new(name: &str, limits: &crate::cargo::Limits) -> Result<Self, super::Error> {
-        if name.is_empty() {
-            return Err(super::Error::Identity);
-        }
+    /// rawr names its profiles itself, so an empty name panics (D664).
+    #[must_use]
+    pub fn new(name: &str, limits: &crate::cargo::Limits) -> Self {
+        assert!(!name.is_empty(), "rawr names each profile");
         // The name length is an accounting target recorded on a profile
         // account, never a refusal.
         crate::surface::account::Account::profile().exceeded(
@@ -27,7 +27,7 @@ impl Identity {
         digest.update(b"rawr.import.profile.identity/v1");
         digest.update(u64::try_from(name.len()).unwrap_or(u64::MAX).to_le_bytes());
         digest.update(name.as_bytes());
-        Ok(Self(digest.finalize().into()))
+        Self(digest.finalize().into())
     }
 
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
@@ -44,12 +44,11 @@ impl Identity {
 
 impl Version {
     /// Transform a nonzero profile rule version into sealed evidence.
-    pub const fn new(version: u32) -> Result<Self, super::Error> {
-        if version == 0 {
-            Err(super::Error::Version)
-        } else {
-            Ok(Self(version))
-        }
+    /// rawr numbers its profiles itself, so version 0 panics (D664).
+    #[must_use]
+    pub const fn new(version: u32) -> Self {
+        assert!(version != 0, "rawr numbers each profile's rules from 1");
+        Self(version)
     }
 
     pub(crate) const fn get(self) -> u32 {

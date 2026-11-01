@@ -70,6 +70,8 @@ pub enum Category {
     /// A root `main` that is `async` with no runtime's entry, as rustc's
     /// E0752.
     AsyncMain,
+    /// A generic parameter whose type nothing gives, as rustc's E0282.
+    TypeAnnotationsNeeded,
 }
 
 impl fmt::Display for Category {
@@ -107,6 +109,7 @@ impl fmt::Display for Category {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
             Self::AsyncMain => formatter.write_str("async main"),
+            Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
         }
     }
 }
@@ -179,9 +182,11 @@ pub enum Error {
         /// Secondary span on the nominal declaration.
         declaration: Span,
     },
-    /// A struct field or enum variant name is declared twice.
+    /// A struct field or enum variant name is declared twice, or a generic
+    /// parameter name in one item's generics.
     DuplicateMember {
-        /// Nominal type containing the duplicate.
+        /// Nominal type containing the duplicate, or empty for an item's
+        /// generic parameters (rustc's E0403).
         owner: ImmutableString,
         /// Reused field or variant name.
         member: ImmutableString,
@@ -302,7 +307,7 @@ pub enum Error {
     },
     /// A statically resolved method call has an invalid shape.
     InvalidMethodCall {
-        /// Nominal owner type.
+        /// Nominal owner type, or empty for a free function or a closure.
         owner: ImmutableString,
         /// Resolved method name.
         method: ImmutableString,
@@ -357,7 +362,7 @@ pub enum Error {
     },
     /// A method signature contains a deferred type form.
     InvalidMethodSignature {
-        /// Nominal owner type.
+        /// Nominal owner type, or empty for a free function.
         owner: ImmutableString,
         /// Method name.
         method: ImmutableString,
@@ -417,6 +422,14 @@ pub enum Error {
         /// The function's signature, from `async` to its output.
         at: Span,
     },
+    /// A call of a generic function that gives one of its type parameters
+    /// no type, which rustc refuses (E0282).
+    TypeAnnotationsNeeded {
+        /// The type parameter as the function declares it.
+        parameter: ImmutableString,
+        /// The call.
+        reference: Span,
+    },
 }
 
 impl Error {
@@ -456,6 +469,7 @@ impl Error {
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
+            Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
         }
     }
 
@@ -495,6 +509,7 @@ impl Error {
             Self::Syntax { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
+            Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
         }
     }
 
@@ -533,6 +548,7 @@ impl Error {
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
+            Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
         }
     }
@@ -577,7 +593,8 @@ impl Error {
             | Self::InvalidMatch { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
-            | Self::AsyncMain { .. } => None,
+            | Self::AsyncMain { .. }
+            | Self::TypeAnnotationsNeeded { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -652,6 +669,16 @@ impl fmt::Display for Written<'_> {
             } => write!(
                 formatter,
                 "cannot derive `{capability}` for `{owner}` at {attribute}: {reason}"
+            ),
+            Error::DuplicateMember {
+                owner,
+                member,
+                declaration,
+                previous_declaration,
+            } if owner.is_empty() => write!(
+                formatter,
+                "the name `{member}` is already used for a generic parameter at {declaration}; \
+                 first used at {previous_declaration} (E0403)"
             ),
             Error::DuplicateMember {
                 owner,
@@ -754,7 +781,8 @@ impl fmt::Display for Written<'_> {
                 call,
             } => write!(
                 formatter,
-                "invalid call to `{owner}::{method}` at {call}: {reason}"
+                "invalid call to `{}` at {call}: {reason}",
+                Qualified(owner, method)
             ),
             Error::InvalidHostOperation {
                 item,
@@ -792,7 +820,8 @@ impl fmt::Display for Written<'_> {
                 signature,
             } => write!(
                 formatter,
-                "invalid signature for `{owner}::{method}` at {signature}: {reason}"
+                "invalid signature for `{}` at {signature}: {reason}",
+                Qualified(owner, method)
             ),
             Error::MissingCapability {
                 owner,
@@ -818,6 +847,27 @@ impl fmt::Display for Written<'_> {
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
+            Error::TypeAnnotationsNeeded {
+                parameter,
+                reference,
+            } => write!(
+                formatter,
+                "type annotations needed at {reference}: cannot infer the type of the type \
+                 parameter `{parameter}` (E0282)"
+            ),
+        }
+    }
+}
+
+/// A member as the program names it: `Owner::member`, or `member` alone
+/// for a free function or a closure, which have no owner.
+pub(crate) struct Qualified<'a>(pub(crate) &'a str, pub(crate) &'a str);
+
+impl fmt::Display for Qualified<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self("", member) => formatter.write_str(member),
+            Self(owner, member) => write!(formatter, "{owner}::{member}"),
         }
     }
 }
