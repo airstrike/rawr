@@ -8,6 +8,7 @@ use std::fmt::Debug;
 pub mod controls;
 pub mod conversions;
 pub mod custom;
+pub mod plane;
 pub mod results;
 pub mod sequences;
 

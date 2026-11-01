@@ -19,6 +19,32 @@ const BUILD_PATH: &str = "build.rs";
 const SOURCE_PATH: &str = "src/main.rs";
 /// The crate name of a runner binary no script type names.
 const RUNNER_BINARY: &str = "rawr_generated_runner";
+/// `core::ops`' operator traits, which a crate type's operator is an impl
+/// of: an adapter calls the impl's method, as `receiver.sub(argument)`.
+const OPERATOR_TRAITS: [&str; 22] = [
+    "Add",
+    "Sub",
+    "Mul",
+    "Div",
+    "Rem",
+    "Neg",
+    "Not",
+    "AddAssign",
+    "SubAssign",
+    "MulAssign",
+    "DivAssign",
+    "RemAssign",
+    "BitAnd",
+    "BitOr",
+    "BitXor",
+    "Shl",
+    "Shr",
+    "BitAndAssign",
+    "BitOrAssign",
+    "BitXorAssign",
+    "ShlAssign",
+    "ShrAssign",
+];
 const TOP_LEVEL_SOURCE: &[u8] = include_bytes!("generate/top_level.rs");
 const BUILD_SCRIPT: &[u8] = b"use std::{env, fs, path::PathBuf};\n\
 fn main() {\n\
@@ -5597,6 +5623,18 @@ fn render_source(
         ";\npub(super) static COMPILE_SNAPSHOT: bool = {compile_snapshot};\n\
          #[allow(dead_code)]\npub(super) static UNIVERSE: bool = {};",
         crate::universe::enabled()
+    )
+    .map_err(|_| request::Error::Encoding)?;
+    // An operator needs no import in Rust: its trait is in scope for every
+    // adapter, which calls the impl's method (`receiver.sub(argument)`).
+    writeln!(
+        stamps,
+        "#[allow(unused_imports)]\npub(super) use ::core::ops::{{{}}};",
+        OPERATOR_TRAITS
+            .iter()
+            .map(|name| format!("{name} as _"))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
     .map_err(|_| request::Error::Encoding)?;
     // Each trait the program names is in scope for every adapter, so a
@@ -11203,7 +11241,7 @@ fn render_take_input(
     let deep;
     let ty = if matches!(
         ty,
-        convert::Type::Sequence { .. } | convert::Type::Option(_)
+        convert::Type::Sequence { .. } | convert::Type::Option(_) | convert::Type::Nominal { .. }
     ) || range_inclusive_element(ty).is_some()
     {
         deep = substituted(ty, signature, substitutions)?;
@@ -11216,13 +11254,13 @@ fn render_take_input(
         Some(profile) => render_take_profile(local, index, ty, profile, &mut taken)?,
         None => render_take(local, index, ty, &mut taken)?,
     }
-    // A crate type of no arguments is written out too: a trait's function
-    // the call reaches through one impl, as `Background::from(color)` of
-    // `impl From<Color> for Background`, takes the impl's type, which
-    // rustc can't infer beside the reflexive `From<Background>`.
-    let plain = matches!(ty, convert::Type::Nominal { arguments, .. } if arguments.is_empty())
-        && !is_value(ty)
-        && !is_future(ty);
+    // A crate type is written out too, at its instance's arguments: a
+    // trait's function the call reaches through one impl, as
+    // `Background::from(color)` of `impl From<Color> for Background`, or
+    // `point.sub(other)` of `impl Sub<Point<T>> for Point<T>` beside `impl
+    // Sub<Vector<T>>`, takes the impl's type, which rustc can't infer
+    // beside the other impls of the trait (T502).
+    let plain = matches!(ty, convert::Type::Nominal { .. }) && !is_value(ty) && !is_future(ty);
     let annotation = (generic || plain)
         .then(|| concrete_type(ty))
         .flatten()
