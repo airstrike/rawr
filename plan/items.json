@@ -687,7 +687,7 @@
     {"t":"T684","issue":684,"title":"T684: A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T685","issue":685,"title":"T685: A program module's function whose signature names another crate's type has a binding","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"6ef755d11","release":"0.3.92"},
     {"t":"T686","issue":686,"title":"T686: Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"f58750341","release":"0.3.91"},
-    {"t":"T687","issue":687,"title":"T687: A method returning `&[T]` borrowed from its receiver","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T687","issue":687,"title":"T687: A method returning `&[T]` borrowed from its receiver","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"78b40ec9c","release":null},
     {"t":"T688","issue":688,"title":"T688: Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"f58750341","release":"0.3.91"},
     {"t":"T689","issue":689,"title":"T689: An async fn input that is a struct holding references","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T690","issue":690,"title":"T690: Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -697,6 +697,7 @@
     {"t":"T694","issue":694,"title":"T694: A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T695","issue":695,"title":"T695: A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T696","issue":696,"title":"T696: node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T697","issue":697,"title":"T697: resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T697","issue":697,"title":"T697: resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T698","issue":698,"title":"T698: A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

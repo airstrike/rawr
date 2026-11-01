@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A method that lends a slice of strings or crate values from `&self`, as iced's `combo_box::State::options()` does, works in place with nothing copied: `.len()`, indexing, `for` loops and iterator methods read the native elements.","issues":[687]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.92",
@@ -1633,7 +1638,7 @@
     {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health"},
     {"issue":685,"title":"A program module's function whose signature names another crate's type has a binding","state":"closed","category":"No glue (D593)","release":"0.3.92"},
     {"issue":686,"title":"Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
-    {"issue":687,"title":"A method returning `&[T]` borrowed from its receiver","state":"open","category":"No glue (D593)"},
+    {"issue":687,"title":"A method returning `&[T]` borrowed from its receiver","state":"closed","category":"No glue (D593)"},
     {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
@@ -1643,7 +1648,8 @@
     {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
     {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
     {"issue":696,"title":"node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health"},
-    {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"}
+    {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"},
+    {"issue":698,"title":"A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
