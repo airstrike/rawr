@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.76",
+  "version": "0.3.77",
   "examples": {
     "running": 22,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A call can take an `Option` of a crate's opaque `impl Trait` value even while it is `None`, as gallery's `stack![content, viewer]` takes `viewer: Option<impl Widget>`.","issues":[626]},
-        {"text":"A crate impl whose input names an associated type of an associated type of its parameter works, as palette's `Rgb::from_color(lab)` takes `Lab<<S::Space as RgbSpace>::WhitePoint, T>`.","issues":[628]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.77",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A call can take an `Option` of a crate's opaque `impl Trait` value even while it is `None`, as gallery's `stack![content, viewer]` takes `viewer: Option<impl Widget>`.","issues":[626]},
+          {"text":"A crate impl whose input names an associated type of an associated type of its parameter works, as palette's `Rgb::from_color(lab)` takes `Lab<<S::Space as RgbSpace>::WhitePoint, T>`.","issues":[628]}
+        ]
+      },
       {
         "version": "0.3.76",
         "date": "2026-11-01",
@@ -1456,9 +1458,9 @@
     {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"closed","category":"Divergences from rustc","release":"0.3.74"},
     {"issue":624,"title":"A closure passed to a method taking impl FnOnce(&mut Self) gets its input from the receiver","state":"open","category":"No glue (D593)"},
     {"issue":625,"title":"rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.76"},
-    {"issue":626,"title":"An Option of a crate opaque value crosses to a crate consumer","state":"closed","category":"No glue (D593)"},
+    {"issue":626,"title":"An Option of a crate opaque value crosses to a crate consumer","state":"closed","category":"No glue (D593)","release":"0.3.77"},
     {"issue":627,"title":"A view returning a borrowing crate opaque widget names a hidden opaque type in the runner","state":"open","category":"No glue (D593)"},
-    {"issue":628,"title":"palette's Rgb::from_color(Lab) has no form","state":"closed","category":"No glue (D593)"},
+    {"issue":628,"title":"palette's Rgb::from_color(Lab) has no form","state":"closed","category":"No glue (D593)","release":"0.3.77"},
     {"issue":629,"title":"A toolchain cache test expects the old revalidation error","state":"closed","category":"Health"},
     {"issue":630,"title":"Non-execution store entries from an older rawr aren't evicted by version","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.76"},
     {"issue":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"},
