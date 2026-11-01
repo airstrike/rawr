@@ -115,6 +115,28 @@ impl Inputs {
         packages: &[String],
         current: &Current,
     ) -> Option<Self> {
+        Self::capture_within(baseline, build, packages, current, false)
+    }
+
+    /// The inputs of a table only this project replays (`bindings::stage`):
+    /// its own sources may be among them, and their contents are checked
+    /// before each replay as any input's are.
+    pub(crate) fn capture_staged(
+        baseline: &Baseline,
+        build: &build::Build,
+        packages: &[String],
+        current: &Current,
+    ) -> Option<Self> {
+        Self::capture_within(baseline, build, packages, current, true)
+    }
+
+    fn capture_within(
+        baseline: &Baseline,
+        build: &build::Build,
+        packages: &[String],
+        current: &Current,
+        project: bool,
+    ) -> Option<Self> {
         let selected = packages.iter().map(String::as_str).collect::<BTreeSet<_>>();
         if selected.is_empty()
             || selected.iter().any(|id| {
@@ -148,7 +170,7 @@ impl Inputs {
                     if generated {
                         continue;
                     }
-                    if path.starts_with(&current.project) {
+                    if !project && path.starts_with(&current.project) {
                         return None;
                     }
                     paths.insert(File {
@@ -484,6 +506,11 @@ mod tests {
         let (root, mut baseline, build, mut current) = fixture();
         current.project = root.clone();
         assert!(Inputs::capture(&baseline, &build, &[PACKAGE.to_owned()], &current).is_none());
+        // A table only the project replays may name its sources: their
+        // contents are checked before each replay.
+        let staged =
+            Inputs::capture_staged(&baseline, &build, &[PACKAGE.to_owned()], &current).unwrap();
+        assert!(staged.validate(&current).is_some());
         current.project = root.join("project");
         let proof::Recipe::Environment { key, .. } = &mut baseline.recipes[4] else {
             panic!("fixture compiler environment");

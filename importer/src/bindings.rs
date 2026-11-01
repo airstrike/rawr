@@ -240,6 +240,52 @@ pub(crate) fn directory(cargo_home: &Path) -> PathBuf {
     home::directory(&crate::store::home(cargo_home))
 }
 
+/// Where the project whose Rawr directory is `rawr` keeps the tables it
+/// extracted before they settle.
+pub(crate) fn staged(rawr: &Path) -> PathBuf {
+    rawr.join("staged")
+}
+
+/// Keep each table this extraction made, with what the nightly's build
+/// scripts gave, where a later demand of the same resolution reads it as it
+/// reads a settled one. Settling still decides what is shared (D609.4); a
+/// staged table only spares the run its nightly build and probe. The
+/// external crates every probe named are kept together, as settling keeps
+/// them. `inputs` are what the replay checks first, which may name the
+/// project's own sources. Best effort: a table not staged is probed again.
+pub(crate) fn stage(directory: &Path, settled: &[(&Settled, crate::input::bindings::Inputs)]) {
+    for (entry, inputs) in settled {
+        let Settled::Extracted {
+            key,
+            nightly: Some(nightly),
+            publish,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let Ok(table) = fs::read(&publish.table) else {
+            continue;
+        };
+        let mut meta = publish.meta.clone();
+        meta.scripts = nightly.clone();
+        meta.inputs = Some(inputs.clone());
+        if let Some(kept) = read(directory, key)
+            && kept.meta.crate_hash == meta.crate_hash
+        {
+            for external in kept.meta.externals {
+                if !meta.externals.contains(&external) {
+                    meta.externals.push(external);
+                }
+            }
+        }
+        let Ok(bytes) = serde_json::to_vec(&meta) else {
+            continue;
+        };
+        let _ = home::publish(directory, key, &[("table.json", &table), (META, &bytes)]);
+    }
+}
+
 /// One shared table a run used or extracted.
 pub(crate) enum Settled {
     /// A table this run extracted, published with the results the
@@ -479,6 +525,12 @@ impl Settlement {
                     scripts,
                     ..
                 } => {
+                    // This project's own extraction, as its probe would give
+                    // it again: drift shows in the build, as it does for a
+                    // table the run extracted.
+                    if directory == staged(rawr) {
+                        continue;
+                    }
                     let differs = scripts.iter().find(|(package, recorded)| {
                         stable.as_ref().and_then(|stable| stable.get(*package)) != Some(*recorded)
                     });
@@ -902,6 +954,86 @@ mod tests {
         .unwrap_err();
         assert!(refused.contains("`demo`"), "{refused}");
         assert!(super::read(&bindings, "demo").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_extracted_table_is_staged_for_the_next_demand_and_settles_where_it_did() {
+        let root = scratch("staged");
+        let package = "registry+https://index#demo@1.0.0".to_owned();
+        let nightly = BTreeMap::from([(package.clone(), vec![script("nightly")])]);
+        // The project's build gives other results than the nightly did.
+        let rawr = runner(
+            &root,
+            &BTreeMap::from([(package.clone(), vec![script("stable")])]),
+        );
+        let staged = super::staged(&rawr);
+        let home = root.join("home");
+        let table = root.join("table");
+        fs::write(&table, b"units").unwrap();
+        let extracted = |key: &str, external: &str, nightly: Option<_>| {
+            // A table only this project replays may name its own sources,
+            // which shared publication refuses.
+            let mut meta = meta(BTreeMap::new());
+            meta.inputs = None;
+            meta.externals.push(External {
+                crate_name: external.to_owned(),
+                stable_crate_id: "0".to_owned(),
+                unit_key: None,
+            });
+            Settled::Extracted {
+                key: key.to_owned(),
+                packages: vec![package.clone()],
+                inputs_packages: vec![package.clone()],
+                nightly,
+                publish: Box::new(Publish {
+                    bindings: home.clone(),
+                    table: table.clone(),
+                    meta,
+                }),
+            }
+        };
+        // Two demands' probes named different external crates: the staged
+        // table keeps both, with the nightly's results.
+        let inputs = crate::input::bindings::Inputs::fixture;
+        let first = extracted("demo", "first", Some(nightly.clone()));
+        super::stage(&staged, &[(&first, inputs())]);
+        let second = extracted("demo", "second", Some(nightly.clone()));
+        super::stage(&staged, &[(&second, inputs())]);
+        // A table with no nightly results is probed again rather than
+        // replayed.
+        let unscripted = extracted("no-nightly", "first", None);
+        super::stage(&staged, &[(&unscripted, inputs())]);
+        assert!(super::read(&staged, "no-nightly").is_none());
+        let entry = super::read(&staged, "demo").unwrap();
+        assert_eq!(entry.table, b"units");
+        assert_eq!(entry.meta.scripts, nightly);
+        assert_eq!(entry.meta.inputs, Some(inputs()));
+        let externals = entry
+            .meta
+            .externals
+            .iter()
+            .map(|external| external.crate_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(externals, ["second", "first"]);
+        drop(entry);
+        // Replaying it is the project's own extraction: nothing is refused
+        // or removed, and nothing reaches the home.
+        Settlement {
+            entries: vec![Settled::Read {
+                directory: staged.clone(),
+                key: "demo".to_owned(),
+                crate_name: "demo".to_owned(),
+                scripts: nightly,
+                inputs: crate::input::bindings::Inputs::fixture(),
+            }],
+            bindings: Some(home.clone()),
+            rawr: Some(rawr),
+        }
+        .settle()
+        .unwrap();
+        assert!(super::read(&staged, "demo").is_some());
+        assert!(super::read(&home, "demo").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
