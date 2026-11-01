@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A dependency that the workspace's `[patch]` replaces with a Git or path crate resolves to that crate, as `cargo build` does, instead of failing on every run.","issues":[668]},
+        {"text":"A program that is a member of a Cargo workspace resolves with the workspace root's `[patch]`, `[replace]`, profiles and `Cargo.lock`, as Cargo resolves every member, so fount's own examples check in place.","issues":[664]},
+        {"text":"`Type::from(value)` of a crate type's own value gives the value back, as core's `impl<T> From<T> for T` does, so `column![..]` of `Element`s checks; `Option<String>::as_deref()` is an `Option<&str>`.","issues":[676]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.86",
@@ -1564,18 +1571,20 @@
     {"issue":661,"title":"rawr check publishes shared bindings, so a later project skips extraction","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.85"},
     {"issue":662,"title":"A demand round finds every missing owner type at once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.85"},
     {"issue":663,"title":"The project's compiler is queried once per run","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.85"},
-    {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
+    {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"closed","category":"Divergences from rustc"},
     {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
     {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"closed","category":"No glue (D593)","release":"0.3.86"},
-    {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"},
+    {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"closed","category":"Divergences from rustc"},
     {"issue":669,"title":"?play's universe runner names a widget's theme from its impl (E0121)","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":670,"title":"Impl headers keep impls whose self type is a reference","state":"open","category":"No glue (D593)"},
     {"issue":671,"title":"`.into()` to a type with no From impl gives rustc's E0277","state":"open","category":"Divergences from rustc"},
     {"issue":672,"title":"A program with its own Rust modules reads shared bindings in a second project","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":673,"title":"symbolic_contract::real_extracted_contract_is_snapshot_bound_positioned_and_symbolic fails on main","state":"open","category":"Health"},
     {"issue":674,"title":"A literal lent to `impl Into<Cow<'static, str>>` or a std trait's 'static impl lives for the program","state":"open","category":"No glue (D593)"},
-    {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"}
+    {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
+    {"issue":676,"title":"Type::from(value) of a crate type's own value is core's reflexive From","state":"open","category":"No glue (D593)"},
+    {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
