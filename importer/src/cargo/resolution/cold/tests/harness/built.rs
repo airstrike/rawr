@@ -239,7 +239,7 @@ fn exercise(outcome: Outcome) {
                         assert!(built.harness.dag.is_none());
                         assert!(built.harness.universe.is_some());
                         assert!(built.allocation.bytes > prepared_bytes);
-                        built.harness.cargo_allocation.require(&cargo_limits)?;
+                        built.harness.cargo_allocation.require(&cargo_limits);
                         let expected = Build::parse(
                             &build_bytes,
                             environment(request, native, layout.final_form().target()),

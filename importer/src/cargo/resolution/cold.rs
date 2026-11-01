@@ -38,17 +38,9 @@ impl Request {
         cargo::unit::BuildGraph,
         cargo::universe::Pending,
     )> {
-        self.require_limits(limits)?;
-        cargo_allocation.require(cargo_limits)?;
-        if !allocation.matches(limits)
-            || allocation.items < self.allocation.items
-            || allocation.bytes < self.allocation.bytes
-        {
-            return Err(Error::Request {
-                field: "retained Cargo document allocation",
-                reason: "does not retain the original request account".into(),
-            });
-        }
+        self.require_limits(limits);
+        cargo_allocation.require(cargo_limits);
+        require_request_account(self, allocation, limits);
         let paths = layout.final_form();
         let (metadata, observation) = cargo::unit::Metadata::parse_versioned_in(
             documents.metadata,
@@ -221,23 +213,15 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<crate::process::Native> {
-        self.require_limits(limits)?;
-        harness.cargo_allocation.require(cargo_limits)?;
+        self.require_limits(limits);
+        harness.cargo_allocation.require(cargo_limits);
         if &harness.toolchain != cached.attestation.value().proof() {
             return Err(Error::ResolutionDrift {
                 command: "reserved Build preparation",
                 field: "prepared harness toolchain",
             });
         }
-        if !allocation.matches(limits)
-            || allocation.items < self.allocation.items
-            || allocation.bytes < self.allocation.bytes
-        {
-            return Err(Error::Request {
-                field: "reserved Build allocation",
-                reason: "does not retain the original request account".into(),
-            });
-        }
+        require_request_account(self, allocation, limits);
         let paths = layout.final_form();
         if harness.dag.is_some()
             || harness.documents.is_none()
@@ -316,32 +300,20 @@ impl Request {
         mut cargo_allocation: cargo::unit::Allocation,
         fresh_only: bool,
     ) -> Result<cargo::Harness> {
-        self.require_limits(limits)?;
-        cargo_allocation.require(cargo_limits)?;
-        if !allocation.matches(limits)
-            || allocation.items < self.allocation.items
-            || allocation.bytes < self.allocation.bytes
-        {
-            return Err(Error::Request {
-                field: "reserved harness allocation",
-                reason: "does not retain the original request account".into(),
-            });
-        }
-        let catalog = self.universe.as_ref().ok_or_else(|| Error::Request {
-            field: "reserved fresh harness",
-            reason: "requires a versioned resolution universe".into(),
-        })?;
+        self.require_limits(limits);
+        cargo_allocation.require(cargo_limits);
+        require_request_account(self, allocation, limits);
+        let catalog = self
+            .universe
+            .as_ref()
+            .expect("a reserved harness belongs to a request with a resolution universe");
         let provisional_manifest =
             cargo::render_manifest_accounted(self, None, limits, allocation)?;
         let placement = cargo::select_placement(self, catalog, &provisional_manifest, limits)?;
-        if fresh_only && !matches!(placement.state, cargo::PlacementState::Fresh) {
-            return Err(Error::Request {
-                field: "reserved fresh harness",
-                reason:
-                    "requires a Fresh placement; persisted authority is not materialization input"
-                        .into(),
-            });
-        }
+        assert!(
+            !fresh_only || matches!(placement.state, cargo::PlacementState::Fresh),
+            "a fresh-only harness is prepared only for a Fresh placement"
+        );
         let toolchain = cached.attestation.value().proof().clone();
         let native = crate::process::Native::from_attestation(&cached.attestation);
         let native = native.production();
@@ -784,16 +756,21 @@ pub(in crate::cargo) fn prefix(
         })?;
         allocation.bytes(layout.size())?;
     }
-    prefix
-        .try_reserve_exact(2)
-        .map_err(|error| Error::Request {
-            field: "reserved Cargo command prefix",
-            reason: error.to_string().into_boxed_str(),
-        })?;
     // Cargo applies later --config values after the explicit config files.
     prefix.push("--config".into());
     prefix.push(config.as_os_str().to_owned());
     Ok(prefix)
+}
+
+/// A reserved preparation runs on an account that still holds everything
+/// its request was charged.
+fn require_request_account(request: &Request, allocation: &RequestAllocation, limits: &Limits) {
+    assert!(
+        allocation.matches(limits)
+            && allocation.items >= request.allocation.items
+            && allocation.bytes >= request.allocation.bytes,
+        "a reserved preparation retains its request's account"
+    );
 }
 
 #[cfg(test)]

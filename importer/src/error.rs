@@ -8,7 +8,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     /// A content-addressed importer node failed inside the legacy product edge.
-    #[error("content-addressed {operation} node failed: {source}")]
+    #[error("{source}")]
     Node {
         /// The product transformation being migrated.
         operation: &'static str,
@@ -24,12 +24,12 @@ pub enum Error {
         state: &'static str,
     },
 
-    /// A named request field could not be promoted into valid importer input.
-    #[error("invalid import request field `{field}`: {reason}")]
+    /// Something in the user's Cargo setup or environment that rawr can't
+    /// build with, said as Cargo or rustc would say it. A condition only a
+    /// rawr bug could cause is a panic, never this.
+    #[error("{reason}")]
     Request {
-        /// The rejected request field.
-        field: &'static str,
-        /// The reason the field was rejected.
+        /// The whole message, naming the dependency, file or variable.
         reason: Box<str>,
     },
 

@@ -142,14 +142,17 @@ impl Seed {
                 command: "metadata",
                 field: "internal Rawr selection",
             })?;
-        if selected.iter().any(|selection| {
+        if let Some(selection) = selected.iter().find(|selection| {
             selection.alias() != config::INTERNAL_ALIAS
                 && selection.package_id() == internal.package_id()
         }) {
             return Err(Error::Request {
-                field: "internal Rawr package identity",
-                reason: "a caller dependency resolves to the reserved internal Rawr PackageId"
-                    .into(),
+                reason: format!(
+                    "the dependency `{}` is the `rawr` crate rawr itself links; remove it \
+                     from `Cargo.toml`",
+                    selection.alias()
+                )
+                .into_boxed_str(),
             });
         }
         let package = metadata
@@ -304,14 +307,14 @@ impl Recipe {
         let selected = table(profiles, profile, "selected Cargo profile")?;
         let packages = table(selected, "package", "Cargo package profile authority")?;
         let short = allocation.formatted(format_args!("{PACKAGE}@{}", self.version))?;
-        let collides = packages.iter().any(|(selector, _)| {
-            selector == PACKAGE || selector == short || selector == self.package_id.as_ref()
+        let collides = packages.iter().find(|(selector, _)| {
+            *selector == PACKAGE || *selector == short || *selector == self.package_id.as_ref()
         });
-        if collides {
+        if let Some((selector, _)) = collides {
             return Err(Error::Request {
-                field: "internal Rawr package profile",
                 reason: format!(
-                    "selected profile `{profile}` already overrides the reserved Rawr identity"
+                    "`[profile.{profile}.package.\"{selector}\"]` in `Cargo.toml` sets the \
+                     profile of the `rawr` crate rawr itself links; remove that table"
                 )
                 .into_boxed_str(),
             });

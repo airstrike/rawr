@@ -127,10 +127,8 @@ fn unsupported_target_and_nonexact_git_revision_reject_while_roles_stay_canonica
     };
     assert!(matches!(
         error,
-        Error::Request {
-            field: "dependency git revision",
-            ..
-        }
+        Error::Request { ref reason }
+            if reason.starts_with("the git revision `abc` of dependency `catalog`")
     ));
     Dependency::git(
         "catalog",
@@ -159,10 +157,8 @@ fn unsupported_target_and_nonexact_git_revision_reject_while_roles_stay_canonica
         .expect_err("unsupported targets reject before Cargo graph authority");
     assert!(matches!(
         error,
-        Error::Request {
-            field: "Cargo target",
-            ..
-        }
+        Error::Request { ref reason }
+            if reason.as_ref() == "rawr does not support the target `x86_64-unknown-linux-gnu`"
     ));
 }
 

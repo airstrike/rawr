@@ -22,12 +22,11 @@ pub(super) fn encode(
             code: "missing-generic-node-parent",
             reason: "cached bindings selection requires a current generic-contract receipt".into(),
         })?;
-    if parent.output_limit() != limits.node_output_bytes() {
-        return Err(crate::Error::Request {
-            field: "bindings cache limits",
-            reason: "differ from the limits sealed by the API node context".into(),
-        });
-    }
+    assert_eq!(
+        parent.output_limit(),
+        limits.node_output_bytes(),
+        "bindings are cached under the limits of their API node"
+    );
     let authority =
         authority(contract.fingerprint().as_bytes()).map_err(|source| crate::Error::Node {
             operation: "capture bindings node authority",

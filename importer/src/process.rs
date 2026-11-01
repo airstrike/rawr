@@ -309,21 +309,15 @@ impl Command {
         action: CargoAction,
         tail: Vec<OsString>,
     ) -> Result<Vec<OsString>> {
-        if prefix.iter().chain(&tail).any(|argument| {
-            argument == "--jobs"
-                || argument == "-j"
-                || argument.to_string_lossy().starts_with("--jobs=")
-        }) {
-            return Err(Error::Request {
-                field: "Cargo parallelism",
-                reason: "caller-supplied Cargo jobs arguments are forbidden".into(),
-            });
-        }
-        let extra = 1 + usize::from(action.parallelism().is_some()) * 2 + tail.len();
-        prefix.try_reserve(extra).map_err(|error| Error::Request {
-            field: "Cargo arguments",
-            reason: format!("failed to reserve sealed Cargo arguments: {error}").into_boxed_str(),
-        })?;
+        assert!(
+            !prefix.iter().chain(&tail).any(|argument| {
+                argument == "--jobs"
+                    || argument == "-j"
+                    || argument.to_string_lossy().starts_with("--jobs=")
+            }),
+            "only the parallelism proof gives Cargo `--jobs`"
+        );
+        prefix.reserve(1 + usize::from(action.parallelism().is_some()) * 2 + tail.len());
         prefix.push(action.subcommand().into());
         if let Some(proof) = action.parallelism() {
             prefix.push("--jobs".into());
@@ -354,34 +348,23 @@ impl Command {
         current_dir: PathBuf,
         environment: Box<[(OsString, OsString)]>,
     ) -> Result<Self> {
-        if arguments.first().map(OsString::as_os_str) != Some(OsStr::new(PROBE_ARGUMENT))
-            || arguments.iter().skip(1).any(|argument| {
-                matches!(
-                    argument.to_str(),
-                    Some(PROBE_ARGUMENT | DIAGNOSTIC_PROBE_ARGUMENT)
-                )
-            })
-        {
-            return Err(Error::Request {
-                field: "metadata probe mode",
-                reason: "must match the sealed probe authority exactly".into(),
-            });
-        }
-        if environment
-            .iter()
-            .any(|(key, _)| key.as_os_str() == OsStr::new(RUST_MIN_STACK_KEY))
-        {
-            return Err(Error::Request {
-                field: "rustc probe stack authority",
-                reason: "must be supplied only by the sealed probe command".into(),
-            });
-        }
+        assert!(
+            arguments.first().map(OsString::as_os_str) == Some(OsStr::new(PROBE_ARGUMENT))
+                && !arguments.iter().skip(1).any(|argument| {
+                    matches!(
+                        argument.to_str(),
+                        Some(PROBE_ARGUMENT | DIAGNOSTIC_PROBE_ARGUMENT)
+                    )
+                }),
+            "a metadata probe runs in exactly the normal probe mode"
+        );
+        assert!(
+            !environment
+                .iter()
+                .any(|(key, _)| key.as_os_str() == OsStr::new(RUST_MIN_STACK_KEY)),
+            "only the probe command sets rustc's stack size"
+        );
         let mut environment = environment.into_vec();
-        environment.try_reserve(1).map_err(|error| Error::Request {
-            field: "rustc probe environment",
-            reason: format!("failed to reserve the sealed rustc stack authority: {error}")
-                .into_boxed_str(),
-        })?;
         environment.push((RUST_MIN_STACK_KEY.into(), RUST_MIN_STACK_VALUE.into()));
         Ok(Self {
             program: Program::Driver,
@@ -423,15 +406,9 @@ impl Preflight {
             Program::Cargo | Program::Rustc | Program::Rustdoc => {
                 Ok(Self(PreflightKind::Which(program)))
             }
-            Program::Rustup => Err(Error::Request {
-                field: "toolchain preflight",
-                reason: "rustup cannot discover itself".into(),
-            }),
+            Program::Rustup => unreachable!("rustup is never found through itself"),
             #[cfg(feature = "rustc-driver")]
-            Program::Driver => Err(Error::Request {
-                field: "toolchain preflight",
-                reason: "the Rawr driver is discovered from the current executable".into(),
-            }),
+            Program::Driver => unreachable!("the driver is found from the current executable"),
         }
     }
 
@@ -440,10 +417,7 @@ impl Preflight {
             Program::Cargo | Program::Rustc | Program::Rustdoc => {
                 Ok(Self(PreflightKind::Version(program)))
             }
-            Program::Rustup => Err(Error::Request {
-                field: "toolchain preflight",
-                reason: "rustup version is not part of the pinned support proof".into(),
-            }),
+            Program::Rustup => unreachable!("rustup's version is never asked"),
             #[cfg(feature = "rustc-driver")]
             Program::Driver => Ok(Self(PreflightKind::DriverVersion)),
         }
@@ -775,8 +749,8 @@ impl Native {
             .entries()
             .find_map(|(key, value)| (key == "PATH").then_some(value))
             .ok_or_else(|| Error::Request {
-                field: "native tool discovery",
-                reason: "sealed PATH is absent".into(),
+                reason: "the environment variable `PATH` is not set, so `rustup` can't be found"
+                    .into(),
             })?;
         let rustup = find_program_in(
             "rustup",
@@ -860,8 +834,7 @@ impl Native {
                 .find_map(|(key, value)| (key == name).then_some(value))
         };
         let path = value("PATH").ok_or_else(|| Error::Request {
-            field: "native tool discovery",
-            reason: "sealed PATH is absent".into(),
+            reason: "the environment variable `PATH` is not set, so `rustup` can't be found".into(),
         })?;
         let rustup = find_program_in(
             "rustup",
@@ -878,8 +851,9 @@ impl Native {
             .map(PathBuf::from)
             .or_else(|| value("HOME").map(|home| PathBuf::from(home).join(".rustup")))
             .ok_or_else(|| Error::Request {
-                field: "native tool discovery",
-                reason: "sealed RUSTUP_HOME and HOME are both absent".into(),
+                reason: "neither `RUSTUP_HOME` nor `HOME` is set, so the Rust toolchain can't be \
+                         found"
+                    .into(),
             })?;
         let rustup_home = if rustup_home.is_absolute() {
             rustup_home
@@ -1021,12 +995,10 @@ impl Cargo {
     }
 
     pub(crate) fn run(&self, command: &Command, limits: Limits) -> Result<Output> {
-        if command.program != Program::Cargo {
-            return Err(Error::Request {
-                field: "pinned Cargo replay",
-                reason: "the sealed command is not a Cargo invocation".into(),
-            });
-        }
+        assert!(
+            command.program == Program::Cargo,
+            "the pinned Cargo runs only Cargo commands"
+        );
         execute_production(&self.executable, command, limits)
     }
 }
@@ -1035,15 +1007,13 @@ impl Cargo {
 /// command's `PATH`, the rustup proxy, which picks the toolchain from the
 /// command's directory as `cargo build` run there does (D609.1).
 pub(crate) fn project_cargo(command: &Command, limits: Limits) -> Result<Output> {
-    if !matches!(
-        command.kind,
-        CommandKind::Cargo(CargoAction::RunnerBuild(_))
-    ) {
-        return Err(Error::Request {
-            field: "project Cargo",
-            reason: "only the runner build runs on the project's Cargo".into(),
-        });
-    }
+    assert!(
+        matches!(
+            command.kind,
+            CommandKind::Cargo(CargoAction::RunnerBuild(_))
+        ),
+        "only the runner build runs on the project's Cargo"
+    );
     execute_production(Path::new("cargo"), command, limits)
 }
 
@@ -1316,8 +1286,7 @@ fn combine_terminal_failure<const N: usize>(error: Error, cleanup: [Result<()>; 
 
 fn find_program(name: &'static str) -> Result<PathBuf> {
     let path = std::env::var_os("PATH").ok_or_else(|| Error::Request {
-        field: "native tool discovery",
-        reason: "PATH is absent".into(),
+        reason: "the environment variable `PATH` is not set, so `rustup` can't be found".into(),
     })?;
     for directory in std::env::split_paths(&path) {
         let candidate = directory.join(name);
@@ -1325,10 +1294,7 @@ fn find_program(name: &'static str) -> Result<PathBuf> {
             return canonical_program("rustup executable", &candidate);
         }
     }
-    Err(Error::Request {
-        field: "native tool discovery",
-        reason: format!("`{name}` was not found in PATH").into_boxed_str(),
-    })
+    Err(not_found(name))
 }
 
 fn find_program_in(
@@ -1343,10 +1309,15 @@ fn find_program_in(
             return canonical_program_in("rustup executable", &candidate, Some(budget));
         }
     }
-    Err(Error::Request {
-        field: "native tool discovery",
-        reason: format!("`{name}` was not found in sealed PATH").into_boxed_str(),
-    })
+    Err(not_found(name))
+}
+
+/// A tool rawr needs is in none of `PATH`'s directories.
+fn not_found(name: &str) -> Error {
+    Error::Request {
+        reason: format!("could not find `{name}` in `PATH`; install Rust with rustup")
+            .into_boxed_str(),
+    }
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -1629,10 +1600,8 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
             .expect("fill path account");
         assert!(matches!(
             find_program_in("rustup", [missing.to_path_buf()], &budget),
-            Err(Error::Request {
-                field: "native tool discovery",
-                ..
-            })
+            Err(Error::Request { reason })
+                if reason.starts_with("could not find `rustup` in `PATH`")
         ));
         assert!(matches!(
             canonical_program_in("tool", missing, Some(&budget)),
@@ -1747,33 +1716,20 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
             [(RUST_MIN_STACK_KEY.into(), RUST_MIN_STACK_VALUE.into())]
         );
 
-        let forged = Command::probe(
+        // A caller-supplied stack size, or an evidence-only diagnostic mode,
+        // is a rawr bug.
+        assert!(std::panic::catch_unwind(|| Command::probe(
             vec![PROBE_ARGUMENT.into()],
             PathBuf::from("fixture"),
             vec![(RUST_MIN_STACK_KEY.into(), "16777216".into())].into_boxed_slice(),
-        )
-        .expect_err("caller-supplied stack authority is rejected");
-        assert!(matches!(
-            forged,
-            Error::Request {
-                field: "rustc probe stack authority",
-                ..
-            }
-        ));
-
-        let diagnostics = Command::probe(
+        ))
+        .is_err());
+        assert!(std::panic::catch_unwind(|| Command::probe(
             vec![DIAGNOSTIC_PROBE_ARGUMENT.into()],
             PathBuf::from("fixture"),
             Box::default(),
-        )
-        .expect_err("normal probes cannot request evidence-only diagnostics");
-        assert!(matches!(
-            diagnostics,
-            Error::Request {
-                field: "metadata probe mode",
-                ..
-            }
-        ));
+        ))
+        .is_err());
     }
 
     #[test]

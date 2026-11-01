@@ -438,7 +438,7 @@ impl Metadata {
         limits: &Limits,
         allocation: &mut Allocation,
     ) -> Result<Self> {
-        allocation.require(limits)?;
+        allocation.require(limits);
         let mut next = allocation.retained;
         // The document size is an accounting target recorded on the
         // JSON epoch; refusal is reserved for the physical capture bound.
@@ -615,7 +615,7 @@ impl Metadata {
         epoch: &mut Allocation,
         definition: Option<&super::universe::Definition>,
     ) -> Result<(Self, Option<super::universe::MetadataObservation>)> {
-        epoch.require(limits)?;
+        epoch.require(limits);
         let raw = RawDocument::from_bytes(bytes);
         let mut allocation = preflight_from("Cargo metadata", bytes, limits, epoch.retained)?;
         let value = parse_owned_json("Cargo metadata", bytes)?;
@@ -999,7 +999,7 @@ impl Metadata {
         dependencies: &[Selected],
         epoch: &mut Allocation,
     ) -> Result<Box<[Selection]>> {
-        epoch.require(&self.limits)?;
+        epoch.require(&self.limits);
         let mut allocation = epoch.retained;
         allocation.nodes("Cargo selection nodes", dependencies.len(), &self.limits)?;
         let mut selections = Vec::new();
@@ -1128,7 +1128,7 @@ impl BuildGraph {
     )> {
         #[cfg(not(feature = "rustc-driver"))]
         let _ = selected_target;
-        epoch.require(limits)?;
+        epoch.require(limits);
         let raw = RawDocument::from_bytes(bytes);
         let mut allocation = preflight_from("Cargo unit graph", bytes, limits, epoch.retained)?;
         let value = parse_owned_json("Cargo unit graph", bytes)?;
@@ -2091,7 +2091,7 @@ impl BuildGraph {
     /// Rebind transient reachability work to every proof retained after this
     /// graph was parsed, without retaining an independently spendable epoch.
     pub(crate) fn bind_reachability(&mut self, epoch: &Allocation, limits: &Limits) -> Result<()> {
-        epoch.require(limits)?;
+        epoch.require(limits);
         self._allocation = epoch.retained;
         Ok(())
     }
@@ -3735,12 +3735,10 @@ impl Allocation {
 
     /// Open the only temporary ownership interval in a fresh resolution.
     pub(super) fn begin_provisional(&mut self) -> Result<Provisional> {
-        if self.provisional.is_some() {
-            return Err(Error::Request {
-                field: "Cargo provisional allocation scope",
-                reason: "is already active".into(),
-            });
-        }
+        assert!(
+            self.provisional.is_none(),
+            "provisional allocation scopes never nest"
+        );
         let scope = Arc::new(());
         self.provisional = Some(Arc::clone(&scope));
         Ok(Provisional {
@@ -3753,26 +3751,22 @@ impl Allocation {
     /// Consume one provisional checkpoint after every value born inside it has
     /// been dropped, releasing exactly that interval's still-charged delta.
     pub(super) fn release_provisional(&mut self, checkpoint: &mut Provisional) -> Result<()> {
-        let scope = checkpoint.scope.take().ok_or_else(|| Error::Request {
-            field: "Cargo provisional allocation scope",
-            reason: "was already consumed".into(),
-        })?;
-        if !Weak::ptr_eq(&checkpoint.epoch, &Arc::downgrade(&self.epoch)) {
-            return Err(Error::Request {
-                field: "Cargo provisional allocation scope",
-                reason: "belongs to a different allocation epoch".into(),
-            });
-        }
-        let active = self.provisional.as_ref().ok_or_else(|| Error::Request {
-            field: "Cargo provisional allocation scope",
-            reason: "is not active".into(),
-        })?;
-        if !Arc::ptr_eq(active, &scope) {
-            return Err(Error::Request {
-                field: "Cargo provisional allocation scope",
-                reason: "was completed out of order".into(),
-            });
-        }
+        let scope = checkpoint
+            .scope
+            .take()
+            .expect("a provisional scope is released once");
+        assert!(
+            Weak::ptr_eq(&checkpoint.epoch, &Arc::downgrade(&self.epoch)),
+            "a provisional scope is released by the epoch that opened it"
+        );
+        let active = self
+            .provisional
+            .as_ref()
+            .expect("a released provisional scope is active");
+        assert!(
+            Arc::ptr_eq(active, &scope),
+            "provisional scopes are released in order"
+        );
         let delta = self
             .retained
             .retained_ownership()
@@ -3782,25 +3776,20 @@ impl Allocation {
         Ok(())
     }
 
-    pub(super) fn require(&self, limits: &Limits) -> Result<()> {
+    pub(super) fn require(&self, limits: &Limits) {
         let expected = &self.limits;
-        if expected.json_bytes == limits.json_bytes
-            && expected.manifest_bytes == limits.manifest_bytes
-            && expected.packages == limits.packages
-            && expected.units == limits.units
-            && expected.edges == limits.edges
-            && expected.items == limits.items
-            && expected.containers == limits.containers
-            && expected.string_bytes == limits.string_bytes
-            && expected.depth == limits.depth
-        {
-            Ok(())
-        } else {
-            Err(Error::Request {
-                field: "Cargo allocation epoch",
-                reason: "was opened under a different limits profile".into(),
-            })
-        }
+        assert!(
+            expected.json_bytes == limits.json_bytes
+                && expected.manifest_bytes == limits.manifest_bytes
+                && expected.packages == limits.packages
+                && expected.units == limits.units
+                && expected.edges == limits.edges
+                && expected.items == limits.items
+                && expected.containers == limits.containers
+                && expected.string_bytes == limits.string_bytes
+                && expected.depth == limits.depth,
+            "a Cargo allocation epoch runs under the limits that opened it"
+        );
     }
 
     #[cfg(test)]
@@ -6921,7 +6910,14 @@ mod allocation_tests {
         assert_eq!(epoch.usage().full_usage(), starting.full_usage());
         assert_eq!(epoch.usage().strings, prior.value().len());
         assert_eq!(epoch.usage().peak_usage().2, 14);
-        assert!(epoch.release_provisional(&mut checkpoint).is_err());
+        assert!(panics(|| {
+            let _ = epoch.release_provisional(&mut checkpoint);
+        }));
+    }
+
+    /// Whether `body` panics: misusing a provisional scope is a rawr bug.
+    fn panics(body: impl FnOnce()) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).is_err()
     }
 
     #[test]
@@ -6929,11 +6925,17 @@ mod allocation_tests {
         let limits = Limits::standard();
         let mut first = Allocation::begin(&limits);
         let mut checkpoint = first.begin_provisional().expect("the first scope opens");
-        assert!(first.begin_provisional().is_err());
+        assert!(panics(|| {
+            let _ = first.begin_provisional();
+        }));
 
         let mut second = Allocation::begin(&limits);
-        assert!(second.release_provisional(&mut checkpoint).is_err());
-        assert!(first.release_provisional(&mut checkpoint).is_err());
+        assert!(panics(|| {
+            let _ = second.release_provisional(&mut checkpoint);
+        }));
+        assert!(panics(|| {
+            let _ = first.release_provisional(&mut checkpoint);
+        }));
         assert!(second.begin_provisional().is_ok());
     }
 
@@ -6952,7 +6954,6 @@ mod allocation_tests {
             })
             .expect("partial provisional value fits");
         let failed = Err::<(), _>(crate::Error::Request {
-            field: "provisional fixture",
             reason: "fails after allocation".into(),
         });
         drop(partial);
@@ -6961,7 +6962,9 @@ mod allocation_tests {
             .expect("error cleanup releases the dropped partial value");
         assert!(failed.is_err());
         assert_eq!(epoch.usage().full_usage(), starting.full_usage());
-        assert!(epoch.release_provisional(&mut checkpoint).is_err());
+        assert!(panics(|| {
+            let _ = epoch.release_provisional(&mut checkpoint);
+        }));
     }
 
     #[test]

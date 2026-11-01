@@ -378,7 +378,6 @@ fn prepare(
             Ok(Some(request)) => request,
             Ok(None) => {
                 return Err(Error::other(rawr_import::Error::Request {
-                    field: "Rust imports",
                     reason: "the crate has no Rust dependency or native module".into(),
                 }));
             }

@@ -251,7 +251,7 @@ fn exercise(outcome: Outcome) {
                         assert_eq!(resolution.toolchain(), cached.attestation.value().proof());
                         assert!(resolution.dag.is_none());
                         assert!(resolution.universe.is_some());
-                        resolution.cargo_allocation.require(&cargo_limits)?;
+                        resolution.cargo_allocation.require(&cargo_limits);
                         assert!(allocation.bytes > before);
                         let receipt: Value = serde_json::from_slice(
                             &fs::read(layout.receipt())
