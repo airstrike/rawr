@@ -37,21 +37,25 @@ fn independent_facts_prove_closed_obligations_without_any_child_process() {
     assert!(inventories[0].rejects_for_test(|facts| {
         facts.partitions[0].associated[0].declaration = None;
     }));
+    // `retained_only::Hidden::retained` is private and no export reaches it.
     let retained = inventories[0]
         .definitions()
         .find(|definition| {
             matches!(definition.kind(), model::Kind::Function { .. })
                 && matches!(definition.owner(), model::Owner::Definition(_))
-                && !inventories[0]
-                    .graph()
-                    .definitions()
-                    .any(|ordinary| ordinary.id() == definition.id())
+                && definition.display_path().last() == Some("retained")
         })
-        .expect("the independent facts retain an associated declaration outside the ordinary graph")
+        .expect("the independent facts retain an associated declaration no export reaches")
         .id()
         .clone();
+    assert!(
+        inventories[0]
+            .exports()
+            .all(|(_, target)| *target != retained),
+        "the retained declaration is no export's target"
+    );
     let original_inventory = *inventories[0].fingerprint();
-    let original_graph = *inventories[0].graph().fingerprint().as_bytes();
+    let original_exports = inventories[0].exports().cloned().collect::<Vec<_>>();
     let original_catalog = *Catalog::join(&inventories).unwrap().fingerprint();
     let script = test_launch::Script::new(
         std::fs::canonicalize(&root).unwrap(),
@@ -261,7 +265,7 @@ fn independent_facts_prove_closed_obligations_without_any_child_process() {
             *definition = serde_json::from_value(value).unwrap();
         })
         .unwrap();
-    assert_eq!(first.graph().fingerprint().as_bytes(), &original_graph);
+    assert!(first.exports().cloned().eq(original_exports));
     assert_ne!(first.fingerprint(), &original_inventory);
     let mutated = [first, second];
     let mutated_catalog = Catalog::join(&mutated).unwrap();
@@ -351,6 +355,55 @@ pub(super) fn capture(
     }
     inventory::Acquired::capture(builder.build().unwrap(), native, limits)
         .expect("the independent intrinsic domain authenticates")
+}
+
+/// A capture of several crates builds no API graph of them all. Each crate's
+/// entry keeps its own exports, rooted at the crate, and every export the
+/// capture saw lands in exactly one entry.
+#[test]
+fn a_capture_splits_its_exports_into_one_entry_per_crate() {
+    let _turn = crate::store::test_turn();
+    crate::store::isolate_for_tests();
+    let limits = Limits::standard();
+    let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/split-entries");
+    std::fs::create_dir_all(&root).unwrap();
+    let acquired = capture(&root.join("ab"), &["a", "b"], &native, &limits);
+    let roots = acquired
+        .exports()
+        .map(|(key, _)| key.root_alias())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        roots.into_iter().collect::<Vec<_>>(),
+        ["facts_a", "facts_b"]
+    );
+    let entries = acquired.entries(|_| Some([7; 32])).unwrap();
+    assert_eq!(entries.len(), 2);
+    let mut split = 0;
+    for entry in &entries {
+        let name = entry.crate_name();
+        for (path, namespace, target) in entry.exports() {
+            assert!(acquired.exports().any(|(key, known)| {
+                key.root_alias() == name
+                    && key.namespace() == *namespace
+                    && key.path().eq(path.iter().map(AsRef::as_ref))
+                    && known == target
+            }));
+            split += 1;
+        }
+    }
+    assert_eq!(split, acquired.exports().len());
+    let a = entries
+        .iter()
+        .find(|entry| entry.crate_name() == "facts_a")
+        .unwrap();
+    for name in ["LeftOnly", "Alias", "alias"] {
+        assert!(
+            a.exports()
+                .any(|(path, _, _)| path.len() == 1 && &*path[0] == name),
+            "facts_a exports {name}"
+        );
+    }
 }
 
 #[test]

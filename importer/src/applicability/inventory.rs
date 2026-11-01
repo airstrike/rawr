@@ -5,38 +5,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::api::{self, identity, model};
+use crate::api::{identity, model};
 use crate::cargo;
 use crate::{Error, Result};
 
-/// One independently captured graph and its complete intrinsic fact payload.
-/// A demand-selected graph cannot be promoted into this type.
+/// One independent capture: its crates' public exports with their targets,
+/// and their complete intrinsic fact payload. No API graph of the capture
+/// is built. A demand-selected capture cannot be promoted into this type.
 pub struct Acquired {
-    graph: api::Graph<api::Extracted>,
+    exports: Box<[(identity::Export, identity::Definition)]>,
     facts: Facts,
     fingerprint: [u8; 32],
     /// What the nightly's build scripts gave, which each entry keeps.
     scripts: super::store::Scripts,
-}
-
-/// Intrinsic facts with their own independently classified ordinary contract.
-/// Classification never merges source graphs or changes their input authority.
-pub struct Prepared {
-    contract: crate::Contract<crate::Classified>,
-    facts: Facts,
-    fingerprint: [u8; 32],
-}
-
-impl Prepared {
-    pub const fn contract(&self) -> &crate::Contract<crate::Classified> {
-        &self.contract
-    }
-    pub const fn fingerprint(&self) -> &[u8; 32] {
-        &self.fingerprint
-    }
-    pub(super) const fn facts(&self) -> &Facts {
-        &self.facts
-    }
 }
 
 /// Unvalidated canonical facts from one authenticated compiler document.
@@ -139,16 +120,21 @@ impl Acquired {
         Ok(acquired)
     }
 
-    pub(crate) fn authenticate(graph: api::Graph<api::Extracted>, facts: Facts) -> Result<Self> {
+    pub(crate) fn authenticate(
+        exports: Box<[(identity::Export, identity::Definition)]>,
+        facts: Facts,
+    ) -> Result<Self> {
         facts.validate()?;
         let mut fingerprint = Sha256::new();
-        fingerprint.update(b"rawr.import.intrinsic-inventory/v1");
-        fingerprint.update(graph.fingerprint().as_bytes());
-        let canonical =
+        fingerprint.update(b"rawr.import.intrinsic-inventory/v2");
+        let encoded = serde_json::to_vec(&exports)
+            .map_err(|_| invalid("intrinsic export encoding failed"))?;
+        fingerprint.update(encoded);
+        let encoded =
             serde_json::to_vec(&facts).map_err(|_| invalid("intrinsic fact encoding failed"))?;
-        fingerprint.update(canonical);
+        fingerprint.update(encoded);
         Ok(Self {
-            graph,
+            exports,
             facts,
             fingerprint: fingerprint.finalize().into(),
             scripts: super::store::Scripts::default(),
@@ -160,10 +146,10 @@ impl Acquired {
     #[cfg(test)]
     pub(super) fn mutate_for_test(self, change: impl FnOnce(&mut Facts)) -> Result<Self> {
         let Self {
-            graph, mut facts, ..
+            exports, mut facts, ..
         } = self;
         change(&mut facts);
-        Self::authenticate(graph, facts)
+        Self::authenticate(exports, facts)
     }
 
     #[cfg(test)]
@@ -173,34 +159,16 @@ impl Acquired {
         facts.validate().is_err()
     }
 
-    /// Classify this constituent alone; the union cannot fabricate a contract
-    /// from a graph captured in a different compiler session.
-    pub fn classify(
-        self,
-        limits: &cargo::Limits,
-    ) -> std::result::Result<Prepared, crate::classify::Error> {
-        let Self {
-            graph,
-            facts,
-            fingerprint,
-            ..
-        } = self;
-        let contract = graph.classify(&crate::classify::Policy::standard(), limits)?;
-        Ok(Prepared {
-            contract,
-            facts,
-            fingerprint,
-        })
-    }
-
     /// Identity includes the full fact payload and exact completeness domains.
     pub const fn fingerprint(&self) -> &[u8; 32] {
         &self.fingerprint
     }
 
-    /// The ordinary selected graph retains its normal closure semantics.
-    pub const fn graph(&self) -> &api::Graph<api::Extracted> {
-        &self.graph
+    /// Each public export, with its target.
+    pub fn exports(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &(identity::Export, identity::Definition)> {
+        self.exports.iter()
     }
 
     /// Full intrinsic definitions, including declarations outside that closure.
@@ -360,19 +328,15 @@ impl Acquired {
             let ours = |owner: &identity::Unit| owner == unit || !owned.contains(owner);
             let crate_name = unit.crate_name();
             let mut exports = self
-                .graph
-                .exports()
-                .filter_map(|path| match path {
-                    api::ledger::Path::Imported(export)
-                        if export.key().root_alias() == crate_name =>
-                    {
-                        Some((
-                            export.key().path().map(Into::into).collect(),
-                            export.key().namespace(),
-                            export.target().clone(),
-                        ))
-                    }
-                    _ => None,
+                .exports
+                .iter()
+                .filter(|(key, _)| key.root_alias() == crate_name)
+                .map(|(key, target)| {
+                    (
+                        key.path().map(Into::into).collect(),
+                        key.namespace(),
+                        target.clone(),
+                    )
                 })
                 .collect::<Vec<_>>();
             exports.sort_unstable();

@@ -1169,22 +1169,34 @@ impl Publication {
                 })?;
         allocation.items(items)?;
         allocation.bytes(bytes)?;
-        let mut definitions = Vec::new();
-        allocation.reserve(&mut definitions, candidate.definitions.len())?;
-        definitions.extend(candidate.definitions.values().cloned());
-        let mut implementations = Vec::new();
-        allocation.reserve(&mut implementations, candidate.implementations.len())?;
-        implementations.extend(candidate.implementations.iter().cloned());
+        // An inventory is its crates' facts and each export's target, which
+        // is all its entries keep. A program's own demand decides what its
+        // API admits; no API of the whole closure is built: iced's closure
+        // alone passed a gigabyte and minutes of closure work.
+        for export in candidate.exports.values() {
+            validate_alias_chain(export, &candidate.definitions, &candidate.spellings)?;
+        }
+        let mut exports = Vec::new();
+        allocation.reserve(&mut exports, candidate.exports.len())?;
+        for export in candidate.exports.into_values() {
+            if is_excluded(&policy, &export) {
+                continue;
+            }
+            if let ExportTarget::Available(target) = export.target {
+                exports.push((export.key, target));
+            }
+        }
+        exports.sort_unstable();
+        let mut implementations = candidate.implementations;
         implementations.sort_unstable_by(|left, right| left.id().cmp(right.id()));
         let facts = inventory::Facts {
-            definitions: definitions.into_boxed_slice(),
+            definitions: candidate.definitions.into_values().collect(),
             implementations: implementations.into_boxed_slice(),
             partitions: partitions.into_boxed_slice(),
         };
-        let graph =
-            candidate.finish(&policy, &context, limits, &mut allocation, SealMode::Direct)?;
-        let graph = graph.publish(input.prove(limits)?)?;
-        inventory::Acquired::authenticate(graph, facts)
+        // The inputs the capture read are the ones the build still sees.
+        input.prove(limits)?;
+        inventory::Acquired::authenticate(exports.into_boxed_slice(), facts)
     }
 
     #[allow(
