@@ -140,6 +140,9 @@ pub(crate) struct Script {
 pub(crate) struct LoweringFailure {
     evidence: LoweringEvidence,
     error: crate::ParseError,
+    /// What else the same pass missed (`miss_of`): the crates are asked for
+    /// it all at once (#662).
+    unknowns: Vec<Error>,
 }
 
 #[derive(Debug)]
@@ -157,6 +160,7 @@ impl LoweringFailure {
         Self {
             evidence: LoweringEvidence::Original(source),
             error,
+            unknowns: Vec::new(),
         }
     }
 
@@ -164,6 +168,7 @@ impl LoweringFailure {
         Self {
             evidence: LoweringEvidence::Generated { source, span },
             error,
+            unknowns: Vec::new(),
         }
     }
 
@@ -171,11 +176,63 @@ impl LoweringFailure {
         Self {
             evidence: LoweringEvidence::Unmapped(reason.into()),
             error,
+            unknowns: Vec::new(),
         }
     }
 
     pub(crate) fn into_parts(self) -> (LoweringEvidence, crate::ParseError) {
         (self.evidence, self.error)
+    }
+
+    /// The item Rawr doesn't know that `error` missed: itself, or the
+    /// ordinary miss a call needing a proof-backed application is.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(super) fn miss_of(error: &Error) -> Option<&Error> {
+        match error {
+            // A member of a recovered miss's `!` (`recover_miss`) names nothing.
+            Error::UnknownMember { owner, .. } if owner.as_str() == "!" => None,
+            Error::UnknownType { .. }
+            | Error::UnknownMember { .. }
+            | Error::UnknownImport { .. } => Some(error),
+            Error::ImportedApplicationRequired {
+                miss: Some(miss), ..
+            } => Some(miss),
+            _ => None,
+        }
+    }
+
+    /// Whether the failure is a miss a crate may answer once asked
+    /// ([`Self::names_unknown`]), the ordinary miss behind a call needing a
+    /// proof-backed application included.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn missed(&self) -> bool {
+        matches!(self.error.err_type(), crate::ParseErrorType::Resolution(error) if Self::miss_of(error).is_some())
+    }
+
+    /// Keep what `other`, a later body's failure, missed beside this one's
+    /// own miss (#662).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn also(&mut self, other: Self) {
+        if let crate::ParseErrorType::Resolution(error) = other.error.err_type() {
+            self.keep([error.clone()]);
+        }
+        self.unknowns.extend(other.unknowns);
+    }
+
+    /// Keep each of `errors` that misses an item Rawr doesn't know.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn keep(&mut self, errors: impl IntoIterator<Item = Error>) {
+        for error in errors {
+            if let Some(miss) = Self::miss_of(&error) {
+                self.unknowns.push(miss.clone());
+            }
+        }
+    }
+
+    /// What else the same pass missed ([`Self::also`], [`Self::keep`]).
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn take_unknowns(&mut self) -> Vec<Error> {
+        std::mem::take(&mut self.unknowns)
     }
 
     /// Whether the failure names a type, member or import Rawr doesn't

@@ -232,7 +232,19 @@ impl crate::Engine {
                 Err(crate::resolve::ImportedFailure::Surface(error)) => {
                     return Err(super::Error::import(Error::Surface(error)));
                 }
-                Err(crate::resolve::ImportedFailure::Lowering(failure)) => {
+                Err(crate::resolve::ImportedFailure::Lowering(mut failure)) => {
+                    // What the pass missed besides this failure, asked for
+                    // with it (#662).
+                    let misses = failure
+                        .take_unknowns()
+                        .iter()
+                        .filter_map(|unknown| match rust_miss(contract, unknown) {
+                            Some(Miss::Demand(path, through_alias, member)) => {
+                                Some((path, through_alias, member))
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     let (evidence, mut error) = failure.into_parts();
                     // A miss a proof may settle is reported and demanded as
                     // the ordinary miss, carrying the call to prove first.
@@ -283,17 +295,17 @@ impl crate::Engine {
                     {
                         let error = super::Error::import_diagnostic(report);
                         return Err(proving(match demand {
-                            Some((path, through_alias, member)) => {
-                                error.with_rust_demand(&path, through_alias, member)
-                            }
+                            Some((path, through_alias, member)) => error
+                                .with_rust_demand(&path, through_alias, member)
+                                .with_rust_misses(misses),
                             None => error,
                         }));
                     }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
                     return Err(proving(match demand {
-                        Some((path, through_alias, member)) => {
-                            error.with_rust_demand(&path, through_alias, member)
-                        }
+                        Some((path, through_alias, member)) => error
+                            .with_rust_demand(&path, through_alias, member)
+                            .with_rust_misses(misses),
                         None => error,
                     }));
                 }

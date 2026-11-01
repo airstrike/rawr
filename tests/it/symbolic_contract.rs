@@ -301,6 +301,27 @@ fn a_path_the_index_holds_is_demanded_once_then_resolves() {
     engine.compile_imported(&second, snapshot(&engine, &source.source)).expect("the demanded path resolves");
 }
 
+/// One compilation reports everything a body misses, past its first miss,
+/// so one more import asks for it all, not one item per attempt (#662).
+#[test]
+fn every_miss_is_demanded_at_once() {
+    let _turn = rawr_import::store::test_turn();
+    let limits = Limits::standard();
+    let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let engine = Engine::new();
+    let source = Fixture::new("fn first() -> i64 {\n    let label = app::widget::button(2).label;\n    let value = app::widget::slider(1).value();\n    label + value\n}\nfn second() -> i64 { app::widget::slider(3).value() }\nfirst() + second()\n");
+    let first = demand_contract(&source.root, &native, &limits, &["app::widget::Button"]);
+    let error = match engine.compile_imported(&first, snapshot(&engine, &source.source)) {
+        Ok(_) => panic!("undemanded items are not extracted"),
+        Err(error) => error,
+    };
+    let missed = error.rust_misses().into_iter().map(|(path, ..)| path).collect::<Vec<_>>();
+    assert_eq!(missed.first(), Some(&"app::widget::button"), "the first miss is reported: {missed:?}");
+    assert!(missed.contains(&"app::widget::slider"), "a later statement's miss is asked for with it: {missed:?}");
+    let all = demand_contract(&source.root, &native, &limits, &["app::widget::Button", "app::widget::slider", "app::widget::button"]);
+    engine.compile_imported(&all, snapshot(&engine, &source.source)).expect("every demanded path resolves");
+}
+
 fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str]) -> rawr_import::Contract<rawr_import::Classified> {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))

@@ -29,19 +29,21 @@ struct Initial {
 
 /// Check one imported application without opening a native window: its
 /// Rust imports are resolved and extracted and the Rawr source is checked
-/// against them. No runner is built; `rawr run` builds it.
+/// against them. No runner is built; `rawr run` builds it. The shared
+/// bindings the check used or extracted come back with the source, to
+/// settle against the project's `cargo check` ([`settle_checked`]).
 pub fn check(
     target: &rawr::project::Target,
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
-) -> Result<PathBuf, diagnostic::Report> {
+) -> Result<(PathBuf, rawr_import::bindings::Settlement), diagnostic::Report> {
     same_build(target)?;
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
     let revision = rawr_import::supervisor::Owner::new()
         .revision()
         .map_err(|error| framework(error, fallback.clone()))?;
-    profile
+    let mut prepared = profile
         .prepare(
             target,
             graph,
@@ -49,7 +51,28 @@ pub fn check(
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
         )
         .map_err(|error| import(error, fallback))?;
-    Ok(source)
+    Ok((source, prepared.take_settlement()))
+}
+
+/// Publish, or refuse, the shared bindings a check used or extracted, once
+/// the project's own `cargo check` has run their build scripts, as a run
+/// does after its runner build (D609.4, #661). A `cargo check` that failed
+/// on its own, or didn't run, gives no evidence, and the tables stay in the
+/// project.
+pub fn settle_checked(
+    settlement: rawr_import::bindings::Settlement,
+    cargo: Option<&rawr_cli::cargo::Status>,
+    target: &rawr::project::Target,
+) -> Result<(), diagnostic::Report> {
+    let Some(rawr_cli::cargo::Status::Finished(outcome)) = cargo else {
+        return Ok(());
+    };
+    if outcome.failure.is_some() {
+        return Ok(());
+    }
+    settlement
+        .settle_checked(outcome.build_scripts.join("\n").as_bytes())
+        .map_err(|error| framework(error, fallback(target).ok()))
 }
 
 /// Run one imported application or preview under the generated child owner.

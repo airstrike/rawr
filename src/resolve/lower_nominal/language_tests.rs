@@ -10079,8 +10079,9 @@ fn language_std_fs_read_gives_bytes() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(
-        printed(&format!(
-            r#"
+        printed_with(
+            &format!(
+                r#"
 fn main() {{
     let bytes: Vec<u8> = std::fs::read(String::from({path:?})).unwrap();
     println!("{{}} {{}}", bytes.len(), bytes[0]);
@@ -10089,7 +10090,9 @@ fn main() {{
 }}
 main();
 "#
-        )),
+            ),
+            crate::Access::all(),
+        ),
         format!("{} {}\nErr(NotFound)\n", bytes.len(), bytes[0])
     );
 }

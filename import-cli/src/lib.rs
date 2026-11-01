@@ -268,18 +268,29 @@ mod stale {
 /// resolve: one below a wholesale crate re-export, or one below a
 /// dependency extracted from demand, when not yet demanded.
 /// A dependency nothing demands is extracted whole and has no more to give.
+/// The compilation's own miss comes first, then what the same pass missed
+/// elsewhere (#662).
 #[must_use]
 pub fn new_demand<'error>(
     error: &'error rawr::package::Error,
     demand: &[Box<str>],
 ) -> Option<&'error str> {
+    error
+        .rust_misses()
+        .into_iter()
+        .find_map(|(path, through_alias, _)| demandable(path, through_alias, demand))
+}
+
+/// `path`, missed below a wholesale crate re-export when `through_alias`,
+/// when demanding it may give more than `demand` gave.
+pub(crate) fn demandable<'path>(
+    path: &'path str,
+    through_alias: bool,
+    demand: &[Box<str>],
+) -> Option<&'path str> {
     let root = |path: &str| path.split("::").next().map(str::to_owned);
-    let path = error.rust_demand().or_else(|| {
-        error
-            .rust_miss()
-            .filter(|path| demand.iter().any(|known| root(known) == root(path)))
-    })?;
-    (!demand.iter().any(|known| **known == *path)).then_some(path)
+    let below = through_alias || demand.iter().any(|known| root(known) == root(path));
+    (below && !demand.iter().any(|known| **known == *path)).then_some(path)
 }
 
 #[cfg(test)]
