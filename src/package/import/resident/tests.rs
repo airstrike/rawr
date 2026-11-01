@@ -138,12 +138,15 @@ mod top_level {
     use crate::host::ImportAllocation as _;
     use crate::{Dynamic, Engine, Shared, AST};
 
-    // The generated helper only needs these two Program fields. Include its
+    // The generated helper only needs these two Program fields and `locate`. Include its
     // emitted source unchanged so the lifetime regression exercises shipping code.
     struct Program {
         engine: Shared<Engine>,
         ast: Option<AST>,
     }
+
+    // No debugger reads these programs.
+    const fn locate(_: &Program) {}
 
     include!("../../../../importer/src/bridge/generate/top_level.rs");
 

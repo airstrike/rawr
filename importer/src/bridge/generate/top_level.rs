@@ -1,4 +1,6 @@
 fn evaluate_program(program: &mut Program) -> std::io::Result<()> {
+    // The program that runs next places the steps a tool reads (D675).
+    locate(program);
     // Retire ordinary top-level support after evaluation. Escaped callbacks
     // retain the same receipt with their captured support for their own lifetime.
     let ast = program

@@ -759,7 +759,7 @@ impl Proof {
             reason: "the importer workspace root is not Unicode".into(),
         })?;
         let manifest = format!(
-            "[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies.__rawr_internal]\npackage = \"rawr\"\npath = {workspace:?}\ndefault-features = false\nfeatures = [\"rust-import\", \"std\", \"sync\"]\n"
+            "[workspace]\nresolver = \"3\"\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies.__rawr_internal]\npackage = \"rawr\"\npath = {workspace:?}\ndefault-features = false\nfeatures = [\"debugging\", \"rust-import\", \"std\", \"sync\"]\n"
         );
         let harness = root.join("runner-harness");
         fs::create_dir_all(&harness).map_err(|source| Error::Io {

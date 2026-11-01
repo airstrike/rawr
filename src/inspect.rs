@@ -148,6 +148,18 @@ pub fn debug_text(context: &mut EvalContext, value: &Dynamic) -> Result<String, 
     }
 }
 
+/// How a host that keeps crate values behind handles names the type of one
+/// without `Debug`, as a runner's arena does.
+pub type Undebuggable = fn(&Dynamic) -> Option<&'static str>;
+
+static UNDEBUGGABLE: std::sync::OnceLock<Undebuggable> = std::sync::OnceLock::new();
+
+/// Name a crate value's type that has no `Debug` with `name`, for values
+/// the host keeps behind handles. Set once per process.
+pub fn name_undebuggable_with(name: Undebuggable) {
+    let _ = UNDEBUGGABLE.set(name);
+}
+
 /// The type of the first value inside `value` that has no `Debug` text: a
 /// crate value whose type doesn't implement `Debug`.
 fn undebuggable(value: &Dynamic) -> Option<&'static str> {
@@ -171,6 +183,9 @@ fn undebuggable(value: &Dynamic) -> Option<&'static str> {
             }
             if crate::place::get(value).is_some() {
                 return None;
+            }
+            if let Some(name) = UNDEBUGGABLE.get().and_then(|name| name(value)) {
+                return Some(name);
             }
             // Without a `Debug` text, `{:?}` falls back to the type's name.
             let name = (***variant).type_name();
@@ -201,6 +216,33 @@ fn short_type_name(name: &str) -> String {
 /// Where a step of the program is: its file and line.
 pub type Locate = dyn Fn(Position) -> Option<(String, usize)> + Send + Sync;
 
+/// A compiled program's entry source and the compiler's positions, which
+/// place a step of the lowered program in its file and line. A compiler
+/// keeps them only on an engine a debugger was registered on.
+pub struct Located {
+    entry: crate::diagnostic::Source,
+    positions: crate::program::Positions,
+}
+
+impl Located {
+    // Only a runner's compiler, a rust-import build, keeps one.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) const fn new(
+        entry: crate::diagnostic::Source,
+        positions: crate::program::Positions,
+    ) -> Self {
+        Self { entry, positions }
+    }
+
+    /// The file and line `position` in the lowered program comes from, or
+    /// `None` in code the compiler wrote around the program's.
+    #[must_use]
+    pub fn line(&self, position: Position) -> Option<(String, usize)> {
+        let (file, span) = self.positions.locate_position(&self.entry, position)?;
+        Some((file.identity().to_owned(), span.start().line()?))
+    }
+}
+
 struct Request {
     id: u64,
     name: Option<String>,
@@ -215,6 +257,8 @@ struct Shared {
     /// The callback is answering: steps of the `Debug` code it runs are not
     /// answered.
     answering: AtomicBool,
+    /// Where the running program's steps are, once it compiled.
+    locate: Mutex<Option<Arc<Locate>>>,
 }
 
 impl Shared {
@@ -223,47 +267,65 @@ impl Shared {
     }
 }
 
-/// Serve requests for the values of the program `engine` runs on a Unix
-/// socket at `socket`, replacing a stale one there. `locate` maps a step's
-/// position to its file and line.
-///
-/// # Errors
-///
-/// When the socket can't be bound.
-#[cfg(unix)]
-pub fn serve(
-    engine: &mut Engine,
-    socket: &std::path::Path,
-    locate: Box<Locate>,
-) -> std::io::Result<()> {
-    use std::os::unix::net::UnixListener;
+/// A socket a tool asks for a running program's values on. Each engine
+/// attached to it answers: a runner compiles each generation of the
+/// program on an engine of its own.
+#[derive(Clone)]
+pub struct Inspector(Arc<Shared>);
 
-    let _ = std::fs::remove_file(socket);
-    let listener = UnixListener::bind(socket)?;
-    let shared = Arc::new(Shared::default());
-    let listening = Arc::clone(&shared);
-    std::thread::Builder::new()
-        .name("rawr-inspect".into())
-        .spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let shared = Arc::clone(&listening);
-                let _ = std::thread::Builder::new()
-                    .name("rawr-inspect-request".into())
-                    .spawn(move || shared.handle(stream));
-            }
-        })?;
-    engine.wake_debugger_on(Arc::clone(&shared.wake));
-    #[allow(deprecated)]
-    engine.register_debugger(
-        |_, debugger| debugger,
-        move |mut context, event, _node, _source, position| {
-            if matches!(event, DebuggerEvent::Wake) {
-                shared.answer(&mut context, position, &*locate);
-            }
-            Ok(DebuggerCommand::Continue)
-        },
-    );
-    Ok(())
+impl Inspector {
+    /// Serve requests on a Unix socket at `socket`, replacing a stale one
+    /// there. Nothing answers them until an engine is attached.
+    ///
+    /// # Errors
+    ///
+    /// When the socket can't be bound.
+    #[cfg(unix)]
+    pub fn bind(socket: &std::path::Path) -> std::io::Result<Self> {
+        use std::os::unix::net::UnixListener;
+
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket)?;
+        let shared = Arc::new(Shared::default());
+        let listening = Arc::clone(&shared);
+        std::thread::Builder::new()
+            .name("rawr-inspect".into())
+            .spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    let shared = Arc::clone(&listening);
+                    let _ = std::thread::Builder::new()
+                        .name("rawr-inspect-request".into())
+                        .spawn(move || shared.handle(stream));
+                }
+            })?;
+        Ok(Self(shared))
+    }
+
+    /// Answer requests from the program `engine` runs. Attach before the
+    /// program compiles, so the compiler keeps what reading needs (#526).
+    pub fn attach(&self, engine: &mut Engine) {
+        let shared = Arc::clone(&self.0);
+        engine.wake_debugger_on(Arc::clone(&shared.wake));
+        #[allow(deprecated)]
+        engine.register_debugger(
+            |_, debugger| debugger,
+            move |mut context, event, _node, _source, position| {
+                if matches!(event, DebuggerEvent::Wake) {
+                    shared.answer(&mut context, position);
+                }
+                Ok(DebuggerCommand::Continue)
+            },
+        );
+    }
+
+    /// Place the program's steps with `locate` from now on: the positions
+    /// of the program that runs next.
+    pub fn locate_with(
+        &self,
+        locate: impl Fn(Position) -> Option<(String, usize)> + Send + Sync + 'static,
+    ) {
+        *self.0.locate.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(locate));
+    }
 }
 
 impl Shared {
@@ -313,10 +375,16 @@ impl Shared {
 
     /// At a step of the program: answer each waiting request this step
     /// matches.
-    fn answer(&self, context: &mut EvalContext, position: Position, locate: &Locate) {
+    fn answer(&self, context: &mut EvalContext, position: Position) {
         if self.answering.swap(true, Ordering::AcqRel) {
             return;
         }
+        let locator = self
+            .locate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let locate = |position| locator.as_ref().and_then(|locate| locate(position));
         let mut location = None;
         let mut located = false;
         let mut matched = Vec::new();

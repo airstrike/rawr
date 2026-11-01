@@ -395,13 +395,21 @@ impl Dependency {
         allocation.string(INTERNAL_ALIAS)?;
         allocation.string("rawr")?;
         allocation.path(path)?;
+        allocation.string("debugging")?;
         allocation.string("rust-import")?;
         allocation.string("std")?;
         allocation.string("sync")?;
         // `sync` makes script values `Send`, so a script future is a `Send`
         // std future any runtime polls (D513.3). It changes no unit the
         // project builds: only rawr's own proc macro sees it.
+        // `debugging` lets `rawr mcp` read the running program's values
+        // (D675). It adds no dependency, so the project's units are the
+        // same, and the runtime compiles once per rawr version either way
+        // (D620). A run that `rawr mcp` didn't start registers no
+        // debugger: each step checks that one `Option` and goes on, as
+        // `rawr run` does for a program without dependencies.
         let features: Box<[Box<str>]> = Box::from([
+            Box::<str>::from("debugging"),
             Box::<str>::from("rust-import"),
             Box::<str>::from("std"),
             Box::<str>::from("sync"),
