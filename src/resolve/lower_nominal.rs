@@ -53408,7 +53408,7 @@ pub fn run() {
                 ParseErrorType::Resolution(crate::resolve::Error::InvalidHostOperation {
                     reason,
                     ..
-                }) if reason.contains("no authenticated generated structural adapter")
+                }) if reason.contains("constructing it is not supported in Rawr yet")
             ),
             "unexpected pre-admission rejection: {error:?}"
         );
