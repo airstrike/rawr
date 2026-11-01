@@ -11878,3 +11878,101 @@ fn generic_debug_is_carried_while_a_debugger_is_registered() {
     );
     assert!(carries_generic_debug(&engine, WITHOUT_DEBUG));
 }
+
+/// A pattern binding of a `&mut` value is writable through `*`, whatever
+/// the scrutinee: `if let`, `match`, `while let` and `let .. else`
+/// of `as_mut()` on an `Option` or `Result` place (#686). rustc prints
+/// `Some(1) Some(15) Some(0) 3 Some(8) Ok(6) [Some(10), None]`.
+#[test]
+fn language_a_pattern_bound_mut_reference_writes_through_deref() {
+    assert_eq!(
+        printed(
+            r#"
+struct Loader { pending: Option<u32> }
+impl Loader {
+    fn tick(&mut self) {
+        if let Some(remaining) = self.pending.as_mut() {
+            *remaining = remaining.saturating_sub(1);
+        }
+    }
+}
+fn main() {
+    let mut l = Loader { pending: Some(3) };
+    l.tick();
+    l.tick();
+    let mut a: Option<u32> = Some(10);
+    match a.as_mut() {
+        Some(x) => *x += 5,
+        None => {}
+    }
+    let mut n: Option<u32> = Some(3);
+    let mut k = 0;
+    while let Some(x) = n.as_mut() {
+        if *x == 0 { break; }
+        *x -= 1;
+        k += 1;
+    }
+    let mut b: Option<i64> = Some(7);
+    let Some(y) = b.as_mut() else { return };
+    *y = *y + 1;
+    let mut r: Result<u32, String> = Ok(3);
+    match r.as_mut() {
+        Ok(x) => *x *= 2,
+        Err(e) => e.push('!'),
+    }
+    let mut v = vec![Some(1), None];
+    if let Some(x) = v[0].as_mut() { *x += 9; }
+    println!("{:?} {:?} {:?} {} {:?} {:?} {:?}", l.pending, a, n, k, b, r, v);
+}
+main();
+"#
+        ),
+        "Some(1) Some(15) Some(0) 3 Some(8) Ok(6) [Some(10), None]\n"
+    );
+}
+
+/// A tuple expression with an expected type coerces each field to it:
+/// `&String` to `&str` in an argument, in a typed `let` and in a nested
+/// tuple (#688). rustc prints `7`, `fount 4` and `fount 1 fount`.
+#[test]
+fn language_a_tuple_expression_coerces_each_field_to_its_expected_type() {
+    assert_eq!(
+        printed(
+            r#"
+struct Catalog { items: Vec<String> }
+fn pair(entry: (&str, &Catalog)) -> usize {
+    let (name, catalog) = entry;
+    name.len() + catalog.items.len()
+}
+fn main() {
+    let name = String::from("fount");
+    let catalog = Catalog { items: vec![String::from("a"), String::from("b")] };
+    println!("{}", pair((&name, &catalog)));
+    let t: (&str, i64) = (&name, 4);
+    println!("{} {}", t.0, t.1);
+    let nested: ((&str, i64), &str) = ((&name, 1), &name);
+    println!("{} {} {}", (nested.0).0, (nested.0).1, nested.1);
+}
+main();
+"#
+        ),
+        "7\nfount 4\nfount 1 fount\n"
+    );
+    // A tuple already made is no coercion site: rustc's E0308, expected
+    // `(&str, i64)`, found `(&String, {integer})`.
+    let error = rejected(
+        r#"
+fn pair(entry: (&str, i64)) -> usize { entry.0.len() }
+fn main() {
+    let name = String::from("fount");
+    let t = (&name, 4);
+    println!("{}", pair(t));
+}
+main();
+"#,
+    );
+    assert!(
+        error.contains("expected '(&str, i64)', found '(&String, {integer})'"),
+        "{error}"
+    );
+}
