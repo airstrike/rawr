@@ -47,6 +47,8 @@ pub(crate) enum Source {
     Git {
         url: String,
         reference: GitReference,
+        /// A `version` beside `git`, which Cargo checks against the package.
+        version: Option<String>,
     },
     /// `{ workspace = true }` in a runner's snapshot, which does not ask
     /// Cargo. The runner reads only the alias.
@@ -338,10 +340,11 @@ impl Source {
             (None, Some(version), None, None) => Ok(Self::Registry {
                 version: version.to_owned(),
             }),
-            (None, None, Some(url), reference) => Ok(Self::Git {
+            (None, version, Some(url), reference) => Ok(Self::Git {
                 url: url.to_owned(),
                 reference: reference
                     .map_or(GitReference::DefaultBranch, |(_, reference)| reference),
+                version: version.map(str::to_owned),
             }),
             (None, None, None, Some((key, _))) => Err(Error {
                 message: format!("Rust dependency `{alias}` has `{key}` without `git`").into(),
@@ -350,6 +353,14 @@ impl Source {
             (None, None, None, None) => Err(Error {
                 message: format!(
                     "Rust dependency `{alias}` requires exactly one of `path`, `version`, or `git`"
+                )
+                .into(),
+                span: item_span(text, item),
+            }),
+            (Some(_), _, Some(_), _) => Err(Error {
+                message: format!(
+                    "dependency ({alias}) specification is ambiguous. Only one of `git` or \
+                     `path` is allowed."
                 )
                 .into(),
                 span: item_span(text, item),

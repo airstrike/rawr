@@ -3563,7 +3563,7 @@ fn validate_declaration(
                 });
             }
         }
-        Source::Git { url, reference } => {
+        Source::Git { url, reference, .. } => {
             if value_string(declaration, "source")
                 .is_none_or(|source| !git_source_matches(source, url, reference))
             {
@@ -3614,7 +3614,7 @@ fn validate_package(dependency: &Selected, package: &Value) -> Result<()> {
                 });
             }
         }
-        Source::Git { url, reference } => {
+        Source::Git { url, reference, .. } => {
             let Some(source) = value_string(package, "source") else {
                 return Err(Error::ResolutionDrift {
                     command: "metadata",

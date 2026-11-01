@@ -119,6 +119,8 @@ pub(crate) enum Source {
     Git {
         url: Box<str>,
         reference: GitReference,
+        /// A `version` beside `git`: Cargo checks it against the Git package.
+        version: Option<Box<str>>,
     },
 }
 
@@ -340,12 +342,27 @@ impl Dependency {
             source: Source::Git {
                 url: url.into(),
                 reference,
+                version: None,
             },
             features: Box::default(),
             default_features: true,
             roles: Roles::library(),
             allocation,
         })
+    }
+
+    /// Add the `version` written beside `git`. Cargo checks the requirement
+    /// against the Git package's version, so rawr passes it through as written.
+    pub fn git_version(mut self, version: &str) -> Result<Self> {
+        let Source::Git {
+            version: retained, ..
+        } = &mut self.source
+        else {
+            panic!("a `version` beside `git` belongs to a Git dependency");
+        };
+        self.allocation.string(version)?;
+        *retained = Some(version.into());
+        Ok(self)
     }
 
     /// Select a package name when it differs from the Rawr alias.
@@ -856,12 +873,18 @@ impl Selected {
                     Source::Git {
                         url: left_url,
                         reference: left_reference,
+                        version: left_version,
                     },
                     Source::Git {
                         url: right_url,
                         reference: right_reference,
+                        version: right_version,
                     },
-                ) => left_url == right_url && left_reference == right_reference,
+                ) => {
+                    left_url == right_url
+                        && left_reference == right_reference
+                        && left_version == right_version
+                }
                 (Source::Path(_), Source::Registry { .. } | Source::Git { .. })
                 | (Source::Registry { .. }, Source::Path(_) | Source::Git { .. })
                 | (Source::Git { .. }, Source::Path(_) | Source::Registry { .. }) => false,
