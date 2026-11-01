@@ -7,6 +7,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - Rawr no longer counts graph work on every charge, and no longer records or warns when a build passes an accounting figure. Allocation failures, checked overflow and physical limits still refuse. (#479)
 - Generating a runner for a program whose closures cross as slots, such as a mapped iced widget, no longer stops with "rawr's generated Rust agrees with the crates on a slot's input". This regression shipped in 0.3.56. (#549)
+- A closure whose input borrows the program's state, as `.theme(|state: &State| ..)`, `.subscription(|state: &State| ..)` or an update closure taking `&mut State`, runs as the state's methods do. (#542)
+- A call with the wrong number of arguments reads as rustc's E0061, or E0057 for a closure: "this function takes 2 arguments but 1 argument was supplied", with rustc's 'defined here' note and its help. (#544)
+- A crate function whose closure returns a future, as sipper's `sipper(|sender| async move { .. })`, is refused at the call, "it takes a closure that returns a future", instead of stopping the build with an internal panic. (#545)
 
 ## 0.3.56 (2026-11-01)
 
