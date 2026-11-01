@@ -24,6 +24,8 @@ pub enum Category {
     DuplicateMember,
     /// A nominal field or enum variant does not exist.
     UnknownMember,
+    /// A path names no item of a module, as rustc's E0425.
+    NotInModule,
     /// A call names no function in scope.
     UnknownFunction,
     /// A path names no value in scope.
@@ -89,6 +91,7 @@ impl fmt::Display for Category {
             Self::InvalidDerive => formatter.write_str("invalid derive"),
             Self::DuplicateMember => formatter.write_str("duplicate member"),
             Self::UnknownMember => formatter.write_str("unknown member"),
+            Self::NotInModule => formatter.write_str("not in module"),
             Self::UnknownFunction => formatter.write_str("unknown function"),
             Self::UnknownVariable => formatter.write_str("unknown variable"),
             Self::MovedValue => formatter.write_str("use of moved value"),
@@ -327,6 +330,17 @@ pub enum Error {
         /// Exact source reference.
         reference: Span,
     },
+    /// A path names no item of a module that exists, as rustc's E0425
+    /// "cannot find function `load` in module `google`": an item the crate
+    /// doesn't have, or one rawr has no binding for yet.
+    NotInModule {
+        /// The module's path as written.
+        module: ImmutableString,
+        /// The item's name.
+        item: ImmutableString,
+        /// Exact source reference of the item's name.
+        reference: Span,
+    },
     /// A member used as the other kind: a field called like a method
     /// (rustc's E0599), or a method read like a field (rustc's E0615).
     MemberKind {
@@ -562,6 +576,7 @@ impl Error {
             Self::InvalidDerive { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
             Self::UnknownMember { .. } | Self::MemberKind { .. } => Category::UnknownMember,
+            Self::NotInModule { .. } => Category::NotInModule,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
             Self::MovedValue { .. } => Category::MovedValue,
@@ -606,6 +621,7 @@ impl Error {
             Self::InvalidDerive { owner, .. } | Self::DuplicateMember { owner, .. } => {
                 owner.as_str()
             }
+            Self::NotInModule { module, .. } => module.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -643,9 +659,9 @@ impl Error {
             Self::LoweringUnavailable { body, .. } => *body,
             Self::InvalidDerive { attribute, .. } => *attribute,
             Self::DuplicateMember { declaration, .. } => *declaration,
-            Self::UnknownMember { reference, .. } | Self::MemberKind { reference, .. } => {
-                *reference
-            }
+            Self::UnknownMember { reference, .. }
+            | Self::MemberKind { reference, .. }
+            | Self::NotInModule { reference, .. } => *reference,
             Self::UnknownFunction { reference, .. } => *reference,
             Self::UnknownVariable { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
@@ -705,6 +721,7 @@ impl Error {
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
             | Self::MemberKind { .. }
+            | Self::NotInModule { .. }
             | Self::UnknownFunction { .. }
             | Self::UnknownVariable { .. }
             | Self::InvalidConstruction { .. }
@@ -817,6 +834,11 @@ impl fmt::Display for Written<'_> {
                 member,
                 reference,
             } => write!(formatter, "unknown member `{owner}::{member}` at {reference}"),
+            Error::NotInModule {
+                module,
+                item,
+                reference,
+            } => write!(formatter, "cannot find `{item}` in module `{module}` at {reference}"),
             Error::MemberKind {
                 owner,
                 member,

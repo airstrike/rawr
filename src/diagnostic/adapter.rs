@@ -288,13 +288,36 @@ fn resolution_report_at(
 ) -> Result<Report, Error> {
     Ok(sourced_builder(error, &source, primary)
         .source(source.clone())
-        .primary(source, primary, primary_label(error))?
+        .primary(
+            source.clone(),
+            primary,
+            primary_label(error, &source, primary),
+        )?
         .finish())
 }
 
 /// The builder for `error`, which reads `source` where rustc's error for it
 /// depends on how the source names the item.
 fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Builder {
+    // rustc's E0425 names what the path is used as: a call's function, or
+    // a value.
+    if let resolve::Error::NotInModule { module, item, .. } = error {
+        let kind = match (
+            called(source, primary, item),
+            item.starts_with(char::is_uppercase),
+        ) {
+            (true, false) => "function",
+            (true, true) => "function, tuple struct or tuple variant",
+            (false, _) => "value",
+        };
+        return Report::error(
+            code::RESOLVE_NOT_IN_MODULE,
+            format!(
+                "cannot find {kind} `{item}` in module `{}`",
+                written_module(source, primary, module)
+            ),
+        );
+    }
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
     };
@@ -333,11 +356,56 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
     builder
 }
 
+/// The module's path as the source writes it before the name at `at`,
+/// as rustc names it: `label` for `label::describe`, which resolves to the
+/// program's `crate::label`. `module` when the source has no path there.
+fn written_module<'a>(source: &'a Source, at: Span, module: &'a str) -> &'a str {
+    let start = at.start();
+    let (Some(line), Some(column)) = (start.line(), start.position()) else {
+        return module;
+    };
+    let Some(text) = source.text().split('\n').nth(line.saturating_sub(1)) else {
+        return module;
+    };
+    let end = text
+        .char_indices()
+        .nth(column.saturating_sub(1))
+        .map_or(text.len(), |(index, _)| index);
+    let Some(before) = text[..end].strip_suffix("::") else {
+        return module;
+    };
+    let begin = before
+        .rfind(|character: char| {
+            !(character.is_alphanumeric() || character == '_' || character == ':')
+        })
+        .map_or(0, |index| index + 1);
+    match &before[begin..] {
+        "" => module,
+        written => written,
+    }
+}
+
+/// Whether the name at `at` in `source` is called: `(` follows it.
+fn called(source: &Source, at: Span, name: &str) -> bool {
+    let start = at.start();
+    let (Some(line), Some(column)) = (start.line(), start.position()) else {
+        return false;
+    };
+    let Some(text) = source.text().split('\n').nth(line.saturating_sub(1)) else {
+        return false;
+    };
+    text.chars()
+        .skip(column.saturating_sub(1) + name.chars().count())
+        .find(|character| !character.is_whitespace())
+        .is_some_and(|next| next == '(')
+}
+
 /// An unknown member's span, which covers its name as rustc underlines it.
 fn member_span(error: &resolve::Error) -> Span {
     let primary = error.primary_span();
-    let (resolve::Error::UnknownMember { member, .. } | resolve::Error::MemberKind { member, .. }) =
-        error
+    let (resolve::Error::UnknownMember { member, .. }
+    | resolve::Error::MemberKind { member, .. }
+    | resolve::Error::NotInModule { item: member, .. }) = error
     else {
         return primary;
     };
@@ -415,7 +483,8 @@ fn resolution_report_with_sources(
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
-        builder = builder.primary(source.clone(), member_span(error), primary_label(error))?;
+        let label = primary_label(error, &source, error.primary_span());
+        builder = builder.primary(source.clone(), member_span(error), label)?;
     }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = builder.secondary(
@@ -428,7 +497,11 @@ fn resolution_report_with_sources(
 }
 
 /// The label under the primary span, where rustc writes one.
-fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
+fn primary_label(
+    error: &resolve::Error,
+    source: &Source,
+    primary: Span,
+) -> Option<crate::ImmutableString> {
     match error {
         resolve::Error::Syntax { label, .. } => {
             Some(label.clone()).filter(|label| !label.is_empty())
@@ -437,6 +510,9 @@ fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
+        resolve::Error::NotInModule { module, .. } => {
+            Some(format!("not found in `{}`", written_module(source, primary, module)).into())
+        }
         resolve::Error::MovedValue {
             previous_iteration: true,
             ..
@@ -497,6 +573,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             _ => code::RESOLVE_DUPLICATE_MEMBER,
         },
         resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
+        resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
         resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
@@ -688,6 +765,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::UnknownMember { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
+        }
+        resolve::Error::NotInModule { module, item, .. } => {
+            format!("cannot find `{item}` in module `{module}`")
         }
         resolve::Error::MemberKind { owner, member, .. } => {
             format!("member `{owner}::{member}` used as the other kind")

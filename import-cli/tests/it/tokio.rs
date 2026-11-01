@@ -85,7 +85,10 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
 
 /// A crate's `async fn` that borrows its argument, as fount's `load(font:
 /// &Font)`, leases the value to its future for the future's life, shared
-/// or mutably (D683.2), and the value is whole again after the await.
+/// or mutably (D683.2), and the value is whole again after the await. A
+/// future borrows through any input type, as fount's `google::load(family:
+/// &str, catalog: Option<&Catalog>)` does, with `Some` and with `None`, and
+/// through a tuple of borrows (#677).
 #[test]
 fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     let root = fixture("tokio-borrowed");
@@ -102,7 +105,46 @@ fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     let stdout = String::from_utf8_lossy(&run.stdout);
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert_eq!(stdout, "Inter 3 3\n");
+    assert_eq!(
+        stdout,
+        "Inter 3 3\nInter listed; Georgia uncataloged; Inter unlisted of 1; 9\n"
+    );
+}
+
+/// A path to a module's item rawr has no binding for is rustc's E0425 at
+/// the module the program wrote, as `label::describe` of a program's own
+/// `mod label;` whose function names another crate's type (#677).
+#[test]
+fn a_module_item_without_a_binding_is_not_found_in_its_module() {
+    let root = fixture("tokio-borrowed");
+    fs::write(
+        root.join("src/label.rs"),
+        "pub fn describe(font: &shelf::Font) -> String {\n    font.family.clone()\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nmod label;\n\nfn main() {\n    let font = shelf::font(String::from(\"Georgia\"), 3);\n    println!(\"{}\", label::describe(&font));\n}\n",
+    )
+    .unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("error[E0425]: cannot find function `describe` in module `label`")
+            && stderr.contains("not found in `label`")
+            && stderr.contains("its signature names a Rust type that Rawr can't name yet"),
+        "stderr:\n{stderr}"
+    );
 }
 
 #[test]

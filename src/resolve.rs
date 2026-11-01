@@ -193,6 +193,7 @@ impl LoweringFailure {
             Error::UnknownMember { owner, .. } if owner.as_str() == "!" => None,
             Error::UnknownType { .. }
             | Error::UnknownMember { .. }
+            | Error::NotInModule { .. }
             | Error::UnknownImport { .. } => Some(error),
             Error::ImportedApplicationRequired {
                 miss: Some(miss), ..
@@ -244,6 +245,7 @@ impl LoweringFailure {
             crate::ParseErrorType::Resolution(
                 Error::UnknownType { .. }
                     | Error::UnknownMember { .. }
+                    | Error::NotInModule { .. }
                     | Error::UnknownImport { .. }
             )
         )

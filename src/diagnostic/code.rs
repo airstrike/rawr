@@ -70,6 +70,7 @@ codes!(Resolve;
     (RESOLVE_UNKNOWN_MEMBER, "RAWR-RESOLVE-UNKNOWN-MEMBER", "Unknown nominal member."),
     (RESOLVE_NO_METHOD, "E0599", "No method or associated item of that name, as rustc reports it."),
     (RESOLVE_NO_FIELD, "E0609", "No field of that name, as rustc reports it."),
+    (RESOLVE_NOT_IN_MODULE, "E0425", "A path names no item of a module, as rustc reports it."),
     (RESOLVE_METHOD_VALUE, "E0615", "A method read like a field, as rustc reports it."),
     (RESOLVE_UNKNOWN_FUNCTION, "RAWR-RESOLVE-UNKNOWN-FUNCTION", "Unknown function."),
     (SCRIPT_NO_FUNCTION, "E0425", "A typed handle names no function of the script, as rustc reports it."),

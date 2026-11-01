@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 87;
+const CLASSIFIER_VERSION: u32 = 88;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7747,25 +7747,18 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// An `async fn` whose own lifetimes only lend its inputs to its future,
-    /// as fount's `async fn load(font: &Font) -> Result<Vec<u8>, Error>`:
-    /// each input that borrows is a `&T` or `&mut T` of a value that holds
-    /// no borrow, which the future leases for its life (D683.2), and the
-    /// future's output names none of the function's own lifetimes.
+    /// as fount's `async fn load(family: &str, catalog: Option<&Catalog>)`:
+    /// the future borrows what its inputs borrow, whatever their types, as
+    /// rustc sees it, and its output names none of the function's own
+    /// lifetimes (D695.3). Each input is leased by what its value borrows
+    /// (`convert_input`); one Rawr can't lend refuses there.
     fn async_lends_inputs(&self, signature: &model::Signature) -> bool {
         signature.async_function()
             && matches!(
                 signature.receiver(),
                 model::Receiver::None | model::Receiver::Value { .. }
             )
-            && signature
-                .inputs()
-                .any(|input| matches!(input, model::Type::Reference { .. }))
-            && signature.inputs().all(|input| match input {
-                model::Type::Reference { ty, .. } => {
-                    !is_str_reference(input) && !names_late_lifetime(ty)
-                }
-                input => !names_late_lifetime(input),
-            })
+            && signature.inputs().any(names_late_lifetime)
             && matches!(signature.output(), model::Type::ImplTrait { bounds, .. }
                 if self
                     .future_bound_output(bounds)
@@ -8353,6 +8346,34 @@ impl<P: api::Phase> Context<'_, P> {
                 representability::convert::Builtin::Str,
             ));
         }
+        // A type that holds borrows, as fount's `load(family: &str, catalog:
+        // Option<&Catalog>)` takes an `Option<&Catalog>`: each borrow in it
+        // is lent as the borrow alone is, recursively, and `None` lends
+        // nothing (#677). Nothing is special to `Option`: a tuple of borrows
+        // lends each of its members.
+        if let model::Type::Definition { id, arguments } = ty
+            && let Some(element) = self
+                .graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| option_element(definition, arguments))
+            && names_late_lifetime(element)
+        {
+            return leased(representability::convert::Type::Option(Box::new(
+                self.convert_input(element)?,
+            )));
+        }
+        if let model::Type::Tuple(members) = ty
+            && !members.is_empty()
+            && members.iter().all(names_late_lifetime)
+        {
+            return leased(representability::convert::Type::Tuple(
+                members
+                    .iter()
+                    .map(|member| self.convert_input(member))
+                    .collect::<Result<_, _>>()?,
+            ));
+        }
         // `&mut Vec<T>` of scalars, as quick-xml's `read_event_into` takes
         // its buffer: Rawr's array, copied in and back out (D558 slice 2).
         if let Some(element) = self.copied_vec(ty) {
@@ -8647,6 +8668,39 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 }
 
 /// `&str` or `&'a str`.
+/// `ty`, an input type that holds borrows, when the call can lease each of
+/// them as the generator's `Lease` does: a `&T` or `&mut T` of a value in
+/// its slot, or a `&str`, alone or in an `Option` or a tuple of them.
+/// Anything else is a reference type Rawr can't lend there.
+fn leased(ty: representability::convert::Type) -> Result<representability::convert::Type, Failure> {
+    use representability::convert::{Builtin, Type};
+    fn leasable(ty: &Type) -> bool {
+        match ty {
+            Type::Borrowed { ty: lent, .. } => match lent.as_ref() {
+                Type::Nominal {
+                    definition,
+                    arguments,
+                } => {
+                    !arguments.is_empty()
+                        || crate::surface::identity::Definition::std_path(definition.as_bytes())
+                            .is_none()
+                }
+                Type::Parameter(_) => true,
+                _ => false,
+            },
+            Type::Builtin(Builtin::Str) => true,
+            Type::Option(element) => leasable(element),
+            Type::Tuple(members) => members.iter().all(leasable),
+            _ => false,
+        }
+    }
+    if leasable(&ty) {
+        Ok(ty)
+    } else {
+        Err(representability::reject::Kind::ReferenceType.into())
+    }
+}
+
 fn is_str_reference(ty: &model::Type) -> bool {
     matches!(ty, model::Type::Reference { mutability: model::Mutability::Shared, ty, .. }
         if matches!(&**ty, model::Type::Primitive(name) if &**name == "str"))
