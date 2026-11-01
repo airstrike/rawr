@@ -158,3 +158,84 @@ impl<S> Clamp for Rgb<S, f32> {
         }
     }
 }
+
+/// The D65 white point, as palette's `white_point::D65`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct D65;
+
+/// An RGB space, as palette's `rgb::RgbSpace`: its white point.
+pub trait RgbSpace {
+    /// The white point of the space.
+    type WhitePoint;
+}
+
+/// An RGB standard, as palette's `rgb::RgbStandard`: its space.
+pub trait RgbStandard {
+    /// The space of the standard.
+    type Space: RgbSpace;
+}
+
+impl RgbSpace for Srgb {
+    type WhitePoint = D65;
+}
+
+impl RgbStandard for Srgb {
+    type Space = Srgb;
+}
+
+/// A CIE L*a*b* color, as palette's `Lab<Wp = D65, T = f32>`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Lab<Wp = D65, T = f32> {
+    /// Lightness, from 0 to 100.
+    pub l: T,
+    /// Green to red.
+    pub a: T,
+    /// Blue to yellow.
+    pub b: T,
+    /// The white point.
+    pub white_point: PhantomData<Wp>,
+}
+
+impl<Wp> Lab<Wp, f32> {
+    /// A color of `l`, `a` and `b`, as palette's `Lab::new`.
+    pub const fn new(l: f32, a: f32, b: f32) -> Self {
+        Lab {
+            l,
+            a,
+            b,
+            white_point: PhantomData,
+        }
+    }
+}
+
+// An RGB color converts from Lab at its standard's white point, which
+// palette's derive writes as a projection through the standard's space.
+impl<S> FromColorUnclamped<Lab<<S::Space as RgbSpace>::WhitePoint, f32>> for Rgb<S, f32>
+where
+    S: RgbStandard,
+{
+    fn from_color_unclamped(lab: Lab<<S::Space as RgbSpace>::WhitePoint, f32>) -> Self {
+        let lightness = lab.l / 100.0;
+        Rgb {
+            red: lightness + lab.a / 200.0,
+            green: lightness - lab.a / 400.0 + lab.b / 400.0,
+            blue: lightness - lab.b / 200.0,
+            standard: PhantomData,
+        }
+    }
+}
+
+impl<Wp> FromColorUnclamped<Lab<Wp, f32>> for Lab<Wp, f32> {
+    fn from_color_unclamped(lab: Lab<Wp, f32>) -> Self {
+        lab
+    }
+}
+
+impl<Wp> Clamp for Lab<Wp, f32> {
+    fn clamp(self) -> Self {
+        Lab {
+            l: self.l.clamp(0.0, 100.0),
+            ..self
+        }
+    }
+}

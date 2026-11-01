@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 79;
+const CLASSIFIER_VERSION: u32 = 80;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1591,24 +1591,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         use representability::signature;
         /// `deep`: also inside a type's arguments, as a callable's
         /// `Subscription<P::Message>` names it.
-        fn find(
-            ty: &model::Type,
-            deep: bool,
-            found: &mut Vec<(u32, api::identity::Definition, api::identity::Definition)>,
-        ) {
+        fn find(ty: &model::Type, deep: bool, found: &mut Vec<(u32, Chain)>) {
             match ty {
-                model::Type::Projection {
-                    trait_id,
-                    associated,
-                    arguments,
-                } => {
-                    if let Some(model::Argument::Type(model::Type::Parameter { index, .. })) =
-                        arguments.first()
-                        && !found
-                            .iter()
-                            .any(|(known, _, named)| known == index && named == associated)
+                // A projection of a parameter, or of a projection of one,
+                // as palette's `<<S as RgbStandard>::Space as RgbSpace>::
+                // WhitePoint`.
+                model::Type::Projection { .. } => {
+                    if let Some((index, chain)) = projection_chain(ty)
+                        && !found.iter().any(|(known, known_chain)| {
+                            *known == index
+                                && known_chain.len() == chain.len()
+                                && known_chain
+                                    .iter()
+                                    .zip(&chain)
+                                    .all(|((_, named), (_, associated))| named == associated)
+                        })
                     {
-                        found.push((*index, trait_id.clone(), associated.clone()));
+                        found.push((index, chain));
                     }
                 }
                 model::Type::Reference { ty, .. } => find(ty, deep, found),
@@ -1644,20 +1643,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             find(input, false, &mut found);
         }
         // The output, as `Cache<Renderer>::draw` gives `Renderer::Geometry`:
-        // the call infers it from the parameter's own type (T318). A std
-        // trait's, as an iterator's `Self::Item`, keeps its own reading.
-        let mut output = Vec::new();
-        find(signature.output(), true, &mut output);
-        for projection in output {
-            if projection.1.unit().authority().sysroot().is_none()
-                && self
-                    .definition_name(&projection.2)
-                    .is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
-                && !found
-                    .iter()
-                    .any(|(known, _, named)| *known == projection.0 && *named == projection.2)
+        // the call infers it from the parameter's own type (T318). So is one
+        // inside an input, as palette's `FromColorUnclamped<Lab<<S::Space
+        // as RgbSpace>::WhitePoint, T>> for Rgb<S, T>` takes a `Lab` at the
+        // white point of `S`. A std trait's, as an iterator's `Self::Item`,
+        // keeps its own reading.
+        let mut deep = Vec::new();
+        find(signature.output(), true, &mut deep);
+        for input in signature.inputs() {
+            find(input, true, &mut deep);
+        }
+        for (index, chain) in deep {
+            if chain
+                .iter()
+                .all(|(trait_id, _)| trait_id.unit().authority().sysroot().is_none())
+                && chain.iter().all(|(_, associated)| {
+                    self.definition_name(associated)
+                        .is_some_and(|name| name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                })
+                && !found.iter().any(|(known, known_chain)| {
+                    *known == index
+                        && known_chain.len() == chain.len()
+                        && known_chain
+                            .iter()
+                            .zip(&chain)
+                            .all(|((_, named), (_, associated))| named == associated)
+                })
             {
-                found.push(projection);
+                found.push((index, chain));
             }
         }
         // A callable parameter's inputs and output, which a script function
@@ -1694,7 +1707,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
         }
         let mut projected: Vec<Projected> = Vec::new();
-        for (position, (index, trait_id, associated)) in found.into_iter().enumerate() {
+        for (position, (index, chain)) in found.into_iter().enumerate() {
+            let Some((trait_id, _)) = chain.last().cloned() else {
+                continue;
+            };
             // A future's `Output` an input or the output names is its own
             // synthetic parameter (D527), and a callable's is its output. A
             // callable's input is read as any other projection is, as iced's
@@ -1719,7 +1735,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             {
                 continue;
             }
-            let Some(name) = self.definition_name(&associated).map(str::to_owned) else {
+            let Some(hops) = chain
+                .into_iter()
+                .map(|(trait_id, associated)| {
+                    let name = self.definition_name(&associated)?.to_owned();
+                    Some(Hop {
+                        trait_id,
+                        associated,
+                        name,
+                    })
+                })
+                .collect::<Option<Box<[Hop]>>>()
+            else {
                 continue;
             };
             let ordinal = projected
@@ -1731,9 +1758,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             };
             projected.push(Projected {
                 parameter: index,
-                trait_id,
-                associated,
-                name,
+                hops,
                 synthetic: signature::projection_output(index, ordinal),
             });
         }
@@ -1805,7 +1830,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             else {
                 continue;
             };
-            let declared = format!("{}{}", owner.name(), projection.name);
+            let mut declared = owner.name().to_owned();
+            for hop in &projection.hops {
+                declared.push_str(&hop.name);
+            }
             extended.push(signature::Parameter::new(
                 projection.synthetic,
                 declared.into_boxed_str(),
@@ -1828,14 +1856,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         const CASES: usize = 64;
         let mut relations = Vec::new();
         for projection in projected {
+            let Some((first, rest)) = projection.hops.split_first() else {
+                continue;
+            };
             let mut cases = Vec::new();
-            for implementation in self.graph.implementations_of(&projection.trait_id) {
+            for implementation in self.graph.implementations_of(&first.trait_id) {
                 let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
                     continue;
                 };
-                if *id != projection.trait_id
-                    || implementation.polarity() != model::Polarity::Positive
-                {
+                if *id != first.trait_id || implementation.polarity() != model::Polarity::Positive {
                     continue;
                 }
                 let Ok(this) = self.convert(implementation.self_type()) else {
@@ -1850,13 +1879,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         model::Kind::AssociatedType {
                             default: model::Default::Present(ty),
                             ..
-                        } if definition.display_path().last() == Some(projection.name.as_str()) => {
+                        } if definition.display_path().last() == Some(first.name.as_str()) => {
                             Some(ty)
                         }
                         _ => None,
                     }
                 });
-                let Some(Ok(value)) = value.map(|value| self.convert(value)) else {
+                // A projection of a projection reads each further one at
+                // the type the one before gives, as `Srgb`'s `Space` is
+                // `Srgb`, whose `WhitePoint` is `D65`.
+                let value = value.and_then(|value| self.associated_through(rest, value.clone()));
+                let Some(Ok(value)) = value.map(|value| self.convert(&value)) else {
                     continue;
                 };
                 if names_other_parameter(&this, u32::MAX) || names_other_parameter(&value, u32::MAX)
@@ -1884,8 +1917,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 else {
                     continue;
                 };
-                let Some(value) =
-                    self.associated_at(&projection.trait_id, &projection.name, instance, 0)
+                let Some(value) = self
+                    .associated_at(&first.trait_id, &first.name, instance, 0)
+                    .and_then(|value| self.associated_through(rest, value))
                 else {
                     continue;
                 };
@@ -1906,23 +1940,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // Without a case, the relation still names the associated type,
             // which an opaque type that fills the parameter gives from its
             // own bound, as `application(..)`'s `impl Program<State = S>`.
+            // A chain names no one associated type of the parameter.
             self.retain_array::<Case>(cases.len())?;
-            self.retain_str(&projection.name)?;
-            relations.push(
-                Relation::new(
-                    projection.parameter,
-                    Box::new([representability::convert::Type::Parameter(
-                        projection.synthetic,
-                    )]),
-                    cases.into_boxed_slice(),
-                )
-                .of_associated(representability::signature::Associated::new(
-                    *crate::surface::identity::Definition::of(&projection.trait_id).as_bytes(),
-                    projection.name.as_str().into(),
-                )),
+            let relation = Relation::new(
+                projection.parameter,
+                Box::new([representability::convert::Type::Parameter(
+                    projection.synthetic,
+                )]),
+                cases.into_boxed_slice(),
             );
+            relations.push(if rest.is_empty() {
+                self.retain_str(&first.name)?;
+                relation.of_associated(representability::signature::Associated::new(
+                    *crate::surface::identity::Definition::of(&first.trait_id).as_bytes(),
+                    first.name.as_str().into(),
+                ))
+            } else {
+                relation
+            });
         }
         Ok(relations)
+    }
+
+    /// The type `ty` gives through each projection of `hops` in turn, read
+    /// as [`Self::associated_at`] reads one.
+    fn associated_through(&self, hops: &[Hop], ty: model::Type) -> Option<model::Type> {
+        hops.iter().try_fold(ty, |ty, hop| {
+            self.associated_at(&hop.trait_id, &hop.name, &ty, 0)
+        })
     }
 
     /// What the associated type `name` of `trait_id` is for the concrete
@@ -9638,14 +9683,49 @@ pub(crate) fn vec_element<'a>(
     }
 }
 
-/// A projection `W::Assoc` of a type parameter a signature names, and the
-/// synthetic parameter that stands for it.
+/// A projection `W::Assoc` of a type parameter a signature names, or of a
+/// projection of one, and the synthetic parameter that stands for it.
 struct Projected {
     parameter: u32,
+    /// Each projection from the parameter out: `W::Assoc` is one, and
+    /// `<<S as RgbStandard>::Space as RgbSpace>::WhitePoint` is two.
+    hops: Box<[Hop]>,
+    synthetic: u32,
+}
+
+/// One projection of a [`Projected`] chain: the trait, its associated
+/// type and that type's name.
+struct Hop {
     trait_id: api::identity::Definition,
     associated: api::identity::Definition,
     name: String,
-    synthetic: u32,
+}
+
+/// Each projection of a chain from its parameter out, by trait and
+/// associated type.
+type Chain = Vec<(api::identity::Definition, api::identity::Definition)>;
+
+/// The type parameter a projection chain starts at, and each projection in
+/// it from the parameter out: `<<S as RgbStandard>::Space as RgbSpace>::
+/// WhitePoint` is `S`, then `RgbStandard::Space`, then `RgbSpace::
+/// WhitePoint`. A parameter alone has no projection.
+fn projection_chain(ty: &model::Type) -> Option<(u32, Chain)> {
+    match ty {
+        model::Type::Parameter { index, .. } => Some((*index, Vec::new())),
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => {
+            let Some(model::Argument::Type(this)) = arguments.first() else {
+                return None;
+            };
+            let (index, mut chain) = projection_chain(this)?;
+            chain.push((trait_id.clone(), associated.clone()));
+            Some((index, chain))
+        }
+        _ => None,
+    }
 }
 
 /// The indices of `owner`'s type parameters `ty` names, wherever they are
@@ -9825,6 +9905,18 @@ fn substitute_bindings(ty: &model::Type, bindings: &BTreeMap<u32, model::Type>) 
     }
 }
 
+/// The owner of the type parameter a projection chain starts at.
+fn projection_owner(ty: &model::Type) -> Option<&api::identity::Definition> {
+    match ty {
+        model::Type::Parameter { owner, .. } => Some(owner),
+        model::Type::Projection { arguments, .. } => match arguments.first() {
+            Some(model::Argument::Type(this)) => projection_owner(this),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `ty` with each projection of `projected` written as its synthetic
 /// parameter, wherever it is inside `ty`.
 fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Type {
@@ -9836,17 +9928,17 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
         other => other.clone(),
     };
     match ty {
-        model::Type::Projection {
-            trait_id,
-            associated,
-            arguments,
-        } => {
-            if let Some(model::Argument::Type(model::Type::Parameter { owner, index })) =
-                arguments.first()
+        model::Type::Projection { .. } => {
+            if let Some(owner) = projection_owner(ty)
+                && let Some((index, chain)) = projection_chain(ty)
                 && let Some(projection) = projected.iter().find(|projection| {
-                    projection.parameter == *index
-                        && projection.trait_id == *trait_id
-                        && projection.associated == *associated
+                    projection.parameter == index
+                        && projection.hops.len() == chain.len()
+                        && projection.hops.iter().zip(&chain).all(
+                            |(hop, (trait_id, associated))| {
+                                hop.trait_id == *trait_id && hop.associated == *associated
+                            },
+                        )
                 })
             {
                 return model::Type::Parameter {
