@@ -4,14 +4,19 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"Type errors name a crate's types by a path the program can write, such as `iced::widget::Slider` or `iced_core::text::Span<u64>`, never by rawr's internal crate paths. A crate function item's parameters print as rustc writes them.","issues":[563]},
-      {"text":"A crate call rawr can't build yet is reported at the call, naming the item, instead of with no location in rawr's terms. A generic function whose type parameter rustc would infer from a later use names that parameter and the turbofish to write.","issues":[565]},
-      {"text":"A widget's `update` can name iced's `Shell<'_, Message>`: its type argument counts as rustc counts it.","issues":[566]},
-      {"text":"An associated function that takes a closure lent a `&mut` value, such as iced's `Path::new(|p| ..)`, is found and runs.","issues":[585],"refs":[477]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.60",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"Type errors name a crate's types by a path the program can write, such as `iced::widget::Slider` or `iced_core::text::Span<u64>`, never by rawr's internal crate paths. A crate function item's parameters print as rustc writes them.","issues":[563]},
+        {"text":"A crate call rawr can't build yet is reported at the call, naming the item, instead of with no location in rawr's terms. A generic function whose type parameter rustc would infer from a later use names that parameter and the turbofish to write.","issues":[565]},
+        {"text":"A widget's `update` can name iced's `Shell<'_, Message>`: its type argument counts as rustc counts it.","issues":[566]},
+        {"text":"An associated function that takes a closure lent a `&mut` value, such as iced's `Path::new(|p| ..)`, is found and runs.","issues":[585],"refs":[477]}
+      ]
+    },
     {
       "version": "0.3.59",
       "date": "2026-11-01",
