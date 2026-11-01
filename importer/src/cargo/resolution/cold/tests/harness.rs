@@ -212,10 +212,22 @@ fn documents_scaled(
         );
         packages.push(value);
     }
-    let protected_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let fixture_root = request
+        .project_root
         .parent()
-        .expect("workspace")
-        .join("iced");
+        .expect("fixture project sits in the fixture root");
+    let protected_root = fixture_root.join("rawr-iced");
+    fs::create_dir_all(protected_root.join("src")).expect("protected package root creates");
+    fs::write(
+        protected_root.join("Cargo.toml"),
+        "[package]\nname = \"rawr-iced\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("protected package manifest writes");
+    fs::write(
+        protected_root.join("src/lib.rs"),
+        b"// synthetic protected crate\n",
+    )
+    .expect("protected package source writes");
     let protected = package(&protected_root, "rawr-iced", "0.1.0");
     let protected_index = packages.len();
     nodes.push(json!({"id": protected["id"], "dependencies": [], "deps": [], "features": []}));
@@ -223,11 +235,7 @@ fn documents_scaled(
     // Registry packages follow the protected package; package and unit indices
     // coincide, so one edge list serves resolve nodes and unit dependencies.
     let first = packages.len();
-    let registry_root = request
-        .project_root
-        .parent()
-        .expect("fixture project sits in the fixture root")
-        .join("registry");
+    let registry_root = fixture_root.join("registry");
     for index in 0..registry {
         let value = registry_package(&registry_root, index);
         nodes.push(json!({"id": value["id"], "dependencies": [], "deps": [], "features": []}));

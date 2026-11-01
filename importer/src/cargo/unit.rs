@@ -6990,18 +6990,18 @@ mod allocation_tests {
                     }]
                 },
                 {
-                    "id": "path+file:///work/rawr/iced#rawr-iced@0.1.0",
+                    "id": "path+file:///work/rawr/importer#rawr-iced@0.1.0",
                     "name": "rawr-iced",
                     "version": "0.1.0",
                     "source": null,
                     "checksum": null,
-                    "manifest_path": "/work/rawr/iced/Cargo.toml",
+                    "manifest_path": "/work/rawr/importer/Cargo.toml",
                     "dependencies": [],
                     "targets": [{
                         "kind": ["lib"],
                         "crate_types": ["lib"],
                         "name": "rawr_iced",
-                        "src_path": "/work/rawr/iced/src/lib.rs",
+                        "src_path": "/work/rawr/importer/src/lib.rs",
                         "edition": "2024"
                     }]
                 }
@@ -7018,7 +7018,7 @@ mod allocation_tests {
                         "features": []
                     },
                     {
-                        "id": "path+file:///work/rawr/iced#rawr-iced@0.1.0",
+                        "id": "path+file:///work/rawr/importer#rawr-iced@0.1.0",
                         "dependencies": [],
                         "deps": [],
                         "features": ["fixture"]
@@ -7057,12 +7057,12 @@ mod allocation_tests {
                     "is_std": false
                 },
                 {
-                    "pkg_id": "path+file:///work/rawr/iced#rawr-iced@0.1.0",
+                    "pkg_id": "path+file:///work/rawr/importer#rawr-iced@0.1.0",
                     "target": {
                         "kind": ["lib"],
                         "crate_types": ["lib"],
                         "name": "rawr_iced",
-                        "src_path": "/work/rawr/iced/src/lib.rs",
+                        "src_path": "/work/rawr/importer/src/lib.rs",
                         "edition": "2024"
                     },
                     "profile": {
@@ -7082,7 +7082,8 @@ mod allocation_tests {
             "roots": [0]
         }"#;
 
-        // The fixture names this workspace: its manifests are read from disk.
+        // The fixture names this workspace: its manifests are read from disk,
+        // so the universe's root package borrows the importer's directory.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap();
