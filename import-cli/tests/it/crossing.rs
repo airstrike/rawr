@@ -623,6 +623,23 @@ fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
     );
 }
 
+/// iced's clock, game_of_life and the_matrix: a number's `.into()` where a
+/// crate struct's field takes a `Pixels` goes through the `From` impl that
+/// takes it, and a literal's type is the one that impl fixes: `14.0` an
+/// `f32`, `20` a `u32` (#426). The output is `cargo run`'s.
+#[test]
+fn a_numbers_into_reaches_a_crate_fields_from_as_rustc_infers_it() {
+    let (rawr, cargo) = both_printed("crossing-pixels", "pixels.rs", "grow");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("content: \"computed\", size: Pixels(11.0)")
+            && rawr.contains("content: \"literal\", size: Pixels(14.0)")
+            && rawr.contains("content: \"integer\", size: Pixels(20.5)")
+            && rawr.contains("content: \"constant\", size: Pixels(10.0)"),
+        "{rawr}"
+    );
+}
+
 /// iced's table: `table(columns, &self.events)` takes a borrowed `Vec` as
 /// rows of `impl IntoIterator<Item = T>`, whose items are the `&Event` the
 /// columns' `|event: &Event|` closures take, so `T: Clone` holds of a
