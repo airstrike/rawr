@@ -58,6 +58,10 @@ pub enum Kind {
     /// A `macro_rules!` macro: Rawr expands its source, so it has no native
     /// operation (the facade plan carries the source).
     MacroRules,
+    /// A closure parameter whose input is an associated type of a type
+    /// parameter, as iced's `Task::sip` takes `impl FnMut(S::Item) -> T`:
+    /// the type the call fixes `S` to decides it (#568).
+    ProjectedClosureInput,
 }
 
 impl Kind {
@@ -112,6 +116,9 @@ impl Kind {
             Self::ScriptFutureType => "its signature names a future parameter's own type",
             Self::FutureClosure => "it takes a closure that returns a future",
             Self::MacroRules => "it is a `macro_rules!` macro, which rawr expands from its source",
+            Self::ProjectedClosureInput => {
+                "it takes a closure whose input is an associated type of a type parameter"
+            }
         }
     }
 }
@@ -211,8 +218,9 @@ mod tests {
             Kind::ScriptFutureType,
             Kind::FutureClosure,
             Kind::MacroRules,
+            Kind::ProjectedClosureInput,
         ];
-        assert_eq!(kinds.len(), 45);
+        assert_eq!(kinds.len(), 46);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))

@@ -68,6 +68,7 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
 
     // The runner's path dependencies under the project's workspace.
     let mut placed = Vec::new();
+    let mut unplaced = Vec::new();
     for_each_dependency(document.as_table_mut(), &mut |dependency| {
         let Some(path) = dependency.get("path").and_then(Item::as_str) else {
             return;
@@ -78,9 +79,12 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
         }
         let relative = under(&normalize(path))
             .or_else(|| fs::canonicalize(path).ok().and_then(|path| under(&path)));
-        if let Some(relative) = relative {
-            placed.push(relative.clone());
-            dependency.insert("path", toml_edit::value(slashed(&relative)));
+        match relative {
+            Some(relative) => {
+                placed.push(relative.clone());
+                dependency.insert("path", toml_edit::value(slashed(&relative)));
+            }
+            None => unplaced.push(normalize(path)),
         }
     });
     if placed.is_empty() {
@@ -119,6 +123,26 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
         });
         for path in reached {
             pending.push(under(&path)?);
+        }
+    }
+
+    // A package the runner names by its own path that names a placed one,
+    // as the crate of a program's native modules names the project's path
+    // dependencies, would make Cargo see that package at two paths.
+    for directory in &unplaced {
+        let Some(mut package) = read(&directory.join("Cargo.toml")) else {
+            continue;
+        };
+        let mut named = false;
+        for_each_dependency(package.as_table_mut(), &mut |dependency| {
+            let Some(path) = dependency.get("path").and_then(Item::as_str) else {
+                return;
+            };
+            named |= under(&normalize(&directory.join(path)))
+                .is_some_and(|relative| seen.iter().any(|placed| relative.starts_with(placed)));
+        });
+        if named {
+            return None;
         }
     }
 
@@ -296,6 +320,40 @@ mod tests {
         );
         // A second pass changes nothing.
         assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The crate of a program's native modules lives under `target/`, so
+    /// the runner names it by its own path, and it names the project's
+    /// path dependency by its absolute path. A link for that dependency
+    /// would make Cargo see one package at two paths.
+    #[test]
+    fn a_package_named_by_its_own_path_that_names_a_placed_one_leaves_the_manifest_alone() {
+        let root = scratch("shadow");
+        let project = root.join("app");
+        write(
+            &project.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n\n[workspace]\n",
+        );
+        write(
+            &project.join("events/Cargo.toml"),
+            "[package]\nname = \"events\"\n",
+        );
+        write(
+            &project.join("target/rawr/crate/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"app\"\n\n[dependencies]\nevents = {{ path = \"{}\" }}\n",
+                project.join("events").display()
+            ),
+        );
+        let runner = project.join("target/rawr/runner");
+        let manifest = format!(
+            "[workspace]\n\n[dependencies]\napp = {{ path = \"{}\" }}\nevents = {{ path = \"{}\" }}\n",
+            project.join("target/rawr/crate").display(),
+            project.join("events").display()
+        );
+        assert_eq!(super::mirror(&project, &runner, &manifest), manifest);
+        assert!(fs::symlink_metadata(runner.join("events")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
