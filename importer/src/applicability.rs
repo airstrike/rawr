@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::api::{self, identity, ledger, model};
+use crate::api::{identity, model};
 use crate::surface;
 
 mod application;
@@ -27,7 +27,6 @@ pub struct Catalog<'facts> {
     /// Every public export of the constituents, rooted at the aliases the
     /// consuming program spells, with its exact target.
     exports: Vec<(identity::Export, &'facts identity::Definition)>,
-    contracts: Vec<&'facts crate::Contract<crate::Classified>>,
     definitions: BTreeMap<&'facts identity::Definition, &'facts model::Definition>,
     implementations: BTreeMap<&'facts identity::Definition, &'facts model::Implementation>,
     partitions: BTreeMap<&'facts identity::Unit, &'facts inventory::Partition>,
@@ -55,20 +54,6 @@ struct Constituent<'facts> {
     exports: Vec<(identity::Export, &'facts identity::Definition)>,
     facts: &'facts inventory::Facts,
     fingerprint: &'facts [u8; 32],
-    contract: Option<&'facts crate::Contract<crate::Classified>>,
-}
-
-/// A captured graph's public exports and their targets.
-fn graph_exports(
-    graph: &api::Graph<api::Extracted>,
-) -> Vec<(identity::Export, &identity::Definition)> {
-    graph
-        .exports()
-        .filter_map(|path| match path {
-            ledger::Path::Imported(export) => Some((export.key().clone(), export.target())),
-            _ => None,
-        })
-        .collect()
 }
 
 impl<'facts> Catalog<'facts> {
@@ -78,10 +63,12 @@ impl<'facts> Catalog<'facts> {
         let constituents = inventories
             .iter()
             .map(|inventory| Constituent {
-                exports: graph_exports(inventory.graph()),
+                exports: inventory
+                    .exports()
+                    .map(|(key, target)| (key.clone(), target))
+                    .collect(),
                 facts: inventory.facts(),
                 fingerprint: inventory.fingerprint(),
-                contract: None,
             })
             .collect::<Vec<_>>();
         Self::from_constituents(constituents, &[])
@@ -119,7 +106,6 @@ impl<'facts> Catalog<'facts> {
                     exports,
                     facts: entry.facts(),
                     fingerprint: entry.fingerprint(),
-                    contract: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -127,21 +113,6 @@ impl<'facts> Catalog<'facts> {
         local.sort_unstable();
         let local = serde_json::to_vec(&local).map_err(|_| Error::Allocation)?;
         Self::from_constituents(constituents, &local)
-    }
-
-    /// Join ordinary contracts only after each independent intrinsic capture
-    /// was classified through its own graph and input proof.
-    pub fn prepared(inventories: &'facts [inventory::Prepared]) -> Result<Self, Error> {
-        let constituents = inventories
-            .iter()
-            .map(|inventory| Constituent {
-                exports: graph_exports(inventory.contract().raw_graph()),
-                facts: inventory.facts(),
-                fingerprint: inventory.fingerprint(),
-                contract: Some(inventory.contract()),
-            })
-            .collect::<Vec<_>>();
-        Self::from_constituents(constituents, &[])
     }
 
     fn from_constituents(
@@ -211,10 +182,6 @@ impl<'facts> Catalog<'facts> {
             fingerprint.update(parent);
         }
         fingerprint.update(local);
-        let contracts = inventories
-            .iter()
-            .filter_map(|part| part.contract)
-            .collect();
         let mut exports = inventories
             .into_iter()
             .flat_map(|part| part.exports)
@@ -223,7 +190,6 @@ impl<'facts> Catalog<'facts> {
         exports.dedup();
         Ok(Self {
             exports,
-            contracts,
             definitions,
             implementations,
             partitions,
@@ -258,11 +224,6 @@ impl<'facts> Catalog<'facts> {
     /// Every public export with its target.
     pub(crate) fn table(&self) -> impl Iterator<Item = (&identity::Export, &identity::Definition)> {
         self.exports.iter().map(|(key, target)| (key, *target))
-    }
-
-    /// Ordinary constituent contracts remain distinct and independently bound.
-    pub fn contracts(&self) -> impl ExactSizeIterator<Item = &crate::Contract<crate::Classified>> {
-        self.contracts.iter().copied()
     }
 
     /// Counts describe facts, not contextual applications or compiler queries.
