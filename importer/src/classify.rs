@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 83;
+const CLASSIFIER_VERSION: u32 = 84;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2257,6 +2257,50 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         *parameters = extended.into_boxed_slice();
         futures
+    }
+
+    /// The type each future parameter's `Output` is bound to, as `T` of
+    /// iced's `Task::future(impl Future<Output = T>)`, by the future's
+    /// synthetic output parameter: `(synthetic, type)`.
+    fn future_outputs(
+        &self,
+        generics: &model::Generics,
+        futures: &[(u32, api::identity::Definition)],
+        rewrite: impl Fn(&model::Type) -> model::Type,
+    ) -> Vec<(u32, representability::convert::Type)> {
+        let mut outputs = Vec::new();
+        for predicate in generics.predicates() {
+            let model::Predicate::ProjectionEquality {
+                projection:
+                    model::Type::Projection {
+                        trait_id,
+                        associated,
+                        arguments,
+                    },
+                ty,
+            } = predicate
+            else {
+                continue;
+            };
+            let Some(model::Argument::Type(model::Type::Parameter { index, .. })) =
+                arguments.first()
+            else {
+                continue;
+            };
+            if !self.is_core_trait(trait_id, "Future")
+                || self.definition_name(associated) != Some("Output")
+                || !futures.iter().any(|(future, _)| future == index)
+            {
+                continue;
+            }
+            let synthetic = representability::signature::future_output(*index);
+            if let Ok(fixed) = self.convert_input(&rewrite(ty))
+                && !names_parameter(&fixed, synthetic)
+            {
+                outputs.push((synthetic, fixed));
+            }
+        }
+        outputs
     }
 
     /// Each bound `R: Trait<A..>` that names another type parameter in
@@ -7018,6 +7062,18 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 return Err(representability::reject::Kind::CallableProtocol.into());
             }
+        }
+        // A future parameter whose `Output` a bound fixes, as iced's
+        // `Task::future(impl Future<Output = T>)` does: the future's output
+        // is that type wherever the signature names it, so the call's `T` is
+        // what the script future gives, as rustc reads it (D683.5).
+        let mut output = output;
+        for (synthetic, fixed) in self.future_outputs(generics, &futures, rewrite) {
+            inputs = inputs
+                .into_iter()
+                .map(|ty| replace_parameter(ty, synthetic, &fixed))
+                .collect();
+            output = replace_parameter(output, synthetic, &fixed);
         }
         let mut relations = self.relations(generics)?.into_vec();
         relations.extend(self.projection_relations(&projected)?);
