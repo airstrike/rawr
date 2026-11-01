@@ -1295,7 +1295,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// `R` or a `W` its output is, is a synthetic parameter the call infers
     /// (D594). iced's `UpdateFn` and `ViewFn` are read so. `None` when no
     /// parameter is.
-    fn blanket_callables(&self, generics: &model::Generics) -> Option<model::Generics> {
+    ///
+    /// Also the parameters whose trait the crate implements for a type of
+    /// its own too, as iced's `ThemeFn` is for `Theme`. With `values`, such
+    /// a parameter keeps its bound, so a value of a type that implements the
+    /// trait fills it, as rustc fills it.
+    fn blanket_callables(
+        &self,
+        generics: &model::Generics,
+        values: bool,
+    ) -> (Option<model::Generics>, Vec<u32>) {
         let callable = |predicate: &model::Predicate, of: u32| {
             matches!(
                 predicate,
@@ -1309,6 +1318,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
         let mut predicates = Vec::new();
         let mut changed = false;
+        let mut valued = Vec::new();
         for predicate in generics.predicates() {
             let model::Predicate::Bound {
                 ty:
@@ -1358,6 +1368,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 predicates.push(predicate.clone());
                 continue;
             };
+            let implemented_for_types = self.graph.implementations_of(trait_id).any(|other| {
+                matches!(other.trait_ref(), model::Trait::Trait { id, .. } if id == trait_id)
+                    && !matches!(other.self_type(),
+                        model::Type::Parameter { owner, .. } if owner == other.id())
+            });
+            if values && implemented_for_types {
+                valued.push(*parameter);
+                predicates.push(predicate.clone());
+                continue;
+            }
             let model::Trait::Trait {
                 arguments: implemented,
                 ..
@@ -1441,10 +1461,16 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 ));
             }
             changed = true;
+            if implemented_for_types {
+                valued.push(*parameter);
+            }
         }
-        changed.then(|| {
-            model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice())
-        })
+        (
+            changed.then(|| {
+                model::Generics::new(parameters.into_boxed_slice(), predicates.into_boxed_slice())
+            }),
+            valued,
+        )
     }
 
     fn callable_conversion(&self, generics: &model::Generics) -> Option<model::Generics> {
@@ -6230,12 +6256,49 @@ impl<P: api::Phase> Context<'_, P> {
         Some((callable?, once, output.id().clone()))
     }
 
+    /// The item, and where a parameter of a crate's trait over `Fn` is one
+    /// the crate also implements for a type of its own, as iced's
+    /// `.theme(impl ThemeFn<State, Theme>)` is for `Theme`, the item read
+    /// with that bound kept beside it: a script function fills the
+    /// parameter as the callable the trait's blanket impl takes, and a
+    /// value of a type that implements the trait fills it as itself.
     fn function_with(
         &self,
         signature: &model::Signature,
         generics: &model::Generics,
         opens_copies: bool,
         borrows_receiver: bool,
+    ) -> Result<representability::Representability, Failure> {
+        use representability::Representability;
+        let classified =
+            self.function_form(signature, generics, opens_copies, borrows_receiver, false)?;
+        let Representability::FunctionItem(item) = classified else {
+            return Ok(classified);
+        };
+        // Only an input the parameter is makes another form: a method of the
+        // opaque program `iced::application(..)` gives is bounded by its
+        // `UpdateFn` and takes no update.
+        let valued = self.blanket_callables(generics, false).1;
+        if !signature.inputs().any(
+            |input| matches!(input, model::Type::Parameter { index, .. } if valued.contains(index)),
+        ) {
+            return Ok(Representability::FunctionItem(item));
+        }
+        Ok(Representability::FunctionItem(
+            match self.function_form(signature, generics, opens_copies, borrows_receiver, true) {
+                Ok(Representability::FunctionItem(values)) => item.with_values(values),
+                _ => item,
+            },
+        ))
+    }
+
+    fn function_form(
+        &self,
+        signature: &model::Signature,
+        generics: &model::Generics,
+        opens_copies: bool,
+        borrows_receiver: bool,
+        values: bool,
     ) -> Result<representability::Representability, Failure> {
         use representability::{callable, function, method, ownership, Representability};
         if !receiver_binder_is_exact(signature)
@@ -6286,7 +6349,7 @@ impl<P: api::Phase> Context<'_, P> {
         // A parameter bounded by a crate's trait over `Fn`, as iced's
         // `impl UpdateFn<State, Message>` is, takes the callable the trait's
         // blanket implementation takes (D594).
-        let blanket = self.blanket_callables(generics);
+        let (blanket, valued) = self.blanket_callables(generics, values);
         let generics = blanket.as_ref().unwrap_or(generics);
         let converted = self.callable_conversion(generics);
         let generics = converted.as_ref().unwrap_or(generics);
@@ -6378,11 +6441,14 @@ impl<P: api::Phase> Context<'_, P> {
         let rewritten = rewrite(signature.output());
         // An opaque `impl Trait` the function gives is a type of its own,
         // at the type parameters the caller fixes (`iced::widget::iced`).
+        // A parameter a value fills where another form takes a callable is
+        // left out as the callable is, so both forms give the one type.
         *self.opaque_output.borrow_mut() = Some(
             call.iter()
                 .map(|(parameter, ..)| *parameter)
                 .chain(crossings.iter().map(|(parameter, ..)| *parameter))
                 .chain(futures.iter().map(|(parameter, _)| *parameter))
+                .chain(valued.iter().copied().filter(|_| values))
                 .collect(),
         );
         let output = match signature.receiver() {

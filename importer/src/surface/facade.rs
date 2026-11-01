@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 25;
+const SCHEMA: u32 = 26;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -545,6 +545,11 @@ pub struct Item {
     kind: ItemKind,
     selector: super::identity::Selector,
     signature: Signature,
+    /// The signature of the item's form that a value fills, where it takes
+    /// a callable through a crate's trait over `Fn` the crate also
+    /// implements for a type of its own (`callable::Item::values`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    values: Option<Signature>,
 }
 
 /// Closed static item family.
@@ -2804,6 +2809,11 @@ impl Item {
     pub const fn signature(&self) -> &Signature {
         &self.signature
     }
+    /// Return the signature of the item's form that a value fills, when it
+    /// has one.
+    pub const fn values(&self) -> Option<&Signature> {
+        self.values.as_ref()
+    }
 }
 
 impl Signature {
@@ -3052,18 +3062,8 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Method { .. } => return Ok(None),
                 _ => return Err(super::Error::ForeignIdentity),
             },
-            if plan.crossings().is_empty() {
-                match plan.call() {
-                    Some(call) => callable_signature(plan.signature(), &[call])?,
-                    None => signature(plan.signature())?,
-                }
-            } else {
-                // A script function fills each callable as a slot (D594).
-                let calls = plan.crossings().iter().collect::<Vec<_>>();
-                let mut signature = callable_signature(plan.signature(), &calls)?;
-                signature.crossing = true;
-                signature
-            },
+            // A script function fills each callable as a slot (D594).
+            item_signature(plan)?,
         ),
         // A callable parameter whose closure Rawr can't make leaves the item
         // uncallable, as cosmic text's `with_buffer_mut` is.
@@ -3090,25 +3090,37 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             // is the closure's type, as a function item's is, and a script
             // function fills it as a slot (D594), as iced's
             // `Application::subscription` takes one.
-            if plan.crossings().is_empty() {
-                match plan.call() {
-                    Some(call) => callable_signature(plan.signature(), &[call])?,
-                    None => signature(plan.signature())?,
-                }
-            } else {
-                let calls = plan.crossings().iter().collect::<Vec<_>>();
-                let mut signature = callable_signature(plan.signature(), &calls)?;
-                signature.crossing = true;
-                signature
-            },
+            item_signature(plan.item())?,
         ),
+    };
+    let values = match outcome.representability() {
+        Representability::FunctionItem(plan) => plan.values(),
+        Representability::Invocation(plan) => plan.item().values(),
+        _ => None,
     };
     Ok(Some(Item {
         path: copy(path)?,
         kind,
         selector: outcome.identity().selector().try_clone()?,
         signature,
+        values: values.map(item_signature).transpose()?,
     }))
+}
+
+/// The signature of a generic item: a closure it takes is the closure's
+/// type, and a script function fills each callable as a slot (D594).
+fn item_signature(plan: &representability::callable::Item) -> Result<Signature, super::Error> {
+    if plan.crossings().is_empty() {
+        match plan.call() {
+            Some(call) => callable_signature(plan.signature(), &[call]),
+            None => signature(plan.signature()),
+        }
+    } else {
+        let calls = plan.crossings().iter().collect::<Vec<_>>();
+        let mut signature = callable_signature(plan.signature(), &calls)?;
+        signature.crossing = true;
+        Ok(signature)
+    }
 }
 
 fn signature(source: &representability::signature::Signature) -> Result<Signature, super::Error> {

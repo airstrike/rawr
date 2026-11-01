@@ -23,6 +23,13 @@ pub struct Item {
     /// fills it by a slot (D594). Empty when one can't.
     #[serde(default)]
     crossings: Box<[Call]>,
+    /// The item with each parameter of a crate's trait over `Fn` that the
+    /// crate also implements for a type of its own kept at that trait, as
+    /// iced's `ThemeFn` is implemented for `Theme`: a value of a type that
+    /// implements it fills the parameter, as `.theme(Theme::Dark)` does.
+    /// A call with no script closure or function there takes this form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    values: Option<Box<Item>>,
 }
 
 /// What a generic item's callable parameter takes and gives: a script
@@ -108,6 +115,35 @@ impl Item {
             predicates,
             call: None,
             crossings: Box::new([]),
+            values: None,
+        }
+    }
+
+    pub(crate) fn with_values(mut self, values: Self) -> Self {
+        self.values = Some(Box::new(values));
+        self
+    }
+
+    /// The form that a value of a type implementing the trait fills, when
+    /// the item has one ([`Self::form`]).
+    #[must_use]
+    pub fn values(&self) -> Option<&Self> {
+        self.values.as_deref()
+    }
+
+    /// The form a call takes: the one a value fills when the call passes
+    /// no script closure (`callable`), script function (`slotted`) or
+    /// crate function there, and the item has one; this item otherwise.
+    #[must_use]
+    pub fn form(
+        &self,
+        callable: Option<crate::surface::callable::Class>,
+        slotted: bool,
+        functions: bool,
+    ) -> &Self {
+        match self.values() {
+            Some(values) if callable.is_none() && !slotted && !functions => values,
+            _ => self,
         }
     }
 
@@ -165,6 +201,9 @@ impl Item {
     /// (`Signature::with_inferred`).
     pub(crate) fn with_inferred(mut self, indices: &[u32], container: usize) -> Self {
         self.signature = self.signature.with_inferred(indices, container);
+        self.values = self
+            .values
+            .map(|values| Box::new(values.with_inferred(indices, container)));
         self
     }
 
@@ -177,6 +216,9 @@ impl Item {
     /// This item of an impl that fixes some of its type's arguments, at
     /// that instance.
     pub(crate) fn with_instance(mut self, instance: super::convert::Type) -> Self {
+        self.values = self
+            .values
+            .map(|values| Box::new(values.with_instance(instance.clone())));
         self.signature = self.signature.with_instance(Some(instance));
         self
     }
@@ -226,6 +268,12 @@ impl Invocation {
     #[must_use]
     pub fn crossings(&self) -> &[Call] {
         self.item.crossings()
+    }
+
+    /// The item ([`Item::form`]).
+    #[must_use]
+    pub const fn item(&self) -> &Item {
+        &self.item
     }
 
     /// Number of leading generic parameters owned by the inherent

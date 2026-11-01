@@ -270,6 +270,82 @@ pub trait Program {
     fn subscription(&self, _state: &Self::State) -> Subscription<Self::Message> {
         Subscription::none()
     }
+    /// The theme of the state, if the program sets one.
+    fn theme(&self, _state: &Self::State) -> Option<Theme> {
+        None
+    }
+}
+
+/// The look of a program, as iced's `Theme`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Theme {
+    /// Light.
+    Light,
+    /// Dark.
+    Dark,
+}
+
+/// The theme logic of a program, as iced's `ThemeFn`: the theme itself,
+/// or any `Fn(&State)` whose output turns into an optional theme.
+pub trait ThemeFn<State, Theme> {
+    /// The theme of the state.
+    fn theme(&self, state: &State) -> Option<Theme>;
+}
+
+impl<State> ThemeFn<State, Theme> for Theme {
+    fn theme(&self, _state: &State) -> Option<Theme> {
+        Some(*self)
+    }
+}
+
+impl<F, T, State, Theme> ThemeFn<State, Theme> for F
+where
+    F: Fn(&State) -> T,
+    T: Into<Option<Theme>>,
+{
+    fn theme(&self, state: &State) -> Option<Theme> {
+        (self)(state).into()
+    }
+}
+
+/// `program` with the theme `theme` gives its state.
+struct WithTheme<P, F> {
+    program: P,
+    theme: F,
+}
+
+impl<P, F> Program for WithTheme<P, F>
+where
+    P: Program,
+    F: ThemeFn<P::State, Theme>,
+{
+    type State = P::State;
+    type Message = P::Message;
+
+    fn boot(&self) -> (Self::State, crate::Task<Self::Message>) {
+        self.program.boot()
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message> {
+        self.program.update(state, message)
+    }
+
+    fn view(
+        &self,
+        state: &Self::State,
+        label: &str,
+        labels: &mut Vec<String>,
+    ) -> Option<Self::Message> {
+        self.program.view(state, label, labels)
+    }
+
+    fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+        self.program.subscription(state)
+    }
+
+    fn theme(&self, state: &Self::State) -> Option<Theme> {
+        self.theme.theme(state)
+    }
 }
 
 /// The messages a program listens for, as iced's `Subscription`.
@@ -502,6 +578,21 @@ impl<P: Program> Application<P> {
         }
     }
 
+    /// The application with the theme `f` gives its state, as iced's
+    /// `Application::theme`: a theme, or a function of the state.
+    pub fn theme(
+        self,
+        f: impl ThemeFn<P::State, Theme>,
+    ) -> Application<impl Program<State = P::State, Message = P::Message>> {
+        Application {
+            program: WithTheme {
+                program: self.program,
+                theme: f,
+            },
+            fonts: self.fonts,
+        }
+    }
+
     /// The application with `fonts` loaded.
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
@@ -544,6 +635,9 @@ impl<P: Program> Application<P> {
             let mut labels = Vec::new();
             let pressed = self.program.view(&state, label, &mut labels);
             println!("{} view {}", event + 1, labels.join(" "));
+            if let Some(theme) = self.program.theme(&state) {
+                println!("{} theme {theme:?}", event + 1);
+            }
             if let Some(message) = pressed {
                 println!("{} message {message:?}", event + 1);
                 deliver(&mut state, message);

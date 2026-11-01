@@ -951,14 +951,18 @@ impl<B> Compiler<'_, B> {
     }
 }
 
-fn demanded_signature(
-    representability: &crate::classify::representability::Representability,
-) -> Option<&crate::classify::representability::signature::Signature> {
+/// The signature of the form of the plan `instance` takes
+/// (`instance::Arguments::form`).
+fn demanded_signature<'plan>(
+    representability: &'plan crate::classify::representability::Representability,
+    instance: &instance::Arguments,
+) -> Option<&'plan crate::classify::representability::signature::Signature> {
     use crate::classify::representability::Representability;
+    if let Some(item) = instance.form(representability) {
+        return Some(item.signature());
+    }
     match representability {
         Representability::Function(plan) => Some(plan.signature()),
-        Representability::FunctionItem(plan) => Some(plan.signature()),
-        Representability::Invocation(plan) => Some(plan.signature()),
         Representability::Method(plan) => Some(plan.signature()),
         _ => None,
     }
@@ -972,7 +976,7 @@ fn validate_function_items(
 ) -> Result<(), Error> {
     use crate::classify::representability::{convert, Representability};
     let signature =
-        demanded_signature(outcome.representability()).ok_or(Error::InstanceMismatch)?;
+        demanded_signature(outcome.representability(), instance).ok_or(Error::InstanceMismatch)?;
     let expected = signature
         .inputs()
         .iter()
@@ -984,11 +988,9 @@ fn validate_function_items(
     // A crate function may fill the callable parameter a script closure
     // would, as `.style(container::rounded_box)` does: the adapter passes
     // the Rust function itself, and rustc checks it against the bound.
-    let call = match outcome.representability() {
-        Representability::FunctionItem(plan) => plan.call(),
-        Representability::Invocation(plan) => plan.call(),
-        _ => None,
-    };
+    let call = instance
+        .form(outcome.representability())
+        .and_then(|item| item.call());
     let callable_at = |position: u32| {
         call.zip(usize::try_from(position).ok())
             .and_then(|(call, position)| Some((call, signature.inputs().get(position)?)))
@@ -1393,17 +1395,14 @@ fn predicate_proofs(
     outcome: crate::classify::Outcome<'_>,
     instance: &instance::Arguments,
 ) -> Result<Box<[identity::Implementation]>, Error> {
-    use crate::classify::representability::Representability;
-    let predicates = match outcome.representability() {
-        Representability::FunctionItem(plan) => plan.predicates(),
-        Representability::Invocation(plan) => plan.predicates(),
-        _ => &[],
-    };
+    let predicates = instance
+        .form(outcome.representability())
+        .map_or(&[][..], |item| item.predicates());
     if predicates.is_empty() {
         return Ok(Box::default());
     }
     let signature =
-        demanded_signature(outcome.representability()).ok_or(Error::InstanceMismatch)?;
+        demanded_signature(outcome.representability(), instance).ok_or(Error::InstanceMismatch)?;
     let mut proofs = Vec::new();
     proofs
         .try_reserve_exact(predicates.len())

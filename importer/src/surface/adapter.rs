@@ -283,7 +283,8 @@ impl Plan {
             reject_unresolved_structural_parameters(outcome.representability())?;
         }
         let origin = selected_origin(outcome, selected.selector())?;
-        let operation = operation_bytes(contract, outcome.representability(), selected)?;
+        let form = selected_form(outcome.representability(), selected);
+        let operation = operation_bytes(contract, &form, selected)?;
         let Some(export) = outcome.export().retained_bytes() else {
             return Ok(None);
         };
@@ -314,7 +315,11 @@ impl Plan {
             export: clone_export(outcome.export())?,
             name: clone_str(outcome.name())?,
             origin: clone_origin(origin)?,
-            operation: clone_operation(contract, outcome.representability(), selected)?,
+            operation: clone_operation(
+                contract,
+                &selected_form(outcome.representability(), selected),
+                selected,
+            )?,
             impls: selected.impls().into(),
             application: None,
         })
@@ -559,6 +564,36 @@ impl SelectedOrigin<'_> {
 
     const fn declaration(&self) -> &model::Span {
         self.declaration
+    }
+}
+
+/// The plan of the form `selected` takes (`identity::Identity::form`): a
+/// generic item's form that a value fills, as its own plan, or `plan`.
+fn selected_form<'plan>(
+    plan: &'plan representability::Representability,
+    selected: &identity::Identity,
+) -> std::borrow::Cow<'plan, representability::Representability> {
+    use std::borrow::Cow;
+    let Some(form) = selected.form(plan) else {
+        return Cow::Borrowed(plan);
+    };
+    match plan {
+        representability::Representability::FunctionItem(item) if !std::ptr::eq(item, form) => {
+            Cow::Owned(representability::Representability::FunctionItem(
+                form.clone(),
+            ))
+        }
+        representability::Representability::Invocation(invocation)
+            if !std::ptr::eq(invocation.item(), form) =>
+        {
+            Cow::Owned(representability::Representability::Invocation(
+                representability::callable::Invocation::new(
+                    form.clone(),
+                    invocation.container_parameters(),
+                ),
+            ))
+        }
+        _ => Cow::Borrowed(plan),
     }
 }
 
