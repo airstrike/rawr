@@ -100,22 +100,6 @@ impl<'a> Call<'a> {
         }
     }
 
-    #[cfg(feature = "rust-import")]
-    pub(super) const fn event(
-        authority: witness::Authority,
-        source: &'a Type,
-        target: &'a Type,
-        mapper: &'a [u8; 16],
-    ) -> Self {
-        Self {
-            authority,
-            operation: Operation::Projection { source, target },
-            invocation: None,
-            event_mapper: Some(mapper),
-            equal: None,
-        }
-    }
-
     /// Return the mapper required by this private contextual replay conversion.
     /// Ordinary item and facade projection calls carry no event mapper authority.
     #[doc(hidden)]

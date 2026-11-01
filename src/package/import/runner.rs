@@ -13,7 +13,6 @@ use rawr_import::surface::facade::{self, ItemKind};
 pub struct Runtime<'engine> {
     native: &'engine account::Native,
     structural: Option<Box<[host::runtime::StructuralAdapter]>>,
-    events: Option<Box<[host::runtime::event::Adapter]>>,
     allocation: account::Attempt,
 }
 
@@ -30,7 +29,6 @@ impl crate::Engine {
         Ok(Runtime {
             native,
             structural: None,
-            events: None,
             allocation,
         })
     }
@@ -59,46 +57,18 @@ impl Runtime<'_> {
         Ok(())
     }
 
-    /// Authenticate temporary replay rows and reserve their runtime copies.
-    pub fn authenticate_events(
-        &mut self,
-        definitions: &[host::facade::Definition],
-        rows: &[EventRow],
-    ) -> Result<(), host::runtime::Error> {
-        if self.events.is_some() {
-            return Err(host::runtime::Error::profile(
-                "event runtime rows already authenticated",
-            ));
-        }
-        let adapters = authenticate_events(
-            definitions,
-            self.native.carrier(),
-            rows,
-            &mut self.allocation,
-        )
-        .map_err(runtime_error)?;
-        self.events = Some(adapters);
-        Ok(())
-    }
-
     /// Borrow this scope's authenticated structural adapters for runtime binding.
     #[must_use]
     pub fn structural(&self) -> &[host::runtime::StructuralAdapter] {
         self.structural.as_deref().unwrap_or_default()
     }
 
-    /// Borrow this scope's authenticated event adapters for runtime binding.
-    #[must_use]
-    pub fn events(&self) -> &[host::runtime::event::Adapter] {
-        self.events.as_deref().unwrap_or_default()
-    }
-
-    /// Move this scope to the registry once both row kinds are authenticated.
+    /// Move this scope to the registry once its rows are authenticated.
     pub fn finish(
         self,
         registry: host::runtime::Registry,
     ) -> Result<host::runtime::Registry, host::runtime::Error> {
-        if self.structural.is_none() || self.events.is_none() {
+        if self.structural.is_none() {
             return Err(host::runtime::Error::profile(
                 "generated runtime authentication is incomplete",
             ));
@@ -144,166 +114,6 @@ pub struct StructuralRow {
     arguments: u32,
     kind: StructuralKind,
     instance: Option<[u8; 32]>,
-}
-
-/// One generated producer and its profile-validated private replay conversion.
-#[doc(hidden)]
-pub struct EventRow {
-    root: &'static str,
-    selector: [u8; 32],
-    identity: [u8; 32],
-    signature: [u8; 32],
-    arguments: u32,
-    source: [u8; 32],
-    target_root: &'static str,
-    target_path: &'static str,
-    mapper: [u8; 16],
-}
-
-impl EventRow {
-    #[doc(hidden)]
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        root: &'static str,
-        selector: [u8; 32],
-        identity: [u8; 32],
-        signature: [u8; 32],
-        arguments: u32,
-        source: [u8; 32],
-        target_root: &'static str,
-        target_path: &'static str,
-        mapper: [u8; 16],
-    ) -> Self {
-        Self {
-            root,
-            selector,
-            identity,
-            signature,
-            arguments,
-            source,
-            target_root,
-            target_path,
-            mapper,
-        }
-    }
-}
-
-/// Join generated producer entries and exact installed contracts into private
-/// replay bindings. Rows are emitted only after the profile/instance proof join.
-#[doc(hidden)]
-pub fn authenticate_generated_events(
-    definitions: &[host::facade::Definition],
-    manifest: &[u8],
-    rows: &[EventRow],
-) -> Result<Box<[host::runtime::event::Adapter]>, Error> {
-    let carrier = rawr_import::runner::manifest::Carrier::transform(manifest)?;
-    let mut allocation = account::Attempt::fresh();
-    authenticate_events(definitions, &carrier, rows, &mut allocation)
-}
-
-/// Authenticate replay bindings while their native owner retains the charges.
-#[doc(hidden)]
-pub fn authenticate_generated_events_retained(
-    definitions: &[host::facade::Definition],
-    rows: &[EventRow],
-    native: &mut account::Native,
-) -> Result<Box<[host::runtime::event::Adapter]>, Error> {
-    let (carrier, mut allocation) = native.parts();
-    authenticate_events(definitions, carrier, rows, &mut allocation)
-}
-
-fn authenticate_events(
-    definitions: &[host::facade::Definition],
-    carrier: &rawr_import::runner::manifest::Carrier,
-    rows: &[EventRow],
-    allocation: &mut account::Attempt,
-) -> Result<Box<[host::runtime::event::Adapter]>, Error> {
-    let mut adapters = Vec::new();
-    use host::ImportAllocation as _;
-    for row in rows {
-        if row.mapper == [0; 16] || !carrier.contains(&row.identity, &row.signature, row.arguments)
-        {
-            panic!("each generated event conversion is in the runner's manifest");
-        }
-        let source = definitions
-            .iter()
-            .find(|definition| definition.root() == row.root)
-            .expect("each generated event conversion names installed bindings");
-        let producer = source
-            .items()
-            .find(|item| {
-                item.imported_identity()
-                    .is_some_and(|identity| identity.fingerprint() == row.selector)
-            })
-            .expect("each generated event conversion names its source and target");
-        let output_matches = match producer.signature().output().shape() {
-            host::type_ref::Shape::Imported { identity, .. } => identity.as_bytes() == &row.source,
-            host::type_ref::Shape::Registered { path, .. } => source.types().any(|ty| {
-                ty.path_ref() == path
-                    && ty
-                        .identity()
-                        .imported()
-                        .is_some_and(|identity| identity.as_bytes() == &row.source)
-            }),
-            _ => false,
-        };
-        if !output_matches {
-            panic!("each generated event conversion's source matches its bindings");
-        }
-        let target = definitions
-            .iter()
-            .find(|definition| definition.root() == row.target_root)
-            .expect("each generated event conversion names installed bindings");
-        let target_type = target
-            .types()
-            .find(|ty| {
-                ty.path_ref()
-                    .segments()
-                    .iter()
-                    .map(|segment| segment.as_str())
-                    .eq(row.target_path.split("::"))
-            })
-            .filter(|ty| ty.parameters().len() == 1)
-            .expect("each generated event conversion names its source and target");
-        let mut found = false;
-        for ty in source.types().filter(|ty| {
-            ty.identity()
-                .imported()
-                .is_some_and(|identity| identity.as_bytes() == &row.source)
-        }) {
-            found = true;
-            let bytes = ty
-                .retained_bytes()
-                .and_then(|bytes| bytes.checked_add(target_type.retained_bytes()?))
-                .and_then(|bytes| {
-                    bytes.checked_add(std::mem::size_of::<host::runtime::event::Adapter>())
-                })
-                .and_then(|bytes| bytes.checked_add(row.root.len()))
-                .and_then(|bytes| bytes.checked_add(row.target_root.len()));
-            allocation.retain_checked(Some(1), bytes)?;
-            let key = host::runtime::event::Key::selected(
-                host::facade::Dependency::new(source.root_path(), source.fingerprint().clone()),
-                ty.contract(),
-                host::facade::Dependency::new(target.root_path(), target.fingerprint().clone()),
-                target_type.contract(),
-                row.mapper,
-            );
-            if adapters
-                .iter()
-                .any(|adapter: &host::runtime::event::Adapter| adapter.matches(&key))
-            {
-                panic!("each generated event conversion is generated once");
-            }
-            adapters
-                .try_reserve_exact(1)
-                .map_err(|_| Error::Allocation)?;
-            adapters.push(host::runtime::event::Adapter::authenticated(key));
-        }
-        if !found {
-            panic!("each generated event conversion's source matches its bindings");
-        }
-    }
-    Ok(adapters.into_boxed_slice())
 }
 
 impl StructuralRow {
@@ -815,7 +625,6 @@ fn build(
                     ty.eq(),
                     ty.hash(),
                     ty.iterator(),
-                    ty.widget(),
                 ]),
                 parameters,
                 defaults,

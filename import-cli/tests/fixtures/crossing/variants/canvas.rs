@@ -7,9 +7,10 @@
 // associated type, as iced's `Cache::draw` does, and `Action::publish` and
 // `Action::and_capture` are named as values, as multitouch names them.
 // The alias's defaulted parameter is what a later use fixes. `Path::new`
-// takes a closure that traces on a builder it lends.
+// takes a closure that traces on a builder it lends, and `Frame::with_save`
+// lends the frame it's called on to a closure whose output it gives back.
 
-use events::canvas::{self, Cache, Geometry, Note, Path};
+use events::canvas::{self, Cache, Frame, Geometry, Note, Path};
 
 #[derive(Default)]
 struct Sketch {
@@ -82,4 +83,16 @@ fn main() {
         p.line_to(2);
     });
     println!("path {}", path.points());
+    // A `&mut self` method whose one-shot closure takes the receiver as
+    // `&mut Frame` and returns a value, as the clock's
+    // `frame.with_save(|frame| ..)` (#586). A nested save sees the depth.
+    let mut frame = Frame::new();
+    frame.fill("face");
+    let hands = frame.with_save(|frame| {
+        frame.fill("hour");
+        frame.with_save(|frame| frame.fill("second"));
+        2
+    });
+    frame.fill("rim");
+    println!("frame {} hands {hands}", frame.steps());
 }

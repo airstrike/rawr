@@ -1,8 +1,6 @@
 //! Native implementations bound to exact compiler facade proofs.
 
 mod call;
-#[cfg(feature = "rust-import")]
-pub mod event;
 pub mod invocation;
 pub(crate) mod type_ref;
 mod unwitnessed;
@@ -136,8 +134,6 @@ pub struct Builder {
     #[cfg(feature = "rust-import")]
     applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
-    #[cfg(feature = "rust-import")]
-    events: BTreeMap<event::Key, Shared<dyn Callback>>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
 }
@@ -153,8 +149,6 @@ pub struct Facade {
     #[cfg(feature = "rust-import")]
     applications: BTreeMap<[u8; 32], Shared<dyn Callback>>,
     structural: BTreeMap<host::structural::Definition, Shared<dyn Callback>>,
-    #[cfg(feature = "rust-import")]
-    events: BTreeMap<event::Key, Shared<dyn Callback>>,
     projections: BTreeMap<host::projection::Key, Shared<dyn Callback>>,
     attestations: BTreeMap<ImmutableString, Shared<dyn TypeAttestor>>,
 }
@@ -251,8 +245,6 @@ enum Binding {
     // Only the Rust importer admits generated structural adapters.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     Structural(host::structural::Definition),
-    #[cfg(feature = "rust-import")]
-    Event(Box<event::Key>),
 }
 
 /// A runtime facade proof could not be built or bound to an application.
@@ -373,8 +365,6 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             applications: BTreeMap::new(),
             structural: BTreeMap::new(),
-            #[cfg(feature = "rust-import")]
-            events: BTreeMap::new(),
             projections: BTreeMap::new(),
             attestations: BTreeMap::new(),
         }
@@ -849,8 +839,6 @@ impl Builder {
             #[cfg(feature = "rust-import")]
             applications: self.applications,
             structural: self.structural,
-            #[cfg(feature = "rust-import")]
-            events: self.events,
             projections: self.projections,
             attestations: self.attestations,
         }
@@ -954,14 +942,6 @@ impl Registry {
                     Binding::Item(_) => Error::MissingBinding {
                         item: requirement.path.clone(),
                     },
-                    #[cfg(feature = "rust-import")]
-                    Binding::Event(_) => Error::Profile {
-                        reason: format!(
-                            "missing private event conversion for `{}`",
-                            requirement.path
-                        )
-                        .into(),
-                    },
                     Binding::Structural(_) => Error::MissingStructuralBinding {
                         operation: requirement.path.clone(),
                     },
@@ -1014,17 +994,6 @@ impl Registry {
                 invocation,
             )
             .with_equal(equal),
-            #[cfg(feature = "rust-import")]
-            Binding::Event(ref key) => {
-                let [source] = requirement.operands.as_ref() else {
-                    return Err(EvalAltResult::ErrorRuntime(
-                        "private event operand proof".into(),
-                        crate::Position::NONE,
-                    )
-                    .into());
-                };
-                Call::event(self.witness, source, &requirement.output, key.mapper())
-            }
             Binding::Structural(_) => Call::structural(
                 self.witness,
                 &requirement.operands,
@@ -1168,8 +1137,6 @@ impl Registry {
             #[cfg(not(feature = "rust-import"))]
             Binding::Item(item) => facade.bindings.get(item),
             Binding::Structural(definition) => facade.structural.get(definition),
-            #[cfg(feature = "rust-import")]
-            Binding::Event(key) => facade.events.get(&**key),
         }
     }
 

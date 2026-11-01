@@ -98,54 +98,11 @@ const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
     ("cmp", &["min", "max"]),
 ];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
-const WIDGET_TEXT_PATH: &str = "iced::widget::text";
-const WIDGET_SPAN_PATH: &str = "iced::widget::span";
-const WIDGET_SPAN_TYPE: &str = "iced::widget::text::Span";
-/// iced's `advanced` traits that a facade type implements natively: the
-/// trait's name and its implementor. A bound by one of them takes that type,
-/// and a value bounded by one calls the type's own method of each name.
-const FACADE_TRAIT_HOSTS: [(&str, &str); 2] = [
-    ("Renderer", "iced::widget::Renderer"),
-    ("Widget", "iced::Element"),
-];
-
-/// The type argument a value bounded by one of `FACADE_TRAIT_HOSTS` takes
-/// in such a call: an `Element`'s Message is erased, as the forwarded
-/// methods never touch it.
-const FACADE_TRAIT_ERASED: &str = "iced::advanced::widget::Erased";
-
-/// The facade type of `FACADE_TRAIT_HOSTS` that `ty` is, when it
-/// implements `trait_name` that way.
-fn facade_trait_host(ty: &Ty, trait_name: &str) -> Option<&'static str> {
-    let ty = match ty {
-        Ty::Reference { target, .. } => target,
-        ty => ty,
-    };
-    let Ty::Host { proof, .. } = ty else {
-        return None;
-    };
-    let path = proof.definition.path();
-    FACADE_TRAIT_HOSTS
-        .iter()
-        .find(|(name, host)| *name == trait_name && *host == path.as_str())
-        .map(|(_, host)| *host)
-}
-
-/// iced's `tree::Tag::of::<T>()`, and the logical tag Rawr makes it.
-const TAG_OF: &str = "iced::advanced::widget::tree::Tag::of";
-const TAG_OF_LOGICAL: &str = "iced::advanced::widget::tree::Tag::__rawr_of";
 /// Why a crate call can't take the program's function that builds its
 /// message, as `Message::Changed` given to iced's `on_input`, here.
 #[cfg(feature = "rust-import")]
 const UNSUPPORTED_MESSAGE_FUNCTION: &str =
     "passing the program's function that builds its message is not supported here in Rawr yet";
-/// The handle `tree.state` reads as, whose `downcast_ref::<T>()` and
-/// `downcast_mut::<T>()` reach a script widget's own State.
-const TREE_STATE: &str = "iced::advanced::widget::tree::Lent";
-
-/// The iced types whose first parameter is a Link that defaults to `()`.
-const LINK_DEFAULT_TYPES: [&str; 2] = [WIDGET_SPAN_TYPE, "iced::widget::text::Rich"];
-const WIDGET_VOID_PATH: &str = "iced::widget::void";
 
 /// Each `impl Trait<A> for Owner` of a generic trait: the impl's own
 /// parameters and the trait's arguments.
@@ -1925,15 +1882,6 @@ fn imported_surface_type(
                 )?),
             }
         }
-        Ty::Host { proof, .. }
-            if proof.definition.identity().imported().is_none()
-                && let Some(definition) = facade_view_argument(&proof.definition) =>
-        {
-            Type::Nominal {
-                definition,
-                arguments: Box::default(),
-            }
-        }
         Ty::Host { proof, arguments } => {
             let identity = proof
                 .definition
@@ -2126,31 +2074,6 @@ const fn structural_use(kind: crate::host::structural::Kind) -> &'static str {
     }
 }
 
-/// The surface type an imported view type's argument names for one of the
-/// iced facade's own types (D558 tier 2): a widget, which the view lowers
-/// to an element; iced's `Theme`; or its `Renderer`.
-#[cfg(feature = "rust-import")]
-fn facade_view_argument(
-    definition: &crate::host::type_def::Definition,
-) -> Option<rawr_import::surface::identity::Definition> {
-    use rawr_import::surface::identity::Definition;
-    let path = definition.path();
-    match path.as_str() {
-        "iced::Theme" => Some(Definition::theme()),
-        "iced::Renderer" | "iced::widget::Renderer" => Some(Definition::renderer()),
-        "iced::Element" => Some(Definition::element()),
-        path if path.starts_with("iced::") && !definition.projections().is_empty() => {
-            Some(Definition::element())
-        }
-        // A value the facade holds as its Rust value, as `iced::Length` is,
-        // where a view's builder takes it (`.width(Fill)`).
-        path if path.starts_with("iced::") && definition.parameters().is_empty() => {
-            Some(Definition::facade(path))
-        }
-        _ => None,
-    }
-}
-
 /// A value type Rust can't name in the runner, as a script struct or a
 /// tuple holding one: a generic Rust item takes it as `rawr::Value`
 /// (D513.2), which carries it as it is.
@@ -2240,15 +2163,6 @@ fn instance_surface_type(
             mapper: *seal,
             payload: Box::new(instance_surface_type(inference, models, payload)?),
         },
-        Ty::Host { proof, .. }
-            if proof.definition.identity().imported().is_none()
-                && let Some(definition) = facade_view_argument(&proof.definition) =>
-        {
-            Type::Nominal {
-                definition,
-                arguments: Box::default(),
-            }
-        }
         Ty::Host { proof, arguments } => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::authenticated(
                 *proof.definition.identity().imported()?.as_bytes(),
@@ -5205,13 +5119,6 @@ enum Op {
     Intrinsic {
         operation: Box<IntrinsicOperation>,
     },
-    #[cfg(feature = "rust-import")]
-    Event {
-        key: crate::host::runtime::event::Key,
-        source: Ty,
-        target: Ty,
-        span: Span,
-    },
     Projection {
         operation: Box<ProjectionOperation>,
     },
@@ -6909,10 +6816,6 @@ enum ExecutableOp {
     Intrinsic {
         proof: intrinsic::Proof,
     },
-    #[cfg(feature = "rust-import")]
-    Event {
-        proof: Box<crate::host::runtime::event::Site>,
-    },
     Projection {
         proof: Box<crate::host::projection::Site>,
     },
@@ -7165,8 +7068,6 @@ impl ExecutableOp {
             Self::Imported { proof } => proof.dependencies(),
             Self::Symbolic { .. } => BTreeSet::new(),
             Self::Intrinsic { proof } => proof.dependencies(),
-            #[cfg(feature = "rust-import")]
-            Self::Event { proof } => proof.dependencies(),
             Self::Projection { proof } => proof.dependencies(),
             Self::Struct { .. }
             | Self::Enum { .. }
@@ -7187,7 +7088,7 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.projection_requirement(),
             Self::Projection { proof } => Some((**proof).clone()),
             #[cfg(feature = "rust-import")]
-            Self::Imported { .. } | Self::Event { .. } | Self::Sequence(_) => None,
+            Self::Imported { .. } | Self::Sequence(_) => None,
             Self::Symbolic { .. }
             | Self::Intrinsic { .. }
             | Self::Struct { .. }
@@ -7209,8 +7110,6 @@ impl ExecutableOp {
             Self::Witnessed(op) => op.placeholder.runtime_requirement(),
             #[cfg(feature = "rust-import")]
             Self::Imported { proof } => Some(crate::host::runtime::Requirement::structural(proof)),
-            #[cfg(feature = "rust-import")]
-            Self::Event { proof } => Some(proof.requirement()),
             #[cfg(feature = "rust-import")]
             Self::Sequence(_) => None,
             Self::Intrinsic { proof } => Some(proof.runtime_requirement()),
@@ -7269,10 +7168,6 @@ impl ExecutableOp {
                     proof.path(),
                     proof.symbol_id()
                 );
-            }
-            #[cfg(feature = "rust-import")]
-            Self::Event { proof } => {
-                return format!("\0rawr.event-finalize.{:016x}", proof.symbol_id())
             }
             Self::Projection { proof } => {
                 return format!(
@@ -7342,8 +7237,6 @@ impl ExecutableOp {
                 .iter()
                 .map(|operand| place_operand(operand.ty().runtime()))
                 .collect(),
-            #[cfg(feature = "rust-import")]
-            Self::Event { proof } => vec![proof.source().runtime()],
             Self::Projection { proof } => vec![proof.source().runtime()],
             Self::Struct { item, .. } => item
                 .fields
@@ -7457,15 +7350,6 @@ impl ExecutableOp {
                     &models.runtime,
                     Some(&equal),
                 )
-            }
-            #[cfg(feature = "rust-import")]
-            Self::Event { proof } => {
-                let runtime = context
-                    .and_then(|context| context.host_runtime())
-                    .ok_or_else(|| invariant("private event conversion runtime missing"))?;
-                let requirement = requirement
-                    .ok_or_else(|| invariant("private event conversion requirement missing"))?;
-                runtime.invoke_event(proof, requirement, args, &models.runtime)
             }
             Self::Projection { proof } => {
                 let Some(runtime) = context.and_then(|context| context.host_runtime()) else {
@@ -13466,9 +13350,6 @@ impl<'a> Parser<'a> {
     /// Whether `ty` implements the crate trait `trait_name`: a script type
     /// with an impl of it, or a generic parameter bounded by it.
     fn type_implements(&self, ty: &Ty, trait_name: &str) -> bool {
-        if facade_trait_host(ty, trait_name).is_some() {
-            return true;
-        }
         match ty {
             Ty::Dyn(name, _) => {
                 name == trait_name
@@ -13504,15 +13385,6 @@ impl<'a> Parser<'a> {
                 if trait_name == "Display" && self.models.std_traits.contains(trait_name) =>
             {
                 true
-            }
-            // iced's `IntoFragment` impls: the same types, and references to them.
-            Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Str | Ty::Char | Ty::Bool
-                if trait_name == "IntoFragment" =>
-            {
-                true
-            }
-            Ty::Reference { target, .. } if trait_name == "IntoFragment" => {
-                self.type_implements(&self.inference.resolve(target), trait_name)
             }
             // `impl<T: For + Copy> For for &T` forwarding to `T`'s impl
             // (`resolve::forward`): `&T` implements it where `T` does and
@@ -13560,26 +13432,6 @@ impl<'a> Parser<'a> {
     fn type_implements_with(&mut self, ty: &Ty, trait_name: &str, arguments: &[Ty]) -> bool {
         if arguments.is_empty() {
             return self.type_implements(ty, trait_name);
-        }
-        let resolved = self.inference.resolve(ty);
-        if facade_trait_host(&resolved, trait_name).is_some() {
-            // `Element<M>: Widget<Message, ..>`: the Element's Message is
-            // the trait's.
-            let target = match &resolved {
-                Ty::Reference { target, .. } => self.inference.resolve(target),
-                ty => ty.clone(),
-            };
-            if let (Ty::Host { arguments: own, .. }, Some(message)) = (&target, arguments.first())
-                && let [own] = &own[..]
-            {
-                let checkpoint = self.inference.checkpoint();
-                if self.unify_type(own, message) {
-                    self.inference.commit(checkpoint);
-                } else {
-                    self.inference.rollback(checkpoint);
-                }
-            }
-            return true;
         }
         // The prelude's blanket impls: `impl<T> From<T> for T`, its builtin
         // conversions, and `impl<T, U: From<T>> Into<U> for T`.
@@ -14184,137 +14036,6 @@ impl<'a> Parser<'a> {
             .iter()
             .position(|declared| declared.text == name)?;
         declared.associated_bounds.get(index)
-    }
-
-    /// `value.member(arguments)` of a value bounded by one of iced's
-    /// `advanced` traits (`FACADE_TRAIT_HOSTS`): the facade type's own
-    /// method, or, for a value of a script type implementing the trait,
-    /// its impl's. `None` when no such bound has the member.
-    fn call_facade_bound(
-        &mut self,
-        value: &ParsedExpr,
-        bounded: &Ty,
-        member: &ImmutableString,
-        arguments: &[ParsedExpr],
-        member_span: Span,
-        end: Position,
-    ) -> Result<Option<ParsedExpr>, Error> {
-        let bounds = self.bound_traits(bounded);
-        let Some((trait_name, host)) = FACADE_TRAIT_HOSTS
-            .iter()
-            .find(|(name, _)| bounds.iter().any(|bound| bound == name))
-        else {
-            return Ok(None);
-        };
-        if self
-            .models
-            .host_items(&format!("{host}::{member}"))
-            .is_none()
-        {
-            return Ok(None);
-        }
-        let Some(definition) = self.models.host.type_(host).cloned() else {
-            return Ok(None);
-        };
-        let owner = self.models.host.type_owner(host).cloned();
-        // The facade type's own arguments (an `Element`'s Message) take no
-        // part in these methods: they are erased for the call.
-        let erased = self
-            .models
-            .host
-            .type_(FACADE_TRAIT_ERASED)
-            .cloned()
-            .map(|erased| Ty::Host {
-                proof: HostTyProof::new(
-                    erased,
-                    None,
-                    self.models.host.type_owner(FACADE_TRAIT_ERASED).cloned(),
-                ),
-                arguments: Box::default(),
-            });
-        let host_ty = Ty::Host {
-            proof: HostTyProof::new(definition.clone(), None, owner),
-            arguments: definition
-                .parameters()
-                .iter()
-                .map(|_| erased.clone().unwrap_or(Ty::Unit))
-                .collect(),
-        };
-        let trait_name: ImmutableString = (*trait_name).into();
-        let implementors = self
-            .models
-            .trait_methods
-            .iter()
-            .filter(|((_, name), definitions)| {
-                name == member
-                    && definitions
-                        .iter()
-                        .any(|definition| definition.trait_name() == Some(&trait_name))
-            })
-            .map(|((owner, _), _)| *owner)
-            .collect::<Vec<_>>();
-        let local = self.temporary("bounded");
-        let call = span(value.span.start(), end);
-        let receiver = self.operator_expr(local.as_str().into(), host_ty, value.span);
-        // `self.content.layout(tree, ..)` lends its `&mut Tree`: a facade
-        // handle, which the facade changes in place.
-        let lent = arguments
-            .iter()
-            .cloned()
-            .map(|mut argument| {
-                if let Ty::Reference {
-                    mutable: true,
-                    target,
-                } = self.inference.resolve(&argument.ty)
-                    && matches!(self.inference.resolve(&target), Ty::Host { .. })
-                {
-                    argument.ty = *target;
-                }
-                argument
-            })
-            .collect();
-        self.pending_arguments = Some((lent, end));
-        let host_call = self.parse_host_method(receiver, member.clone(), member_span)?;
-        let mut source = origin::Fragment::plain(format!("{{ let {local} = "));
-        source.push(value.rendered_source());
-        source.push_text("; ");
-        let dispatch = if implementors.is_empty() {
-            None
-        } else {
-            self.bound_trait_function(bounded, member, member_span)?
-        };
-        match dispatch {
-            Some((trait_name, function)) => {
-                // The place itself, which a `&mut self` method changes.
-                let dispatched = self.call_trait_method(
-                    value.clone(),
-                    bounded.clone(),
-                    &trait_name,
-                    &function,
-                    arguments.to_vec(),
-                    member_span,
-                    end,
-                )?;
-                self.require_type(&dispatched.ty, &host_call.ty, call)?;
-                let index = self.prelude_op(PreludeOp::TypeIndex, [local.as_str().into()]);
-                source.push_text("if ");
-                for (position, owner) in implementors.iter().enumerate() {
-                    if position > 0 {
-                        source.push_text(" || ");
-                    }
-                    source.push(index.clone());
-                    source.push_text(format!(" == {}", owner_key(*owner)));
-                }
-                source.push_text(" { ");
-                source.push(dispatched.rendered_source());
-                source.push_text(" } else { ");
-                source.push(host_call.rendered_source());
-                source.push_text(" }");
-            }
-            None => source.push(host_call.rendered_source()),
-        }
-        source.push_text(" }");
-        Ok(Some(self.operator_expr(source, host_call.ty, call)))
     }
 
     /// The function `member` of a user trait bounding `bounded`, a generic
@@ -16682,20 +16403,6 @@ impl<'a> Parser<'a> {
                         .with_copies(copies),
                 }
             }
-            #[cfg(feature = "rust-import")]
-            Op::Event {
-                key,
-                source,
-                target,
-                span,
-            } => ExecutableOp::Event {
-                proof: Box::new(crate::host::runtime::event::Site::selected(
-                    key,
-                    self.proven_type(&source, "iced::Element", span)?,
-                    self.proven_type(&target, "iced::Element", span)?,
-                    span,
-                )),
-            },
             Op::Projection { operation } => {
                 let ProjectionOperation {
                     key,
@@ -17048,16 +16755,19 @@ impl<'a> Parser<'a> {
             }
             Ty::Host { proof, arguments } => {
                 let definition = &proof.definition;
-                // iced's `Span<'a, Link = ()>`: a span no `.link(..)` gave a
-                // Link has the default one, and so has its `Rich`.
-                let linked = LINK_DEFAULT_TYPES.contains(&definition.path().as_str());
                 let arguments = arguments
                     .iter()
                     .enumerate()
                     .map(|(index, argument)| {
-                        if linked
-                            && index == 0
-                            && matches!(self.inference.resolve(argument), Ty::Infer(_))
+                        // An argument nothing fixed whose parameter defaults
+                        // to `()`, as `Span<'a, Link = ()>`'s with no
+                        // `.link(..)`: its default.
+                        if matches!(self.inference.resolve(argument), Ty::Infer(_))
+                            && definition.defaults().get(index).is_some_and(|default| {
+                                default.as_ref().is_some_and(|default| {
+                                    matches!(default.shape(), crate::host::type_ref::Shape::Unit)
+                                })
+                            })
                         {
                             return Ok(intrinsic::Type::unit());
                         }
@@ -17161,22 +16871,6 @@ impl<'a> Parser<'a> {
                     let span = argument.span;
                     *argument =
                         self.call_host_function(&from, owner, vec![argument.clone()], span)?;
-                }
-            }
-        }
-        // A value that took iced's `f32` for a facade `f64` is passed as its
-        // runtime `f64`. An open `{float}` is passed so too, and stays open
-        // for its later uses, as `-90.0 * factor` leaves `factor` to the
-        // `f32` it is multiplied with next.
-        if item.path().starts_with("iced::") && !repeated {
-            for (expected, argument) in signature.inputs.iter().zip(arguments.iter_mut()) {
-                if self.inference.resolve(expected) == Ty::Float(Float::F64)
-                    && matches!(
-                        self.inference.resolve(&argument.ty),
-                        Ty::Float(Float::F32 | Float::Var(_))
-                    )
-                {
-                    argument.ty = Ty::Float(Float::F64);
                 }
             }
         }
@@ -17484,29 +17178,9 @@ impl<'a> Parser<'a> {
                     .iter()
                     .all(|argument| self.unify_type(expected, &argument.ty))
             } else {
-                // iced's `f64` is Rust's `f32`, as a slider's `T` is for an
-                // `f32` closure: a value whose type is not known yet takes it.
-                let iced = item.path().starts_with("iced::");
                 signature.inputs.len() == arguments.len()
                     && signature.inputs.iter().zip(arguments).enumerate().all(
                         |(index, (expected, argument))| {
-                            if iced
-                                && matches!(self.inference.resolve(&argument.ty), Ty::Infer(_))
-                                && self.inference.resolve(expected) == Ty::Float(Float::F64)
-                            {
-                                return self.unify_type(&Ty::Float(Float::F32), &argument.ty);
-                            }
-                            // An open `{float}` stays open: iced's `f32` or a
-                            // generic number, its later uses settle it.
-                            if iced
-                                && matches!(
-                                    self.inference.resolve(&argument.ty),
-                                    Ty::Float(Float::Var(_))
-                                )
-                                && self.inference.resolve(expected) == Ty::Float(Float::F64)
-                            {
-                                return true;
-                            }
                             self.unify_type(expected, &argument.ty)
                                 || facade
                                     && self
@@ -17679,7 +17353,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Rust's `&String` to `&str` deref coercion at a facade call: a facade
-    /// `String` input stands for iced's `&str` or `impl IntoFragment`, and a
+    /// `String` input stands for a `&str`, and a
     /// shared borrow is passed by value, and a typed number as its runtime kind.
     /// Imported Rust items keep exact types.
     fn deref_facade_strings(
@@ -17690,63 +17364,6 @@ impl<'a> Parser<'a> {
         if items.iter().any(|item| item.imported_identity().is_some()) {
             return Ok(());
         }
-        // An imported value where an iced helper takes text, as `text` takes
-        // `impl IntoFragment`: its `Display` text. `cargo check` holds the
-        // value's type to the trait iced asks for.
-        #[cfg(feature = "rust-import")]
-        for (index, argument) in arguments.iter_mut().enumerate() {
-            let target = match self.inference.resolve(&argument.ty) {
-                Ty::Reference { target, .. } => self.inference.resolve(&target),
-                ty => ty,
-            };
-            let imported = matches!(&target, Ty::Host { proof, .. }
-                if proof.definition.identity().imported().is_some());
-            let text = items.iter().all(|item| item.path().starts_with("iced::"))
-                && items.iter().any(|item| {
-                    item.signature()
-                        .parameters()
-                        .get(index)
-                        .is_some_and(|parameter| {
-                            matches!(
-                                parameter.shape(),
-                                crate::host::type_ref::Shape::Builtin(
-                                    crate::host::type_ref::Builtin::String
-                                )
-                            )
-                        })
-                });
-            if imported && text {
-                argument.source =
-                    self.prelude_op(PreludeOp::DisplayText, [argument.rendered_source()]);
-                argument.prelude = origin::Fragment::default();
-                argument.lvalue = None;
-                argument.ty = Ty::String;
-            }
-        }
-        // iced never takes an `i64` or `f64`: its numbers are `f32`, `u8`,
-        // `u16`, `u32`, or a slider's `T`. A facade `i64`/`f64` input stands
-        // for those, so a literal is inferred into it, but a typed `i64` or
-        // `f64` is Rust's E0308.
-        let narrow = |index: usize| {
-            items.iter().all(|item| {
-                let path = item.path();
-                path.starts_with("iced::")
-                    && !path.contains("lider")
-                    && item
-                        .signature()
-                        .parameters()
-                        .get(index)
-                        .is_some_and(|parameter| {
-                            matches!(
-                                parameter.shape(),
-                                crate::host::type_ref::Shape::Builtin(
-                                    crate::host::type_ref::Builtin::I64
-                                        | crate::host::type_ref::Builtin::F64
-                                )
-                            )
-                        })
-            })
-        };
         let slice = |index: usize| {
             items.iter().any(|item| {
                 item.signature()
@@ -17802,21 +17419,6 @@ impl<'a> Parser<'a> {
                         target => target,
                     };
                 }
-                ty @ (Ty::Int(Int::I64) | Ty::Float(Float::F64)) if narrow(index) => {
-                    let (found, expected) = if ty == Ty::Int(Int::I64) {
-                        (
-                            "i64",
-                            "iced's `u8`/`u16`/`u32` (or `f32`); write a literal or `as u32`",
-                        )
-                    } else {
-                        ("f64", "iced's `f32`; write a literal or `as f32`")
-                    };
-                    return Err(Error::TypeMismatch {
-                        expected: expected.into(),
-                        actual: format!("`{found}` (E0308)").into(),
-                        expression: argument.span,
-                    });
-                }
                 // iced's `Option<&T>` (a combo box's selection) is an
                 // `Option<T>` in the facade.
                 Ty::Option(ref inner)
@@ -17830,15 +17432,6 @@ impl<'a> Parser<'a> {
                 Ty::Float(Float::F32) if !generic(index) => argument.ty = Ty::Float(Float::F64),
                 Ty::Int(kind) if !matches!(kind, Int::I64 | Int::Var(_)) && !generic(index) => {
                     argument.ty = Ty::Int(Int::I64);
-                }
-                // A generic `T: IntoFragment` is its text, as iced's
-                // `into_fragment` makes it.
-                ty @ (Ty::Param(_) | Ty::Projection(..))
-                    if self.type_implements(&ty, "IntoFragment") =>
-                {
-                    argument.source = argument.source.clone().surrounded("(\"\" + (", "))");
-                    argument.lvalue = None;
-                    argument.ty = Ty::String;
                 }
                 _ => {}
             }
@@ -18099,59 +17692,6 @@ impl<'a> Parser<'a> {
             &mut parameters,
             operation,
         )?;
-        // An imported iced item's `Theme` and `Renderer` are iced's, the ones
-        // the facade declares, as its defaults name and its view uses (D558
-        // tier 2).
-        // An iced view value an iced item takes carries the item's messages,
-        // as a `Controls` given to `TitleBar::controls(impl Into<..>)` does:
-        // a view's messages are its application's (D558 tier 2).
-        #[cfg(feature = "rust-import")]
-        if item.imported_identity().is_some()
-            && item_path.starts_with("iced::")
-            && let Some(message) = parameters.get("Message").cloned()
-            && let Some(arguments) = arguments
-        {
-            for argument in arguments {
-                if let Ty::Host { proof, arguments } = self.inference.resolve(&argument.ty)
-                    && proof.definition.identity().imported().is_some()
-                    && let Some(index) = proof
-                        .definition
-                        .parameters()
-                        .iter()
-                        .position(|parameter| parameter.as_str() == "Message")
-                    && let Some(carried) = arguments.get(index)
-                {
-                    let _ = self.unify_type(&message, carried);
-                }
-            }
-        }
-        #[cfg(feature = "rust-import")]
-        if item.imported_identity().is_some() && item_path.starts_with("iced::") {
-            for (name, path) in [
-                ("Theme", "iced::Theme"),
-                ("Renderer", "iced::widget::Renderer"),
-            ] {
-                let Some(ty) = parameters.get(name).cloned() else {
-                    continue;
-                };
-                if !matches!(self.inference.resolve(&ty), Ty::Infer(_)) {
-                    continue;
-                }
-                if let Some(definition) = self.models.host.type_(path).cloned()
-                    && definition.parameters().is_empty()
-                {
-                    let facade = Ty::Host {
-                        proof: HostTyProof::new(
-                            definition,
-                            None,
-                            self.models.host.type_owner(path).cloned(),
-                        ),
-                        arguments: Box::default(),
-                    };
-                    let _ = self.unify_type(&ty, &facade);
-                }
-            }
-        }
         let requirements = item
             .signature()
             .type_parameters()
@@ -19245,45 +18785,6 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
-        // `tree::Tag::of::<State>()`: the logical tag of a script widget's
-        // State, its type and its schema, which a reload compares.
-        if items.first().is_some_and(|item| item.path() == TAG_OF)
-            && arguments.is_empty()
-            && let Some(types) = self.pending_turbofish.take()
-        {
-            let [ty] = &types[..] else {
-                return Err(Error::InvalidTypeArguments {
-                    ty: TAG_OF.into(),
-                    expected: 1,
-                    actual: types.len(),
-                    reference: call,
-                });
-            };
-            let ty = self.inference.resolve(ty);
-            let logical = match &ty {
-                Ty::Script(id, _) => {
-                    let model = self.models.definition(*id);
-                    format!(
-                        "{}#{:016x}",
-                        ty.name(&self.models),
-                        model.definition().schema().symbol_id()
-                    )
-                }
-                ty => ty.name(&self.models).to_string(),
-            };
-            let items = self
-                .models
-                .host_items(TAG_OF_LOGICAL)
-                .map(<[_]>::to_vec)
-                .ok_or_else(|| Error::InvalidHostOperation {
-                    item: TAG_OF.into(),
-                    reason: "it is not supported in Rawr yet with this version of iced".into(),
-                    operation: call,
-                })?;
-            let owner = self.models.item_owner(TAG_OF_LOGICAL).cloned();
-            let literal = self.literal(format!("{logical:?}"), Ty::String, call);
-            return self.call_host_function(&items, owner, vec![literal], call);
-        }
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
         self.host_turbofish = self.pending_turbofish.take();
@@ -19352,7 +18853,7 @@ impl<'a> Parser<'a> {
         self.reject_invocation(&output, call, "returned by a function")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
-        let ty = facade_output(&item, &output);
+        let ty = output.clone();
         let summary = self.host_summary(&item, &self.inference.resolve(&ty), arguments.len());
         let opens = item.opens();
         let imported = item.imported_identity().is_some();
@@ -19723,44 +19224,6 @@ impl<'a> Parser<'a> {
         self.parse_primary()
     }
 
-    /// Rewrite the call arguments ahead, `(f)`, into `((f)())`: the one
-    /// argument called with no arguments. `false` leaves the tokens alone.
-    fn splice_immediate_call(&mut self) -> bool {
-        let mut ahead = self.input.clone();
-        let Some((Token::LeftParen, open)) = ahead.next() else {
-            return false;
-        };
-        let mut depth = 1_usize;
-        let mut inner = Vec::new();
-        let close = loop {
-            let Some((token, at)) = ahead.next() else {
-                return false;
-            };
-            match token {
-                Token::LeftParen | Token::LeftBracket | Token::LeftBrace => depth += 1,
-                Token::RightParen | Token::RightBracket | Token::RightBrace => depth -= 1,
-                Token::Comma if depth == 1 => return false,
-                _ => {}
-            }
-            if depth == 0 {
-                break at;
-            }
-            inner.push((token, at));
-        };
-        for _ in 0..inner.len() + 2 {
-            self.next();
-        }
-        let mut tokens = vec![(Token::LeftParen, open), (Token::LeftParen, open)];
-        tokens.extend(inner);
-        tokens.extend([
-            (Token::RightParen, close),
-            (Token::Unit, close),
-            (Token::RightParen, close),
-        ]);
-        self.splice_tokens(tokens);
-        true
-    }
-
     fn parse_host_value(
         &mut self,
         item: crate::host::item::Definition,
@@ -19924,16 +19387,6 @@ impl<'a> Parser<'a> {
             "the closing delimiter after intrinsic macro elements",
         )?;
         let call = span(name_span.start(), end);
-        // iced's `color!(0xrrggbb, a)` and `color!(r, g, b, a)`: the color
-        // with its alpha set to `a`, any `f32` expression.
-        let alpha = (item.path() == "iced::color" && matches!(arguments.len(), 2 | 4))
-            .then(|| arguments.pop())
-            .flatten();
-        if let Some(alpha) = alpha {
-            let color = self.lower_host_macro(&items, owner, arguments, call)?;
-            self.pending_arguments = Some((vec![alpha], end));
-            return self.parse_host_method(color, "a".into(), call);
-        }
         self.lower_host_macro(&items, owner, arguments, call)
     }
 
@@ -20021,18 +19474,6 @@ impl<'a> Parser<'a> {
         let alias = resolved.host_alias().cloned();
         let Some(definition) = alias else {
             return Err(self.unsupported("host method receiver type"));
-        };
-        // iced's `button.on_press_with(f)` builds its message with `f` on
-        // press. Rawr builds it with the view, which gives the same message
-        // for a closure without side effects: `.on_press((f)())`.
-        let member = if member.as_str() == "on_press_with"
-            && definition.path() == "iced::widget::Button"
-            && self.pending_arguments.is_none()
-            && self.splice_immediate_call()
-        {
-            ImmutableString::from("on_press")
-        } else {
-            member
         };
         let path = format!("{}::{member}", definition.path());
         let (member, path) = self.exported_member(&definition, member, path, member_span)?;
@@ -20181,13 +19622,6 @@ impl<'a> Parser<'a> {
         if scoped {
             self.require_invocation_receiver(&receiver, member_span)?;
         }
-        // `tree.state.downcast_ref::<State>()`, and `downcast_mut`, a place.
-        if definition.path().as_str() == TREE_STATE
-            && matches!(member.as_str(), "downcast_ref" | "downcast_mut")
-            && self.pending_arguments.is_none()
-        {
-            return self.parse_state_downcast(receiver, member, member_span);
-        }
         // `tree.size = size` and `self.shadow.offset.x = x`: a facade
         // field of a place is a place, set through the field's owned
         // builder, which returns the changed value.
@@ -20316,109 +19750,6 @@ impl<'a> Parser<'a> {
             (true, true, false) => Err(kind(true)),
             _ => Ok((member, path)),
         }
-    }
-
-    /// `state.downcast_ref::<T>()` of a script widget's Tree state: its
-    /// State, a `T`. `downcast_mut::<T>()` is a place whose store puts the
-    /// changed State back in the Tree.
-    fn parse_state_downcast(
-        &mut self,
-        receiver: ParsedExpr,
-        member: ImmutableString,
-        member_span: Span,
-    ) -> Result<ParsedExpr, Error> {
-        if !(matches!(self.peek(), Token::DoubleColon)
-            && matches!(self.peek_second(), Token::LessThan))
-        {
-            return Err(Error::InvalidHostOperation {
-                item: format!("{TREE_STATE}::{member}").into(),
-                reason: "names its State's type, as `downcast_ref::<State>()`".into(),
-                operation: member_span,
-            });
-        }
-        self.next();
-        self.next();
-        let ty = self.parse_local_type()?;
-        self.expect_close_angle("'>' after the State's type")?;
-        let end = match self.peek() {
-            Token::Unit => self.next().1,
-            _ => {
-                self.expect(Token::LeftParen, "'(' after `downcast`")?;
-                self.expect(Token::RightParen, "')' after `downcast(`")?
-            }
-        };
-        let at = receiver.span;
-        let read = |this: &mut Self, local: ParsedExpr| -> Result<ParsedExpr, Error> {
-            this.pending_arguments = Some((Vec::new(), end));
-            this.host_turbofish = Some(vec![ty.clone()]);
-            let read = this.parse_host_method(local, "__rawr_downcast".into(), member_span);
-            this.host_turbofish = None;
-            read
-        };
-        if member.as_str() == "downcast_ref" || receiver.lvalue.is_none() {
-            if member.as_str() == "downcast_mut" {
-                return Err(
-                    self.unsupported("`downcast_mut` of a Tree's state that is not a place")
-                );
-            }
-            let mut value = read(self, receiver)?;
-            value.span = span(at.start(), end);
-            return Ok(value);
-        }
-        let lvalue = receiver.lvalue.clone().expect("checked above");
-        let place = self.temporary("place");
-        let stored = self.temporary("stored");
-        let local = self.operator_expr(
-            origin::Fragment::plain(place.clone()),
-            receiver.ty.clone(),
-            at,
-        );
-        let getter = read(self, local.clone())?;
-        let operand = self.operator_expr(origin::Fragment::plain(stored.clone()), ty.clone(), at);
-        self.pending_arguments = Some((vec![operand], end));
-        self.host_turbofish = Some(vec![ty.clone()]);
-        let setter = self.parse_host_method(local, "__rawr_store".into(), member_span);
-        self.host_turbofish = None;
-        let setter = setter?;
-        let mut reader = origin::Fragment::plain("{ ");
-        reader.push(getter.prelude.clone());
-        reader.push(getter.source.clone());
-        reader.push_text(" }");
-        let mut store = origin::Fragment::plain("{ ");
-        store.push(setter.prelude.clone());
-        store.push(setter.source.clone());
-        store.push_text(" }");
-        let step = PlaceStep::Accessor {
-            place: place.clone(),
-            stored,
-            read: reader.clone(),
-            store,
-        };
-        let lvalue = match &lvalue {
-            Lvalue::Binding { binding, .. } => Lvalue::Nested(Box::new(NestedLvalue {
-                binding: binding.clone(),
-                base: origin::Fragment::plain(binding.to_string()),
-                steps: vec![step],
-                ty: ty.clone(),
-            })),
-            Lvalue::Slice(_) => return Err(self.unsupported("assignment target")),
-            lvalue => nested_step(lvalue, step, ty.clone()),
-        };
-        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
-        source.push(receiver.rendered_source());
-        source.push_text("; ");
-        source.push(reader);
-        source.push_text(" }");
-        let mut value = self.operator_expr(
-            source,
-            Ty::Reference {
-                mutable: true,
-                target: Box::new(ty),
-            },
-            span(at.start(), end),
-        );
-        value.lvalue = Some(lvalue);
-        Ok(value)
     }
 
     /// `value.field` of a facade type as an assignment's target: a place
@@ -20905,7 +20236,7 @@ impl<'a> Parser<'a> {
         self.reject_invocation(&output, call, "returned by a method")?;
         let outcome = item.outcome();
         let evaluation = item.evaluation();
-        let ty = facade_output(&item, &output);
+        let ty = output.clone();
         let summary = self.host_summary(&item, &self.inference.resolve(&ty), arguments.len());
         self.note_call(call.end(), summary);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
@@ -34304,12 +33635,6 @@ impl<'a> Parser<'a> {
                 let name = bounded.name(&self.models);
                 let (arguments, end) =
                     self.parse_borrowing_arguments("generic value method arguments")?;
-                if let Some(called) =
-                    self.call_facade_bound(&value, &bounded, &member, &arguments, member_span, end)?
-                {
-                    value = called;
-                    continue;
-                }
                 if let Some((trait_name, function)) =
                     self.bound_trait_function(&bounded, &member, member_span)?
                 {
@@ -47001,67 +46326,8 @@ impl<'a> Parser<'a> {
             source = unboxed;
             value.ty = source.clone();
         }
-        // iced's `impl Widget for &str`: a string where a widget erases is
-        // its `text`.
-        if source.is_text()
-            && matches!(&target, Ty::Host { .. })
-            && self
-                .erasure_types()
-                .iter()
-                .any(|erased| same_head(erased, &target))
-            && let Some(items) = self.models.host_items(WIDGET_TEXT_PATH).map(<[_]>::to_vec)
-        {
-            let owner = self.models.item_owner(WIDGET_TEXT_PATH).cloned();
-            let call = value.span;
-            let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
-            let string = std::mem::replace(value, placeholder);
-            *value = self.call_host_function(&items, owner, vec![string], call)?;
-            return self.coerce_expr(&target, value);
-        }
-        // iced's `impl From<&str> for Span`: a string where a span is
-        // expected is its `span`, as `rich_text!["a ", span("b")]` takes.
-        if source.is_text()
-            && let Ty::Host { proof, .. } = &target
-            && proof.definition.path().as_str() == WIDGET_SPAN_TYPE
-            && let Some(items) = self.models.host_items(WIDGET_SPAN_PATH).map(<[_]>::to_vec)
-        {
-            let owner = self.models.item_owner(WIDGET_SPAN_PATH).cloned();
-            let call = value.span;
-            let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, call);
-            let string = std::mem::replace(value, placeholder);
-            *value = self.call_host_function(&items, owner, vec![string], call)?;
-            return self.coerce_expr(&target, value);
-        }
         if self.coerce_implemented_trait(&source, &target, value)? {
             return self.coerce_expr(&target, value);
-        }
-        if self.coerce_optional_widget(&source, &target, value)? {
-            return Ok(None);
-        }
-        #[cfg(feature = "rust-import")]
-        if self.coerce_imported_widget(&source, &target, value)? {
-            return Ok(None);
-        }
-        #[cfg(feature = "rust-import")]
-        if let Some(key) = self.coerce_profile_projectable(&source, &target)? {
-            let target = self.inference.resolve(&target);
-            let helper = self.push_op(Op::Event {
-                key,
-                source,
-                target: target.clone(),
-                span: value.span,
-            });
-            if self.normalize_private_calls {
-                let operand = self.materialize_in_place(value, &format!("{helper}_arg_0"));
-                value.source = self.op_call(&helper, [operand]);
-            } else {
-                debug_assert!(value.prelude.is_empty());
-                value.source = self.op_call(&helper, [std::mem::take(&mut value.source)]);
-            }
-            value.ty = target;
-            value.lvalue = None;
-            value.source.cover(value.span);
-            return Ok(Some(helper));
         }
         if self.coerce_children(&source, &target, value)? {
             return Ok(None);
@@ -47213,142 +46479,6 @@ impl<'a> Parser<'a> {
         if let Some((items, _)) = self.collected_items(value) {
             value.prelude = origin::Fragment::default();
             value.source = items;
-        }
-    }
-
-    /// An imported iced view value iced implements `Widget` for, as
-    /// pane_grid's `PaneGrid`, where a view takes an `Element`: the element
-    /// it shows as, through rawr-iced's `recipe::element` (D558 tier 2).
-    #[cfg(feature = "rust-import")]
-    fn coerce_imported_widget(
-        &mut self,
-        source: &Ty,
-        target: &Ty,
-        value: &mut ParsedExpr,
-    ) -> Result<bool, Error> {
-        const ELEMENT: &str = "iced::widget::recipe::element";
-        let Ty::Host { proof, arguments } = self.inference.resolve(source) else {
-            return Ok(false);
-        };
-        if proof.definition.identity().imported().is_none()
-            || !proof
-                .definition
-                .capabilities()
-                .contains(capability::Kind::Widget)
-        {
-            return Ok(false);
-        }
-        let Ty::Host {
-            proof: target_proof,
-            arguments: target_arguments,
-        } = self.inference.resolve(target)
-        else {
-            return Ok(false);
-        };
-        let Some(element) = self.models.host.type_("iced::Element") else {
-            return Ok(false);
-        };
-        let [message] = target_arguments.as_ref() else {
-            return Ok(false);
-        };
-        if target_proof.definition.contract() != element.contract() {
-            return Ok(false);
-        }
-        if let Some(index) = proof
-            .definition
-            .parameters()
-            .iter()
-            .position(|parameter| parameter.as_str() == "Message")
-            && let Some(argument) = arguments.get(index)
-        {
-            let checkpoint = self.inference.checkpoint();
-            if !self.unify_type(message, argument) {
-                self.inference.rollback(checkpoint);
-                return Ok(false);
-            }
-            self.inference.commit(checkpoint);
-        }
-        let Some(items) = self.models.host_items(ELEMENT).map(<[_]>::to_vec) else {
-            return Ok(false);
-        };
-        let owner = self.models.item_owner(ELEMENT).cloned();
-        let span = value.span;
-        let placeholder = self.operator_expr(origin::Fragment::default(), Ty::Unit, span);
-        let view = std::mem::replace(value, placeholder);
-        *value = self.call_host_function(&items, owner, vec![view], span)?;
-        let target = self.inference.resolve(target);
-        if !self.unify_type(&target, &value.ty) {
-            return Err(Error::TypeMismatch {
-                expected: target.name(&self.models),
-                actual: self.inference.resolve(&value.ty).name(&self.models),
-                expression: span,
-            });
-        }
-        value.ty = target;
-        Ok(true)
-    }
-
-    #[cfg(feature = "rust-import")]
-    fn coerce_profile_projectable(
-        &mut self,
-        source: &Ty,
-        target: &Ty,
-    ) -> Result<Option<crate::host::runtime::event::Key>, Error> {
-        let Ty::Host {
-            proof: source_proof,
-            arguments: source_arguments,
-        } = source
-        else {
-            return Ok(None);
-        };
-        let [Ty::ProfileMessage { script, seal, .. }] = source_arguments.as_ref() else {
-            return Ok(None);
-        };
-        if *seal == [0; 16]
-            || source_proof.owner.is_none()
-            || source_proof.definition.identity().imported().is_none()
-            || source_proof.definition.parameters().len() != 1
-        {
-            return Ok(None);
-        }
-        let Ty::Host {
-            proof: target_proof,
-            arguments: target_arguments,
-        } = target
-        else {
-            return Ok(None);
-        };
-        let [target_message] = target_arguments.as_ref() else {
-            return Ok(None);
-        };
-        let Some(element) = self.models.host.type_("iced::Element") else {
-            return Ok(None);
-        };
-        let Some(element_owner) = self.models.host.type_owner("iced::Element").cloned() else {
-            return Ok(None);
-        };
-        if target_proof.definition.contract() != element.contract()
-            || target_proof.owner.as_ref() != Some(&element_owner)
-            || element.parameters().len() != 1
-        {
-            return Ok(None);
-        }
-        let checkpoint = self.inference.checkpoint();
-        if self.unify_type(target_message, script) {
-            self.inference.commit(checkpoint);
-            Ok(Some(crate::host::runtime::event::Key::selected(
-                source_proof
-                    .owner
-                    .clone()
-                    .expect("the guard above keeps only a source with its crate"),
-                source_proof.definition.contract(),
-                element_owner,
-                target_proof.definition.contract(),
-                *seal,
-            )))
-        } else {
-            self.inference.rollback(checkpoint);
-            Ok(None)
         }
     }
 
@@ -47710,51 +46840,6 @@ impl<'a> Parser<'a> {
             arguments.insert(0, program);
             let owner = self.models.item_owner(&path).cloned();
             *value = self.call_host_function(&items, owner, arguments, call)?;
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    /// `Option<W>` where a widget erases (iced's `impl Widget for
-    /// Option<W>`).
-    #[inline(never)]
-    fn coerce_optional_widget(
-        &mut self,
-        source: &Ty,
-        target: &Ty,
-        value: &mut ParsedExpr,
-    ) -> Result<bool, Error> {
-        if let Ty::Option(element) = source
-            && matches!(target, Ty::Host { .. })
-            && self
-                .erasure_types()
-                .iter()
-                .any(|erased| same_head(erased, target))
-            && let Some(items) = self.models.host_items(WIDGET_VOID_PATH).map(<[_]>::to_vec)
-        {
-            let call = value.span;
-            let option = self.temporary("option");
-            let unwrapped = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
-            let mut some = self.operator_expr(unwrapped, (**element).clone(), call);
-            self.coerce_expr(target, &mut some)?;
-            let owner = self.models.item_owner(WIDGET_VOID_PATH).cloned();
-            let mut none = self.call_host_function(&items, owner, Vec::new(), call)?;
-            self.coerce_expr(target, &mut none)?;
-            let mut rendered = origin::Fragment::plain(format!("{{ let {option} = "));
-            rendered.push(value.rendered_source());
-            rendered.push_text("; if ");
-            let test = self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]);
-            rendered.push(test);
-            rendered.push_text(" { ");
-            rendered.push(some.rendered_source());
-            rendered.push_text(" } else { ");
-            rendered.push(none.rendered_source());
-            rendered.push_text(" } }");
-            value.prelude = origin::Fragment::default();
-            value.source = rendered.surrounded("(", ")");
-            value.ty = target.clone();
-            value.lvalue = None;
-            value.source.cover(value.span);
             return Ok(true);
         }
         Ok(false)
@@ -50512,15 +49597,6 @@ fn typed_lexicographic<'t>(
         }
     }
     Some(lhs.len().cmp(&rhs.len()))
-}
-
-/// The type of what an iced facade item returns: its `f64` is iced's `f32`
-/// (a radius, a color channel), as Rust reads it.
-fn facade_output(item: &crate::host::item::Definition, output: &Ty) -> Ty {
-    match output {
-        Ty::Float(Float::F64) if item.path().starts_with("iced::") => Ty::Float(Float::F32),
-        output => output.clone(),
-    }
 }
 
 pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
@@ -53363,7 +52439,7 @@ mod tests {
             std::mem::size_of::<super::Op>()
         );
         #[cfg(feature = "rust-import")]
-        assert_eq!(std::mem::size_of::<super::Op>(), 504);
+        assert_eq!(std::mem::size_of::<super::Op>(), 320);
         #[cfg(not(feature = "rust-import"))]
         assert!(
             std::mem::size_of::<super::ExecutableOp>() < 1_112,

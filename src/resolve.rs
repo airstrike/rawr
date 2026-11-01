@@ -3602,7 +3602,7 @@ fn trait_table(
 /// The std traits a crate may implement by hand: the derivable ones,
 /// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
 /// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 41] = [
+pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
     "Clone",
     "Hash",
     "Copy",
@@ -3616,7 +3616,6 @@ pub(crate) const BUILTIN_TRAITS: [&str; 41] = [
     "PartialOrd",
     "Ord",
     "Iterator",
-    "IntoFragment",
     "Add",
     "Sub",
     "Mul",
@@ -3808,7 +3807,7 @@ pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
             )]
         }
         // `std::error::Error`'s methods all have defaults.
-        "Copy" | "Eq" | "Hash" | "IntoFragment" | "Error" => Vec::new(),
+        "Copy" | "Eq" | "Hash" | "Error" => Vec::new(),
         // `trait Drop { fn drop(&mut self); }`: the destructor, which Rawr
         // runs where Rust drops a value (`lower_nominal::drops`).
         "Drop" => {
@@ -4880,59 +4879,24 @@ fn resolve_bounds_with_arguments(
                 traits.push(name);
                 continue;
             }
-            // iced's `text::IntoFragment<'a>`, what `text(..)` takes: Rust's
-            // strings, `char`, `bool` and numbers, by reference too.
-            if let [prefix @ .., last] = &bound.segments[..]
-                && last.name.text == "IntoFragment"
-                && last.arguments.iter().all(|argument| {
-                    matches!(argument, crate::item::type_ref::Argument::Lifetime(_))
-                })
-                && prefix.iter().all(|module| {
-                    module.arguments.is_empty()
-                        && matches!(
-                            module.name.text.as_str(),
-                            "iced" | "core" | "advanced" | "widget" | "text"
-                        )
-                })
-            {
-                traits.push(last.name.clone());
-                continue;
-            }
-            // iced's `advanced` traits by their module path:
-            // `renderer::Renderer`, `advanced::widget::Widget<M, T, R>`.
+            // A crate's trait by its module path, as `text::IntoFragment<'a>`
+            // or `advanced::widget::Widget<M, T, R>`: the trait its last
+            // segment names, checked as a trait of one segment is.
             if let [prefix @ .., last] = &bound.segments[..]
                 && !prefix.is_empty()
-                && prefix.iter().all(|module| {
-                    module.arguments.is_empty()
-                        && matches!(
-                            module.name.text.as_str(),
-                            "iced"
-                                | "core"
-                                | "advanced"
-                                | "widget"
-                                | "renderer"
-                                | "graphics"
-                                | "mesh"
-                        )
-                })
-                && matches!(last.name.text.as_str(), "Renderer" | "Widget" | "Meta")
-                && last
-                    .arguments
-                    .iter()
-                    .all(|argument| matches!(argument, crate::item::type_ref::Argument::Type(_)))
+                && prefix.iter().all(|module| module.arguments.is_empty())
             {
                 traits.push(last.name.clone());
-                if !last.arguments.is_empty() {
-                    trait_arguments.push((
-                        last.name.clone(),
-                        last.arguments
-                            .iter()
-                            .filter_map(|argument| match argument {
-                                crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
-                                crate::item::type_ref::Argument::Lifetime(_) => None,
-                            })
-                            .collect(),
-                    ));
+                let arguments = last
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        crate::item::type_ref::Argument::Type(ty) => Some(ty.clone()),
+                        crate::item::type_ref::Argument::Lifetime(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                if !arguments.is_empty() {
+                    trait_arguments.push((last.name.clone(), arguments));
                 }
                 continue;
             }

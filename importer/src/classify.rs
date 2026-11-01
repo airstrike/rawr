@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 74;
+const CLASSIFIER_VERSION: u32 = 75;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5606,10 +5606,6 @@ impl<P: api::Phase> Context<'_, P> {
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
             self.implements_for_any(definition, "Iterator"),
-        )
-        .with_view(
-            lifetime_parameters(generics) != 0 && self.renders(generics),
-            self.implements_iced(definition, "Widget"),
         ))
     }
 
@@ -5775,22 +5771,6 @@ impl<P: api::Phase> Context<'_, P> {
     /// Whether `id` is iced's own trait `name`, in `iced_core`.
     fn iced_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
         id.unit().crate_name() == "iced_core" && self.definition_name(id) == Some(name)
-    }
-
-    /// Whether iced's trait `name` is implemented for the definition at
-    /// `definition`, at any arguments.
-    fn implements_iced(&self, definition: usize, name: &str) -> bool {
-        let Some(definition) = self.graph.definitions().nth(definition) else {
-            return false;
-        };
-        self.graph
-            .implementations_for(definition.id())
-            .any(|implementation| {
-                implementation.polarity() == model::Polarity::Positive
-                    && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. }
-                    if self.iced_trait(id, name))
-                    && any_arguments(implementation.self_type(), definition.id())
-            })
     }
 
     fn enumeration(
