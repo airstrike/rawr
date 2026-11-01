@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.77",
+  "version": "0.3.78",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A trait's provided method called on an opaque alias, as `iced::Renderer`'s `renderer.with_translation(v, |renderer| renderer.draw_mesh(mesh))`, lends the alias's renderer to the closure as its `&mut Self`. iced's geometry example passes `rawr check`.","issues":[634],"refs":[624]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.78",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A trait's provided method called on an opaque alias, as `iced::Renderer`'s `renderer.with_translation(v, |renderer| renderer.draw_mesh(mesh))`, lends the alias's renderer to the closure as its `&mut Self`. iced's geometry example passes `rawr check`.","issues":[634],"refs":[624]}
+        ]
+      },
       {
         "version": "0.3.77",
         "date": "2026-11-01",
@@ -1471,7 +1473,7 @@
     {"issue":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":633,"title":"A capturing closure lent a &mut crate value by a trait method","state":"closed","category":"No glue (D593)","release":"0.3.76"},
-    {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)"},
+    {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)","release":"0.3.78"},
     {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
     {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"},
     {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"open","category":"No glue (D593)"},

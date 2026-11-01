@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.78 (2026-11-01)
+
 - A trait's provided method called on an opaque alias, as `iced::Renderer`'s `renderer.with_translation(v, |renderer| renderer.draw_mesh(mesh))`, lends the alias's renderer to the closure as its `&mut Self`. iced's geometry example passes `rawr check`. (#634; part of #624)
 
 ## 0.3.77 (2026-11-01)
