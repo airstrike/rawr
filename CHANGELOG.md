@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.92 (2026-11-01)
+
 - A native module's function can take and give a dependency's types, by value or by reference: with `mod label;`, `label::describe(&version)` works when `label.rs` has `pub fn describe(version: &semver::Version) -> String`. (#685)
 
 ## 0.3.91 (2026-11-01)

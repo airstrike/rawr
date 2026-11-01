@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.91",
+  "version": "0.3.92",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A native module's function can take and give a dependency's types, by value or by reference: with `mod label;`, `label::describe(&version)` works when `label.rs` has `pub fn describe(version: &semver::Version) -> String`.","issues":[685]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.92",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A native module's function can take and give a dependency's types, by value or by reference: with `mod label;`, `label::describe(&version)` works when `label.rs` has `pub fn describe(version: &semver::Version) -> String`.","issues":[685]}
+        ]
+      },
       {
         "version": "0.3.91",
         "date": "2026-11-01",
@@ -1629,7 +1631,7 @@
     {"issue":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":683,"title":"A module function taking a dependency's type checks","state":"open","category":"Divergences from rustc"},
     {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health"},
-    {"issue":685,"title":"A program module's function whose signature names another crate's type has a binding","state":"closed","category":"No glue (D593)"},
+    {"issue":685,"title":"A program module's function whose signature names another crate's type has a binding","state":"closed","category":"No glue (D593)","release":"0.3.92"},
     {"issue":686,"title":"Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":687,"title":"A method returning `&[T]` borrowed from its receiver","state":"open","category":"No glue (D593)"},
     {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
