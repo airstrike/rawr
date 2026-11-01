@@ -294,9 +294,10 @@ or the site.
 
 The job runs on `ubuntu-latest`, which is x86-64, so the image builds
 natively with Docker Buildx. Buildx keeps its layers in the GitHub Actions
-cache, so a later run recompiles only the workspace crates. The job frees
-disk space and adds 24 GB of swap first. It builds with one rustc job,
-because rawr's thin-LTO compile needs most of the runner's 16 GB.
+cache, so a later run recompiles only the workspace crates. The job adds
+24 GB of swap first and builds with four rustc jobs. Before the image, it
+builds the site and runs the Worker's and the site's tests, so a broken site
+stops the release before an image is built or pushed.
 
 The job pushes the image as `rawr-play:<commit>`. It writes that image and
 `PLAY_VERSION` into its own copy of `wrangler.jsonc` and runs `deploy.sh`.

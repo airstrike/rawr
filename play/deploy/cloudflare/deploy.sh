@@ -21,6 +21,8 @@ want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
 
 # The site's build (site/dist) comes first: the tests read its pages, and
 # wrangler deploy then merges it as built (SITE_BUILT) instead of building again.
+# With SITE_BUILT=1 already set, as in the GitHub Actions release, which built
+# and tested the site before the image, this build only merges.
 node build.mjs >"$logs/release-build.log" 2>&1 || { echo "the build failed; see $logs/release-build.log" >&2; exit 1; }
 npm test >"$logs/release-test.log" 2>&1 || { echo "npm test failed; see $logs/release-test.log" >&2; exit 1; }
 npm --prefix "$repo/site" test >"$logs/release-site-test.log" 2>&1 || { echo "the site's tests failed; see $logs/release-site-test.log" >&2; exit 1; }

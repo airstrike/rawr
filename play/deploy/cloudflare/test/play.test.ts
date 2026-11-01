@@ -232,11 +232,17 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   const { decodeHtml, runBlocks, runnable, sha256 } = await import("../src/play.ts");
   const root = new URL("../../../../", import.meta.url);
   const html = readFileSync(new URL("site/dist/index.html", root), "utf8");
+  const blocks = runBlocks(html);
   const sources = runnable(html);
-  assert.equal(sources.length, 1, "cart.rs");
-  assert.deepEqual(runBlocks(html).map((block) => block.name), ["cart.rs"]);
-  // What the page shows (and its Run button sends) is examples/scripts/cart.rs, marked as a program.
-  assert.equal(sources[0], "// rawr\n" + readFileSync(new URL("examples/scripts/cart.rs", root), "utf8").trimEnd());
+  assert.ok(blocks.length > 0, "the landing page has a run block");
+  assert.equal(sources.length, blocks.length);
+  // What the page shows (and its Run button sends) is the examples/scripts
+  // file its block names, marked as a program.
+  for (const [i, block] of blocks.entries()) {
+    assert.ok(block.name, `landing block ${i} names its file`);
+    const file = readFileSync(new URL(`examples/scripts/${block.name}`, root), "utf8").trimEnd();
+    assert.equal(sources[i], "// rawr\n" + file, block.name);
+  }
   assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
   // The allow-list is the set of their hashes; anything else is refused.
   const allowed = new Set(await Promise.all(sources.map(sha256)));
@@ -245,47 +251,38 @@ test("the landing page's runnable sources are its files, exactly", async () => {
   assert.equal(await sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 });
 
+// Which blocks each page holds is the docs' to change, so this checks what
+// holds for any set of them rather than listing today's.
 test("the allow-list covers every page's run blocks, the docs included", async () => {
   const { allowList, sitePages } = await import("../allowlist.mjs");
-  const { sha256 } = await import("../src/play.ts");
+  const { runSnippet, sha256 } = await import("../src/play.ts");
   const pages = sitePages(new URL("../../../../site/dist", import.meta.url).pathname);
   const { hashes, blocks } = await allowList(pages);
-  const at = (page: string) => blocks.filter((block: { page: string }) => block.page === page).map((block: { name: string }) => block.name);
-  assert.deepEqual(at("index.html"), ["cart.rs"]);
-  assert.deepEqual(at("docs/index.html"), []);
-  assert.deepEqual(at("docs/start.html"), ["hello.rs", "cart.rs"]);
-  assert.deepEqual(at("docs/reference/overview.html"), ["parse.rs"]);
-  assert.deepEqual(at("docs/reference/items.html"), [
-    "nested-fn.rs", "structs.rs", "enums.rs", "impl.rs", "mut-ref.rs", "traits.rs", "unsafe-impl.rs", "consts.rs", "aliases.rs", "geometry.rs", "variants.rs", "derive.rs",
-  ]);
-  assert.deepEqual(at("docs/reference/types.html"), [
-    "integers.rs", "wide.rs", "sqrt.rs", "text.rs", "tuples.rs", "option.rs", "rc.rs", "impl-iter.rs", "dyn-iter.rs", "fn-pointer.rs", "casts.rs",
-  ]);
-  assert.deepEqual(at("docs/reference/generics.html"), ["generics.rs", "shapes.rs", "countdown.rs", "bag.rs"]);
-  assert.deepEqual(at("docs/reference/patterns.html"), [
-    "match.rs", "destructure.rs", "let-else.rs", "irrefutable.rs", "labels.rs", "block-value.rs", "iter-mut.rs",
-  ]);
-  assert.deepEqual(at("docs/reference/closures.html"), ["closures.rs", "capture.rs", "boxed-fn.rs", "copy-closure.rs", "method-path.rs", "struct-update.rs"]);
-  assert.deepEqual(at("docs/reference/moves.html"), ["use-after-move.rs", "partial-move.rs", "drop-order.rs", "clone-out.rs", "rc-refcell.rs"]);
-  assert.deepEqual(at("docs/reference/macros.html"), ["macros.rs", "write.rs", "format.rs"]);
-  assert.deepEqual(at("docs/reference/std.html"), [
-    "strings.rs", "find-retain.rs", "iterators.rs", "array-map.rs", "floats.rs", "time.rs",
-    "hashmap.rs", "refcell.rs", "cell.rs", "mem.rs", "ordering.rs", "conversions.rs", "errors.rs", "path.rs",
-  ]);
-  assert.deepEqual(at("docs/reference/iced.html"), []);
-  assert.deepEqual(at("docs/iced/index.html"), []);
-  assert.deepEqual(at("docs/play/index.html"), [""]);
-  assert.deepEqual(at("docs/reference/play.html"), []);
+  const all = blocks as { page: string; name: string; code: string; hash: string }[];
+  const at = (page: string) => all.filter((block) => block.page === page).map((block) => block.name);
+  assert.ok(at("index.html").length > 0, "the landing page has run blocks");
+  assert.ok(all.some((block) => block.page.startsWith("docs/reference/")), "the reference has run blocks");
+  assert.deepEqual(at("docs/reference/iced.html"), [], "?play runs plain programs only");
+  assert.deepEqual(at("docs/iced/index.html"), [], "?play runs plain programs only");
   assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
   assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
   assert.deepEqual(at("docs/ratatui.html"), [], "a ratatui app needs a Cargo project and a terminal");
-  // Every name is one source: the docs' cart.rs is the landing page's block.
-  const names = blocks.filter((block: { name: string }) => block.name !== "").map((block: { name: string }) => block.name);
-  assert.equal(new Set(names).size, names.length - 1);
-  // The docs' cart.rs is the landing page's cart.rs, so the pair is one entry.
-  assert.equal(hashes.length, new Set(blocks.map((block: { hash: string }) => block.hash)).size);
-  assert.equal(hashes.length, blocks.length - 1);
-  assert.ok(hashes.includes(await sha256(canonical(snippet({ code: "let xs = vec![3, 1, 2];\nxs.iter().sum::<i64>()" })))));
+  // Every name is one source wherever it appears, so the docs' copy of a
+  // landing block is the same entry.
+  const byName = new Map<string, string>();
+  for (const block of all.filter((block) => block.name !== "")) {
+    const first = byName.get(block.name);
+    if (first === undefined) byName.set(block.name, block.hash);
+    else assert.equal(block.hash, first, `${block.page}: ${block.name}`);
+  }
+  // The allow-list is exactly the blocks' distinct hashes, and each block's
+  // entry is the hash of what its Run button sends.
+  assert.deepEqual(hashes, [...new Set(all.map((block) => block.hash))].sort());
+  for (const block of all) {
+    const sent = runSnippet(block);
+    assert.ok(typeof sent !== "string", `${block.page}: ${block.name}: ${sent}`);
+    assert.ok(hashes.includes(await sha256(canonical(sent))), `${block.page}: ${block.name}`);
+  }
   assert.ok(!hashes.includes(await sha256(canonical(snippet({ code: "println!(\"hi\");" })))));
 });
 
