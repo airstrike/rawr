@@ -560,6 +560,13 @@
     {"t":"T557","issue":557,"title":"T557: Delete the native account's counters and its account reports","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":"25ac22a69","release":null},
     {"t":"T558","issue":558,"title":"T558: Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T559","issue":559,"title":"T559: Delete the item and byte figures host bindings pass to ImportAllocation","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
-    {"t":"T560","issue":560,"title":"T560: Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null}
+    {"t":"T560","issue":560,"title":"T560: Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
+    {"t":"T561","issue":561,"title":"T561: rawr panics where a crate signature names a type its bindings don't declare","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T562","issue":562,"title":"T562: rawr panics on a use whose span isn't in its source's text","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T563","issue":563,"title":"T563: Type errors still print rawr's internal crate paths","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T564","issue":564,"title":"T564: column! with an Option<widget> has no _boxed","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T565","issue":565,"title":"T565: Importer messages about overloads and surface instances name rawr's machinery","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T566","issue":566,"title":"T566: iced's advanced Shell is named with no type argument","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T567","issue":567,"title":"T567: bezier_tool: no map on a Canvas behind impl Widget again","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

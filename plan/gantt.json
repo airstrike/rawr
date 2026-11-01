@@ -2,7 +2,7 @@
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-01",
   "version": "0.3.58",
-  "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
+  "examples": {"running":15,"total":56,"note":"15 pass rawr check with 0.3.57 (2026-11-01); the rest stop at recorded gaps"},
   "groups": [
     {
       "id": "foundations",
