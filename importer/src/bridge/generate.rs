@@ -1851,6 +1851,89 @@ fn reach_place<P: __rawr_internal::place::Policy>(
     }).map_err(|error| Error::Value(error.to_string()))
 }
 
+/// The receiver a slice a `&self` method lends borrows (#687): a value in
+/// an arena slot, or one native code lent (D558.3).
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Lender {
+    Handle(NativeHandle),
+    Lent(__rawr_internal::scope::Lent),
+}
+
+#[allow(dead_code)]
+struct LenderF<T>(std::marker::PhantomData<fn() -> T>);
+
+impl<T: 'static> __rawr_internal::scope::Family for LenderF<T> {
+    type Of<'a> = T;
+}
+
+thread_local! {
+    /// The arena slots a lent slice's operation has claimed on this
+    /// thread, by slot and generation: a nested operation on a slice the
+    /// same value lends shares the claim, as Rust's shared borrows do.
+    static LENDERS: RefCell<std::collections::BTreeMap<(u32, u64), __rawr_internal::scope::Nonce>> =
+        const { RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+#[allow(dead_code)]
+struct Lending((u32, u64));
+
+impl Drop for Lending {
+    fn drop(&mut self) {
+        LENDERS.with_borrow_mut(|lenders| lenders.remove(&self.0));
+    }
+}
+
+/// Reach the receiver `lender` names, shared, for one operation on the
+/// slice it lends. A value in a slot is leased for the operation, so the
+/// arena is free while native code reads the slice, and the value goes
+/// back when it ends. A value an iced view's home holds is read there.
+#[allow(dead_code)]
+fn reach_lender<T: 'static>(
+    lender: &Lender,
+    visit: &mut dyn FnMut(&T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+    let handle = match lender {
+        Lender::Lent(lent) => {
+            let failed = |error| place_error(Error::Lent(lent.name(), error));
+            let access: fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |value| result = Some(visit(value)))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            return result.unwrap_or_else(|| Err(failed(__rawr_internal::scope::Error::Busy)));
+        }
+        Lender::Handle(handle) => handle,
+    };
+    fn claimed<T: 'static>(
+        nonce: __rawr_internal::scope::Nonce,
+        visit: &mut dyn FnMut(&T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+        __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| visit(value))
+            .map_err(|error| place_error(Error::Value(error.to_string())))?
+    }
+    let key = (handle.slot, handle.generation);
+    if let Some(nonce) = LENDERS.with_borrow(|lenders| lenders.get(&key).copied()) {
+        return claimed(nonce, visit);
+    }
+    let held = with_arena(|arena| {
+        if arena.homed(handle).is_some() {
+            return Ok(None);
+        }
+        arena.lease_place::<T>(handle.clone()).map(Some)
+    })
+    .map_err(place_error)?;
+    let Some(held) = held else {
+        return with_arena(|arena| arena.shared::<T, _>(handle.clone(), |value| visit(value)))
+            .map_err(place_error)?;
+    };
+    let value = held.value.as_ref().expect("a leased receiver holds its value until restored");
+    __rawr_internal::scope::lend_ref::<LenderF<T>, _>(value, |nonce| {
+        LENDERS.with_borrow_mut(|lenders| lenders.insert(key, nonce));
+        let _lending = Lending(key);
+        claimed(nonce, visit)
+    })
+}
+
 /// Run `body` with each argument at `lendable` (its index, whether the call
 /// takes it `&mut`, and how to reach it) that is a value native code lent
 /// (D558.3) reached for the call, nested in its accessor, as ratatui's
@@ -7343,6 +7426,27 @@ fn render_adapter_body(
                 )
                 .map_err(request::unwritable)?;
             }
+            if shared_field(field.ty()) && !matches!(field.ty(), convert::Type::Borrowed { .. }) {
+                // A field of an element a native place names, as `family.
+                // name` of an option a lent slice gives (#687): read where
+                // the element is, inside one claim of the place, with the
+                // arena lent so the claim can reach the slice's owner.
+                let read = if copy_field(field.ty()) {
+                    format!("receiver.read().{}", field.name())
+                } else {
+                    format!("Clone::clone(&receiver.read().{})", field.name())
+                };
+                writeln!(
+                    output,
+                    "    if let Some(place) = arguments.values.first().and_then(|value| __rawr_internal::place::get(value)) {{
+        let output = lend(arguments.arena, || __rawr_internal::place::reach_as::<{path}, _>(&place, false, |receiver| Ok({read})))
+            .map_err(|error| Error::Value(error.to_string()))?;
+        return {{"
+                )
+                .map_err(request::unwritable)?;
+                render_give(field.ty(), "output", output)?;
+                writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+            }
             if matches!(field.ty(), convert::Type::Borrowed { mutable: false, .. }) {
                 // A field that borrows for the struct's lifetime, as iced's
                 // `LineDash::segments`: Rawr's copy, made while the struct
@@ -7616,6 +7720,25 @@ fn render_adapter_body(
                     render_give_with(signature, substitutions, "output", output)?;
                 }
             }
+        }
+        Operation::Method {
+            receiver: Receiver::Shared,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            call: None,
+            ..
+        } if lent_slice(signature, substitutions).is_some() => {
+            render_lent_slice(
+                plan,
+                &path,
+                signature,
+                substitutions,
+                constants,
+                *container_parameters,
+                output,
+            )?;
         }
         Operation::Method {
             receiver,
@@ -8954,6 +9077,97 @@ fn render_borrowed_receiver(
     }};"
     )
     .map_err(encoding)
+}
+
+/// The element of the `&[T]` a `&self` method that takes nothing else lends
+/// from its receiver, as iced's `combo_box::State::options` does (#687),
+/// when the slice is lent in place: its elements are text or crate values,
+/// which a native place reaches where they are. A slice of scalars is
+/// still a copy, which Rawr's array patterns match (D558 slice 2).
+fn lent_slice(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<convert::Type> {
+    if !signature.inputs().is_empty() || signature.guard().is_some() || signature.scope().is_some()
+    {
+        return None;
+    }
+    let convert::Type::Borrowed { mutable: false, ty } =
+        substituted(signature.output(), signature, substitutions).ok()?
+    else {
+        return None;
+    };
+    let convert::Type::Sequence {
+        element,
+        owned: false,
+        length: None,
+    } = *ty
+    else {
+        return None;
+    };
+    (matches!(
+        *element,
+        convert::Type::Builtin(convert::Builtin::String) | convert::Type::Nominal { .. }
+    ) && !is_value(&element)
+        && !is_duration(&element)
+        && !is_facade_value(&element)
+        && place::available(&element))
+    .then_some(*element)
+}
+
+/// A `&self` method's `&[T]` lent in place (#687): a native place that
+/// reaches the slice by claiming the receiver and calling the method again
+/// at each operation, so `.len()`, indexing and iteration read the native
+/// elements where they are, as Rust does, and none is copied.
+#[allow(clippy::too_many_arguments)]
+fn render_lent_slice(
+    plan: &Plan,
+    path: &str,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let element = lent_slice(signature, substitutions)
+        .ok_or_else(|| request::drift("a lent slice's element"))?;
+    let policy = place::policy(&element)?;
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        Receiver::Shared,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut call,
+    )?;
+    call.write_all(b")").map_err(request::unwritable)?;
+    let call = String::from_utf8(call).map_err(request::unwritable)?;
+    writeln!(
+        output,
+        "    let witness = output_witness().ok_or(Error::Stale)?;
+    let lender = match lent_value(arguments, 0) {{
+        Some(lent) => Lender::Lent(lent),
+        None => Lender::Handle(native_handle(arguments, 0, false)?),
+    }};
+    __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| {{
+        reach_lender::<{container}>(&lender, &mut |receiver| visit({call}))
+    }})
+    .map_err(|error| Error::Value(error.to_string()))"
+    )
+    .map_err(request::unwritable)
 }
 
 /// `render_guard` for a receiver in a scope frame's region (D558 tier 1),

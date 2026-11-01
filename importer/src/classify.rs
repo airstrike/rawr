@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 88;
+const CLASSIFIER_VERSION: u32 = 89;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6962,20 +6962,39 @@ impl<P: api::Phase> Context<'_, P> {
             model::Receiver::Reference { .. } if signature.async_function() => {
                 self.convert_output(&rewritten)
             }
-            // A `&[T]` the method lends from its receiver, as QName's
-            // `as_ref(&self) -> &[u8]`: a copy, typed as the slice it is,
-            // so a slice pattern matches it (D558 slice 2).
+            // A `&[T]` the method lends from its receiver, typed as the
+            // slice it is. Through `&self`, as iced's `combo_box::State::
+            // options(&self) -> &[T]`, the slice is lent in place for as
+            // long as the receiver's borrow lasts, whatever `T` is (#687).
+            // Through `&mut self`, and for `T` a scalar, as QName's
+            // `as_ref(&self) -> &[u8]`, it is still a copy, so a slice
+            // pattern matches it (D558 slice 2).
             model::Receiver::Reference {
                 lifetime: lifetime @ model::Lifetime::Late { .. },
+                mutability,
                 ..
-            } if matches!(&rewritten, model::Type::Reference { lifetime: lent, ty, .. }
-                    if lent == lifetime && matches!(&**ty, model::Type::Slice(_))) =>
+            } if let model::Type::Reference {
+                lifetime: lent, ty, ..
+            } = &rewritten
+                && lent == lifetime
+                && let model::Type::Slice(element) = &**ty =>
             {
-                self.convert_value(&rewritten).map(|copied| {
-                    representability::convert::Type::Borrowed {
-                        mutable: false,
-                        ty: Box::new(copied),
-                    }
+                let lent_in_place = matches!(mutability, model::Mutability::Shared)
+                    && signature.inputs().len() == 0;
+                let converted = if lent_in_place {
+                    self.convert_value(element).map(|element| {
+                        representability::convert::Type::Sequence {
+                            element: Box::new(element),
+                            owned: false,
+                            length: None,
+                        }
+                    })
+                } else {
+                    self.convert_value(&rewritten)
+                };
+                converted.map(|slice| representability::convert::Type::Borrowed {
+                    mutable: false,
+                    ty: Box::new(slice),
                 })
             }
             _ => self.convert_value(&rewritten),

@@ -450,6 +450,26 @@ macro_rules! reg_range {
     };
 }
 
+/// The elements of a native sequence place, in order. The length is read
+/// once, as Rust's slice iterator fixes it: the borrow checker keeps the
+/// sequence from changing while it is walked.
+fn place_elements(value: Dynamic) -> Box<dyn Iterator<Item = RawrResultOf<Dynamic>>> {
+    let place = value.cast::<crate::place::Place>();
+    let length = place
+        .invoke(crate::place::Operation::Len, &mut [])
+        .and_then(|length| {
+            length
+                .as_int()
+                .ok()
+                .filter(|_| place.witness().sequence_element().is_some())
+                .ok_or_else(|| ERR::ErrorFor(Position::NONE).into())
+        });
+    match length {
+        Ok(length) => Box::new((0..length).map(move |at| place.element(&Dynamic::from_int(at)))),
+        Err(error) => Box::new(std::iter::once(Err(error))),
+    }
+}
+
 def_package! {
     /// Package of basic range iterators
     pub BasicIteratorPackage(lib) {
@@ -463,6 +483,11 @@ def_package! {
         lib.set_iter(TypeId::of::<ImmutableString>(), |value| Box::new(
             CharsStream::new(value.cast::<ImmutableString>().as_str(), 0, INT::MAX).map(Into::into)
         ));
+        // A native slice or vector (D651), as `for x in state.options()`
+        // walks the `&[T]` a crate method lends: each item is the
+        // element's place, or a copy of a `Copy` element, as `v[i]` reads
+        // it, never a copy of the sequence.
+        lib.set_iter_result(TypeId::of::<crate::place::Place>(), place_elements);
 
         // Register iterator types.
         lib.set_iterator::<CharsStream>();
