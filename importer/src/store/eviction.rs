@@ -572,10 +572,13 @@ fn kind_excess(
 /// carries, so a bundle of these kinds with another schema is one no current
 /// lookup reaches (#577).
 fn current_execution(kind: Kind) -> Option<u32> {
+    #[cfg(feature = "rustc-driver")]
     use crate::node::Value as _;
     match kind {
         Kind::Runner => Some(crate::runner::EXECUTION_SCHEMA),
+        #[cfg(feature = "rustc-driver")]
         Kind::NativeProduct => Some(crate::cargo::resolution::BuildProduct::SCHEMA),
+        #[cfg(feature = "rustc-driver")]
         Kind::Resolution => Some(crate::cargo::resolution::owner::EXECUTION_SCHEMA),
         _ => None,
     }
@@ -588,6 +591,9 @@ fn current_execution(kind: Kind) -> Option<u32> {
 fn current_plain(kind: Kind) -> Option<u32> {
     use crate::node::Value as _;
     match kind {
+        // The API's cache lives behind the driver; a build without it reads
+        // no API entries, so none is current for it.
+        #[cfg(feature = "rustc-driver")]
         Kind::Api => Some(crate::api::cached::Product::SCHEMA),
         Kind::Generic => Some(crate::classify::cached::Product::SCHEMA),
         Kind::Facade => Some(crate::surface::facade::cached::Product::SCHEMA),
