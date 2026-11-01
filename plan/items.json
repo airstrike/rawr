@@ -632,6 +632,10 @@
     {"t":"T629","issue":629,"title":"T629: A toolchain cache test expects the old revalidation error","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"3ec55efa4","release":null},
     {"t":"T630","issue":630,"title":"T630: Non-execution store entries from an older rawr aren't evicted by version","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":"3ec55efa4","release":null},
     {"t":"T631","issue":631,"title":"T631: Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T632","issue":632,"title":"T632: Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T632","issue":632,"title":"T632: Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T633","issue":633,"title":"T633: A capturing closure lent a &mut crate value by a trait method","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T634","issue":634,"title":"T634: Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T635","issue":635,"title":"T635: A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T636","issue":636,"title":"T636: Store eviction broke every program's runtime build","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"818ab9daf","release":null}
   ]
 }

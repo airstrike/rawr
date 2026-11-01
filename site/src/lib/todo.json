@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"The store also evicts API, generic, overlay and bindings entries an older rawr wrote, when it opens and when it makes room.","issues":[630]},
-        {"text":"rawr check no longer reports that the Cargo configuration changed during the build when CARGO_INCREMENTAL is exported.","issues":[625]}
+        {"text":"rawr check no longer reports that the Cargo configuration changed during the build when CARGO_INCREMENTAL is exported.","issues":[625]},
+        {"text":"A closure that captures a value can take a crate value as `&mut`, as a trait's provided `with_translation(v, |renderer| ..)` lends the renderer, when the receiver's type is concrete.","issues":[633],"refs":[624]}
       ]
     },
     "releases": [
@@ -1453,7 +1454,11 @@
     {"issue":629,"title":"A toolchain cache test expects the old revalidation error","state":"closed","category":"Health"},
     {"issue":630,"title":"Non-execution store entries from an older rawr aren't evicted by version","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":633,"title":"A capturing closure lent a &mut crate value by a trait method","state":"open","category":"No glue (D593)"},
+    {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"open","category":"No glue (D593)"},
+    {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
+    {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"}
   ],
   "groups": [
     {
