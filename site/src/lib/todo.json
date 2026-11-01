@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.68",
+  "version": "0.3.69",
   "examples": {
     "running": 21,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A cache missing one deleted execution forgets it and the pins that held it, and rebuilds it, instead of failing with \"lost a registered allocation\".","issues":[612]},
-        {"text":"A fresh build whose cache key still holds an older entry that no longer checks replaces that entry instead of failing to publish.","issues":[614]},
-        {"text":"A cache entry that goes stale after `rawr check`'s first pass, or during `rawr run`'s runner build, prepares the program again instead of failing.","issues":[613]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.69",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A cache missing one deleted execution forgets it and the pins that held it, and rebuilds it, instead of failing with \"lost a registered allocation\".","issues":[612]},
+          {"text":"A fresh build whose cache key still holds an older entry that no longer checks replaces that entry instead of failing to publish.","issues":[614]},
+          {"text":"A cache entry that goes stale after `rawr check`'s first pass, or during `rawr run`'s runner build, prepares the program again instead of failing.","issues":[613]}
+        ]
+      },
       {
         "version": "0.3.68",
         "date": "2026-11-01",
@@ -1380,9 +1382,9 @@
     {"issue":609,"title":"invalid stored baseline reaches the user instead of a rebuild","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.68"},
     {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"open","category":"No glue (D593)"},
     {"issue":611,"title":"rawr accepts Rgb { .., ..Rgb::default() } where rustc gives E0283","state":"open","category":"Divergences from rustc"},
-    {"issue":612,"title":"A store missing a single execution still fails","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":613,"title":"Stale entries after rawr check's prepare loop and in rawr run's runner build still fail","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":614,"title":"A stale stored node at the same action as a fresh build fails on publish","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":612,"title":"A store missing a single execution still fails","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
+    {"issue":613,"title":"Stale entries after rawr check's prepare loop and in rawr run's runner build still fail","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
+    {"issue":614,"title":"A stale stored node at the same action as a fresh build fails on publish","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
