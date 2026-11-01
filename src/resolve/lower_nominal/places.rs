@@ -1315,10 +1315,16 @@ impl Parser<'_> {
         proof: &mut NominalPattern,
         bindings: &[PatternBinding],
     ) -> Result<Option<PlacePattern>, Error> {
-        let borrowed = matches!(
-            self.inference.resolve(&subject.ty),
-            Ty::Reference { mutable: true, .. }
-        );
+        // `o.as_mut()` lends its place as `&mut o` does (`lend_place`).
+        let lent = match &subject.lvalue {
+            None => self.lent_places.get(&subject.span).cloned(),
+            Some(_) => None,
+        };
+        let borrowed = lent.is_some()
+            || matches!(
+                self.inference.resolve(&subject.ty),
+                Ty::Reference { mutable: true, .. }
+            );
         if !borrowed && subject.lvalue.is_none() {
             return Ok(None);
         }
@@ -1348,7 +1354,7 @@ impl Parser<'_> {
                 ty: Ty::Unknown,
             }
         } else {
-            match subject.lvalue.clone() {
+            match subject.lvalue.clone().or(lent) {
                 Some(lvalue) => lvalue,
                 None => {
                     return Err(Error::UnsupportedNominalSyntax {

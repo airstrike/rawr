@@ -11247,6 +11247,13 @@ struct Parser<'a> {
     /// (`optional_place`, `borrowed_call`), for a pattern matching it
     /// (`pattern_place`).
     optional_subjects: BTreeMap<Span, (origin::Fragment, origin::Fragment)>,
+    /// The place a value lends `&mut` to the parts of, by the value's
+    /// span: `o.as_mut()` of an `Option` or `Result` place, whose pattern's
+    /// `&mut` bindings reach the place's parts (`pattern_place`).
+    lent_places: BTreeMap<Span, Lvalue>,
+    /// A tuple expression's field spans, by its span: where it has an
+    /// expected type, each field is coerced to its own (`coerce_expr`).
+    tuple_fields: BTreeMap<Span, Vec<Span>>,
     /// The expression depth of a let chain's link being read: `&&` there
     /// ends the link (`parse_chain`).
     chain_link: Option<usize>,
@@ -11612,6 +11619,8 @@ impl<'a> Parser<'a> {
             field_entries: Vec::new(),
             native_modules: engine.global_modules.clone(),
             optional_subjects: BTreeMap::new(),
+            lent_places: BTreeMap::new(),
+            tuple_fields: BTreeMap::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
@@ -35625,6 +35634,10 @@ impl<'a> Parser<'a> {
             })
             .collect();
         self.compose(span(open, end), &ty, &parts);
+        self.tuple_fields.insert(
+            span(open, end),
+            members.iter().map(|member| member.span).collect(),
+        );
         let source = origin::Fragment::join(members.iter().map(ParsedExpr::rendered_source), ", ")
             .surrounded("[", "]");
         Ok(self.operator_expr(source, ty, span(open, end)))
@@ -39438,6 +39451,9 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         };
+        if member.as_str() == "as_mut" {
+            self.lend_place(&value, expression);
+        }
         let mut parsed = self.operator_expr(source, ty, expression);
         if place.is_some() {
             parsed.lvalue = place;
@@ -39773,8 +39789,22 @@ impl<'a> Parser<'a> {
             }
         };
         source.push_text(" }");
+        if member.as_str() == "as_mut" {
+            self.lend_place(&value, expression);
+        }
         // A block is not an `if` condition in the legacy parser.
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
+    }
+
+    /// `o.as_mut()` of a place `o`: the value at `expression` lends `&mut`
+    /// to the place's parts, which a pattern binds as `Some(x)` of
+    /// `&mut o` does (`pattern_place`).
+    fn lend_place(&mut self, value: &ParsedExpr, expression: Span) {
+        if let Some(lvalue) = &value.lvalue
+            && !matches!(lvalue, Lvalue::Slice(_))
+        {
+            self.lent_places.insert(expression, lvalue.clone());
+        }
     }
 
     /// A call of the closure or `fn` argument `callable` with `operands`,
@@ -46816,6 +46846,39 @@ impl<'a> Parser<'a> {
         {
             self.option_host_callable(value)?;
             source = self.inference.resolve(&value.ty);
+        }
+        // A tuple expression coerces each field to its expected type, as
+        // `pair((&name, &catalog))` passes a `&String` field as `&str`.
+        if let (Ty::Tuple(to), Ty::Tuple(from)) = (&target, &source)
+            && to.len() == from.len()
+            && let Some(fields) = self.tuple_fields.get(&value.span).cloned()
+            && fields.len() == to.len()
+        {
+            let tuple = self.temporary("tuple");
+            let mut changed = false;
+            let mut members = Vec::with_capacity(to.len());
+            for (index, ((to, from), field)) in to.iter().zip(from.iter()).zip(fields).enumerate() {
+                let read = format!("{tuple}[{index}]");
+                let mut member =
+                    self.operator_expr(origin::Fragment::plain(read.as_str()), from.clone(), field);
+                self.coerce_expr(to, &mut member)?;
+                let rendered = member.rendered_source();
+                changed |= rendered.as_str() != read;
+                members.push(rendered);
+            }
+            if changed {
+                let mut rendered = origin::Fragment::plain(format!("{{ let {tuple} = "));
+                rendered.push(value.rendered_source());
+                rendered.push_text("; ");
+                rendered.push(origin::Fragment::join(members, ", ").surrounded("[", "]"));
+                rendered.push_text(" }");
+                value.prelude = origin::Fragment::default();
+                value.source = rendered;
+                value.lvalue = None;
+                value.source.cover(value.span);
+            }
+            value.ty = target;
+            return Ok(None);
         }
         // `&F` where `F: Fn` is itself `Fn`: a borrowed closure passed as a
         // function, as `.map(self.on_change.as_ref())`.
