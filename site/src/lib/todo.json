@@ -1017,7 +1017,11 @@
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open","category":"Health"},
     {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"open","category":"Health"},
     {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
-    {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"}
+    {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
+    {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health"},
+    {"issue":493,"title":"Run the ?play release on each release push to main","state":"open","category":"Health"},
+    {"issue":494,"title":"Move the workflows' actions off Node 20","state":"open","category":"Health"},
+    {"issue":495,"title":"Cache the Linux workflow's release build of the importer","state":"open","category":"Health"}
   ],
   "groups": [
     {

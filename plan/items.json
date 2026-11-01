@@ -491,6 +491,10 @@
     {"t":"T488","issue":488,"title":"T488: Read a running program's values from rawr mcp and the editor","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":["D521","D557"],"commit":null,"release":null},
     {"t":"T489","issue":489,"title":"T489: Breakpoints and stepping under rawr run","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":["D557"],"commit":null,"release":null},
     {"t":"T490","issue":490,"title":"T490: Evaluate Rust in a paused frame","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"repl"},"decisions":["D557"],"commit":null,"release":null},
-    {"t":"T491","issue":491,"title":"T491: Record and replay messages, with iced's comet","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"record-replay"},"decisions":["D557"],"commit":null,"release":null}
+    {"t":"T491","issue":491,"title":"T491: Record and replay messages, with iced's comet","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"record-replay"},"decisions":["D557"],"commit":null,"release":null},
+    {"t":"T492","issue":492,"title":"T492: CI runs fail only when the code is broken","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"ef5d948a8","release":null},
+    {"t":"T493","issue":493,"title":"T493: Run the ?play release on each release push to main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T494","issue":494,"title":"T494: Move the workflows' actions off Node 20","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T495","issue":495,"title":"T495: Cache the Linux workflow's release build of the importer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
