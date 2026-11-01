@@ -5,7 +5,9 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]}
+      {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]},
+      {"text":"A reference to a crate value fills a crate's type argument, as `pick_list(Some(&self.backend), Backend::ALL, Backend::to_string)` does. The view borrows the value in place, and `update` then changes it in place.","issues":[591]},
+      {"text":"A crate function whose output borrows its `&'a T` inputs, as iced's `qr_code(&data)` does, has a binding. qr_code passes `rawr check`.","issues":[590]}
     ]
   },
   "releases": [

@@ -6,6 +6,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking. (#592)
+- A reference to a crate value fills a crate's type argument, as `pick_list(Some(&self.backend), Backend::ALL, Backend::to_string)` does. The view borrows the value in place, and `update` then changes it in place. (#591)
+- A crate function whose output borrows its `&'a T` inputs, as iced's `qr_code(&data)` does, has a binding. qr_code passes `rawr check`. (#590)
 
 ## 0.3.63 (2026-11-01)
 

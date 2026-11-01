@@ -590,10 +590,12 @@
     {"t":"T587","issue":587,"title":"T587: Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D662"],"commit":null,"release":null},
     {"t":"T588","issue":588,"title":"T588: Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"17fb887dc","release":null},
     {"t":"T589","issue":589,"title":"T589: Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.61"},
-    {"t":"T590","issue":590,"title":"T590: qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T591","issue":591,"title":"T591: solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T590","issue":590,"title":"T590: qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b41e3aa45","release":null},
+    {"t":"T591","issue":591,"title":"T591: solar_system: pick_list's V can't be a reference to a crate type","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b41e3aa45","release":null},
     {"t":"T592","issue":592,"title":"T592: color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664","D680"],"commit":"5bb146122","release":null},
     {"t":"T593","issue":593,"title":"T593: serde's derives on program types","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T594","issue":594,"title":"T594: color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":null,"release":null}
+    {"t":"T594","issue":594,"title":"T594: color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T595","issue":595,"title":"T595: solar_system: canvas::LineDash { .. } is refused as having private fields","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T596","issue":596,"title":"T596: A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

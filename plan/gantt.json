@@ -3,9 +3,9 @@
   "updated": "2026-11-01",
   "version": "0.3.63",
   "examples": {
-    "running": 18,
+    "running": 19,
     "total": 56,
-    "note": "18 pass rawr check (15 in the 0.3.57 batch, then table, bezier_tool and arc); the rest stop at recorded gaps"
+    "note": "19 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc and qr_code); the rest stop at recorded gaps"
   },
   "groups": [
     {
