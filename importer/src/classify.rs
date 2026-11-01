@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 68;
+const CLASSIFIER_VERSION: u32 = 69;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -3550,15 +3550,7 @@ impl<'graph> Names<'graph> {
             .definitions()
             .map(|model| (crate::surface::identity::Definition::of(model.id()), model))
             .collect();
-        let mut exported = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
-        for path in graph.exports() {
-            if let ledger::Path::Imported(export) = path {
-                exported
-                    .entry(export.key().root_alias())
-                    .or_default()
-                    .insert(crate::surface::identity::Definition::of(export.target()));
-            }
-        }
+        let mut exported = exported_by_root(graph);
         // A type whose only name is a passing alias is named through it.
         for (root, _, target) in sole_passing_aliases(graph) {
             exported
@@ -6960,26 +6952,18 @@ impl<P: api::Phase> Context<'_, P> {
     /// iced_tiny_skia::Renderer>` is where the crate re-exports neither
     /// backend. Rust code can write that type only through the alias, so
     /// it is a type of its own, named by the alias, wherever a signature
-    /// or a parameter's default names it.
+    /// or a parameter's default names it. The test is per root crate: a
+    /// graph whose other root re-exports both backends, as `iced_test`
+    /// does, leaves `iced::Renderer` the only name `iced` has.
     fn instance_aliases(&self) -> &[usize] {
         self.instance_aliases.get_or_init(|| {
-            let exported = self
-                .graph
-                .exports()
-                .filter_map(|path| match path {
-                    ledger::Path::Imported(export) => {
-                        Some(crate::surface::identity::Definition::of(export.target()))
-                    }
-                    _ => None,
-                })
-                .collect::<std::collections::BTreeSet<_>>();
+            let exported = exported_by_root(self.graph);
             self.graph
                 .definitions()
                 .enumerate()
                 .filter(|(_, definition)| {
+                    let identity = crate::surface::identity::Definition::of(definition.id());
                     matches!(definition.visibility(), model::Visibility::Public)
-                        && exported
-                            .contains(&crate::surface::identity::Definition::of(definition.id()))
                         && matches!(
                             definition.kind(),
                             model::Kind::TypeAlias {
@@ -7001,7 +6985,10 @@ impl<P: api::Phase> Context<'_, P> {
                                 && arguments
                                     .iter()
                                     .any(|argument| matches!(argument, model::Argument::Type(_)))
-                                && !reaches_only_exported(target, &exported)
+                                && exported.values().any(|exported| {
+                                    exported.contains(&identity)
+                                        && !reaches_only_exported(target, exported)
+                                })
                         )
                 })
                 .map(|(index, _)| index)
@@ -7926,15 +7913,7 @@ fn passing_target<'graph>(
 fn sole_passing_aliases(
     graph: &api::Graph<impl api::Phase>,
 ) -> Vec<(&str, &model::Definition, &model::Definition)> {
-    let exported = graph
-        .exports()
-        .filter_map(|path| match path {
-            ledger::Path::Imported(export) => {
-                Some(crate::surface::identity::Definition::of(export.target()))
-            }
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>();
+    let exported = exported_by_root(graph);
     graph
         .exports()
         .filter_map(|path| match path {
@@ -7946,10 +7925,32 @@ fn sole_passing_aliases(
                 .definitions()
                 .nth(graph.definition_index(export.target())?)?;
             let target = passing_target(graph, alias)?;
-            (!exported.contains(&crate::surface::identity::Definition::of(target.id())))
-                .then_some((export.key().root_alias(), alias, target))
+            let root = export.key().root_alias();
+            (!exported.get(root).is_some_and(|exported| {
+                exported.contains(&crate::surface::identity::Definition::of(target.id()))
+            }))
+            .then_some((root, alias, target))
         })
         .collect()
+}
+
+/// The definitions each root crate exports, by root. Whether Rust code can
+/// name a type is a question about one crate: a type another root of the
+/// same graph re-exports, as `iced_test` re-exports iced's renderers, is
+/// still unnamed in the crate that doesn't.
+fn exported_by_root(
+    graph: &api::Graph<impl api::Phase>,
+) -> BTreeMap<&str, std::collections::BTreeSet<crate::surface::identity::Definition>> {
+    let mut exported = BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    for path in graph.exports() {
+        if let ledger::Path::Imported(export) = path {
+            exported
+                .entry(export.key().root_alias())
+                .or_default()
+                .insert(crate::surface::identity::Definition::of(export.target()));
+        }
+    }
+    exported
 }
 
 fn reaches_only_exported(
