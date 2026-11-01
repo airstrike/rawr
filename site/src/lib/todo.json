@@ -1,20 +1,22 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.50",
+  "version": "0.3.51",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]},
-        {"text":"A runner executable over 256 MiB builds. rawr hashes executables and other build outputs as streams, with no size limit.","issues":[518]},
-        {"text":"A symlinked `.cargo` directory or Cargo config file is followed, as Cargo follows it. Editing the target or pointing the link elsewhere triggers a rebuild.","issues":[520]},
-        {"text":"A Git dependency with a `version` is accepted, and Cargo checks the version against the Git package.","issues":[521]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.51",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]},
+          {"text":"A runner executable over 256 MiB builds. rawr hashes executables and other build outputs as streams, with no size limit.","issues":[518]},
+          {"text":"A symlinked `.cargo` directory or Cargo config file is followed, as Cargo follows it. Editing the target or pointing the link elsewhere triggers a rebuild.","issues":[520]},
+          {"text":"A Git dependency with a `version` is accepted, and Cargo checks the version against the Git package.","issues":[521]}
+        ]
+      },
       {
         "version": "0.3.50",
         "date": "2026-11-01",
@@ -1126,15 +1128,15 @@
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
-    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"closed","category":"Divergences from rustc"},
+    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"closed","category":"Divergences from rustc","release":"0.3.51"},
     {"issue":519,"title":"rawr refuses a dependency from a registry other than crates.io","state":"open","category":"Divergences from rustc"},
-    {"issue":520,"title":"A symlinked .cargo directory or config file is refused","state":"closed","category":"Divergences from rustc"},
-    {"issue":521,"title":"A Git dependency with a version is refused","state":"closed","category":"Divergences from rustc"},
+    {"issue":520,"title":"A symlinked .cargo directory or config file is refused","state":"closed","category":"Divergences from rustc","release":"0.3.51"},
+    {"issue":521,"title":"A Git dependency with a version is refused","state":"closed","category":"Divergences from rustc","release":"0.3.51"},
     {"issue":522,"title":"Separate the importer's cache-rebuild signals from its failures","state":"open","category":"Importer"},
     {"issue":523,"title":"Errors about generated data still name rawr's internals","state":"open","category":"Divergences from rustc"},
     {"issue":524,"title":"Three rawr lib tests fail on main","state":"closed","category":"Health"},
     {"issue":525,"title":"Resident support tests check what a program's support module holds","state":"closed","category":"Health"},
-    {"issue":526,"title":"Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"closed","category":"Health"},
+    {"issue":526,"title":"Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"closed","category":"Health","release":"0.3.51"},
     {"issue":527,"title":"?play answers an animated iced app with a GIF that plays once and holds its last frame","state":"open","category":"No glue (D593)"},
     {"issue":528,"title":"?play shows the text an iced program printed beside its frame","state":"open","category":"No glue (D593)"},
     {"issue":529,"title":"?play draws an iced frame at the program's own scale_factor","state":"open","category":"No glue (D593)"},
