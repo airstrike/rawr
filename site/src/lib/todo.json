@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.62",
+  "version": "0.3.63",
   "examples": {
     "running": 18,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A crate item with impls that differ only in how they take a string, such as iced's `widget::Id::from`, no longer fails the whole program. The argument picks the impl as rustc does, and impls rawr still can't tell apart are reported only at a call that uses them.","issues":[580]},
-        {"text":"Members of an inherent impl whose self type fixes an argument, such as palette's `impl<T> Hsl<Srgb, T>`, belong to their own type instead of the argument's type.","issues":[579]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.63",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A crate item with impls that differ only in how they take a string, such as iced's `widget::Id::from`, no longer fails the whole program. The argument picks the impl as rustc does, and impls rawr still can't tell apart are reported only at a call that uses them.","issues":[580]},
+          {"text":"Members of an inherent impl whose self type fixes an argument, such as palette's `impl<T> Hsl<Srgb, T>`, belong to their own type instead of the argument's type.","issues":[579]}
+        ]
+      },
       {
         "version": "0.3.62",
         "date": "2026-11-01",
@@ -1297,8 +1299,8 @@
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"},
     {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
-    {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)"},
-    {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)"},
+    {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","release":"0.3.63"},
+    {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","release":"0.3.63"},
     {"issue":581,"title":"Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc"},
     {"issue":582,"title":"An associated function's one-shot closure that takes a &mut borrow","state":"closed","category":"No glue (D593)"},
     {"issue":583,"title":"bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","release":"0.3.61"},
