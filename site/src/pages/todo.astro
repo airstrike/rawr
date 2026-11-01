@@ -36,8 +36,10 @@ const sections = [...versions, undefined]
   }))
   .filter((m) => m.groups.length);
 const finished = (m: (typeof sections)[number]) => m.groups.every((g) => g.rows.every((r) => r.state === "done"));
-// Folded: done, and before the first milestone with work left.
-const current = sections.findIndex((m) => !finished(m));
+// Folded: done, before the first milestone with work left, and older than
+// the series being released (0.3 while 0.3.x ships).
+const series = VERSION.split(".").slice(0, 2).join(".");
+const current = sections.findIndex((m) => !finished(m) || m.title === series);
 const milestones = sections.map((m, i) => ({
   ...m,
   open: current < 0 ? i === sections.length - 1 : i >= current,
