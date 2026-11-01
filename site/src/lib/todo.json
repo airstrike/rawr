@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.89",
+  "version": "0.3.90",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"An async function whose future borrows its arguments crosses whatever the arguments' types are, as fount's `google::load(family: &str, catalog: Option<&Catalog>)`: the future holds a crate value lent from its place, an `Option`'s `Some` payload, each member of a tuple of borrows, and the program's own string, with nothing copied. A path to a module's item rawr can't bind reads as rustc's E0425 (\"cannot find function `load` in module `google`\").","issues":[677]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.90",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"An async function whose future borrows its arguments crosses whatever the arguments' types are, as fount's `google::load(family: &str, catalog: Option<&Catalog>)`: the future holds a crate value lent from its place, an `Option`'s `Some` payload, each member of a tuple of borrows, and the program's own string, with nothing copied. A path to a module's item rawr can't bind reads as rustc's E0425 (\"cannot find function `load` in module `google`\").","issues":[677]}
+        ]
+      },
       {
         "version": "0.3.89",
         "date": "2026-11-01",
@@ -1606,7 +1608,7 @@
     {"issue":674,"title":"A literal lent to `impl Into<Cow<'static, str>>` or a std trait's 'static impl lives for the program","state":"open","category":"No glue (D593)"},
     {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
     {"issue":676,"title":"Type::from(value) of a crate type's own value is core's reflexive From","state":"closed","category":"No glue (D593)","release":"0.3.87"},
-    {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"closed","category":"No glue (D593)"},
+    {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"closed","category":"No glue (D593)","release":"0.3.90"},
     {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"open","category":"Divergences from rustc"},
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
