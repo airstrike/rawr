@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A generic crate function named as a value, such as `.map(text)` over an iterator or an `Option`, works even where a macro and a module share its name, as rustc reads it.","issues":[569]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.62",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A generic crate function named as a value, such as `.map(text)` over an iterator or an `Option`, works even where a macro and a module share its name, as rustc reads it.","issues":[569]}
+      ]
+    },
     {
       "version": "0.3.61",
       "date": "2026-11-01",

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.61",
+  "version": "0.3.62",
   "examples": {
     "running": 18,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A generic crate function named as a value, such as `.map(text)` over an iterator or an `Option`, works even where a macro and a module share its name, as rustc reads it.","issues":[569]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.62",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A generic crate function named as a value, such as `.map(text)` over an iterator or an `Option`, works even where a macro and a module share its name, as rustc reads it.","issues":[569]}
+        ]
+      },
       {
         "version": "0.3.61",
         "date": "2026-11-01",
@@ -1279,7 +1281,7 @@
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","release":"0.3.59"},
     {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)"},
-    {"issue":569,"title":"A generic crate function passed as a value is refused","state":"closed","category":"No glue (D593)"},
+    {"issue":569,"title":"A generic crate function passed as a value is refused","state":"closed","category":"No glue (D593)","release":"0.3.62"},
     {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"open","category":"Divergences from rustc"},
     {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
     {"issue":572,"title":"A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc"},
