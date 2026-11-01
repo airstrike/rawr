@@ -17226,6 +17226,44 @@ impl<'a> Parser<'a> {
                 operation: call,
             });
         };
+        // A script function or closure fills an imported item's callable
+        // parameter, not a type parameter another form of it takes a value
+        // at: `.theme(App::theme)` takes the form of iced's `impl
+        // ThemeFn<State, Theme>` read as `Fn(&State)`, and
+        // `.theme(Theme::Dark)` the one that keeps the bound
+        // (`callable::Item::values`).
+        let callable_forms;
+        let items = if items.len() > 1 && !facade {
+            callable_forms = items
+                .iter()
+                .filter(|item| {
+                    !arguments.iter().enumerate().any(|(index, argument)| {
+                        matches!(
+                            self.inference.resolve(&argument.ty),
+                            Ty::Callable { .. }
+                                | Ty::Fn { .. }
+                                | Ty::FnItem { .. }
+                                | Ty::FnChoice { .. }
+                        ) && matches!(
+                            item.signature()
+                                .parameters()
+                                .get(index)
+                                .map(crate::host::type_ref::Type::shape),
+                            Some(crate::host::type_ref::Shape::Parameter(_))
+                        )
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if callable_forms.is_empty() {
+                items
+            } else {
+                &callable_forms[..]
+            }
+        } else {
+            items
+        };
+        let first = items.first().unwrap_or(first);
         if items.len() == 1 {
             let signature = self.instantiate_host_signature(first, receiver, Some(arguments))?;
             return Ok((first.clone(), signature));

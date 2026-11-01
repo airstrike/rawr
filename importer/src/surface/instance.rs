@@ -495,16 +495,35 @@ impl Arguments {
         )
     }
 
+    /// The form of a generic item's plan this instance takes
+    /// (`callable::Item::form`): the one a value fills when it passes no
+    /// script closure, script function or crate function.
+    pub(crate) fn form<'plan>(
+        &self,
+        representability: &'plan representability::Representability,
+    ) -> Option<&'plan representability::callable::Item> {
+        let item = match representability {
+            representability::Representability::FunctionItem(item) => item,
+            representability::Representability::Invocation(plan) => plan.item(),
+            _ => return None,
+        };
+        Some(item.form(
+            self.callable,
+            !self.slots.is_empty(),
+            !self.functions.is_empty(),
+        ))
+    }
+
     pub(crate) fn matches(
         &self,
         representability: &representability::Representability,
     ) -> Result<(), super::Error> {
-        let parameters = match representability {
-            representability::Representability::FunctionItem(item) => item.signature().parameters(),
-            representability::Representability::Invocation(item) => item.signature().parameters(),
+        let form = self.form(representability);
+        let parameters = match (form, representability) {
+            (Some(item), _) => item.signature().parameters(),
             // A generic struct made at an instance other than its defaulted
             // one, as iced's `Size<Length>`.
-            representability::Representability::Struct(plan)
+            (_, representability::Representability::Struct(plan))
                 if !self.types.is_empty()
                     && self.constants.is_empty()
                     && self.binders.is_empty()
@@ -532,11 +551,7 @@ impl Arguments {
             .count();
         // A call whose callables are slots needs each parameter to cross.
         if !self.slots.is_empty() {
-            let crossings = match representability {
-                representability::Representability::FunctionItem(item) => item.crossings(),
-                representability::Representability::Invocation(item) => item.crossings(),
-                _ => &[],
-            };
+            let crossings = form.map_or(&[][..], |item| item.crossings());
             return if type_parameters == self.types.len()
                 && constant_parameters == self.constants.len()
                 && self.callable.is_none()
@@ -551,14 +566,10 @@ impl Arguments {
             && constant_parameters == self.constants.len()
             && parameters
                 .first()
-                .map(|_| match representability {
-                    representability::Representability::FunctionItem(item) => {
+                .map(|_| {
+                    form.is_none_or(|item| {
                         item.class() == self.callable && item.binders() == self.binders.as_ref()
-                    }
-                    representability::Representability::Invocation(item) => {
-                        item.class() == self.callable && item.binders() == self.binders.as_ref()
-                    }
-                    _ => true,
+                    })
                 })
                 .unwrap_or(self.callable.is_none() && self.binders.is_empty())
         {

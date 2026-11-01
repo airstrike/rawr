@@ -852,11 +852,14 @@ fn build(
             .map_err(|source| entry_error(facade.root(), ty.path(), source.into()))?;
     }
     for item in facade.items() {
-        let definition = item_definition(facade, item)
-            .map_err(|source| entry_error(facade.root(), item.path(), source))?;
-        builder
-            .imported_item(definition)
-            .map_err(|source| entry_error(facade.root(), item.path(), source.into()))?;
+        // The item, and its form that a value fills, when it has one.
+        for signature in std::iter::once(item.signature()).chain(item.values()) {
+            let definition = item_definition(facade, item, signature)
+                .map_err(|source| entry_error(facade.root(), item.path(), source))?;
+            builder
+                .imported_item(definition)
+                .map_err(|source| entry_error(facade.root(), item.path(), source.into()))?;
+        }
     }
     // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
     for (path, builtin) in facade.builtins() {
@@ -1121,8 +1124,9 @@ fn field(field: &facade::Field) -> Result<host::type_def::Field, Error> {
 fn item_definition(
     facade: &facade::Facade,
     item: &facade::Item,
+    form: &facade::Signature,
 ) -> Result<host::item::Definition, Error> {
-    let signature = signature(facade, item.signature())?;
+    let signature = signature(facade, form)?;
     let definition = match item.kind() {
         ItemKind::Function => host::item::Definition::function(item.path(), signature)?,
         ItemKind::AssociatedFunction => {
@@ -1137,14 +1141,12 @@ fn item_definition(
         ItemKind::MutableMethod => {
             host::item::Definition::method(item.path(), receiver::Mode::Mutable, signature)?
         }
-        ItemKind::Constant => {
-            host::item::Definition::value(item.path(), ty(item.signature().output())?)?
-        }
+        ItemKind::Constant => host::item::Definition::value(item.path(), ty(form.output())?)?,
         ItemKind::AssociatedConstant => {
-            host::item::Definition::associated_value(item.path(), ty(item.signature().output())?)?
+            host::item::Definition::associated_value(item.path(), ty(form.output())?)?
         }
     };
-    let guard = item.signature().guard().map(|guard| match guard {
+    let guard = form.guard().map(|guard| match guard {
         rawr_import::classify::representability::signature::Guard::Shared => {
             host::item::Guard::Shared
         }
@@ -1161,7 +1163,7 @@ fn item_definition(
     Ok(definition
         .imported(item.selector().try_clone()?)
         .guarded(guard)
-        .opening(item.signature().scope().is_some()))
+        .opening(form.scope().is_some()))
 }
 
 fn signature(

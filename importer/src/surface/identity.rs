@@ -825,6 +825,27 @@ impl Identity {
         &self.slots
     }
 
+    /// The form of a generic item's plan this use takes
+    /// (`callable::Item::form`): the one a value fills when it passes no
+    /// script closure, script function or crate function.
+    #[must_use]
+    pub fn form<'plan>(
+        &self,
+        representability: &'plan crate::classify::representability::Representability,
+    ) -> Option<&'plan crate::classify::representability::callable::Item> {
+        use crate::classify::representability::Representability;
+        let item = match representability {
+            Representability::FunctionItem(item) => item,
+            Representability::Invocation(plan) => plan.item(),
+            _ => return None,
+        };
+        Some(item.form(
+            self.callable,
+            !self.slots.is_empty(),
+            !self.functions.is_empty(),
+        ))
+    }
+
     /// Return the canonical definition shared by all of its export aliases.
     #[must_use]
     pub const fn definition(&self) -> Option<Definition> {

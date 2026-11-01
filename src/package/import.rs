@@ -2032,6 +2032,11 @@ fn build(
         let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
         if let Some(item) = item.filter(|_| names_declared(entry.outcome, declared)) {
             builder.imported_item(item)?;
+            if let Some(values) =
+                imported_values(&types, entry.relative.as_ref(), entry.outcome, allocation)?
+            {
+                builder.imported_item(values)?;
+            }
         }
         // A function's members are those of the opaque type it gives.
         let owner = if matches!(
@@ -2070,6 +2075,11 @@ fn build(
                 .filter(|item| !alias || item.receiver().is_none())
             {
                 builder.imported_item(item)?;
+                if let Some(values) = imported_values(&types, &path, associated, allocation)?
+                    .filter(|item| !alias || item.receiver().is_none())
+                {
+                    builder.imported_item(values)?;
+                }
             }
         }
     }
@@ -2399,6 +2409,70 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     Ok(item)
+}
+
+/// The form of `outcome`'s item that a value fills where the item takes a
+/// callable through a crate's trait over `Fn` the crate also implements for
+/// a type of its own, as iced's `.theme(Theme::Dark)` fills `impl
+/// ThemeFn<State, Theme>` (`callable::Item::values`): another form of the
+/// item, beside the one a script function fills.
+fn imported_values(
+    types: &Types,
+    path: &str,
+    outcome: rawr_import::classify::Outcome<'_>,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<Option<host::item::Definition>, Error> {
+    use rawr_import::surface::identity::Selector;
+
+    let (values, retains) = match outcome.representability() {
+        Representability::FunctionItem(plan) => match plan.values() {
+            Some(values) => (values, callable_generic(values)),
+            None => return Ok(None),
+        },
+        Representability::Invocation(plan) => match plan.item().values() {
+            Some(values) => (
+                values,
+                writes_declared(values.signature(), values.call(), values.crossings()),
+            ),
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    if !retains {
+        return Ok(None);
+    }
+    let selector = outcome.identity().selector();
+    let bytes = selector.retained_bytes().and_then(|selector| {
+        std::mem::size_of::<host::item::Definition>()
+            .checked_add(unqualified_path_bytes(path)?)?
+            .checked_add(selector)
+    });
+    allocation.retain_checked(Some(1), bytes)?;
+    let signature = callable_signature(
+        types,
+        values.signature(),
+        values.call(),
+        values.crossings(),
+        allocation,
+    )?;
+    let definition = match selector {
+        Selector::AssociatedFunction { .. } => {
+            host::item::Definition::associated_function(path, signature)?
+        }
+        Selector::Function { .. } => host::item::Definition::function(path, signature)?,
+        Selector::Method { .. } => host::item::Definition::method(
+            path,
+            receiver(values.receiver().ok_or(Error::Cardinality)?),
+            signature,
+        )?,
+        _ => return Err(Error::Cardinality),
+    };
+    Ok(Some(
+        definition
+            .imported(selector.try_clone()?)
+            .guarded(guard(values.signature()))
+            .opening(values.signature().scope().is_some()),
+    ))
 }
 
 /// Whether every imported type the outcome's signature names is declared.

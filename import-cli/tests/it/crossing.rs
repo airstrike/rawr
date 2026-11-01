@@ -457,6 +457,27 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
     );
 }
 
+/// iced's game_of_life, arc and delineate: `Application::theme` takes `impl
+/// ThemeFn<State, Theme>`, which the crate implements for its `Theme` and
+/// for every `Fn(&State)` whose output turns into an `Option<Theme>`. The
+/// theme itself fills it by the first impl, and a script function of the
+/// state by the second. Both outputs are `cargo run`'s.
+#[test]
+fn a_parameter_of_a_trait_over_fn_takes_any_type_that_implements_it() {
+    let (rawr, cargo) = both_printed("crossing-theme", "theme.rs", "Dark,Dark");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 theme Dark") && rawr.contains("2 theme Dark"),
+        "{rawr}"
+    );
+    let (rawr, cargo) = both_printed("crossing-themed", "themed.rs", "Dark,Dark");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 theme Light") && rawr.contains("2 theme Dark"),
+        "{rawr}"
+    );
+}
+
 /// iced's stopwatch: the crate's `time` re-exports std's `Duration` and
 /// `Instant`, and the script imports them through it and writes
 /// `time::Duration` through the module. `time::every(milliseconds(10))`
