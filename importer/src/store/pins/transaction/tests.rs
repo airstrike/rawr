@@ -256,7 +256,7 @@ fn post_bind_witness_drift_uses_the_same_open_store_and_never_calls_admission() 
     });
     assert!(matches!(
         result,
-        Err(Error::Codec("external witness drift"))
+        Err(Error::StaleReadSet { action }) if action == value.receipt().action()
     ));
     assert_eq!(visits.load(Ordering::SeqCst), 2);
     assert_eq!(snapshot(&store), before);

@@ -178,6 +178,13 @@ pub enum Error {
 }
 
 impl Error {
+    /// Whether a cache entry this run read went stale before it was used.
+    /// The run starts again, and its lookup rebuilds the entry (#609).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        matches!(self, Self::Node { source, .. } if source.is_stale())
+    }
+
     /// The invariant this failure breaks, when only a rawr bug can cause it.
     /// The cache check reads these errors as an entry to rebuild; a fresh
     /// build panics with this (`node::Error::fresh`, #522).

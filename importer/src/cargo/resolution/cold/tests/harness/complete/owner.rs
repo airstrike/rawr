@@ -663,6 +663,81 @@ fn validates() -> usize {
     owner::REPLAYS.with(Cell::get)
 }
 
+/// A stored resolution whose recorded inputs changed misses and is
+/// recaptured, whether the change comes before the next run or between the
+/// run's replay and the use of its result (#609, D664).
+#[cfg(unix)]
+#[test]
+fn changed_inputs_recapture_the_stored_resolution() {
+    let Fixture {
+        root,
+        request,
+        context,
+        store,
+    } = api_continuation_fixture(&Limits::standard());
+    let limits = Limits::standard();
+    let universe = request.universe.clone();
+    let cached = cargo::CachedToolchain {
+        context: context.clone(),
+        attestation: context.cached_toolchain().unwrap(),
+    };
+    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
+        .unwrap();
+    let action = cold.node().receipt().action();
+    drop(cold);
+    let source = root.join("rawr-iced/src/lib.rs");
+    let change = |text: &[u8]| {
+        let mut bytes = fs::read(&source).unwrap();
+        bytes.extend_from_slice(text);
+        fs::write(&source, bytes).unwrap();
+    };
+    let reopen = || {
+        let mut request = Fixture::request(&root, context.environment().clone());
+        request.universe = universe.clone();
+        let fresh = crate::context::Context::capture_config(
+            context.project(),
+            &request.config,
+            context.target(),
+            &limits,
+        )
+        .unwrap();
+        cargo::toolchain::Attestation::fixture_replay(&fresh);
+        let cached = cargo::CachedToolchain {
+            attestation: fresh.cached_toolchain().unwrap(),
+            context: fresh.clone(),
+        };
+        (fresh, request, cached)
+    };
+    change(b"// changed before the run\n");
+    let (first, request, cached) = reopen();
+    let rebuilt =
+        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
+            .expect("a changed input is a miss, rebuilt");
+    assert_ne!(rebuilt.node().receipt().action(), action);
+    let action = rebuilt.node().receipt().action();
+    // The input changes again after this run's replay and before its result
+    // is used: the use says the entry is stale, and the run starts again.
+    change(b"// changed during the run\n");
+    let stale = rebuilt
+        .publish(&limits)
+        .err()
+        .expect("a stale replay is never used");
+    assert!(stale.is_stale(), "{stale:?}");
+    drop(first);
+    let (second, request, cached) = reopen();
+    let again =
+        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
+            .expect("the run started again rebuilds the entry");
+    assert_ne!(again.node().receipt().action(), action);
+    again
+        .publish(&limits)
+        .expect("the rebuilt entry is current");
+    drop(second);
+    drop(context);
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A later consumer in one graph reuses the staged record interpretation
 /// without decoding any record wire, while a fresh graph decodes afresh because
 /// the stage never crosses evaluations.

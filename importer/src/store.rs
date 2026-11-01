@@ -199,10 +199,20 @@ fn clear(root: &Path) -> Result<(), Error> {
     remove_tree(root)
         .and_then(|()| fs::create_dir(root))
         .map_err(|source| Error::Io {
-            operation: "clear a typed store of another format",
+            operation: "clear a damaged typed store or one of another format",
             path: root.to_path_buf(),
             source,
         })
+}
+
+/// Whether every fixed directory of a bootstrapped store is still there.
+fn complete_layout(root: &Path) -> Result<bool, Error> {
+    for directory in FIXED_DIRECTORIES {
+        if entry::existing_directory(root, Path::new(directory))?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// One canonical versioned typed-node store. Clones share its graph budget.
@@ -266,8 +276,14 @@ impl Store {
             source,
         })?;
         // A store another format wrote is a clean miss: it is removed and
-        // rebuilt, never migrated.
+        // rebuilt, never migrated. So is one missing a directory its layout
+        // has, such as deleted executions: every entry it registered there
+        // is gone, and it is rebuilt as Cargo rebuilds a damaged target (#584).
         let fresh = match accounting::current_format(&root)? {
+            Some(true) if !complete_layout(&root)? => {
+                clear(&root)?;
+                true
+            }
             Some(true) => false,
             Some(false) => {
                 clear(&root)?;
