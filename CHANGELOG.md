@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A pattern's binding of `o.as_mut()` on an `Option` or `Result` place writes through `*`, in `if let`, `match`, `while let` and `let .. else`, as `if let Some(n) = self.pending.as_mut() { *n -= 1; }` does in Rust. (#686)
+- A tuple expression with an expected type coerces each field to it, so `pair((&name, &catalog))` passes a `&String` where `pair` takes `(&str, &Catalog)`; a tuple already held in a local isn't coerced, as in rustc. (#688)
 
 ## 0.3.90 (2026-11-01)
 
