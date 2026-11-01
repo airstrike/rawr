@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 79;
+const CLASSIFIER_VERSION: u32 = 80;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5977,35 +5977,45 @@ impl<P: api::Phase> Context<'_, P> {
         .with_unsupported(unsupported))
     }
 
-    /// An input native code gives a script closure: a value, or a copy of
+    /// An input native code gives a script closure: a value, a copy of
     /// what a shared reference names, as pane_grid's `view(pane, &state,
-    /// is_maximized)` gives `&S`.
+    /// is_maximized)` gives `&S`, or a crate value lent `&mut` for the
+    /// call, as a trait's `with_translation(v, f: impl FnOnce(&mut Self))`
+    /// lends the renderer.
     fn convert_closure_input(
         &self,
         input: &model::Type,
     ) -> Option<representability::convert::Type> {
+        use crate::surface::identity::Definition;
         if let Ok(input) = self.convert_value(input) {
             return Some(input);
         }
         if let Some(native) = self.native_place_input(input) {
             return Some(native);
         }
-        let model::Type::Reference {
-            mutability: model::Mutability::Shared,
-            ty,
-            ..
-        } = input
-        else {
+        let model::Type::Reference { mutability, ty, .. } = input else {
             return None;
         };
+        let mutable = matches!(mutability, model::Mutability::Mutable);
         let target = self.convert_value(ty).ok()?;
-        matches!(
-            target,
-            representability::convert::Type::Parameter(_)
-                | representability::convert::Type::Nominal { .. }
-        )
-        .then(|| representability::convert::Type::Borrowed {
-            mutable: false,
+        let admitted = match &target {
+            representability::convert::Type::Parameter(_) => !mutable,
+            // Rawr's own values cross by value, so only a crate value is
+            // lent.
+            representability::convert::Type::Nominal { definition, .. } => {
+                !mutable
+                    || ![
+                        Definition::value(),
+                        Definition::duration(),
+                        Definition::instant(),
+                        Definition::infallible(),
+                    ]
+                    .contains(definition)
+            }
+            _ => false,
+        };
+        admitted.then(|| representability::convert::Type::Borrowed {
+            mutable,
             ty: Box::new(target),
         })
     }

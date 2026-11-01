@@ -4,12 +4,24 @@
 // only the crate's `pack` makes. The program is `run((), view)`: its state
 // is the unit, its update is the crate's own impl for `()`, and its view
 // gives widgets that borrow string literals for as long as the unit is
-// lent.
+// lent. `with_translation`, a provided method of a trait the renderer
+// implements, lends the renderer to a closure as `&mut Self`, whose
+// `draw_mesh` is another trait's.
 
 use events::advanced::graphics::color;
 use events::advanced::graphics::mesh::{self, Mesh, SolidVertex2D};
+use events::advanced::renderer::{Recorder, Vector};
 use events::widgets::{center, column, text, Widget};
 use events::Never;
+
+fn draw(renderer: &mut Recorder, mesh: Mesh) {
+    use events::advanced::graphics::mesh::Renderer as _;
+    use events::advanced::Renderer as _;
+
+    renderer.with_translation(Vector::new(2.0, 3.0), |renderer| {
+        renderer.draw_mesh(mesh);
+    });
+}
 
 fn rainbow(width: f32) -> Mesh {
     let color_r = [1.0, 0.0, 0.0, 1.0];
@@ -55,5 +67,8 @@ fn main() {
         color: color::pack([0.5, 0.25, 0.0, 1.0]),
     };
     println!("{:?} {:?}", vertex.position, vertex.color);
+    let mut renderer = Recorder::new();
+    draw(&mut renderer, rainbow(4.0));
+    println!("drew {}", renderer.steps());
     events::widgets::run((), view);
 }

@@ -282,6 +282,98 @@ pub mod graphics {
         pub fn shade(shaded: &Shaded) -> f32 {
             (shaded.shade)(shaded.position[0])
         }
+
+        /// What draws meshes, as iced_graphics's `mesh::Renderer`.
+        pub trait Renderer {
+            /// Draws `mesh`.
+            fn draw_mesh(&mut self, mesh: Mesh);
+        }
+    }
+}
+
+/// What draws, as iced_core's `renderer`.
+pub mod renderer {
+    use crate::graphics::mesh::{self, Mesh};
+
+    /// How far something moves, as iced_core's `Vector`.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Vector {
+        /// Across.
+        pub x: f32,
+        /// Down.
+        pub y: f32,
+    }
+
+    impl Vector {
+        /// The vector `(x, y)`.
+        pub const fn new(x: f32, y: f32) -> Self {
+            Vector { x, y }
+        }
+    }
+
+    /// What draws, as iced_core's `Renderer`, whose provided
+    /// `with_translation` lends the renderer itself, as `&mut Self`, to a
+    /// closure.
+    pub trait Renderer: 'static {
+        /// Starts moving what is drawn by `offset`.
+        fn start_transformation(&mut self, offset: Vector);
+
+        /// Stops moving what is drawn by the last offset.
+        fn end_transformation(&mut self);
+
+        /// Draws what `f` draws moved by `offset`.
+        fn with_transformation(&mut self, offset: Vector, f: impl FnOnce(&mut Self)) {
+            self.start_transformation(offset);
+            f(self);
+            self.end_transformation();
+        }
+
+        /// Draws what `f` draws moved by `translation`.
+        fn with_translation(&mut self, translation: Vector, f: impl FnOnce(&mut Self)) {
+            self.with_transformation(translation, f);
+        }
+    }
+
+    /// A renderer that records what it draws, as iced's `Renderer`.
+    pub struct Recorder {
+        offset: Vector,
+        steps: Vec<String>,
+    }
+
+    impl Recorder {
+        /// A renderer that drew nothing.
+        pub fn new() -> Self {
+            Recorder {
+                offset: Vector::new(0.0, 0.0),
+                steps: Vec::new(),
+            }
+        }
+
+        /// What it drew, in order.
+        pub fn steps(&self) -> String {
+            self.steps.join(",")
+        }
+    }
+
+    impl Renderer for Recorder {
+        fn start_transformation(&mut self, offset: Vector) {
+            self.offset = Vector::new(self.offset.x + offset.x, self.offset.y + offset.y);
+        }
+
+        fn end_transformation(&mut self) {
+            self.offset = Vector::new(0.0, 0.0);
+        }
+    }
+
+    impl mesh::Renderer for Recorder {
+        fn draw_mesh(&mut self, mesh: Mesh) {
+            let Mesh::Solid { buffers, .. } = mesh;
+            self.steps.push(format!(
+                "{} vertices at {:?}",
+                buffers.vertices.len(),
+                [self.offset.x, self.offset.y]
+            ));
+        }
     }
 }
 
