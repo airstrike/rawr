@@ -568,8 +568,10 @@ fn inspect_reads_a_running_programs_bindings_as_rust_prints_them() {
         .filter_map(|binding| binding["name"].as_str())
         .collect();
     assert_eq!(names, ["counter", "names"], "{caller}");
+    // `tick` holds `counter` by `&mut` while it runs, so the caller's binding
+    // reads as borrowed, as rustc would describe it (#540).
     assert_eq!(
-        structured["bindings"][0]["value"], read["structuredContent"]["bindings"][0]["value"],
+        structured["bindings"][0]["error"], "`counter` is borrowed by the call to `counter::tick`",
         "{caller}"
     );
     let deeper = client.call(
