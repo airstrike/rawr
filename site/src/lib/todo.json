@@ -1,22 +1,24 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.46",
+  "version": "0.3.47",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"The work plan at rawr.airstrike.fyi/todo, its changelog and the docs update on each push to main, not only at a release.","issues":[496]},
-        {"text":"The /todo chart puts milestones at the top level, each with the epics that have work in it.","issues":[501]},
-        {"text":"CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image.","issues":[492]},
-        {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]},
-        {"text":"The importer no longer carries the request path for rawr-iced's host profile.","issues":[487],"refs":[451]},
-        {"text":"`rawr mcp` has an `inspect` tool that reads a running program's values: the bindings in scope where the program is, or one binding by name or file. Each value prints as the program's `{:?}` would, and a crate type without `Debug` says so as rustc does. Programs with Rust dependencies don't answer it yet.","issues":[488]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.47",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"The work plan at rawr.airstrike.fyi/todo, its changelog and the docs update on each push to main, not only at a release.","issues":[496]},
+          {"text":"The /todo chart puts milestones at the top level, each with the epics that have work in it.","issues":[501]},
+          {"text":"CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image.","issues":[492]},
+          {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]},
+          {"text":"The importer no longer carries the request path for rawr-iced's host profile.","issues":[487],"refs":[451]},
+          {"text":"`rawr mcp` has an `inspect` tool that reads a running program's values: the bindings in scope where the program is, or one binding by name or file. Each value prints as the program's `{:?}` would, and a crate type without `Debug` says so as rustc does. Programs with Rust dependencies don't answer it yet.","issues":[488]}
+        ]
+      },
       {
         "version": "0.3.46",
         "date": "2026-10-31",
@@ -1024,7 +1026,7 @@
     {"issue":447,"title":"Upstream component's generated runner fails to compile","state":"open","category":"No glue (D593)"},
     {"issue":448,"title":"rawr no longer carries the application, preview and widget protocols, host operations and…","state":"closed","category":"No glue (D593)","release":"0.3.35"},
     {"issue":449,"title":"Remove the profile event projection","state":"open","category":"No glue (D593)"},
-    {"issue":450,"title":"Remove signature supports and operation endpoints","state":"closed","category":"No glue (D593)"},
+    {"issue":450,"title":"Remove signature supports and operation endpoints","state":"closed","category":"No glue (D593)","release":"0.3.47"},
     {"issue":451,"title":"Reduce the importer's profile to the plain profile","state":"open","category":"No glue (D593)"},
     {"issue":452,"title":"Decide on the parse-time application rewrites","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":453,"title":"Remove the dead select! and try_join! wrapping in parse_tokio_macro","state":"closed","category":"No glue (D593)","release":"0.3.37"},
@@ -1061,21 +1063,21 @@
     {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc"},
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health"},
-    {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer"},
-    {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open","category":"Health"},
+    {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
+    {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"open","category":"Health"},
     {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
     {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
-    {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health"},
+    {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":493,"title":"Run the ?play release on each release push to main","state":"open","category":"Health"},
     {"issue":494,"title":"Move the workflows' actions off Node 20","state":"open","category":"Health"},
     {"issue":495,"title":"Cache the Linux workflow's release build of the importer","state":"open","category":"Health"},
-    {"issue":496,"title":"Deploy the site on each push to main, not only at release","state":"closed","category":"Health"},
+    {"issue":496,"title":"Deploy the site on each push to main, not only at release","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":497,"title":"A site change that needs a newer rawr-web or image goes live before them","state":"open","category":"Health"},
     {"issue":498,"title":"An image pushed from a Mac leaves the site workflow without rawr-web","state":"open","category":"Health"},
     {"issue":499,"title":"A crate type reached only through a path dependency can't be named by the runner","state":"open","category":"No glue (D593)"},
     {"issue":500,"title":"Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc"},
-    {"issue":501,"title":"Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health"},
+    {"issue":501,"title":"Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":502,"title":"game_of_life: Point minus Point is not typed as iced's Vector","state":"closed","category":"No glue (D593)","release":"0.3.46"},
     {"issue":503,"title":"Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer"},
     {"issue":504,"title":"Judge a crate alias the only name of its type per root crate","state":"closed","category":"No glue (D593)","release":"0.3.45"},
@@ -1621,7 +1623,7 @@
           "state": "now",
           "note": "rawr mcp inspect reads values; dependencies, frames and the editor remain",
           "issues": [
-            {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open"},
+            {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"open"},
             {"number":511,"title":"inspect reads callers' frames","state":"open"},
             {"number":512,"title":"inspect prints bindings by their declared type","state":"open"},
