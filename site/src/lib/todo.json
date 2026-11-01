@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.73",
+  "version": "0.3.74",
   "examples": {
     "running": 22,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A function returning `Option<impl Trait>` (or a Result, Vec, box or tuple of one) takes the open type arguments of its value from the written bound's defaults, and a crate function's opaque output implements its bounds' traits.","issues":[623]},
-        {"text":"A struct update `..base` of a generic crate struct, as `Rgb { red, ..Rgb::default() }`, copies the fields it takes when their type is Copy, instead of panicking.","issues":[617]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.74",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A function returning `Option<impl Trait>` (or a Result, Vec, box or tuple of one) takes the open type arguments of its value from the written bound's defaults, and a crate function's opaque output implements its bounds' traits.","issues":[623]},
+          {"text":"A struct update `..base` of a generic crate struct, as `Rgb { red, ..Rgb::default() }`, copies the fields it takes when their type is Copy, instead of panicking.","issues":[617]}
+        ]
+      },
       {
         "version": "0.3.73",
         "date": "2026-11-01",
@@ -1423,13 +1425,13 @@
     {"issue":614,"title":"A stale stored node at the same action as a fresh build fails on publish","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":616,"title":"A view of unit state, iced::run((), view), panics the generator","state":"closed","category":"No glue (D593)","release":"0.3.72"},
-    {"issue":617,"title":"A struct update ..T::default() on a crate type panics","state":"closed","category":"No glue (D593)"},
+    {"issue":617,"title":"A struct update ..T::default() on a crate type panics","state":"closed","category":"No glue (D593)","release":"0.3.74"},
     {"issue":618,"title":"A program trait's associated function on a crate type, called by the type's name, is refused","state":"open","category":"Divergences from rustc"},
     {"issue":619,"title":"A derived Default with a crate-type field fails at runtime","state":"open","category":"No glue (D593)"},
     {"issue":620,"title":"An empty match on Infallible is refused","state":"open","category":"Divergences from rustc"},
     {"issue":621,"title":"A closure input that is a std trait's associated type of a type parameter","state":"closed","category":"No glue (D593)","release":"0.3.73"},
     {"issue":622,"title":"A path dependency builds twice when the program has native modules","state":"open","category":"No glue (D593)"},
-    {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"closed","category":"Divergences from rustc"},
+    {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"closed","category":"Divergences from rustc","release":"0.3.74"},
     {"issue":624,"title":"A closure passed to a method taking impl FnOnce(&mut Self) gets its input from the receiver","state":"open","category":"No glue (D593)"},
     {"issue":625,"title":"rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":626,"title":"An Option of a crate opaque value crosses to a crate consumer","state":"open","category":"No glue (D593)"},
