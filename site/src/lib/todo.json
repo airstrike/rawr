@@ -1,17 +1,19 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.51",
+  "version": "0.3.52",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr mcp`'s `inspect` reads the values of a program with Rust dependencies, such as an iced app's `state` in `update` and `view`. A crate value prints through its own `Debug`, and a crate value without one names its type, as rustc does.","issues":[510]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.52",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`rawr mcp`'s `inspect` reads the values of a program with Rust dependencies, such as an iced app's `state` in `update` and `view`. A crate value prints through its own `Debug`, and a crate value without one names its type, as rustc does.","issues":[510]}
+        ]
+      },
       {
         "version": "0.3.51",
         "date": "2026-11-01",
@@ -1125,7 +1127,7 @@
     {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed","category":"No glue (D593)","release":"0.3.48"},
     {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"closed","category":"Divergences from rustc","release":"0.3.49"},
     {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
-    {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"closed","category":"Health"},
+    {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"closed","category":"Health","release":"0.3.52"},
     {"issue":511,"title":"inspect reads callers' frames","state":"open","category":"Health"},
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
