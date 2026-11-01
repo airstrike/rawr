@@ -27,7 +27,6 @@ std::thread_local! {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Metadata {
-    raw: RawDocument,
     limits: Limits,
     canonical: Box<[u8]>,
     root: usize,
@@ -40,7 +39,6 @@ pub(crate) struct Metadata {
 
 #[derive(Clone, Debug)]
 pub(crate) struct BuildGraph {
-    raw: RawDocument,
     _allocation: JsonAllocation,
     canonical: Digest,
     artifacts: Box<[Output]>,
@@ -157,13 +155,6 @@ pub(super) struct Provisional {
     epoch: Weak<()>,
     scope: Option<Arc<()>>,
     retained: JsonOwnership,
-}
-
-/// Exact transport bytes retained only as a post-command equality witness.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RawDocument {
-    bytes: usize,
-    digest: Digest,
 }
 
 /// Exact command bytes moved into their original Cargo allocation epoch.
@@ -415,7 +406,6 @@ impl Metadata {
             .map(|package| (Arc::clone(&package.id), package))
             .collect();
         Self {
-            raw: RawDocument::from_bytes(&[]),
             limits: Limits::standard(),
             canonical: Box::default(),
             root: 0,
@@ -603,7 +593,6 @@ impl Metadata {
         definition: Option<&super::universe::Definition>,
     ) -> Result<(Self, Option<super::universe::MetadataObservation>)> {
         epoch.require(limits);
-        let raw = RawDocument::from_bytes(bytes);
         let mut allocation = preflight_from("Cargo metadata", bytes, limits, epoch.retained)?;
         let value = parse_owned_json("Cargo metadata", bytes)?;
         let document_ownership = JsonOwnership::tree(&value)?;
@@ -931,7 +920,6 @@ impl Metadata {
         }
 
         let parsed = Self {
-            raw,
             limits: *limits,
             canonical,
             root,
@@ -958,11 +946,6 @@ impl Metadata {
         };
         epoch.retained = allocation;
         Ok((parsed, observation))
-    }
-
-    pub(crate) fn require_exact_raw(&self, bytes: &[u8], command: &'static str) -> Result<()> {
-        self.raw
-            .require(bytes, command, "exact post-build Cargo metadata")
     }
 
     pub(crate) fn selections(
@@ -1092,7 +1075,6 @@ impl BuildGraph {
         #[cfg(not(feature = "rustc-driver"))]
         let _ = selected_target;
         epoch.require(limits);
-        let raw = RawDocument::from_bytes(bytes);
         let mut allocation = preflight_from("Cargo unit graph", bytes, limits, epoch.retained)?;
         let value = parse_owned_json("Cargo unit graph", bytes)?;
         let document_ownership = JsonOwnership::tree(&value)?;
@@ -1335,7 +1317,6 @@ impl BuildGraph {
         drop(extraction_indices);
         allocation.release(validation_ownership)?;
         let graph = Self {
-            raw,
             canonical,
             _allocation: allocation,
             artifacts: finished.artifacts,
@@ -1356,11 +1337,6 @@ impl BuildGraph {
         self.canonical == other.canonical
             && self.artifacts == other.artifacts
             && self.scripts == other.scripts
-    }
-
-    pub(crate) fn require_exact_raw(&self, bytes: &[u8], command: &'static str) -> Result<()> {
-        self.raw
-            .require(bytes, command, "exact post-build Cargo unit graph")
     }
 
     pub(crate) fn artifacts(&self) -> &[Output] {
@@ -1407,7 +1383,6 @@ impl BuildGraph {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Self {
-            raw: RawDocument::from_bytes(&[]),
             _allocation: JsonAllocation::empty(),
             canonical: digest(&[]),
             artifacts,
@@ -4420,23 +4395,6 @@ fn subtract_owned(current: usize, released: usize) -> Result<usize> {
     })
 }
 
-impl RawDocument {
-    fn from_bytes(bytes: &[u8]) -> Self {
-        Self {
-            bytes: bytes.len(),
-            digest: digest(bytes),
-        }
-    }
-
-    fn require(self, bytes: &[u8], command: &'static str, field: &'static str) -> Result<()> {
-        if self == Self::from_bytes(bytes) {
-            Ok(())
-        } else {
-            Err(Error::ResolutionDrift { command, field })
-        }
-    }
-}
-
 impl<'de> DeserializeSeed<'de> for JsonSeed<'_> {
     type Value = ();
 
@@ -6471,11 +6429,10 @@ mod allocation_tests {
 
     #[cfg(feature = "rustc-driver")]
     #[test]
-    fn post_metadata_checkpoint_precedes_high_fanout_reachability_ownership() {
-        const DOCUMENTS: [(&str, &[u8]); 3] = [
+    fn cargo_checkpoints_precede_high_fanout_reachability_ownership() {
+        const DOCUMENTS: [(&str, &[u8]); 2] = [
             ("Cargo metadata", br#"{"metadata":"aaaaaaaa"}"#),
             ("Cargo unit graph", br#"{"unit":"bbbbbbbb"}"#),
-            ("post-Build Cargo metadata", br#"{"post":"cccccccc"}"#),
         ];
         let exercise = |limits: &Limits| {
             OWNED_JSON_VALUES.with(|owned| owned.set(0));
@@ -6517,7 +6474,7 @@ mod allocation_tests {
         let standard = Limits::standard();
         let (_, json_owned, reachability_owned) =
             exercise(&standard).expect("the full live sequence measures");
-        assert_eq!(json_owned, 3);
+        assert_eq!(json_owned, 2);
         assert!(reachability_owned > 128);
     }
 
@@ -6562,6 +6519,41 @@ fn normalize_metadata(
         drop(previous);
         allocation.release(released)?;
         *ownership = ownership.checked_sub(released)?.checked_add(acquired)?;
+    }
+    // Cargo lists a dependency kind twice while it writes the lock for a
+    // package reached through a patch, and once when it reads the written
+    // lock. Both describe the same graph, so they canonicalize alike.
+    if let Some(nodes) = object
+        .get_mut("resolve")
+        .and_then(Value::as_object_mut)
+        .and_then(|resolve| resolve.get_mut("nodes"))
+        .and_then(Value::as_array_mut)
+    {
+        for node in nodes {
+            let Some(dependencies) = node.get_mut("deps").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for dependency in dependencies {
+                let Some(kinds) = dependency
+                    .get_mut("dep_kinds")
+                    .and_then(Value::as_array_mut)
+                else {
+                    continue;
+                };
+                let mut index = 1;
+                while index < kinds.len() {
+                    if kinds[..index].contains(&kinds[index]) {
+                        let duplicate = kinds.remove(index);
+                        let released = JsonOwnership::tree(&duplicate)?;
+                        drop(duplicate);
+                        allocation.release(released)?;
+                        *ownership = ownership.checked_sub(released)?;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+        }
     }
     sort_metadata_field(object, "workspace_members", allocation)?;
     sort_metadata_field(object, "workspace_default_members", allocation)?;
@@ -7643,9 +7635,8 @@ mod tests {
     }
 
     #[test]
-    fn canonical_unit_and_validated_metadata_bytes_are_equality_authority() {
+    fn canonical_unit_and_metadata_forms_are_equality_authority() {
         let initial = BuildGraph {
-            raw: super::RawDocument::from_bytes(b"a"),
             _allocation: super::JsonAllocation::empty(),
             canonical: super::digest(b"a"),
             artifacts: Box::default(),
@@ -7654,7 +7645,6 @@ mod tests {
             extraction: Box::default(),
         };
         let drifted = BuildGraph {
-            raw: super::RawDocument::from_bytes(b"b"),
             _allocation: super::JsonAllocation::empty(),
             canonical: super::digest(b"b"),
             artifacts: Box::default(),
@@ -7663,20 +7653,30 @@ mod tests {
             extraction: Box::default(),
         };
         assert!(!initial.equals(&drifted));
-        initial
-            .require_exact_raw(b"a", "post-build fixture")
-            .expect("the exact raw unit replay seals");
-        assert!(initial
-            .require_exact_raw(b"b", "post-build fixture")
-            .is_err());
 
-        let metadata = metadata([]);
-        metadata
-            .require_exact_raw(&[], "post-build fixture")
-            .expect("the exact raw metadata replay seals");
-        assert!(metadata
-            .require_exact_raw(b"drift", "post-build fixture")
-            .is_err());
+        let kinds = |kinds: Value| {
+            json!({
+                "target_directory": "/fixture/target",
+                "build_directory": "/fixture/target",
+                "resolve": {
+                    "root": null,
+                    "nodes": [{
+                        "id": "a",
+                        "dependencies": ["b"],
+                        "deps": [{ "name": "b", "pkg": "b", "dep_kinds": kinds }],
+                        "features": [],
+                    }],
+                },
+            })
+        };
+        let normal = json!({ "kind": null, "target": null });
+        let build = json!({ "kind": "build", "target": null });
+        assert_eq!(
+            canonical_metadata_bytes(kinds(json!([normal, build, normal, build])))
+                .expect("the metadata Cargo prints while writing its lock canonicalizes"),
+            canonical_metadata_bytes(kinds(json!([build, normal])))
+                .expect("the metadata Cargo prints from its lock canonicalizes"),
+        );
 
         let resolution = json!({
             "target_directory": "/fixture/resolution-target",

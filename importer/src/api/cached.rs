@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::cargo::resolution::{BuildProduct, Locked, UnitGraph};
+use crate::cargo::resolution::BuildProduct;
 use crate::node::{self, Parent};
 use crate::{context::Context, metrics};
 
@@ -30,25 +30,17 @@ enum Form {
     },
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the API node binds its complete three-parent Cargo closure and request authority"
-)]
+/// Look up or capture the API under its Cargo build product and request
+/// authority. The build product's parents carry the unit graph it built.
 pub(crate) fn evaluate(
     context: &Context,
     request: &[u8; 32],
     policy: &[u8; 32],
     build: &node::Validated<BuildProduct>,
-    post_unit: &node::Validated<UnitGraph>,
-    post_metadata: &node::Validated<Locked>,
     sink: &dyn metrics::Sink,
     materialize: impl FnOnce(Option<&Product>) -> crate::Result<Graph<Captured>>,
 ) -> Result<(node::Validated<Product>, Graph<Captured>), node::Error> {
-    let parents = [
-        Parent::validated(build),
-        Parent::validated(post_unit),
-        Parent::validated(post_metadata),
-    ];
+    let parents = [Parent::validated(build)];
     evaluate_with_parents(context, request, policy, &parents, sink, materialize)
 }
 

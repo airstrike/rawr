@@ -497,7 +497,7 @@ struct Harness {
     closure_units: Option<Box<[u8]>>,
 }
 
-/// A prepared harness whose ordinary Build and both postchecks succeeded.
+/// A prepared harness whose ordinary Build succeeded.
 #[cfg(feature = "rustc-driver")]
 struct Built {
     harness: Harness,
@@ -525,15 +525,8 @@ impl<'bytes> DocumentBytes<'bytes> {
 }
 
 impl Documents {
-    fn bind(
-        metadata: unit::Transport,
-        units: unit::Transport,
-        parsed: &unit::Metadata,
-        graph: &unit::BuildGraph,
-    ) -> Result<Self> {
-        parsed.require_exact_raw(metadata.bytes(), "retained Cargo observations")?;
-        graph.require_exact_raw(units.bytes(), "retained Cargo observations")?;
-        Ok(Self { metadata, units })
+    fn new(metadata: unit::Transport, units: unit::Transport) -> Self {
+        Self { metadata, units }
     }
 }
 
@@ -541,11 +534,6 @@ impl Documents {
 struct Retained {
     documents: Documents,
     build: crate::input::build::Retained,
-}
-
-enum Postcheck {
-    Units,
-    Metadata,
 }
 
 struct CachedToolchain {
@@ -565,8 +553,6 @@ pub(crate) struct DagResolution {
     pub(crate) context: crate::context::Context,
     pub(crate) request: Digest,
     pub(crate) build: crate::node::Validated<crate::cargo::resolution::BuildProduct>,
-    pub(crate) post_unit: crate::node::Validated<crate::cargo::resolution::UnitGraph>,
-    pub(crate) post_metadata: crate::node::Validated<crate::cargo::resolution::Locked>,
 }
 
 struct Placement {
@@ -1225,8 +1211,8 @@ impl Request {
             finalize_harness(self, &harness_root, &internal)?;
             drop(provisional_selected);
             drop(provisional_metadata);
-            // The post-build check observes metadata under the Build's target
-            // directory, so the final metadata names that same directory.
+            // The final metadata and the unit graph name the Build's target
+            // directory, where its artifacts land.
             #[cfg(feature = "rustc-driver")]
             let initial_target = harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
             #[cfg(not(feature = "rustc-driver"))]
@@ -1681,8 +1667,9 @@ impl Request {
         write_atomic(lock_path, self.starting_lock(definition))?;
         // The candidate's metadata is the final metadata: Cargo wrote the lock
         // it resolved, and the `--locked` unit graph that follows refuses a
-        // lock it would change. Running `--locked` metadata again only
-        // reproduced these bytes.
+        // lock it would change. Cargo's bytes can differ when it reads that
+        // lock back (it may list a dependency kind once instead of twice), so
+        // nothing compares them; canonicalization makes both forms hash alike.
         let bytes = observe(MetadataPhase::Candidate)?;
         self.revalidate(limits, "resolution candidate materialization")?;
         let lock_bytes = read_bounded(
@@ -1813,7 +1800,6 @@ impl Request {
         &self,
         bytes: &[u8],
         environment: Box<[(OsString, OsString)]>,
-        metadata: &unit::Metadata,
         mut initial: unit::BuildGraph,
         cargo_allocation: &unit::Allocation,
         toolchain: &toolchain::Proof,
@@ -1821,7 +1807,6 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
         workspace: &crate::input::workspace::Image,
-        postcheck: Option<impl FnMut(Postcheck) -> Result<Box<[u8]>>>,
     ) -> Result<(crate::input::build::Build, unit::BuildGraph)> {
         let build = crate::input::build::Build::parse(
             bytes,
@@ -1837,12 +1822,6 @@ impl Request {
             workspace.require(&mut crate::input::workspace::Account::bounded(limits))
         };
         revalidate()?;
-        if let Some(mut observe) = postcheck {
-            let units = observe(Postcheck::Units)?;
-            initial.require_exact_raw(&units, "build")?;
-            let post_metadata = observe(Postcheck::Metadata)?;
-            metadata.require_exact_raw(&post_metadata, "build")?;
-        }
         initial.bind_reachability(cargo_allocation, cargo_limits)?;
         revalidate()?;
         Ok((build, initial))
@@ -1957,14 +1936,9 @@ impl Request {
         #[cfg(not(feature = "rustc-driver"))]
         let (bytes, environment) = uncached(execution::Operation::Build)
             .run(|| cargo_execute_build(native, &self, &manifest_path, &command_target, limits))?;
-        #[cfg(feature = "rustc-driver")]
-        let mut post_unit_parent = None;
-        #[cfg(feature = "rustc-driver")]
-        let mut post_metadata_parent = None;
         let (build, build_unit) = self.check_build(
             &bytes,
             environment,
-            &metadata,
             initial,
             &cargo_allocation,
             &toolchain,
@@ -1976,105 +1950,6 @@ impl Request {
             limits,
             limits,
             &workspace,
-            Some(|phase| match phase {
-                Postcheck::Units => {
-                    #[cfg(feature = "rustc-driver")]
-                    if let Some((context, request, build)) = dag_build.as_ref() {
-                        let authority = post_build_unit_graph_node_authority(
-                            *request,
-                            &toolchain,
-                            &self,
-                            &manifest_path,
-                            limits,
-                        )?;
-                        let authority = workspace_node_authority(&authority, &workspace)?;
-                        let post_unit = crate::cargo::resolution::cached_post_unit_graph(
-                            context,
-                            build,
-                            &authority,
-                            &crate::metrics::Current,
-                            || {
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::bounded(limits),
-                                )?;
-                                let bytes = cargo_units(
-                                    native,
-                                    &self,
-                                    &manifest_path,
-                                    &command_target,
-                                    limits,
-                                )?;
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::bounded(limits),
-                                )?;
-                                Ok(bytes)
-                            },
-                        )
-                        .map_err(|source| Error::Node {
-                            operation: "post-build Cargo unit graph",
-                            source: Box::new(source),
-                        })?;
-                        let bytes = post_unit.value().raw().to_vec().into_boxed_slice();
-                        post_unit_parent = Some(post_unit);
-                        return Ok(bytes);
-                    }
-                    uncached(execution::Operation::UnitGraph)
-                        .run(|| cargo_units(native, &self, &manifest_path, &command_target, limits))
-                }
-                Postcheck::Metadata => {
-                    #[cfg(feature = "rustc-driver")]
-                    if let Some((context, request, build)) = dag_build.as_ref() {
-                        let authority = post_build_metadata_node_authority(
-                            *request,
-                            &toolchain,
-                            &self,
-                            &manifest_path,
-                            limits,
-                        )?;
-                        let authority = workspace_node_authority(&authority, &workspace)?;
-                        let post_metadata = crate::cargo::resolution::cached_post_metadata(
-                            context,
-                            build,
-                            &authority,
-                            &manifest_path,
-                            &lock_path,
-                            &command_target,
-                            &crate::metrics::Current,
-                            || {
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::bounded(limits),
-                                )?;
-                                let bytes = cargo_metadata(
-                                    native,
-                                    &self,
-                                    &manifest_path,
-                                    &command_target,
-                                    true,
-                                    limits,
-                                )?;
-                                metadata.require_exact_raw(
-                                    &bytes,
-                                    "workspace-bound post-build metadata",
-                                )?;
-                                workspace.require(
-                                    &mut crate::input::workspace::Account::bounded(limits),
-                                )?;
-                                Ok(bytes)
-                            },
-                        )
-                        .map_err(|source| Error::Node {
-                            operation: "post-build Cargo metadata",
-                            source: Box::new(source),
-                        })?;
-                        let bytes = post_metadata.value().raw().to_vec().into_boxed_slice();
-                        post_metadata_parent = Some(post_metadata);
-                        return Ok(bytes);
-                    }
-                    uncached(execution::Operation::Metadata).run(|| {
-                        cargo_metadata(native, &self, &manifest_path, &command_target, true, limits)
-                    })
-                }
-            }),
         )?;
         let package_scope = uncached(execution::Operation::Package);
         #[cfg(feature = "rustc-driver")]
@@ -2119,24 +1994,11 @@ impl Request {
         )?;
         #[cfg(feature = "rustc-driver")]
         {
-            resolution.dag = match (dag_build, post_unit_parent, post_metadata_parent) {
-                (Some((context, request, build)), Some(post_unit), Some(post_metadata)) => {
-                    Some(DagResolution {
-                        context,
-                        request,
-                        build,
-                        post_unit,
-                        post_metadata,
-                    })
-                }
-                (None, None, None) => None,
-                _ => {
-                    return Err(Error::ResolutionDrift {
-                        command: "DAG resolution completion",
-                        field: "post-build node closure",
-                    });
-                }
-            };
+            resolution.dag = dag_build.map(|(context, request, build)| DagResolution {
+                context,
+                request,
+                build,
+            });
         }
         Ok(resolution)
     }
@@ -2821,15 +2683,7 @@ impl Resolution {
                 field: "pinned toolchain proof",
             });
         }
-        let manifest = self.harness_root.join(HARNESS_MANIFEST);
-        let target_dir = self.harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
-        let metadata_bytes = replay_metadata(native, self, &manifest, &target_dir, limits)?;
-        self.metadata
-            .require_exact_raw(&metadata_bytes, "publication validation")?;
         self.internal.revalidate(&self.metadata, &self.selected)?;
-        let unit_bytes = replay_units(native, self, &manifest, &target_dir, limits)?;
-        self.build_unit
-            .require_exact_raw(&unit_bytes, "publication validation")?;
         self.build_unit
             .bind_reachability(&self.cargo_allocation, limits)?;
         if let Some(capture) = &mut self.capture {
@@ -4014,88 +3868,6 @@ fn authoritative_build_node_authority(
     Ok(bytes.into_boxed_slice())
 }
 
-#[cfg(feature = "rustc-driver")]
-fn post_build_unit_graph_node_authority(
-    request: Digest,
-    toolchain: &toolchain::Proof,
-    resolution: &Request,
-    manifest: &Path,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let mut prefix = config_arguments(resolution.config.explicit_configs());
-    prefix.extend(["-Z".into(), "unstable-options".into()]);
-    let arguments = process::Command::cargo_arguments(
-        prefix,
-        process::CargoAction::UnitBuild(resolution.parallelism),
-        cargo_unit_arguments(manifest, &resolution.target, &resolution.profile),
-    )?;
-    node_authority(
-        b"rawr.import.post-build-unit-node-authority/v1",
-        request,
-        toolchain,
-        &arguments,
-        "post-build Cargo unit node authority bytes",
-        limits,
-    )
-}
-
-#[cfg(feature = "rustc-driver")]
-fn post_build_metadata_node_authority(
-    request: Digest,
-    toolchain: &toolchain::Proof,
-    resolution: &Request,
-    manifest: &Path,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let arguments = process::Command::cargo_arguments(
-        config_arguments(resolution.config.explicit_configs()),
-        process::CargoAction::Metadata,
-        cargo_metadata_arguments(
-            resolution.toolchain.schemas().graph(),
-            manifest,
-            &resolution.target,
-            true,
-        ),
-    )?;
-    node_authority(
-        b"rawr.import.post-build-metadata-node-authority/v1",
-        request,
-        toolchain,
-        &arguments,
-        "post-build Cargo metadata node authority bytes",
-        limits,
-    )
-}
-
-#[cfg(feature = "rustc-driver")]
-fn node_authority(
-    domain: &[u8],
-    request: Digest,
-    toolchain: &toolchain::Proof,
-    arguments: &[OsString],
-    resource: &'static str,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(domain);
-    bytes.extend_from_slice(request.as_bytes());
-    bytes.extend_from_slice(&toolchain.node_digest());
-    bytes.extend_from_slice(&(arguments.len() as u64).to_le_bytes());
-    for argument in arguments {
-        let argument = argument.as_os_str().as_encoded_bytes();
-        bytes.extend_from_slice(&(argument.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(argument);
-    }
-    if bytes.len() > limits.node_input_bytes() {
-        return Err(Error::Limit {
-            resource,
-            limit: limits.node_input_bytes(),
-            actual: bytes.len(),
-        });
-    }
-    Ok(bytes.into_boxed_slice())
-}
-
 fn final_command_cohort(
     graph_schema: u32,
     target: &str,
@@ -4218,80 +3990,6 @@ fn cargo_build_arguments(manifest: &Path, target: &str, profile: &str) -> Vec<Os
     ])
 }
 
-#[cfg(feature = "rustc-driver")]
-fn replay_metadata(
-    native: &impl ProductionReplay,
-    resolution: &Resolution,
-    manifest: &Path,
-    target_dir: &Path,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let prefix = config_arguments(resolution.retained_config.explicit_configs());
-    let tail = cargo_metadata_arguments(
-        resolution.toolchain.schemas().graph(),
-        manifest,
-        &resolution.target,
-        true,
-    );
-    replay_cargo(
-        native,
-        resolution,
-        target_dir,
-        prefix,
-        process::CargoAction::PublicationMetadata,
-        tail,
-        limits,
-    )
-}
-
-#[cfg(feature = "rustc-driver")]
-fn replay_units(
-    native: &impl ProductionReplay,
-    resolution: &Resolution,
-    manifest: &Path,
-    target_dir: &Path,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let mut prefix = config_arguments(resolution.retained_config.explicit_configs());
-    prefix.extend(["-Z".into(), "unstable-options".into()]);
-    let tail = cargo_unit_arguments(manifest, &resolution.target, &resolution.profile);
-    replay_cargo(
-        native,
-        resolution,
-        target_dir,
-        prefix,
-        process::CargoAction::PublicationUnitBuild(resolution.parallelism),
-        tail,
-        limits,
-    )
-}
-
-#[cfg(feature = "rustc-driver")]
-fn replay_cargo(
-    native: &impl ProductionReplay,
-    resolution: &Resolution,
-    target_dir: &Path,
-    prefix: Vec<OsString>,
-    action: process::CargoAction,
-    tail: Vec<OsString>,
-    limits: &Limits,
-) -> Result<Box<[u8]>> {
-    let command = process::Command::cargo(
-        prefix,
-        action,
-        tail,
-        resolution.project_root.clone(),
-        resolution
-            .retained_config
-            .command_environment(target_dir, native)?,
-    )?;
-    // Physical capture refuses; the epoch that parses these bytes charges
-    // them, exactly as in `run_cargo`.
-    native
-        .run(&command, limits.process)?
-        .checked(Program::Cargo)
-}
-
 fn config_arguments(configs: &[PathBuf]) -> Vec<OsString> {
     let mut arguments = Vec::with_capacity(configs.len() * 2);
     for config in configs {
@@ -4407,9 +4105,9 @@ fn authority_input_digest(path: &Path, limit: usize) -> Result<Option<Digest>> {
     }
 }
 
-/// Old Build/postcheck records never gain a new workspace certificate merely
-/// because their output bytes happen to agree. Every miss is also checked on
-/// both sides of its actual command before that native result can be published.
+/// Old Build records never gain a new workspace certificate merely because
+/// their output bytes happen to agree. Every miss is also checked on both
+/// sides of its actual command before that native result can be published.
 fn workspace_node_authority(
     authority: &[u8],
     workspace: &crate::input::workspace::Image,

@@ -201,14 +201,6 @@ fn exercise(outcome: Outcome) {
                     .expect("the real cold entry retained both documents");
                 let metadata_pointer = documents.metadata.bytes().as_ptr();
                 let unit_pointer = documents.units.bytes().as_ptr();
-                built
-                    .harness
-                    .metadata
-                    .require_exact_raw(documents.metadata.bytes(), "retained fixture")?;
-                built
-                    .harness
-                    .initial
-                    .require_exact_raw(documents.units.bytes(), "retained fixture")?;
                 let build_storage = built.build.fixture_storage();
                 let build_usage = built.build.usage();
                 let replay_definition = request
@@ -247,14 +239,6 @@ fn exercise(outcome: Outcome) {
                         assert_eq!(retained.documents.units.bytes().as_ptr(), unit_pointer);
                         assert_eq!(retained.build.build().fixture_storage(), build_storage);
                         assert_eq!(retained.build.build().usage(), build_usage);
-                        resolution.metadata.require_exact_raw(
-                            retained.documents.metadata.bytes(),
-                            "complete retained fixture",
-                        )?;
-                        resolution.build_unit.require_exact_raw(
-                            retained.documents.units.bytes(),
-                            "complete retained fixture",
-                        )?;
                         let (stored, mut original) = crate::input::stored::Stored::capture(
                             resolution.input,
                             &limits,
