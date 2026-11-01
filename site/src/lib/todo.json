@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.63",
@@ -1296,7 +1301,7 @@
     {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"open","category":"Health"},
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
-    {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"},
+    {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health"},
     {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
     {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","release":"0.3.63"},
@@ -1312,8 +1317,9 @@
     {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"open","category":"No glue (D593)"},
     {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)"},
-    {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"open","category":"No glue (D593)"},
-    {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"}
+    {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)"},
+    {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"},
+    {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

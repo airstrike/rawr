@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A crate whose trait impls name a type with a const argument, as palette's `ArrayTable<256>`, imports instead of panicking.","issues":[592]}
+    ]
   },
   "releases": [
     {
