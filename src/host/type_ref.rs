@@ -560,7 +560,11 @@ impl Type {
                 assert_eq!(
                     expected,
                     arguments.len(),
-                    "a crate type's use in `{item}` gives it its declared parameters"
+                    "a crate type's use in `{item}` gives `{}` its declared parameters",
+                    types
+                        .iter()
+                        .find(|definition| definition.identity().imported() == Some(identity))
+                        .map_or_else(|| "?".to_owned(), host::type_def::Definition::path)
                 );
                 Ok(Self(Shape::Imported {
                     identity: *identity,
@@ -678,7 +682,11 @@ impl Type {
                 assert_eq!(
                     expected,
                     arguments.len(),
-                    "a crate type's use in `{item}` gives it its declared parameters"
+                    "a crate type's use in `{item}` gives `{}` its declared parameters",
+                    types
+                        .iter()
+                        .find(|definition| definition.identity().imported() == Some(identity))
+                        .map_or_else(|| "?".to_owned(), host::type_def::Definition::path)
                 );
                 for argument in arguments {
                     argument

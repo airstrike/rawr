@@ -39,6 +39,15 @@ pub struct Definition {
     shape: Option<Shared<Shape>>,
     projections: Box<[Projection]>,
     exact_arity: bool,
+    /// The parameters' defaults and the associated types an opaque type
+    /// binds. Few types have either, so they share one box, and the field
+    /// is `None` when a type has neither.
+    generics: Option<Box<Generics>>,
+}
+
+/// The rarely present parts of a [`Definition`]'s parameters.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct Generics {
     /// Each parameter's default (`Hsl<S = Srgb, T = f32>`), which a type
     /// written without the argument takes. Empty when none has one.
     defaults: Box<[Option<host::type_ref::Type>]>,
@@ -204,15 +213,27 @@ impl Definition {
             .try_fold(0_usize, |bytes, projection| {
                 bytes.checked_add(projection.retained_bytes()?)
             })?;
-        let defaults = self
-            .defaults
-            .len()
-            .checked_mul(std::mem::size_of::<Option<host::type_ref::Type>>())?;
+        let generics = match &self.generics {
+            None => 0,
+            Some(generics) => std::mem::size_of::<Generics>()
+                .checked_add(
+                    generics
+                        .defaults
+                        .len()
+                        .checked_mul(std::mem::size_of::<Option<host::type_ref::Type>>())?,
+                )?
+                .checked_add(
+                    generics
+                        .associated
+                        .len()
+                        .checked_mul(std::mem::size_of::<Associated>())?,
+                )?,
+        };
         std::mem::size_of::<Self>()
             .checked_add(path)?
             .checked_add(parameters)?
             .checked_add(projections)?
-            .checked_add(defaults)
+            .checked_add(generics)
     }
 
     #[cfg(feature = "rust-import")]
@@ -268,8 +289,7 @@ impl Definition {
             shape: self.shape.clone(),
             projections: projections.into_boxed_slice(),
             exact_arity: self.exact_arity,
-            defaults: self.defaults.clone(),
-            associated: self.associated.clone(),
+            generics: self.generics.clone(),
         })
     }
 
@@ -311,8 +331,7 @@ impl Definition {
             shape: None,
             projections: Box::default(),
             exact_arity: true,
-            defaults: Box::default(),
-            associated: Box::default(),
+            generics: None,
         })
     }
 
@@ -329,8 +348,7 @@ impl Definition {
             shape: None,
             projections: Box::default(),
             exact_arity: false,
-            defaults: Box::default(),
-            associated: Box::default(),
+            generics: None,
         }
     }
 
@@ -376,8 +394,12 @@ impl Definition {
             shape: (!matches!(shape.as_ref(), Shape::Opaque)).then_some(shape),
             projections: Box::default(),
             exact_arity: true,
-            defaults,
-            associated: Box::default(),
+            generics: (!defaults.is_empty()).then(|| {
+                Box::new(Generics {
+                    defaults,
+                    associated: Box::default(),
+                })
+            }),
         })
     }
 
@@ -417,8 +439,10 @@ impl Definition {
     /// Return each parameter's default type, by position. A parameter past
     /// the end has none.
     #[must_use]
-    pub const fn defaults(&self) -> &[Option<host::type_ref::Type>] {
-        &self.defaults
+    pub fn defaults(&self) -> &[Option<host::type_ref::Type>] {
+        self.generics
+            .as_ref()
+            .map_or(&[], |generics| &generics.defaults)
     }
 
     /// Return the capabilities explicitly promised by the host.
@@ -465,7 +489,9 @@ impl Definition {
 
     #[cfg(feature = "rust-import")]
     pub(crate) fn with_associated(mut self, associated: Box<[Associated]>) -> Self {
-        self.associated = associated;
+        if !associated.is_empty() {
+            self.generics.get_or_insert_default().associated = associated;
+        }
         self
     }
 
@@ -474,7 +500,9 @@ impl Definition {
     /// opaque type binds it.
     #[cfg(feature = "rust-import")]
     pub(crate) fn associated(&self, trait_identity: &[u8; 32], name: &str) -> Option<usize> {
-        self.associated
+        self.generics
+            .as_ref()?
+            .associated
             .iter()
             .find(|(identity, known, _)| identity == trait_identity && known.as_str() == name)
             .map(|(_, _, position)| *position)
@@ -500,7 +528,7 @@ impl Definition {
             && self.shape == other.shape
             && self.projections == other.projections
             && self.exact_arity == other.exact_arity
-            && self.defaults == other.defaults
+            && self.defaults() == other.defaults()
     }
 
     pub(crate) fn contract(&self) -> Contract {
@@ -1115,7 +1143,7 @@ mod layout_tests {
     #[test]
     fn imported_shape_metadata_stays_compact() {
         assert_eq!(size_of::<Option<Shared<Shape>>>(), size_of::<usize>());
-        assert_eq!(size_of::<Definition>(), 120);
+        assert_eq!(size_of::<Definition>(), 112);
         assert!(size_of::<Contract>() <= 88);
     }
 }

@@ -136,3 +136,14 @@ fn an_uncallable_named_callable_parameter_leaves_the_crate_importable() {
 fn an_opaque_types_members_import() {
     runs_as_cargo_does("opaque", "7\nvalue 8\n");
 }
+
+/// A crate's trait impl on a type with a const parameter, as palette's
+/// `impl<T> Lookup<u8, T> for ArrayTable<256>` is, leaves the crate
+/// importable: no facade type writes a const argument, so the impl's header
+/// is left out. An impl on `Hsl`, which rustc reads as `Hsl<Srgb>`, keeps
+/// its header with the default filled in. The const one used to give
+/// `Table` no arguments and stop the import.
+#[test]
+fn a_trait_impl_on_a_const_argument_leaves_the_crate_importable() {
+    runs_as_cargo_does("table", "3\n");
+}
