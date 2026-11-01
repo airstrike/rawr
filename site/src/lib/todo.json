@@ -5,7 +5,13 @@
   "examples": {"running":15,"total":56,"note":"15 pass rawr check with 0.3.57 (2026-11-01); the rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Type errors name a crate's types by a path the program can write, such as `iced::widget::Slider` or `iced_core::text::Span<u64>`, never by rawr's internal crate paths. A crate function item's parameters print as rustc writes them.","issues":[563]},
+        {"text":"A crate call rawr can't build yet is reported at the call, naming the item, instead of with no location in rawr's terms. A generic function whose type parameter rustc would infer from a later use names that parameter and the turbofish to write.","issues":[565]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.59",
@@ -1246,7 +1252,7 @@
     {"issue":560,"title":"Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer"},
     {"issue":561,"title":"rawr panics where a crate signature names a type its bindings don't declare","state":"closed","category":"No glue (D593)","release":"0.3.59"},
     {"issue":562,"title":"rawr panics on a use whose span isn't in its source's text","state":"closed","category":"No glue (D593)","release":"0.3.59"},
-    {"issue":563,"title":"Type errors still print rawr's internal crate paths","state":"open","category":"Divergences from rustc"},
+    {"issue":563,"title":"Type errors still print rawr's internal crate paths","state":"closed","category":"Divergences from rustc"},
     {"issue":564,"title":"column! with an Option<widget> has no _boxed","state":"open","category":"No glue (D593)"},
     {"issue":565,"title":"Importer messages about overloads and surface instances name rawr's machinery","state":"open","category":"Divergences from rustc"},
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"open","category":"No glue (D593)"},
@@ -1260,7 +1266,11 @@
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"},
-    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
+    {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"open","category":"No glue (D593)"},
+    {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)"},
+    {"issue":581,"title":"Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

@@ -563,7 +563,7 @@
     {"t":"T560","issue":560,"title":"T560: Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
     {"t":"T561","issue":561,"title":"T561: rawr panics where a crate signature names a type its bindings don't declare","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":"a415faccc","release":"0.3.59"},
     {"t":"T562","issue":562,"title":"T562: rawr panics on a use whose span isn't in its source's text","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"a415faccc","release":"0.3.59"},
-    {"t":"T563","issue":563,"title":"T563: Type errors still print rawr's internal crate paths","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T563","issue":563,"title":"T563: Type errors still print rawr's internal crate paths","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":"6be2f0852","release":null},
     {"t":"T564","issue":564,"title":"T564: column! with an Option<widget> has no _boxed","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T565","issue":565,"title":"T565: Importer messages about overloads and surface instances name rawr's machinery","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
     {"t":"T566","issue":566,"title":"T566: iced's advanced Shell is named with no type argument","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -577,6 +577,10 @@
     {"t":"T574","issue":574,"title":"T574: Check the engine under Miri's Stacked Borrows","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T575","issue":575,"title":"T575: Say why a caller frame has no bindings to read","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T576","issue":576,"title":"T576: imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":null,"release":null}
+    {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":null,"release":null},
+    {"t":"T578","issue":578,"title":"T578: Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T579","issue":579,"title":"T579: palette's inherent new_srgb functions land on the wrong owner type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T581","issue":581,"title":"T581: Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
