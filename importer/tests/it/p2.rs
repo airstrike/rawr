@@ -71,19 +71,16 @@ fn request(root: &Path, limits: &Limits) -> Request {
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("facade_a", &fixture)
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the first facade alias is exact"),
         )
-        .expect("the first facade dependency fits the request")
         .dependency(
             Dependency::path("facade_b", &fixture)
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the second facade alias is exact"),
         )
-        .expect("the second facade dependency fits the request")
         .build()
         .expect("the P2 request seals")
 }

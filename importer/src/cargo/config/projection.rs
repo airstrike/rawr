@@ -125,7 +125,7 @@ impl Projection {
     ) -> Result<Self> {
         let mut values = BTreeMap::<String, Option<Box<str>>>::new();
         for key in STATIC_KEYS {
-            insert_environment(&mut values, environment, key)?;
+            insert_environment(&mut values, environment, key);
         }
         let mut platforms = [toolchain::HOST, target];
         platforms.sort_unstable();
@@ -134,7 +134,7 @@ impl Projection {
             let platform = component(platform);
             for suffix in TARGET_SUFFIXES {
                 let key = derived_key("CARGO_TARGET_", &platform, "_", suffix);
-                insert_environment(&mut values, environment, &key)?;
+                insert_environment(&mut values, environment, &key);
             }
         }
         let profile_component = component(profile);
@@ -163,7 +163,7 @@ impl Projection {
         }
         for suffix in PROFILE_SUFFIXES {
             let key = derived_key("CARGO_PROFILE_", &profile_component, "_", suffix);
-            insert_environment(&mut values, environment, &key)?;
+            insert_environment(&mut values, environment, &key);
         }
         for suffix in BUILD_OVERRIDE_SUFFIXES {
             let key = derived_key(
@@ -172,23 +172,23 @@ impl Projection {
                 "_BUILD_OVERRIDE_",
                 suffix,
             );
-            insert_environment(&mut values, environment, &key)?;
+            insert_environment(&mut values, environment, &key);
         }
 
-        insert_derived(&mut values, "CARGO_INCREMENTAL", "0")?;
+        insert_derived(&mut values, "CARGO_INCREMENTAL", "0");
         insert_derived(
             &mut values,
             "rawr.context.cargo_commit",
             toolchain::supported_cargo_commit(),
-        )?;
+        );
         insert_derived(
             &mut values,
             "rawr.context.rustc_commit",
             toolchain::supported_rustc_commit(),
-        )?;
-        insert_derived(&mut values, "rawr.context.host", toolchain::HOST)?;
-        insert_derived(&mut values, "rawr.context.target", target)?;
-        insert_derived(&mut values, "rawr.context.profile", profile)?;
+        );
+        insert_derived(&mut values, "rawr.context.host", toolchain::HOST);
+        insert_derived(&mut values, "rawr.context.target", target);
+        insert_derived(&mut values, "rawr.context.profile", profile);
         for (key, value) in [
             (
                 "rawr.context.parallelism_schema",
@@ -231,7 +231,7 @@ impl Projection {
                 cargo::formatted(format_args!("3"))?,
             ),
         ] {
-            insert_derived(&mut values, key, &value)?;
+            insert_derived(&mut values, key, &value);
         }
 
         let mut entries = Vec::with_capacity(values.len());
@@ -371,9 +371,9 @@ fn insert_environment(
     values: &mut BTreeMap<String, Option<Box<str>>>,
     environment: &Environment,
     key: &str,
-) -> Result<()> {
+) {
     let value = environment.value(key).map(|value| keyed_value(key, value));
-    insert(values, key, value.as_deref())
+    insert(values, key, value.as_deref());
 }
 
 /// The value one environment variable contributes to keys and projections.
@@ -445,31 +445,21 @@ fn resolved(candidate: &std::path::Path) -> Option<(std::path::PathBuf, [u8; 32]
     Some((path, digest))
 }
 
-fn insert_derived(
-    values: &mut BTreeMap<String, Option<Box<str>>>,
-    key: &str,
-    value: &str,
-) -> Result<()> {
-    insert(values, key, Some(value))
+fn insert_derived(values: &mut BTreeMap<String, Option<Box<str>>>, key: &str, value: &str) {
+    insert(values, key, Some(value));
 }
 
-fn insert(
-    values: &mut BTreeMap<String, Option<Box<str>>>,
-    key: &str,
-    value: Option<&str>,
-) -> Result<()> {
+/// An environment key read twice has one value, and no derived key is an
+/// environment variable's name, so a key never meets a different value.
+fn insert(values: &mut BTreeMap<String, Option<Box<str>>>, key: &str, value: Option<&str>) {
     if let Some(previous) = values.get(key) {
-        return if previous.as_deref() == value {
-            Ok(())
-        } else {
-            Err(Error::Request {
-                reason: format!("the environment gives Cargo's `{key}` two different values")
-                    .into_boxed_str(),
-            })
-        };
+        assert!(
+            previous.as_deref() == value,
+            "Cargo's `{key}` has one value in the projection"
+        );
+        return;
     }
     values.insert(key.to_owned(), value.map(Box::from));
-    Ok(())
 }
 
 fn component(value: &str) -> String {

@@ -68,13 +68,11 @@ fn request(root: &Path, limits: &Limits) -> Request {
         .expect("the P4 request builder seals")
         .environment(environment)
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits")
         .dependency(
             Dependency::path("generic", &fixture)
                 .and_then(|dependency| dependency.package("generic-api"))
                 .expect("the generic facade alias is exact"),
         )
-        .expect("the generic dependency fits")
         .build()
         .expect("the P4 request seals")
 }

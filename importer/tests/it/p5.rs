@@ -331,13 +331,11 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
         .expect("the P5 request builder seals")
         .environment(environment)
         .policy(extract::Policy::manifest().seal())
-        .expect("the manifest policy fits")
         .dependency(
             Dependency::path("clock", &fixture)
                 .and_then(|dependency| dependency.package("profile-clock"))
                 .expect("the profile anchor alias is exact"),
         )
-        .expect("the profile dependency fits")
         .build()
         .expect("the P5 request seals")
 }

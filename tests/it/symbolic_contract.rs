@@ -308,16 +308,14 @@ fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str
     let mut builder = Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(extract::Policy::manifest(limits).seal())
-        .expect("the manifest policy fits the request")
+        .policy(extract::Policy::manifest().seal())
         .dependency(
             Dependency::path("app", &rust_fixture("demand-api"))
                 .and_then(|dependency| dependency.package("demand-api"))
                 .expect("the demand fixture selection is exact"),
-        )
-        .expect("the fixture dependency fits the request");
+        );
     for path in demand {
-        builder = builder.demand(path.split("::")).expect("the demanded path fits the request");
+        builder = builder.demand(path.split("::"));
     }
     builder
         .build()
@@ -336,16 +334,14 @@ fn reexport_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&s
     let mut builder = Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(extract::Policy::manifest(limits).seal())
-        .expect("the manifest policy fits the request")
+        .policy(extract::Policy::manifest().seal())
         .dependency(
             Dependency::path("outer", &rust_fixture("outer-api"))
                 .and_then(|dependency| dependency.package("outer-api"))
                 .expect("the re-exporting fixture selection is exact"),
-        )
-        .expect("the fixture dependency fits the request");
+        );
     if !demand.is_empty() {
-        builder = builder.demand(demand.iter().copied()).expect("the demanded path fits the request");
+        builder = builder.demand(demand.iter().copied());
     }
     builder
         .build()
@@ -373,20 +369,17 @@ fn request(root: &Path, limits: &Limits) -> Request {
     Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(extract::Policy::manifest(limits).seal())
-        .expect("the manifest policy fits the request")
+        .policy(extract::Policy::manifest().seal())
         .dependency(
             Dependency::path("fixture", &rust_fixture("symbolic-api"))
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the real Rust fixture selection is exact"),
         )
-        .expect("the fixture dependency fits the request")
         .dependency(
             Dependency::path("fixture_b", &rust_fixture("symbolic-api"))
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the second Rust fixture alias is exact"),
         )
-        .expect("the second fixture alias fits the request")
         .build()
         .expect("the fixture request seals")
 }

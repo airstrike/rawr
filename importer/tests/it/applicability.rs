@@ -70,20 +70,17 @@ fn capture(root: &Path, selected: &[&str], native: &Native, limits: &Limits) -> 
         .unwrap()
         .inventory()
         .environment(environment)
-        .policy(Policy::manifest().seal())
-        .unwrap();
+        .policy(Policy::manifest().seal());
     for name in selected {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
             .join(format!("applicability-{name}"));
-        builder = builder
-            .dependency(
-                Dependency::path(&format!("facts_{name}"), &path)
-                    .unwrap()
-                    .package(&format!("facts-{name}"))
-                    .unwrap(),
-            )
-            .unwrap();
+        builder = builder.dependency(
+            Dependency::path(&format!("facts_{name}"), &path)
+                .unwrap()
+                .package(&format!("facts-{name}"))
+                .unwrap(),
+        );
     }
     Acquired::capture(builder.build().unwrap(), native, limits)
         .expect("the independent intrinsic domain authenticates")

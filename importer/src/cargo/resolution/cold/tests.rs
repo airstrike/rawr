@@ -134,15 +134,12 @@ impl Fixture {
             .expect("request builder seals")
             .environment(environment)
             .cargo_authority(&authority.join("Cargo.toml"))
-            .expect("the separate Cargo authority is selected")
             .policy(crate::extract::Policy::manifest().seal())
-            .expect("policy fits")
             .dependency(
                 config::Dependency::path("catalog", &dependency)
                     .and_then(|dependency| dependency.package("catalog-api"))
                     .expect("dependency seals"),
             )
-            .expect("dependency fits")
             .build()
             .expect("the real request seals")
     }

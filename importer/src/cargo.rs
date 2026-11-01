@@ -2386,19 +2386,19 @@ impl Builder {
     }
 
     /// Select the one explicit Cargo manifest authority.
-    pub fn cargo_authority(mut self, manifest: &Path) -> Result<Self> {
+    pub fn cargo_authority(mut self, manifest: &Path) -> Self {
         self.cargo_authority = Some(manifest.to_path_buf());
-        Ok(self)
+        self
     }
 
     /// Select a supported target triple instead of the pinned host.
-    pub fn target(mut self, target: &str) -> Result<Self> {
+    pub fn target(mut self, target: &str) -> Self {
         self.target = Some(target.into());
-        Ok(self)
+        self
     }
 
     /// Select one Cargo profile from the authority copied into the harness.
-    pub fn profile(mut self, profile: &str) -> Result<Self> {
+    pub fn profile(mut self, profile: &str) -> Self {
         let valid = profile.bytes().enumerate().all(|(index, byte)| {
             byte.is_ascii_alphanumeric() || byte == b'_' || index > 0 && byte == b'-'
         });
@@ -2407,24 +2407,24 @@ impl Builder {
             "rawr selects only Cargo profile names, never `{profile}`"
         );
         self.profile = profile.into();
-        Ok(self)
+        self
     }
 
     /// Add one dependency with a final graph role.
-    pub fn dependency(mut self, dependency: config::Dependency) -> Result<Self> {
+    pub fn dependency(mut self, dependency: config::Dependency) -> Self {
         self.dependencies.push(dependency);
-        Ok(self)
+        self
     }
 
     /// Bind one preselected framework resolution universe to this request.
     #[doc(hidden)]
-    pub fn resolution_universe(mut self, universe: universe::Catalog) -> Result<Self> {
+    pub fn resolution_universe(mut self, universe: universe::Catalog) -> Self {
         assert!(
             self.universe.is_none(),
             "a request selects one resolution universe"
         );
         self.universe = Some(universe);
-        Ok(self)
+        self
     }
 
     /// Demand one Rust path Rawr names, root alias first. A
@@ -2434,7 +2434,7 @@ impl Builder {
     /// tables), by the same probe against the existing metadata. Paths
     /// through wholesale crate re-exports (`pub use other_crate;`) resolve
     /// the same way. Order and duplicates do not matter.
-    pub fn demand<'a>(mut self, path: impl IntoIterator<Item = &'a str>) -> Result<Self> {
+    pub fn demand<'a>(mut self, path: impl IntoIterator<Item = &'a str>) -> Self {
         let mut segments = Vec::new();
         for segment in path {
             assert!(
@@ -2448,13 +2448,13 @@ impl Builder {
             "a demanded Rust path names an item below a crate"
         );
         self.demand.insert(segments.into_boxed_slice());
-        Ok(self)
+        self
     }
 
     /// Bind the exact Rawr-manifest exclusion policy to this request.
-    pub fn policy(mut self, policy: crate::extract::Policy) -> Result<Self> {
+    pub fn policy(mut self, policy: crate::extract::Policy) -> Self {
         self.policy = Some(policy);
-        Ok(self)
+        self
     }
 
     /// Promote loose request fields into canonical path/config/authority proof.
@@ -4846,13 +4846,11 @@ mod universe_placement_tests {
                 .expect("request builder seals")
                 .environment(config::Environment::capture().expect("environment captures"))
                 .policy(crate::extract::Policy::manifest().seal())
-                .expect("policy fits")
                 .dependency(
                     config::Dependency::path("catalog", &dependency)
                         .and_then(|dependency| dependency.package("catalog-api"))
                         .expect("catalog dependency seals"),
                 )
-                .expect("dependency fits")
                 .build()
         };
         for cache in [link.join("target/rawr/cache"), project.cache()] {
@@ -4937,9 +4935,7 @@ mod universe_placement_tests {
             .expect("request builder seals")
             .environment(config::Environment::capture().expect("environment captures"))
             .policy(crate::extract::Policy::manifest().seal())
-            .expect("policy fits")
             .dependency(dependency)
-            .expect("dependency fits")
             .build()
             .expect("request seals")
     }
@@ -5045,22 +5041,21 @@ mod universe_placement_tests {
                 format!("[workspace]\nresolver = \"3\"\n{profile}"),
             )
             .expect("authority manifest writes");
+            let catalog = fs::canonicalize(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/catalog-api"),
+            )
+            .expect("catalog fixture canonicalizes");
             let request = Request::builder(&project.0, &project.cache(), &limits)
                 .expect("request builder seals")
                 .environment(config::Environment::capture().expect("environment captures"))
                 .policy(crate::extract::Policy::manifest().seal())
-                .and_then(|builder| {
-                    let catalog = fs::canonicalize(
-                        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                            .join("tests/fixtures/catalog-api"),
-                    )
-                    .expect("catalog fixture canonicalizes");
-                    builder.dependency(
-                        config::Dependency::path("catalog", &catalog)?.package("catalog-api")?,
-                    )
-                })
-                .and_then(|builder| builder.cargo_authority(&authority))
-                .and_then(|builder| builder.build())
+                .dependency(
+                    config::Dependency::path("catalog", &catalog)
+                        .and_then(|dependency| dependency.package("catalog-api"))
+                        .expect("the catalog dependency seals"),
+                )
+                .cargo_authority(&authority)
+                .build()
                 .expect("request seals");
             let provisional = render_manifest(&request, None).expect("provisional");
             let key = versioned_request_identity(&request, &definition(), &provisional);
@@ -5219,16 +5214,14 @@ mod universe_placement_tests {
             "https://example.invalid/catalog",
             config::GitReference::Tag("v1.2.0".into()),
         )
-        .and_then(|dependency| dependency.git_version("1.2"))
+        .map(|dependency| dependency.git_version("1.2"))
         .and_then(|dependency| dependency.package("catalog-api"))
         .expect("Cargo accepts `version` beside `git`");
         let request = Request::builder(&project.0, &project.cache(), &limits)
             .expect("request builder seals")
             .environment(config::Environment::capture().expect("environment captures"))
             .policy(crate::extract::Policy::manifest().seal())
-            .expect("policy fits")
             .dependency(dependency)
-            .expect("dependency fits")
             .build()
             .expect("request seals");
         let manifest = render_manifest(&request, None).expect("manifest renders");

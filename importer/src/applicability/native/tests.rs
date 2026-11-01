@@ -140,21 +140,18 @@ fn request(
     let mut builder = Request::builder(&root, &root.join("target/rawr/cache"), limits)
         .unwrap()
         .environment(environment)
-        .policy(Policy::manifest().seal())
-        .unwrap();
+        .policy(Policy::manifest().seal());
     if inventory {
         builder = builder.inventory();
     }
     for name in selected {
         let path: PathBuf = fixtures.join(format!("applicability-{name}"));
-        builder = builder
-            .dependency(
-                Dependency::path(&format!("facts_{name}"), &path)
-                    .unwrap()
-                    .package(&format!("facts-{name}"))
-                    .unwrap(),
-            )
-            .unwrap();
+        builder = builder.dependency(
+            Dependency::path(&format!("facts_{name}"), &path)
+                .unwrap()
+                .package(&format!("facts-{name}"))
+                .unwrap(),
+        );
     }
     builder.build().unwrap()
 }
