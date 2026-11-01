@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A dependency resolution whose inputs change while `rawr check` uses it is rebuilt and the check continues, instead of failing with "invalid stored baseline". (#609)
+- A rawr store missing one of its directories is cleared and rebuilt the next time it opens, instead of failing every check. (#584)
 
 ## 0.3.67 (2026-11-01)
 
