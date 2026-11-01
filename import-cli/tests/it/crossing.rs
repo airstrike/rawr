@@ -478,6 +478,26 @@ fn a_parameter_of_a_trait_over_fn_takes_any_type_that_implements_it() {
     );
 }
 
+/// iced's `.theme(|state| ..)`, `.subscription(|state| ..)` and
+/// `.scale_factor(|_: &State| 2.0)`, and an update closure: closures whose
+/// inputs borrow the program's own state, `&State` and `&mut State`, cross
+/// as the state's methods do. The update
+/// changes the state in place, and the theme and subscription read it.
+/// The output is `cargo run`'s.
+#[test]
+fn closures_that_borrow_the_programs_state_cross_as_its_methods_do() {
+    let (rawr, cargo) = both_printed("crossing-closures", "closures.rs", "Dark,Dark");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("update Ticked(2) after 1")
+            && rawr.contains("1 theme Light")
+            && rawr.contains("update Toggled(true) after 3")
+            && rawr.contains("2 theme Dark")
+            && rawr.contains("2 scale 2"),
+        "{rawr}"
+    );
+}
+
 /// iced's stopwatch: the crate's `time` re-exports std's `Duration` and
 /// `Instant`, and the script imports them through it and writes
 /// `time::Duration` through the module. `time::every(milliseconds(10))`

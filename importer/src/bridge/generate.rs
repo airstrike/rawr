@@ -11236,7 +11236,29 @@ fn render_callable_closure(
     let mut parameters = Vec::new();
     let mut values = Vec::new();
     let mut places = Vec::new();
+    let mut lent = Vec::new();
+    let mut restores = String::new();
     for (position, input) in inputs.iter().enumerate() {
+        // A borrow of a script value, as `.theme(|state| ..)` takes the
+        // program's `&State`: lent by its handle, as a slot lends it, and
+        // `&mut` as the closure's own place, given back after the call.
+        if let convert::Type::Borrowed { mutable, ty } = input
+            && matches!(**ty, convert::Type::Script { .. })
+        {
+            let rust = concrete_type(ty).ok_or_else(|| request::drift("closure input type"))?;
+            if *mutable {
+                parameters.push(format!("input_{position}: &mut {rust}"));
+                values.push(format!("input_{position}.0.lend_mut()"));
+                lent.push(position.to_string());
+                restores.push_str(&format!(
+                    "\n            input_{position}.0.restore(std::mem::take(&mut values[{position}]));"
+                ));
+            } else {
+                parameters.push(format!("input_{position}: &{rust}"));
+                values.push(format!("input_{position}.0.lend()"));
+            }
+            continue;
+        }
         let rust = concrete_type(input).ok_or_else(|| request::drift("closure input type"))?;
         parameters.push(format!("input_{position}: {rust}"));
         if let convert::Type::Borrowed { mutable, ty } = input
@@ -11290,6 +11312,7 @@ fn render_callable_closure(
         .iter()
         .filter(|(_, mutable, _)| *mutable)
         .map(|(at, _, _)| at.to_string())
+        .chain(lent)
         .collect::<Vec<_>>();
     let call = if mutable.is_empty() {
         call.to_owned()
@@ -11330,7 +11353,7 @@ fn render_callable_closure(
     } else {
         ""
     };
-    let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
+    let body = format!("{call_arena}let mut values = {values};\n            let value = {call}.unwrap_or_else(|error| panic!(\"{{}}\", __rawr_internal::future::message(&error)));{restores}\n            {converted}.unwrap_or_else(|error| panic!(\"rawr: a closure gave back a value native code can't take: {{error:?}}\"))");
     let body = place::around(&places, "witnesses.clone()", body);
     Ok(format!(
         "{{\n        let callable = __rawr_internal::future::Callable::new({source})\n            .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}\n        move |{}| -> {rust} {{\n            {body}\n        }}\n    }}",
@@ -13888,8 +13911,11 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
             ..
         } => Some(format!("[{}]", concrete_type(element)?)),
         convert::Type::Builtin(convert::Builtin::Str) => Some("str".to_owned()),
-        // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives.
-        convert::Type::Nominal { .. } | convert::Type::Builtin(_) => concrete_type(ty),
+        // A closure's `&S`, as pane_grid's `view(pane, &state, ..)` gives,
+        // or `&State` of the program's own, as `.theme(|state| ..)` takes.
+        convert::Type::Nominal { .. }
+        | convert::Type::Builtin(_)
+        | convert::Type::Script { .. } => concrete_type(ty),
         _ => None,
     }
 }

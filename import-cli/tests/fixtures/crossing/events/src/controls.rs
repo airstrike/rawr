@@ -274,6 +274,10 @@ pub trait Program {
     fn theme(&self, _state: &Self::State) -> Option<Theme> {
         None
     }
+    /// The scale factor of the state.
+    fn scale_factor(&self, _state: &Self::State) -> f32 {
+        1.0
+    }
 }
 
 /// The look of a program, as iced's `Theme`.
@@ -345,6 +349,50 @@ where
 
     fn theme(&self, state: &Self::State) -> Option<Theme> {
         self.theme.theme(state)
+    }
+}
+
+/// `program` at the scale factor `scale_factor` gives its state.
+struct WithScaleFactor<P, F> {
+    program: P,
+    scale_factor: F,
+}
+
+impl<P, F> Program for WithScaleFactor<P, F>
+where
+    P: Program,
+    F: Fn(&P::State) -> f32,
+{
+    type State = P::State;
+    type Message = P::Message;
+
+    fn boot(&self) -> (Self::State, crate::Task<Self::Message>) {
+        self.program.boot()
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message> {
+        self.program.update(state, message)
+    }
+
+    fn view(
+        &self,
+        state: &Self::State,
+        label: &str,
+        labels: &mut Vec<String>,
+    ) -> Option<Self::Message> {
+        self.program.view(state, label, labels)
+    }
+
+    fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+        self.program.subscription(state)
+    }
+
+    fn theme(&self, state: &Self::State) -> Option<Theme> {
+        self.program.theme(state)
+    }
+
+    fn scale_factor(&self, state: &Self::State) -> f32 {
+        (self.scale_factor)(state)
     }
 }
 
@@ -593,6 +641,21 @@ impl<P: Program> Application<P> {
         }
     }
 
+    /// The application at the scale factor `f` gives its state, as iced's
+    /// `Application::scale_factor`.
+    pub fn scale_factor(
+        self,
+        f: impl Fn(&P::State) -> f32,
+    ) -> Application<impl Program<State = P::State, Message = P::Message>> {
+        Application {
+            program: WithScaleFactor {
+                program: self.program,
+                scale_factor: f,
+            },
+            fonts: self.fonts,
+        }
+    }
+
     /// The application with `fonts` loaded.
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
@@ -637,6 +700,10 @@ impl<P: Program> Application<P> {
             println!("{} view {}", event + 1, labels.join(" "));
             if let Some(theme) = self.program.theme(&state) {
                 println!("{} theme {theme:?}", event + 1);
+            }
+            let scale = self.program.scale_factor(&state);
+            if scale != 1.0 {
+                println!("{} scale {scale}", event + 1);
             }
             if let Some(message) = pressed {
                 println!("{} message {message:?}", event + 1);
