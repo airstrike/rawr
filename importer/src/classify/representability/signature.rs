@@ -96,6 +96,13 @@ pub struct Signature {
     /// Reader<&'a [u8]>`: the instance the bridge reaches it at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instance: Option<super::convert::Type>,
+    /// The trait a method of a trait impl is called through, at the impl's
+    /// arguments, when the impl has parameters its type doesn't name, as
+    /// `Renderer` of `impl<.., Renderer> Widget<Message, Theme, Renderer>
+    /// for Button<..>`: the method's own type can't fix them, and the trait
+    /// path names them, as `<_ as Widget<Part>>::map` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    through: Option<super::convert::Type>,
 }
 
 /// How an item's output borrows (D558 tier 1). The call opens a native
@@ -320,7 +327,21 @@ impl Signature {
             guard: None,
             scope: None,
             instance: None,
+            through: None,
         }
+    }
+
+    pub(crate) fn with_through(mut self, through: Option<super::convert::Type>) -> Self {
+        self.through = through;
+        self
+    }
+
+    /// The trait the method is called through, as a nominal type of the
+    /// trait's identity and its arguments other than `Self`, when its impl
+    /// has parameters its type doesn't name.
+    #[must_use]
+    pub const fn through(&self) -> Option<&super::convert::Type> {
+        self.through.as_ref()
     }
 
     pub(crate) fn with_instance(mut self, instance: Option<super::convert::Type>) -> Self {

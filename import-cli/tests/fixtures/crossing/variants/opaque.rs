@@ -3,7 +3,9 @@
 // one built from its parameter, and one from a `&'static str`, take no
 // lifetime from an input. A canvas behind `impl Widget<Curve>` is mapped,
 // and `column!` boxes the `Map` through the trait's own `boxed`, as `Map`'s
-// impl has parameters its type does not.
+// impl has parameters its type does not. A button behind `impl
+// Widget<Part>` is mapped too: its type is a `Widget` at any renderer, and
+// only the `impl Widget<Part>` fixes the one `map` is called at.
 
 use events::canvas::{self, Bounds, Event, Geometry, Pen};
 use events::widgets::{button, column, Framed, Widget};
@@ -19,6 +21,12 @@ enum Message {
     Increment,
     Decrement,
     Curve(Curve),
+    Part(Part),
+}
+
+#[derive(Debug, Clone)]
+enum Part {
+    Down,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +61,10 @@ fn decrement() -> impl Widget<Message> {
     button(label).on_press(Message::Decrement)
 }
 
+fn part() -> impl Widget<Part> {
+    button("Decrement").on_press(Part::Down)
+}
+
 fn bezier(value: i64) -> impl Widget<Curve> {
     canvas::canvas(Bezier { value })
 }
@@ -63,12 +75,14 @@ impl Counter {
             Message::Increment => self.value += 1,
             Message::Decrement => self.value -= 1,
             Message::Curve(Curve::Drawn(label)) => self.value += label.len() as i64,
+            Message::Part(Part::Down) => self.value -= 2,
         }
     }
 
     fn view(&self) -> impl Widget<Message> {
         column![
             increment(Message::Increment),
+            part().map(Message::Part),
             decrement(),
             bezier(self.value).map(Message::Curve),
         ]

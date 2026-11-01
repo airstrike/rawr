@@ -2198,6 +2198,20 @@ fn instance_surface_type(
             definition: rawr_import::surface::identity::Definition::instant(),
             arguments: Box::default(),
         },
+        // A script closure a crate value holds, as `Map<W, F, A>` does: the
+        // boxed closure `imported_surface_type` names, so a call on the
+        // value keys the adapter generated for it (T417).
+        Ty::Callable { inputs, output, .. }
+        | Ty::Fn { inputs, output }
+        | Ty::FnItem { inputs, output, .. }
+        | Ty::FnChoice { inputs, output, .. } => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::callable(),
+            arguments: inputs
+                .iter()
+                .chain([&**output])
+                .map(|ty| instance_surface_type(inference, models, ty))
+                .collect::<Option<_>>()?,
+        },
         // A shared borrow of a script value is its proxy, which shares it.
         Ty::Reference {
             mutable: false,

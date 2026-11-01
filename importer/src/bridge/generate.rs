@@ -5907,7 +5907,49 @@ fn render_source(
     sources.push((IMPLS_PATH.into(), impls));
     sources.push((PROXIES_PATH.into(), proxies));
     sources.push((SURFACE_PATH.into(), stamps));
+    // Each crate a type is named through (`hidden_spelling`), which the
+    // runner depends on as it does a macro's `$crate`.
+    for (path, source) in sources.iter() {
+        if **path == *BINDINGS_PATH {
+            continue;
+        }
+        for segment in hidden_segments(source) {
+            if !hidden.iter().any(|known| known.segment == segment)
+                && let Some(found) = hidden_crate(lock, &segment)
+            {
+                hidden.push(found);
+            }
+        }
+    }
     Ok(PROXY_CRATE.with_borrow(Clone::clone))
+}
+
+/// `path`, a root's path through a crate it reaches only as a macro's
+/// `$crate` does (`__rawr_crate_<name>_<id>`), from that crate, which the
+/// runner depends on under the segment's name: `::__rawr_crate_..::rest`.
+fn hidden_spelling(path: &str) -> Option<String> {
+    let segments = path.split("::").collect::<Vec<_>>();
+    let at = segments
+        .iter()
+        .position(|segment| segment.starts_with(crate::api::ledger::CRATE_SEGMENT))?;
+    (at + 1 < segments.len()).then(|| format!("::{}", segments[at..].join("::")))
+}
+
+/// Each `::__rawr_crate_<name>_<id>` crate a generated source names, once.
+fn hidden_segments(source: &[u8]) -> std::collections::BTreeSet<String> {
+    let marker = format!("::{}", crate::api::ledger::CRATE_SEGMENT);
+    let mut found = std::collections::BTreeSet::new();
+    let Ok(text) = std::str::from_utf8(source) else {
+        return found;
+    };
+    for (at, _) in text.match_indices(&marker) {
+        let segment = text[at + 2..]
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .next()
+            .unwrap_or_default();
+        found.insert(segment.to_owned());
+    }
+    found
 }
 
 /// The key a call of this adapter's instance carries, or zeros for an
@@ -7754,20 +7796,18 @@ fn render_adapter_body(
                         .unwrap_or_default();
                         write!(
                             output,
-                            "    let output{annotation} = lend(arguments.arena, || receiver.{}",
-                            plan.name()
+                            "    let output{annotation} = lend(arguments.arena, || "
                         )
                         .map_err(|_| request::Error::Encoding)?;
-                        render_item_turbofish(
+                        render_method_head(
+                            plan.name(),
+                            *receiver,
                             signature,
                             substitutions,
                             constants,
                             *container_parameters,
                             output,
                         )?;
-                        output
-                            .write_all(b"(")
-                            .map_err(|_| request::Error::Encoding)?;
                         argument_list(signature.inputs().len(), 1, output)?;
                         output
                             .write_all(b"));\n")
@@ -7850,20 +7890,18 @@ fn render_adapter_body(
                         } else {
                             write!(
                                 output,
-                                "    let output{annotation} = lend(arguments.arena, || receiver.{}",
-                                plan.name()
+                                "    let output{annotation} = lend(arguments.arena, || "
                             )
                             .map_err(|_| request::Error::Encoding)?;
-                            render_item_turbofish(
+                            render_method_head(
+                                plan.name(),
+                                *receiver,
                                 signature,
                                 substitutions,
                                 constants,
                                 *container_parameters,
                                 output,
                             )?;
-                            output
-                                .write_all(b"(")
-                                .map_err(|_| request::Error::Encoding)?;
                         }
                         argument_list(signature.inputs().len(), 1, output)?;
                         output
@@ -8412,15 +8450,16 @@ fn render_method_opening(
         &mut container,
     )?;
     let container = String::from_utf8(container).map_err(|_| request::Error::Encoding)?;
-    let mut call = format!("receiver.{}", plan.name()).into_bytes();
-    render_item_turbofish(
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
         signature,
         substitutions,
         constants,
         container_parameters,
         &mut call,
     )?;
-    call.write_all(b"(").map_err(encoding)?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
     let call = String::from_utf8(call).map_err(|_| request::Error::Encoding)?;
@@ -8579,25 +8618,27 @@ fn render_scoped_receiver(
     let Some(family) = container_family(path, &container) else {
         return Ok(());
     };
-    let mut call = format!("receiver.{}", plan.name()).into_bytes();
-    render_item_turbofish(
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
         signature,
         substitutions,
         constants,
         container_parameters,
         &mut call,
     )?;
-    call.write_all(b"(").map_err(encoding)?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
-    let mut call = format!("receiver.{}", plan.name()).into_bytes();
-    render_item_turbofish(
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        receiver,
         signature,
         substitutions,
         constants,
         container_parameters,
         &mut call,
     )?;
-    call.write_all(b"(").map_err(encoding)?;
     argument_list(signature.inputs().len(), 1, &mut call)?;
     call.write_all(b")").map_err(encoding)?;
     call.write_all(lent_copy(signature).as_bytes())
@@ -8687,15 +8728,16 @@ fn render_borrowed_receiver(
         }
         call
     } else {
-        let mut call = format!("receiver.{}", plan.name()).into_bytes();
-        render_item_turbofish(
+        let mut call = Vec::new();
+        render_method_head(
+            plan.name(),
+            receiver,
             signature,
             substitutions,
             constants,
             container_parameters,
             &mut call,
         )?;
-        call.write_all(b"(").map_err(encoding)?;
         call
     };
     argument_list(signature.inputs().len(), 1, &mut call)?;
@@ -12711,6 +12753,12 @@ thread_local! {
     /// The same, by identity.
     static TYPE_TRAITS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Lifetimes>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// Which of each named trait's type parameters other than `Self` have
+    /// a default, by the trait's identity: a path through the trait leaves
+    /// one the call doesn't fix to its default, as `impl Widget<Part>`
+    /// does.
+    static TRAIT_DEFAULTS: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[bool]>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// Each imported type's identity, by every Rust path it has.
     static PATH_IDENTITIES: std::cell::RefCell<std::collections::BTreeMap<String, [u8; 32]>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
@@ -13667,6 +13715,7 @@ impl TypePaths {
     /// An imported type that renders is an ordinary scoped type (D594).
     fn install(facade: Option<&crate::surface::facade::Plan>) -> Self {
         place::clear();
+        TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_PATHS.with_borrow_mut(|paths| {
             FACADE_VALUES.with_borrow_mut(|values| {
                 paths.clear();
@@ -13708,12 +13757,17 @@ impl TypePaths {
                         }
                     }
                 }
+                // A type the root reaches through no path, as iced's
+                // `core::widget::Map`, is named through the crate that
+                // defines it, which the runner depends on as a macro's
+                // `$crate` reaches it (`HiddenCrate`, T476).
                 for (owner, ty) in through {
                     let path = format!("{}::{}", owner.root(), ty.path());
                     let facade = *crate::surface::identity::Definition::facade(&path).as_bytes();
+                    let spelled = hidden_spelling(&path).unwrap_or_else(|| path.clone());
                     values.insert(facade);
-                    paths.entry(facade).or_insert_with(|| path.clone());
-                    paths.entry(*ty.identity()).or_insert(path);
+                    paths.entry(facade).or_insert_with(|| spelled.clone());
+                    paths.entry(*ty.identity()).or_insert(spelled);
                 }
             });
         });
@@ -13787,14 +13841,16 @@ impl TypePaths {
                                 types.entry(*ty.identity()).or_insert(lifetimes);
                             }
                             traits.entry(*ty.identity()).or_insert(lifetimes);
-                            paths
-                                .entry(format!("{}::{}", owner.root(), ty.path()))
-                                .or_insert(lifetimes);
-                            PATH_IDENTITIES.with_borrow_mut(|identities| {
-                                identities
-                                    .entry(format!("{}::{}", owner.root(), ty.path()))
-                                    .or_insert(*ty.identity());
-                            });
+                            // A type named through its crate is found at
+                            // that spelling too (`hidden_spelling`).
+                            let path = format!("{}::{}", owner.root(), ty.path());
+                            let spelled = hidden_spelling(&path);
+                            for path in [Some(path), spelled].into_iter().flatten() {
+                                paths.entry(path.clone()).or_insert(lifetimes);
+                                PATH_IDENTITIES.with_borrow_mut(|identities| {
+                                    identities.entry(path).or_insert(*ty.identity());
+                                });
+                            }
                         }
                     }
                     // An alias that passes its parameters on to a type, as
@@ -13828,6 +13884,11 @@ impl TypePaths {
             .flat_map(crate::surface::facade::Plan::facades)
         {
             for header in owner.trait_headers() {
+                TRAIT_DEFAULTS.with_borrow_mut(|defaults| {
+                    defaults
+                        .entry(*header.identity())
+                        .or_insert_with(|| header.defaults().iter().map(Option::is_some).collect());
+                });
                 let path = format!("{}::{}", owner.root(), header.path());
                 PATH_IDENTITIES.with_borrow_mut(|identities| {
                     identities.entry(path.clone()).or_insert(*header.identity());
@@ -13850,6 +13911,7 @@ impl Drop for TypePaths {
     fn drop(&mut self) {
         place::clear();
         TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
+        TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -14057,6 +14119,105 @@ fn borrowed_target(ty: &convert::Type) -> Option<String> {
         convert::Type::Nominal { .. } | convert::Type::Builtin(_) => concrete_type(ty),
         _ => None,
     }
+}
+
+/// The head of a method call on the adapter's `receiver`, through the
+/// `(` before its arguments: `receiver.name::<..>(`. A method of a trait
+/// impl whose parameters its type doesn't name, as `Renderer` of `impl<..,
+/// Renderer> Widget<Message, Theme, Renderer> for Button<..>`, is called
+/// through the trait at the arguments the call fixes, and its defaults for
+/// the rest, as the `impl Widget<Part>` a value is reads them (T428):
+/// `<_ as Widget<Part>>::map::<..>(receiver, `.
+#[allow(clippy::too_many_arguments)]
+fn render_method_head(
+    name: &str,
+    receiver: Receiver,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = |_| request::Error::Encoding;
+    let Some(through) = through_trait(signature, substitutions)? else {
+        write!(output, "receiver.{name}").map_err(encoding)?;
+        render_item_turbofish(
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            output,
+        )?;
+        return output.write_all(b"(").map_err(encoding);
+    };
+    write!(output, "<_ as {through}>::{name}").map_err(encoding)?;
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        output,
+    )?;
+    let lent = match receiver {
+        Receiver::Owned => "receiver",
+        Receiver::Shared => "&*receiver",
+        Receiver::Mutable => "&mut *receiver",
+    };
+    let separator = if signature.inputs().is_empty() {
+        ""
+    } else {
+        ", "
+    };
+    write!(output, "({lent}{separator}").map_err(encoding)
+}
+
+/// The trait a method is called through, at the arguments its call fixes
+/// (`signature::Signature::through`): one the call leaves open is `_`, and
+/// trailing ones the trait defaults are left to their defaults. `None` for
+/// a method called on its receiver, or a trait or argument with no Rust
+/// spelling.
+fn through_trait(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<String>, request::Error> {
+    let Some(convert::Type::Nominal {
+        definition,
+        arguments,
+    }) = signature.through()
+    else {
+        return Ok(None);
+    };
+    let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(definition.as_bytes()).cloned())
+    else {
+        return Ok(None);
+    };
+    let defaults = TRAIT_DEFAULTS
+        .with_borrow(|defaults| defaults.get(definition.as_bytes()).cloned())
+        .unwrap_or_default();
+    let mut written = Vec::new();
+    for argument in arguments {
+        let ty = substituted(argument, signature, substitutions)?;
+        written.push(match ty {
+            convert::Type::Inferred => None,
+            ty => match concrete_type(&ty) {
+                Some(rust) => Some(rust),
+                None => return Ok(None),
+            },
+        });
+    }
+    while written.last().is_some_and(Option::is_none)
+        && defaults.get(written.len() - 1).copied().unwrap_or(false)
+    {
+        written.pop();
+    }
+    if written.is_empty() {
+        return Ok(Some(path));
+    }
+    let written = written
+        .into_iter()
+        .map(|argument| argument.unwrap_or_else(|| "_".to_owned()))
+        .collect::<Vec<_>>();
+    Ok(Some(format!("{path}<{}>", written.join(", "))))
 }
 
 fn render_item_turbofish(
@@ -14628,6 +14789,33 @@ mod tests {
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
+
+    /// A type the root reaches through no path, as iced's
+    /// `core::widget::Map`, is spelled from the crate that defines it, and
+    /// the runner depends on each such crate its sources name (T476).
+    #[test]
+    fn a_type_no_root_path_reaches_is_named_through_its_crate() {
+        let segment = format!(
+            "{}iced_core_18998c4171898b8e",
+            crate::api::ledger::CRATE_SEGMENT
+        );
+        assert_eq!(
+            super::hidden_spelling(&format!("iced::{segment}::widget::Map")),
+            Some(format!("::{segment}::widget::Map"))
+        );
+        assert_eq!(super::hidden_spelling("iced::widget::Button"), None);
+        assert_eq!(super::hidden_spelling(&format!("iced::{segment}")), None);
+        let source = format!(
+            "type Of<'x> = ::{segment}::widget::Map<iced::widget::Button<'x>, F, A>;\n\
+             let m: ::{segment}::widget::Map<_, _, _> = x;"
+        );
+        assert_eq!(
+            super::hidden_segments(source.as_bytes())
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![segment]
+        );
+    }
 
     /// A script type in a generic item crosses as `rawr::Value`, by value,
     /// and comes back checked against the type it stands for (D513.2).
