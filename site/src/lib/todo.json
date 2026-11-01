@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.60",
+  "version": "0.3.61",
   "examples": {
     "running": 18,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Closures passed to iced's `canvas::Path::new` take the `&mut Builder` iced lends, once, so bezier_tool and arc pass `rawr check`.","issues":[583]},
-        {"text":"A crate's trait impl for std's `Option<T>`, `Result<T, E>` or `Vec<T>` is used as an impl for the crate's own type is, so `column![.., maybe.map(|x| slider(..))]` boxes an `Option` of a widget through the crate's `impl<T> Widget for Option<T>`.","issues":[589],"refs":[564]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.61",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"Closures passed to iced's `canvas::Path::new` take the `&mut Builder` iced lends, once, so bezier_tool and arc pass `rawr check`.","issues":[583]},
+          {"text":"A crate's trait impl for std's `Option<T>`, `Result<T, E>` or `Vec<T>` is used as an impl for the crate's own type is, so `column![.., maybe.map(|x| slider(..))]` boxes an `Option` of a widget through the crate's `impl<T> Widget for Option<T>`.","issues":[589],"refs":[564]}
+        ]
+      },
       {
         "version": "0.3.60",
         "date": "2026-11-01",
@@ -1286,13 +1288,13 @@
     {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)"},
     {"issue":581,"title":"Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc"},
     {"issue":582,"title":"An associated function's one-shot closure that takes a &mut borrow","state":"closed","category":"No glue (D593)"},
-    {"issue":583,"title":"bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)"},
+    {"issue":583,"title":"bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":584,"title":"A store missing its executions fails every check instead of rebuilding","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":585,"title":"Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"open","category":"No glue (D593)"},
     {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)"},
     {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"open","category":"No glue (D593)"},
-    {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"open","category":"No glue (D593)"}
+    {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"}
   ],
   "groups": [
     {
