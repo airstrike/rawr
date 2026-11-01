@@ -65,6 +65,42 @@ pub mod geometry {
 
     pub use path::Path;
 
+    /// What a program draws on, as iced_graphics's `geometry::Frame`.
+    pub struct Frame {
+        steps: Vec<String>,
+        depth: usize,
+    }
+
+    impl Frame {
+        /// An empty frame.
+        pub fn new() -> Self {
+            Frame {
+                steps: Vec::new(),
+                depth: 0,
+            }
+        }
+
+        /// Fills `shape` at the frame's current depth.
+        pub fn fill(&mut self, shape: &str) {
+            self.steps.push(format!("{shape}@{}", self.depth));
+        }
+
+        /// Runs `f` on the frame with its state saved, and restores it
+        /// after, as iced_graphics's `Frame::with_save(&mut self, f: impl
+        /// FnOnce(&mut Frame) -> R) -> R`.
+        pub fn with_save<R>(&mut self, f: impl FnOnce(&mut Frame) -> R) -> R {
+            self.depth += 1;
+            let result = f(self);
+            self.depth -= 1;
+            result
+        }
+
+        /// What the frame drew, in order.
+        pub fn steps(&self) -> String {
+            self.steps.join(",")
+        }
+    }
+
     /// A traced shape and what traces it, as iced_graphics's
     /// `geometry::path`.
     pub mod path {

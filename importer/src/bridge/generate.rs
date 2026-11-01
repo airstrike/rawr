@@ -8420,6 +8420,27 @@ fn render_borrowed_receiver(
     )?;
     let access = if mutable { "mutable" } else { "shared" };
     let borrow = if mutable { "&mut " } else { "&" };
+    // A method that calls a script closure back, as `Frame::with_save(&mut
+    // self, f: impl FnOnce(&mut Frame) -> R)` does, holds its receiver out
+    // of its slot and lends the arena while it runs, as a function does
+    // (D551.6), so the closure's own native calls reach the arena.
+    let calls_back = signature.inputs().iter().any(|ty| {
+        callable_parameter(ty, signature)
+            || matches!(ty, convert::Type::Option(inner) if callable_parameter(inner, signature))
+    });
+    let (arena_call, lent_call) = if calls_back {
+        (
+            format!(
+                "arguments.arena.held::<{container}, _>(receiver, |arena, receiver| lend(arena, || {call}))?"
+            ),
+            format!("lend(arguments.arena, || {call})"),
+        )
+    } else {
+        (
+            format!("arguments.arena.{access}::<{container}, _>(receiver, |receiver| {call})?"),
+            call.clone(),
+        )
+    };
     let mut taken = Vec::new();
     argument_list(signature.inputs().len(), 1, &mut taken)?;
     let taken = String::from_utf8(taken).map_err(request::unwritable)?;
@@ -8453,7 +8474,7 @@ fn render_borrowed_receiver(
             access(lent.nonce().bits(), &mut |receiver| {{
                 #[allow(irrefutable_let_patterns, unused_parens)]
                 if let Some({taken}) = taken.take() {{
-                    output = Some({call});
+                    output = Some({lent_call});
                 }}
             }})
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
@@ -8461,7 +8482,7 @@ fn render_borrowed_receiver(
         }}
         None => {{
             let receiver = native_handle(arguments, 0, false)?;
-            arguments.arena.{access}::<{container}, _>(receiver, |receiver| {call})?
+            {arena_call}
         }}
     }};"
     )
