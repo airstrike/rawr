@@ -19,6 +19,13 @@ pub struct Parameter {
     /// the call's argument fills it, and no turbofish names it (E0632).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     argument_impl: bool,
+    /// A `&str` fills it only at `'static`, as rustc requires of a literal
+    /// passed to iced's `title(impl Title<State>)`, which iced implements
+    /// for `&'static str`: by its `T: 'static` bound, or because its
+    /// trait's impl for a string reference is at `'static`. The string
+    /// lives for the program, as a literal does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    static_str: bool,
 }
 
 /// The name a signature declares an argument's `impl Trait` by. rustc names
@@ -330,7 +337,21 @@ impl Parameter {
             default: None,
             bounds: Box::new([]),
             argument_impl: false,
+            static_str: false,
         }
+    }
+
+    /// This parameter, which a `&str` fills only at `'static` when
+    /// `static_str`.
+    pub(crate) const fn with_static_str(mut self, static_str: bool) -> Self {
+        self.static_str = static_str;
+        self
+    }
+
+    /// Whether a `&str` fills it only at `'static`.
+    #[must_use]
+    pub const fn static_str(&self) -> bool {
+        self.static_str
     }
 
     /// This parameter as an argument's `impl Trait`, renamed so a

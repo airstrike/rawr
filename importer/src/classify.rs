@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 85;
+const CLASSIFIER_VERSION: u32 = 86;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6879,7 +6879,8 @@ impl<P: api::Phase> Context<'_, P> {
             .into_iter()
             .map(|parameter| {
                 let bounds = self.derivable_bounds(generics, parameter.index());
-                parameter.with_bounds(bounds)
+                let static_str = self.static_str_parameter(generics, parameter.index());
+                parameter.with_bounds(bounds).with_static_str(static_str)
             })
             .collect();
         if !futures.is_empty() {
@@ -7820,6 +7821,58 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// The derivable std traits the bounds on type parameter `index` name.
+    /// Whether a `&str` fills the type parameter at `index` only at
+    /// `'static`: its bounds say `T: 'static`, or one of its traits is
+    /// implemented for `&'static str`, as iced's `Title<State>` is. A
+    /// trait has at most one impl for a string reference, since two would
+    /// overlap, so that impl is the one a `&str` argument selects.
+    fn static_str_parameter(&self, generics: &model::Generics, index: u32) -> bool {
+        let declared = generics
+            .parameters()
+            .filter(|parameter| parameter.index() == index)
+            .flat_map(|parameter| match parameter.kind() {
+                model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            });
+        let mut predicated = Vec::new();
+        for predicate in generics.predicates() {
+            match predicate {
+                model::Predicate::Bound {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    bound,
+                } if *bounded == index => predicated.push(bound),
+                model::Predicate::TypeOutlives {
+                    ty: model::Type::Parameter { index: bounded, .. },
+                    lifetime: model::Lifetime::Static,
+                } if *bounded == index => return true,
+                _ => {}
+            }
+        }
+        declared.chain(predicated).any(|bound| {
+            let model::Bound::Trait {
+                trait_id,
+                polarity: model::Polarity::Positive,
+                ..
+            } = bound
+            else {
+                return false;
+            };
+            self.graph
+                .implementations_of(trait_id)
+                .any(|implementation| {
+                    implementation.polarity() == model::Polarity::Positive
+                        && matches!(
+                            implementation.self_type(),
+                            model::Type::Reference {
+                                lifetime: model::Lifetime::Static,
+                                ..
+                            }
+                        )
+                        && is_str_reference(implementation.self_type())
+                })
+        })
+    }
+
     fn derivable_bounds(&self, generics: &model::Generics, index: u32) -> Box<[Box<str>]> {
         let declared = generics
             .parameters()

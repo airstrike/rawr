@@ -278,6 +278,116 @@ pub trait Program {
     fn scale_factor(&self, _state: &Self::State) -> f32 {
         1.0
     }
+    /// The window's title for the state, if the program sets one.
+    fn title(&self, _state: &Self::State) -> Option<String> {
+        None
+    }
+}
+
+/// The title of a program's window, as iced's `Title<State>`: a string
+/// that lives for the program, or any `Fn(&State) -> String`.
+pub trait Title<State> {
+    /// The title for the state.
+    fn title(&self, state: &State) -> String;
+}
+
+impl<State> Title<State> for &'static str {
+    fn title(&self, _state: &State) -> String {
+        self.to_string()
+    }
+}
+
+impl<T, State> Title<State> for T
+where
+    T: Fn(&State) -> String,
+{
+    fn title(&self, state: &State) -> String {
+        self(state)
+    }
+}
+
+/// A font named by a string that lives for the program, as iced's
+/// `Font::with_name(&'static str)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Named {
+    name: &'static str,
+}
+
+impl Named {
+    /// The font named `name`.
+    pub fn with_name(name: &'static str) -> Self {
+        Self { name }
+    }
+
+    /// Its name's length.
+    pub fn len(&self) -> usize {
+        self.name.len()
+    }
+}
+
+/// A heading, which only a string that lives for the program is.
+pub trait Heading {
+    /// Its text.
+    fn text(&self) -> &'static str;
+}
+
+impl Heading for &'static str {
+    fn text(&self) -> &'static str {
+        self
+    }
+}
+
+/// The text of `heading`.
+pub fn heading(heading: impl Heading) -> &'static str {
+    heading.text()
+}
+
+/// `program` with the title `title` gives its state.
+struct WithTitle<P, F> {
+    program: P,
+    title: F,
+}
+
+impl<P, F> Program for WithTitle<P, F>
+where
+    P: Program,
+    F: Title<P::State>,
+{
+    type State = P::State;
+    type Message = P::Message;
+
+    fn boot(&self) -> (Self::State, crate::Task<Self::Message>) {
+        self.program.boot()
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Option<Self::Message> {
+        self.program.update(state, message)
+    }
+
+    fn view(
+        &self,
+        state: &Self::State,
+        label: &str,
+        labels: &mut Vec<String>,
+    ) -> Option<Self::Message> {
+        self.program.view(state, label, labels)
+    }
+
+    fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
+        self.program.subscription(state)
+    }
+
+    fn theme(&self, state: &Self::State) -> Option<Theme> {
+        self.program.theme(state)
+    }
+
+    fn scale_factor(&self, state: &Self::State) -> f32 {
+        self.program.scale_factor(state)
+    }
+
+    fn title(&self, state: &Self::State) -> Option<String> {
+        Some(self.title.title(state))
+    }
 }
 
 /// The look of a program, as iced's `Theme`.
@@ -350,6 +460,10 @@ where
     fn theme(&self, state: &Self::State) -> Option<Theme> {
         self.theme.theme(state)
     }
+
+    fn title(&self, state: &Self::State) -> Option<String> {
+        self.program.title(state)
+    }
 }
 
 /// `program` at the scale factor `scale_factor` gives its state.
@@ -393,6 +507,10 @@ where
 
     fn scale_factor(&self, state: &Self::State) -> f32 {
         (self.scale_factor)(state)
+    }
+
+    fn title(&self, state: &Self::State) -> Option<String> {
+        self.program.title(state)
     }
 }
 
@@ -507,6 +625,10 @@ where
 
     fn subscription(&self, state: &Self::State) -> Subscription<Self::Message> {
         (self.subscription)(state)
+    }
+
+    fn title(&self, state: &Self::State) -> Option<String> {
+        self.program.title(state)
     }
 }
 
@@ -656,6 +778,22 @@ impl<P: Program> Application<P> {
         }
     }
 
+    /// The application with the title `title` gives its state, as iced's
+    /// `Application::title`: a string that lives for the program, or a
+    /// function of the state.
+    pub fn title(
+        self,
+        title: impl Title<P::State>,
+    ) -> Application<impl Program<State = P::State, Message = P::Message>> {
+        Application {
+            program: WithTitle {
+                program: self.program,
+                title,
+            },
+            fonts: self.fonts,
+        }
+    }
+
     /// The application with `fonts` loaded.
     pub fn fonts(mut self, fonts: impl IntoIterator<Item = impl Into<Cow<'static, [u8]>>>) -> Self {
         self.fonts.extend(fonts.into_iter().map(Into::into));
@@ -713,6 +851,9 @@ impl<P: Program> Application<P> {
         let mut labels = Vec::new();
         let _ = self.program.view(&state, "", &mut labels);
         println!("last view {}", labels.join(" "));
+        if let Some(title) = self.program.title(&state) {
+            println!("named {title}");
+        }
     }
 }
 

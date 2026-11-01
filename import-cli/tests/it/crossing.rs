@@ -882,6 +882,60 @@ fn a_literal_names_the_public_field_rawr_cannot_hold() {
     );
 }
 
+/// fount's `.title("fount – system font")`: iced's `title(impl
+/// Title<State>)` is implemented for `&'static str`, so the literal lives
+/// for the program, as rustc's literals do. A view calls
+/// `Named::with_name(&'static str)` every frame, and a loop calls
+/// `heading(impl Heading)`, implemented for `&'static str` alone. Each
+/// site holds its literal once, with no copy (#667). The output is `cargo
+/// run`'s.
+#[test]
+fn a_literal_lent_for_the_program_lives_as_long_as_it() {
+    let (rawr, cargo) = both_printed("crossing-titled", "titled.rs", "Count,Count");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.starts_with("headings 42\n")
+            && rawr.contains("last view pad 0 <Count:0> \"2\" \"9\"\nnamed fount – system font"),
+        "{rawr}"
+    );
+}
+
+/// A local `String` borrowed where only a `&'static str` goes is rustc's
+/// E0597 at the borrow: by a `&'static str` input, and by a type
+/// parameter whose trait is implemented for `&'static str` (#667).
+#[test]
+fn a_borrowed_local_where_a_static_str_goes_does_not_live_long_enough() {
+    for (variant, at) in [
+        ("lent_name.rs", "main.rs:10:37-"),
+        ("lent_heading.rs", "main.rs:10:28-"),
+    ] {
+        let root = root("crossing-lent");
+        fs::copy(
+            root.join("variants").join(variant),
+            root.join("src/main.rs"),
+        )
+        .unwrap();
+        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", directory.join("rawr-home"))
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&check.stderr);
+        assert!(!check.status.success(), "{stderr}");
+        // rawr's own span, which runs to the borrow's end.
+        assert!(
+            stderr.contains("error[E0597]: `name` does not live long enough")
+                && stderr.contains(at),
+            "{variant}: {stderr}"
+        );
+    }
+}
+
 /// iced's clock: a crate type compared with a number, `rotation < 180.0`,
 /// through `PartialOrd<f32>`, whose impl writes only `partial_cmp`, so `<`
 /// is std's provided `lt`. The type is also `PartialOrd` with itself, and
