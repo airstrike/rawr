@@ -1586,7 +1586,7 @@
     {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"open","category":"No glue (D593)"},
     {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"open","category":"No glue (D593)"},
     {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
-    {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"open","category":"Health"},
+    {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"closed","category":"Health"},
     {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
     {"issue":642,"title":"An engine starts with no file, environment or process access","state":"closed","category":"Platforms","release":"0.3.79"},
     {"issue":643,"title":"std::fs::read, write and the usual whole-file functions","state":"closed","category":"Divergences from rustc","release":"0.3.79"},
@@ -1611,7 +1611,7 @@
     {"issue":662,"title":"A demand round finds every missing owner type at once","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.85"},
     {"issue":663,"title":"The project's compiler is queried once per run","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.85"},
     {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"closed","category":"Divergences from rustc","release":"0.3.87"},
-    {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
+    {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"closed","category":"Health"},
     {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"closed","category":"No glue (D593)","release":"0.3.86"},
     {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"closed","category":"Divergences from rustc","release":"0.3.87"},
@@ -1627,7 +1627,7 @@
     {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"open","category":"Divergences from rustc"},
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
-    {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"open","category":"Health"},
+    {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"closed","category":"Health"},
     {"issue":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":683,"title":"A module function taking a dependency's type checks","state":"open","category":"Divergences from rustc"},
     {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health"},
@@ -1640,7 +1640,10 @@
     {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"open","category":"Divergences from rustc"},
-    {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"}
+    {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
+    {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
+    {"issue":696,"title":"node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health"},
+    {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"}
   ],
   "groups": [
     {
