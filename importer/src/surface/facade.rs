@@ -3129,15 +3129,21 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 Selector::Function { .. } => ItemKind::Function,
                 Selector::AssociatedFunction { .. } => ItemKind::AssociatedFunction,
                 // A generic method Rawr calls at the types it infers: every
-                // parameter a type, or the one callable a script closure
-                // fills, as Freya's `on_press` takes (D551.6).
+                // parameter a type, the one callable a script closure fills,
+                // as Freya's `on_press` takes (D551.6), or a callable a
+                // script function fills by a slot, as `Frame::with_save(&mut
+                // self, f: impl FnOnce(&mut Frame) -> R)` takes (D594).
                 Selector::Method { .. }
-                    if (plan.class().is_none() || plan.call().is_some())
+                    if (plan.class().is_none()
+                        || plan.call().is_some()
+                        || !plan.crossings().is_empty())
                         && plan.signature().parameters().iter().all(|parameter| {
                             parameter.kind() == representability::signature::Kind::Type
                                 || plan
                                     .call()
-                                    .is_some_and(|call| call.parameter() == parameter.index())
+                                    .into_iter()
+                                    .chain(plan.crossings())
+                                    .any(|call| call.parameter() == parameter.index())
                         }) =>
                 {
                     match plan.receiver() {
