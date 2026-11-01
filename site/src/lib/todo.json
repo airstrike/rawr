@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr no longer keys any behaviour on iced's paths. Bounds, type paths, coercions and calls of iced items follow the same rules as any crate's.","issues":[587]},
+        {"text":"A method that lends its receiver to a closure, as `frame.with_save(|frame| ..)` does, runs, nested too.","issues":[586]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.64",
@@ -1315,8 +1321,8 @@
     {"issue":583,"title":"bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":584,"title":"A store missing its executions fails every check instead of rebuilding","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":585,"title":"Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","release":"0.3.60"},
-    {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"open","category":"No glue (D593)"},
-    {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)"},
+    {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"closed","category":"No glue (D593)"},
+    {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"closed","category":"No glue (D593)"},
     {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)"},
     {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)","release":"0.3.64"},
@@ -1325,7 +1331,12 @@
     {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"},
     {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)"},
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"open","category":"Divergences from rustc"},
-    {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"}
+    {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
+    {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"open","category":"No glue (D593)"},
+    {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
+    {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"open","category":"No glue (D593)"},
+    {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},
+    {"issue":601,"title":"Remove the runner's always-None event mapper","state":"open","category":"Importer"}
   ],
   "groups": [
     {
