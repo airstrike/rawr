@@ -512,8 +512,10 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         for (next, output) in revealed {
             match next {
                 Pending::Function(index) => {
-                    if let item::Kind::Function(definition) = &mut program.items[index].kind {
-                        definition.output = Some(output);
+                    if let item::Kind::Function(definition) = &mut program.items[index].kind
+                        && let Some(written) = definition.output.replace(output)
+                    {
+                        definition.lifetimes.written_output = Some(Box::new(written));
                     }
                 }
                 Pending::Method(index) => program.methods[index].reveal_output(output),
@@ -21385,6 +21387,11 @@ impl<'a> Parser<'a> {
             .imported_type_paths(identity, owner)?
             .collect::<Vec<_>>();
         let first = paths.first()?;
+        // `Trait::method(value)` the trait answers over its `Self`
+        // (`spliced_trait_call`) needs no member of the type's own.
+        if method && self.spliced_trait_member(member, member_span).is_some() {
+            return None;
+        }
         // A method no alias has yet may come from a trait the type
         // implements: demand it through the first alias.
         if method
@@ -21497,6 +21504,67 @@ impl<'a> Parser<'a> {
             .find(|path| !path.contains("::__rawr_crate_"))
             .or(paths.first())
             .map(|path| path.as_str().into())
+    }
+
+    /// `Trait::method(value, ..)`, spliced as `value.method(..)` at
+    /// `member_span`, called as the trait's method over its `Self`
+    /// (`surface::member`): `Err(value)` back when the call was not written
+    /// through a crate's trait, or the trait has no such method.
+    #[cfg(feature = "rust-import")]
+    fn spliced_trait_call(
+        &mut self,
+        mut value: ParsedExpr,
+        member: &str,
+        member_span: Span,
+    ) -> Result<Result<ParsedExpr, ParsedExpr>, Error> {
+        let Some(path) = self.spliced_trait_member(member, member_span) else {
+            return Ok(Err(value));
+        };
+        let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+            return Ok(Err(value));
+        };
+        let owner = self.models.item_owner(&path).cloned();
+        let start = value.span.start();
+        let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+        let mut inputs = Vec::with_capacity(arguments.len() + 1);
+        self.move_local(&mut value)?;
+        inputs.push(value);
+        for mut argument in arguments {
+            self.move_local(&mut argument)?;
+            inputs.push(argument);
+        }
+        self.call_host_function(&items, owner, inputs, span(start, end))
+            .map(Ok)
+    }
+
+    /// The path of the trait's method over its `Self` (`surface::member`)
+    /// for `Trait::method(value, ..)` spliced as `value.method(..)` at
+    /// `member_span`, when the trait has it.
+    #[cfg(feature = "rust-import")]
+    fn spliced_trait_member(&self, member: &str, member_span: Span) -> Option<String> {
+        let trait_path = self.spliced_traits.get(&member_span.start())?;
+        let path = rawr_import::surface::member::path(trait_path, member);
+        self.models.host_items(&path).is_some().then_some(path)
+    }
+
+    /// Whether the crate gives the host type `ty` (or the type it refers
+    /// to) a member `member` of its own.
+    #[cfg(feature = "rust-import")]
+    fn host_has_member(&self, ty: &Ty, member: &str) -> bool {
+        let resolved = match self.inference.resolve(ty) {
+            Ty::Reference { target, .. } => self.inference.resolve(&target),
+            ty => ty,
+        };
+        let member = crate::tokenizer::demangle_names(member);
+        resolved
+            .host_alias()
+            .cloned()
+            .or_else(|| self.imported_member_owner(&resolved, &member))
+            .is_some_and(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+                    .is_some()
+            })
     }
 
     /// The first alias of an imported type with no alias of its own whose
@@ -34721,6 +34789,21 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if has_host {
+                // `Trait::method(value, ..)` where the crate gives the
+                // value's type no such member of its own, as `column!`'s
+                // `Widget::_boxed(widget.map(f))` of a `Map`, whose impl
+                // declares parameters its type does not have: the trait's
+                // method over its `Self`, which rustc selects the impl for.
+                #[cfg(feature = "rust-import")]
+                if !self.host_has_member(&value.ty, &member) {
+                    match self.spliced_trait_call(value, &member, member_span)? {
+                        Ok(called) => {
+                            value = called;
+                            continue;
+                        }
+                        Err(back) => value = back,
+                    }
+                }
                 value = self.parse_host_method(value, member, member_span)?;
                 continue;
             }
@@ -34746,22 +34829,13 @@ impl<'a> Parser<'a> {
                     .models
                     .trait_methods
                     .contains_key(&(definition_id, member.clone()))
-                && let Some(trait_path) = self.spliced_traits.get(&member_span.start()).cloned()
             {
-                let path = rawr_import::surface::member::path(&trait_path, &member);
-                if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) {
-                    let owner = self.models.item_owner(&path).cloned();
-                    let start = value.span.start();
-                    let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
-                    let mut inputs = Vec::with_capacity(arguments.len() + 1);
-                    self.move_local(&mut value)?;
-                    inputs.push(value);
-                    for mut argument in arguments {
-                        self.move_local(&mut argument)?;
-                        inputs.push(argument);
+                match self.spliced_trait_call(value, &member, member_span)? {
+                    Ok(called) => {
+                        value = called;
+                        continue;
                     }
-                    value = self.call_host_function(&items, owner, inputs, span(start, end))?;
-                    continue;
+                    Err(back) => value = back,
                 }
             }
             // A scripted widget's `map` and `boxed` (`erasure_with`).

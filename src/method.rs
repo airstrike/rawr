@@ -320,7 +320,8 @@ impl Definition {
     pub(crate) fn reveal_output(&mut self, output: type_ref::Type) {
         self.fingerprint =
             signature::Fingerprint::function(true, self.receiver, &self.parameters, Some(&output));
-        self.output = output;
+        let written = std::mem::replace(&mut self.output, output);
+        self.lifetimes.written_output = Some(Box::new(written));
     }
 
     pub(crate) const fn body(&self) -> Span {

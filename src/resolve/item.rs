@@ -327,6 +327,11 @@ pub(crate) struct Lifetimes {
     pub bounds: Box<[(crate::ImmutableString, crate::ImmutableString)]>,
     /// The impl's owner, for a method: `S<'a>` of `impl<'a> S<'a>`.
     pub owner: Option<Box<type_ref::Type>>,
+    /// The output as written, once `lower_nominal::reveal` has named the
+    /// hidden type of an `impl Trait` in it: the signature says what the
+    /// output borrows, and the hidden type does not (rustc's E0106 and
+    /// edition 2024 capture rules read the `impl Trait`).
+    pub written_output: Option<Box<type_ref::Type>>,
 }
 
 impl Lifetimes {

@@ -406,7 +406,13 @@ fn read(signature: &Signature<'_>, declared: &dyn Fn(&Target) -> Option<usize>) 
         inputs.push((Input::Argument(index), positions));
     }
     let mut output = Positions::new();
-    reader.positions(signature.output, Path::ROOT, true, &mut output);
+    let written = signature.lifetimes.written_output.as_deref();
+    reader.positions(
+        written.unwrap_or(signature.output),
+        Path::ROOT,
+        true,
+        &mut output,
+    );
 
     let mut distinct: Vec<&Region> = Vec::new();
     let mut unknown = false;
