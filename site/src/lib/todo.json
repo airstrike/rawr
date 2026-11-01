@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.85",
+  "version": "0.3.86",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A string literal passed where a crate takes `&'static str`, directly or through a trait implemented for `&'static str` (iced's `.title(\"..\")`), lives for the program as in Rust: kept once per distinct text per call site, with no copy. A borrowed local `String` there gets rustc's E0597 at the borrow.","issues":[667]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.86",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A string literal passed where a crate takes `&'static str`, directly or through a trait implemented for `&'static str` (iced's `.title(\"..\")`), lives for the program as in Rust: kept once per distinct text per call site, with no copy. A borrowed local `String` there gets rustc's E0597 at the borrow.","issues":[667]}
+        ]
+      },
       {
         "version": "0.3.85",
         "date": "2026-11-01",
@@ -1565,7 +1567,7 @@
     {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
     {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
     {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"closed","category":"No glue (D593)","release":"0.3.84"},
-    {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"closed","category":"No glue (D593)"},
+    {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"closed","category":"No glue (D593)","release":"0.3.86"},
     {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"},
     {"issue":669,"title":"?play's universe runner names a widget's theme from its impl (E0121)","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":670,"title":"Impl headers keep impls whose self type is a reference","state":"open","category":"No glue (D593)"},

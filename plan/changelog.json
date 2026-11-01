@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A string literal passed where a crate takes `&'static str`, directly or through a trait implemented for `&'static str` (iced's `.title(\"..\")`), lives for the program as in Rust: kept once per distinct text per call site, with no copy. A borrowed local `String` there gets rustc's E0597 at the borrow.","issues":[667]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.86",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A string literal passed where a crate takes `&'static str`, directly or through a trait implemented for `&'static str` (iced's `.title(\"..\")`), lives for the program as in Rust: kept once per distinct text per call site, with no copy. A borrowed local `String` there gets rustc's E0597 at the borrow.","issues":[667]}
+      ]
+    },
     {
       "version": "0.3.85",
       "date": "2026-11-01",

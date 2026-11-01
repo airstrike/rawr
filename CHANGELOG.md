@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.86 (2026-11-01)
+
 - A string literal passed where a crate takes `&'static str`, directly or through a trait implemented for `&'static str` (iced's `.title("..")`), lives for the program as in Rust: kept once per distinct text per call site, with no copy. A borrowed local `String` there gets rustc's E0597 at the borrow. (#667)
 
 ## 0.3.85 (2026-11-01)
