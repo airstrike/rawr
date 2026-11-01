@@ -19174,6 +19174,26 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         self.supply_display_labeller(items, &mut arguments, call)?;
         self.deref_facade_strings(items, &mut arguments)?;
+        // `Element::from(element)`: core's `impl<T> From<T> for T`, which
+        // no crate lists among its own `From` impls, gives the value back.
+        if let [argument] = arguments.as_slice()
+            && matches!(self.inference.resolve(&argument.ty), Ty::Host { .. })
+            && items.iter().all(|item| {
+                item.path_ref().name() == "from"
+                    && matches!(item.kind(), crate::host::item::Kind::AssociatedFunction)
+            })
+            && let Some(item) = items.first()
+        {
+            let checkpoint = self.inference.checkpoint();
+            let reflexive = self
+                .instantiate_host_signature(item, None, None, call)
+                .is_ok_and(|signature| self.unify_type(&signature.output, &argument.ty));
+            if reflexive {
+                self.inference.commit(checkpoint);
+                return Ok(arguments.pop().expect("one argument"));
+            }
+            self.inference.rollback(checkpoint);
+        }
         self.host_turbofish = self.pending_turbofish.take();
         let selected = self.select_host_signature(items, None, &mut arguments, false, call);
         self.host_turbofish = None;
@@ -39258,10 +39278,22 @@ impl<'a> Parser<'a> {
             "as_ref" | "as_mut" | "as_deref" => {
                 arity(0, &arguments)?;
                 source.push_text(o.as_str());
-                Ty::Option(Box::new(Ty::Reference {
-                    mutable: member.as_str() == "as_mut",
-                    target: Box::new(element),
-                }))
+                // `as_deref` borrows through `Deref`: `Option<String>` gives
+                // `Option<&str>` (`Str` is itself the borrow), and
+                // `Option<Box<T>>` gives `Option<&T>`.
+                match self.inference.resolve(&element) {
+                    Ty::String if member.as_str() == "as_deref" => Ty::Option(Box::new(Ty::Str)),
+                    resolved => {
+                        let target = match resolved {
+                            Ty::Boxed(_, inner) if member.as_str() == "as_deref" => *inner,
+                            _ => element,
+                        };
+                        Ty::Option(Box::new(Ty::Reference {
+                            mutable: member.as_str() == "as_mut",
+                            target: Box::new(target),
+                        }))
+                    }
+                }
             }
             "copied" | "cloned" => {
                 arity(0, &arguments)?;

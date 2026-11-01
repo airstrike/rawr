@@ -1518,3 +1518,134 @@ fn a_dependency_rawr_takes_with_more_features_keeps_the_locked_runner_build() {
         "{main}"
     );
 }
+
+/// Write `files` under a fresh `root`, with the fixture's toolchain.
+fn project(root: &Path, files: &[(&str, &str)]) {
+    let _ = fs::remove_dir_all(root);
+    for (path, source) in files {
+        let destination = root.join(path);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(destination, source).unwrap();
+    }
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+}
+
+/// A prerelease no registry publishes, which only the patch provides: an
+/// unpatched resolution fails as Cargo's does.
+const PATCHED_GAUGE: [(&str, &str); 2] = [
+    (
+        "gauge/Cargo.toml",
+        "[package]\nname='rawr-patched-gauge'\nversion='0.9.0-dev'\nedition='2024'\n",
+    ),
+    ("gauge/src/lib.rs", "pub fn sides() -> i64 { 6 }\n"),
+];
+
+const PATCHED_MAIN: &str =
+    "// rawr\nfn main() {\n    println!(\"sides: {}\", rawr_patched_gauge::sides());\n}\n";
+
+/// Run and check `program`, and compare its check with `cargo check`'s.
+fn assert_runs_and_checks(program: &Path, home: &Path) {
+    let limit = std::time::Duration::from_secs(600);
+    let run = rawr_import_within(program, &["run"], home, limit);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "sides: 6\n");
+    let checked = rawr_import_within(program, &["check"], home, limit);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    assert_eq!(
+        text(&checked.stdout),
+        format!(
+            "Checked {}\ncargo check passed\n",
+            program.join("src/main.rs").display()
+        )
+    );
+}
+
+/// A registry dependency that the package's own `[patch.crates-io]`
+/// replaces with a path crate resolves to the patch, as under Cargo (#668).
+#[test]
+fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("patched-dependency");
+    let mut files = PATCHED_GAUGE.to_vec();
+    files.extend([
+        (
+            "Cargo.toml",
+            "[workspace]\n[package]\nname='patched-dependency'\nversion='0.1.0'\nedition='2024'\n\
+             [dependencies]\nrawr-patched-gauge='0.9.0-dev'\n\
+             [patch.crates-io]\nrawr-patched-gauge={path='gauge'}\n",
+        ),
+        ("src/main.rs", PATCHED_MAIN),
+    ]);
+    project(&root, &files);
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    assert_runs_and_checks(&root, &home);
+}
+
+/// `Sides::from(sides)` of a crate type is core's reflexive `impl<T>
+/// From<T> for T`, beside the crate's own `From` impls, as `column!`'s
+/// `Element::from(element)` is. `Sides::from(6)` beside it is the crate's
+/// `From<i64>`.
+#[test]
+fn a_crate_types_from_of_itself_gives_the_value_back() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("reflexive-from");
+    project(
+        &root,
+        &[
+            (
+                "Cargo.toml",
+                "[workspace]\n[package]\nname='reflexive-from'\nversion='0.1.0'\nedition='2024'\n\
+                 [dependencies]\nsides={path='sides'}\n",
+            ),
+            (
+                "sides/Cargo.toml",
+                "[package]\nname='sides'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            (
+                "sides/src/lib.rs",
+                "pub struct Sides(i64);\n\
+                 impl Sides { pub fn count(&self) -> i64 { self.0 } }\n\
+                 impl From<i64> for Sides { fn from(count: i64) -> Self { Sides(count) } }\n\
+                 impl From<&str> for Sides { fn from(name: &str) -> Self { Sides(name.len() as i64) } }\n",
+            ),
+            (
+                "src/main.rs",
+                "// rawr\nuse sides::Sides;\nfn main() {\n    let sides = Sides::from(6);\n    \
+                 let same = Sides::from(sides);\n    println!(\"sides: {}\", same.count());\n}\n",
+            ),
+        ],
+    );
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    assert_runs_and_checks(&root, &home);
+}
+
+/// A workspace member resolves with the workspace root's `[patch]`, as
+/// Cargo resolves every member (#664).
+#[test]
+fn a_workspace_member_resolves_with_the_roots_patch() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("patched-workspace");
+    let mut files = PATCHED_GAUGE.to_vec();
+    files.extend([
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers=['app']\nresolver='3'\n\
+             [patch.crates-io]\nrawr-patched-gauge={path='gauge'}\n",
+        ),
+        (
+            "app/Cargo.toml",
+            "[package]\nname='app'\nversion='0.1.0'\nedition='2024'\n\
+             [dependencies]\nrawr-patched-gauge='0.9.0-dev'\n",
+        ),
+        ("app/src/main.rs", PATCHED_MAIN),
+    ]);
+    project(&root, &files);
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    assert_runs_and_checks(&root.join("app"), &home);
+}
