@@ -1493,7 +1493,7 @@ pub(super) fn registrations_recovery(
 pub(super) fn garbage_recovery(
     root: &Path,
     budget: &mut super::recovery::Budget,
-) -> Result<Option<(PathBuf, Charge)>, Error> {
+) -> Result<Option<super::control::Found>, Error> {
     let ledger = Ledger::read_recovery(root, budget)?;
     super::control::garbage(
         root,

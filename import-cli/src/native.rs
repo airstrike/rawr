@@ -486,6 +486,19 @@ impl Error {
     }
 }
 
+impl crate::Stale for Error {
+    fn is_stale(&self) -> bool {
+        match self {
+            Self::Import(error) => error.is_stale(),
+            Self::Build(error) => error.is_stale(),
+            Self::Node(error)
+            | Self::Process(rawr_import::process::RunnerError::Node(error))
+            | Self::PinCleanup { failure: error, .. } => error.is_stale(),
+            _ => false,
+        }
+    }
+}
+
 impl From<rawr_import::Error> for Error {
     fn from(error: rawr_import::Error) -> Self {
         Self::Import(error)

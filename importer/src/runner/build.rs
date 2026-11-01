@@ -294,6 +294,19 @@ pub enum Error {
     Manifest(#[from] super::manifest::Error),
 }
 
+impl Error {
+    /// Whether a cache entry this build read went stale before it was used
+    /// (`crate::Error::is_stale`), so the run prepares again (#613).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        match self {
+            Self::Import(error) => error.is_stale(),
+            Self::Node(error) => error.is_stale(),
+            _ => false,
+        }
+    }
+}
+
 fn validate_carrier(
     entry: &Path,
     manifest: &super::manifest::GeneratedManifest,

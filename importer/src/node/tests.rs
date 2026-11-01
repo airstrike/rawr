@@ -3281,6 +3281,56 @@ fn poisoned_candidate_index_clean_misses_without_denying_the_valid_action() {
     fs::remove_dir_all(root).expect("the poisoned-index fixture retires");
 }
 
+/// A fresh build whose action already holds an older entry that no longer
+/// checks retires that entry and publishes in its place (#614).
+#[test]
+fn fresh_build_replaces_a_stale_entry_at_its_action() {
+    static CHANGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let root = temporary("discoverable-stale-same-action");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the typed store opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let recipe = context
+        .discover::<Derived>(b"discoverable-stale-same-action", 4_096)
+        .expect("the discoverable recipe seals");
+    // Both values discover the same inputs, so they share one action, and
+    // the older value stops checking once its external fact changes.
+    let validate = |candidate: &Derived| {
+        if candidate.0.as_ref() == b"older" && CHANGED.load(Ordering::Relaxed) {
+            return Err(Error::Codec("fixture external fact changed"));
+        }
+        retain_fixture_bytes(b"same-inputs", 4_096, "fixture discovered inputs")
+    };
+    let older = evaluator
+        .discover(&recipe, validate, || {
+            Ok(Derived(b"older".to_vec().into_boxed_slice()))
+        })
+        .expect("the older entry publishes");
+    let action = older.receipt().action();
+    drop(older);
+    CHANGED.store(true, Ordering::Relaxed);
+    let fresh = Evaluator::new(&store, &counts)
+        .discover(&recipe, validate, || {
+            Ok(Derived(b"fresh".to_vec().into_boxed_slice()))
+        })
+        .expect("the fresh build replaces the stale entry");
+    assert_eq!(fresh.receipt().action(), action);
+    assert_eq!(fresh.value().0.as_ref(), b"fresh");
+    drop(fresh);
+    let replayed = Evaluator::new(&store, &counts)
+        .discover(&recipe, validate, || {
+            Err(Error::State("the replaced entry is reused"))
+        })
+        .expect("the replacement is found");
+    assert_eq!(replayed.value().0.as_ref(), b"fresh");
+    drop(replayed);
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+    fs::remove_dir_all(root).expect("the stale-action fixture retires");
+}
+
 #[test]
 fn same_discoverable_key_contenders_execute_and_publish_exactly_once() {
     let root = temporary("discoverable-contenders");
@@ -4941,6 +4991,57 @@ fn store_missing_its_executions_rebuilds_them() {
     };
     rebuild(b"store-lost-executions").expect("the lost entry is rebuilt");
     rebuild(b"store-lost-executions-other").expect("an unrelated entry publishes");
+    store
+        .fixture_physical_inventory()
+        .expect("the rebuilt store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// A store missing one execution inside its executions directory rebuilds
+/// it: the lost entries and the pins that hold them are forgotten, never an
+/// error on every later check (#612).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn store_missing_one_execution_rebuilds_it() {
+    let (root, store, runners) = store_growth_runners(
+        "store-lost-execution",
+        &[b"store-lost-execution", b"store-kept-execution"],
+    );
+    store_growth_pin(&store, &runners[0].1, crate::store::PinRole::Live);
+    store_growth_pin(&store, &runners[1].1, crate::store::PinRole::LastGood);
+    drop(runners);
+    let context = fixture_context(&root);
+    let execution = context
+        .discover::<BundleValue>(b"store-lost-execution", 4_096)
+        .unwrap()
+        .execution();
+    let lost = store.root().join("executions").join(execution.directory());
+    fs::remove_dir_all(&lost).expect("the runner's execution is removed");
+    drop(store);
+    // The next run opens the store again.
+    let store = context
+        .open_store()
+        .expect("a store missing an execution opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let rebuild = |name: &'static [u8]| {
+        let recipe = context.discover::<BundleValue>(name, 4_096).unwrap();
+        let current = store.clone();
+        evaluator.discover_bundled(
+            &recipe,
+            move |candidate| candidate.validate_published(&current),
+            bundled_fixture,
+        )
+    };
+    rebuild(b"store-lost-execution").expect("the lost entry is rebuilt");
+    rebuild(b"store-kept-execution").expect("the kept entry is found");
+    // Making room walks the store: the lost entry and its pin are forgotten.
+    store
+        .fixture_make_room()
+        .expect("a store missing an execution makes room");
+    rebuild(b"store-lost-execution").expect("the lost entry is found or rebuilt");
+    rebuild(b"store-lost-execution-other").expect("an unrelated entry publishes");
     store
         .fixture_physical_inventory()
         .expect("the rebuilt store's inventory is whole");

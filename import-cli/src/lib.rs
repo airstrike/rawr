@@ -125,6 +125,9 @@ pub enum Error {
     Rawr(rawr::package::Error),
     /// The importer or the profile failed.
     Other(String),
+    /// A cache entry the preparation read went stale before it was used.
+    /// Preparing again rebuilds it ([`again_while_stale`]).
+    Stale(String),
 }
 
 impl Error {
@@ -132,13 +135,23 @@ impl Error {
     pub fn other(error: impl fmt::Display) -> Self {
         Self::Other(error.to_string())
     }
+
+    /// An importer failure, which is [`Error::Stale`] when a cache entry
+    /// went stale.
+    pub fn cache(error: impl Stale + fmt::Display) -> Self {
+        if error.is_stale() {
+            Self::Stale(error.to_string())
+        } else {
+            Self::other(error)
+        }
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Rawr(error) => error.fmt(formatter),
-            Self::Other(message) => formatter.write_str(message),
+            Self::Other(message) | Self::Stale(message) => formatter.write_str(message),
         }
     }
 }
@@ -147,8 +160,107 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Rawr(error) => Some(error),
-            Self::Other(_) => None,
+            Self::Other(_) | Self::Stale(_) => None,
         }
+    }
+}
+
+/// How many times one preparation starts again for entries that went stale.
+const STALE_RESTARTS: usize = 2;
+
+/// A failure that may be a cache entry gone stale while the run used it.
+pub trait Stale {
+    /// Whether it is.
+    fn is_stale(&self) -> bool;
+}
+
+impl Stale for Error {
+    fn is_stale(&self) -> bool {
+        matches!(self, Self::Stale(_))
+    }
+}
+
+macro_rules! stale {
+    ($($error:ty),* $(,)?) => {$(
+        impl Stale for $error {
+            fn is_stale(&self) -> bool {
+                <$error>::is_stale(self)
+            }
+        }
+    )*};
+}
+
+stale!(
+    rawr_import::Error,
+    rawr_import::checked::Error,
+    rawr_import::node::Error,
+    rawr_import::profile::Error,
+    rawr_import::bridge::request::Error,
+    rawr_import::runner::BuildError,
+);
+
+/// Run `attempt` again while it fails only because a cache entry it read
+/// went stale: the next attempt's lookups miss and rebuild the entry, as
+/// Cargo rebuilds what changed (#609, #613). Inputs that keep changing end
+/// the restarts with their error.
+pub fn again_while_stale<T, E: Stale>(mut attempt: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+    let mut restarts = Restarts::default();
+    loop {
+        match attempt() {
+            Err(error) if restarts.again(&error) => {}
+            result => return result,
+        }
+    }
+}
+
+/// The restarts left to one preparation for entries that went stale.
+#[derive(Default)]
+pub(crate) struct Restarts(usize);
+
+impl Restarts {
+    /// Whether `error` starts the preparation again, which counts.
+    pub(crate) fn again(&mut self, error: &impl Stale) -> bool {
+        let again = error.is_stale() && self.0 < STALE_RESTARTS;
+        self.0 += usize::from(again);
+        again
+    }
+}
+
+#[cfg(test)]
+mod stale {
+    use super::{again_while_stale, Error, STALE_RESTARTS};
+
+    /// A stale entry prepares again until it is rebuilt, a bounded number
+    /// of times, and any other failure is reported at once (#613).
+    #[test]
+    fn stale_entries_prepare_again() {
+        let stale = || Error::cache(rawr_import::profile::Error::Stale);
+        let mut attempts = 0;
+        let rebuilt = again_while_stale(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(stale())
+            } else {
+                Ok(attempts)
+            }
+        });
+        assert_eq!(rebuilt.ok(), Some(2));
+
+        let mut attempts = 0;
+        let changing = again_while_stale(|| -> Result<(), Error> {
+            attempts += 1;
+            Err(stale())
+        });
+        assert!(matches!(changing, Err(Error::Stale(_))));
+        assert_eq!(attempts, STALE_RESTARTS + 1);
+
+        let mut attempts = 0;
+        let failed = again_while_stale(|| -> Result<(), Error> {
+            attempts += 1;
+            Err(Error::other("the program does not compile"))
+        });
+        assert!(matches!(failed, Err(Error::Other(_))));
+        assert_eq!(attempts, 1);
     }
 }
 

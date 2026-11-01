@@ -1021,6 +1021,51 @@ pub(crate) fn retire_project_runner(
     Ok(physically_unreferenced)
 }
 
+/// Forget every pin that holds a lost allocation: each project root that
+/// names one, and each stale physical pin that records one (#612). A
+/// running program's pin keeps them, and `false` says so.
+pub(super) fn forget(
+    publication: &super::lease::Publication<'_>,
+    root: &Path,
+    snapshot: lock::Snapshot,
+    lost: &std::collections::BTreeSet<Reference>,
+    registrations: &[accounting::Registered],
+    budget: &mut super::recovery::Budget,
+) -> Result<bool, Error> {
+    let holds = |references: &[Reference]| references.iter().any(|edge| lost.contains(edge));
+    if holds(snapshot.protected()) {
+        return Ok(false);
+    }
+    let directory = root.join("ledgers/projects");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries.collect::<Result<Vec<_>, _>>(),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(source) => Err(source),
+    }
+    .map_err(|source| Error::Io {
+        operation: "read project ledgers to forget lost allocations",
+        path: directory.clone(),
+        source,
+    })?;
+    for entry in entries {
+        let project = project_from_name(&entry.file_name()).ok_or(Error::CleanupRequired(
+            "a project logical ledger changed canonical placement",
+        ))?;
+        let mut ledger = Ledger::read_or_empty_recovery(root, project, registrations)?;
+        let before = ledger.roots.len();
+        ledger.roots.retain(|pinned| !holds(&pinned.references));
+        if ledger.roots.len() != before {
+            save_or_retire(publication, root, &ledger)?;
+        }
+    }
+    for stale in snapshot.into_stale() {
+        if holds(stale.references()) {
+            stale.retire(publication, root, budget)?;
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 pub(crate) fn usage(root: &Path, project: Digest) -> Result<(Charge, usize, usize), Error> {
     let ledger = Ledger::read_or_empty(root, project)?;

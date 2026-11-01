@@ -158,7 +158,9 @@ pub(super) fn inventory(
     evictions: &[Registered],
     reservations: &[Reservation],
 ) -> Result<Charge, Error> {
-    inspect(root, registrations, evictions, reservations, None, None).map(|state| state.control)
+    let state = inspect(root, registrations, evictions, reservations, None, None)?;
+    state.whole(registrations)?;
+    Ok(state.control)
 }
 
 /// Admit one control mutation by what it changes, not by re-inventorying the
@@ -246,6 +248,7 @@ pub(super) fn inventory_for_repair(
         plan.retirement_target(),
         Some(repair),
     )?;
+    state.whole(registrations)?;
     if !state
         .observed
         .iter()
@@ -263,8 +266,24 @@ pub(super) fn garbage(
     registrations: &[Registered],
     evictions: &[Registered],
     reservations: &[Reservation],
-) -> Result<Option<(PathBuf, Charge)>, Error> {
-    inspect(root, registrations, evictions, reservations, None, None).map(|state| state.garbage)
+) -> Result<Option<Found>, Error> {
+    let state = inspect(root, registrations, evictions, reservations, None, None)?;
+    let lost = state.lost(registrations);
+    if !lost.is_empty() {
+        return Ok(Some(Found::Lost(lost)));
+    }
+    Ok(state
+        .garbage
+        .map(|(path, charge)| Found::Garbage(path, charge)))
+}
+
+/// What a garbage pass removes first.
+pub(super) enum Found {
+    /// Registered allocations whose directories are gone, such as an
+    /// execution someone deleted: the registry forgets them (#612).
+    Lost(Box<[Registered]>),
+    /// One unregistered tree, with its charge.
+    Garbage(PathBuf, Charge),
 }
 
 fn inspect<'store>(
@@ -354,14 +373,6 @@ fn inspect<'store>(
         project_ledgers: 0,
     };
     state.walk(Path::new(""))?;
-    if registrations
-        .iter()
-        .any(|registered| !state.observed.contains(registered))
-    {
-        return Err(Error::CleanupRequired(
-            "typed store physical inventory lost a registered allocation",
-        ));
-    }
     Ok(state)
 }
 
@@ -395,6 +406,29 @@ struct State<'store> {
 }
 
 impl State<'_> {
+    /// The registered allocations the walk never found.
+    fn lost(&self, registrations: &[Registered]) -> Box<[Registered]> {
+        registrations
+            .iter()
+            .copied()
+            .filter(|registered| !self.observed.contains(registered))
+            .collect()
+    }
+
+    /// Fail when a registered allocation is gone. Only a garbage pass
+    /// forgets lost ones.
+    fn whole(&self, registrations: &[Registered]) -> Result<(), Error> {
+        if registrations
+            .iter()
+            .any(|registered| !self.observed.contains(registered))
+        {
+            return Err(Error::CleanupRequired(
+                "typed store physical inventory lost a registered allocation",
+            ));
+        }
+        Ok(())
+    }
+
     fn walk(&mut self, relative: &Path) -> Result<(), Error> {
         if let Some((registered, _required)) = self.immutable.get(relative).copied() {
             return self.allocation(relative, registered);

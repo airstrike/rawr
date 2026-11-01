@@ -243,8 +243,12 @@ pub(super) fn recover_pending(store: &Path, budget: &mut recovery::Budget) -> Re
 
 fn recover_garbage(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {
     lease::with_publication(store, |publication| {
-        let Some((path, charge)) = accounting::garbage_recovery(store, budget)? else {
-            return Ok(false);
+        let (path, charge) = match accounting::garbage_recovery(store, budget)? {
+            None => return Ok(false),
+            Some(super::control::Found::Lost(lost)) => {
+                return forget_lost(publication, store, &lost, budget);
+            }
+            Some(super::control::Found::Garbage(path, charge)) => (path, charge),
         };
         budget.deletion(charge)?;
         let admitted = super::control::Admitted::seal(
@@ -263,6 +267,121 @@ fn recover_garbage(store: &Path, budget: &mut recovery::Budget) -> Result<bool, 
         ))?)?;
         Ok(true)
     })
+}
+
+/// Forget registered allocations whose directories are gone, such as an
+/// execution someone deleted, with each one's seal unit and the pins that
+/// hold them. Their next lookup misses and rebuilds them, as Cargo rebuilds
+/// what was deleted from its target (#612).
+fn forget_lost(
+    publication: &lease::Publication<'_>,
+    store: &Path,
+    lost: &[Registered],
+    budget: &mut recovery::Budget,
+) -> Result<bool, Error> {
+    forget(
+        publication,
+        store,
+        lost,
+        "typed store physical inventory lost a registered allocation",
+        budget,
+    )?;
+    Ok(true)
+}
+
+/// Retire the entry already at an action that a fresh build publishes,
+/// which the build's miss recheck found stale or damaged, with the pins
+/// that hold it (#614).
+pub(super) fn retire_replaced(
+    publication: &lease::Publication<'_>,
+    store: &Path,
+    kind: Kind,
+    schema: u32,
+    action: ActionKey,
+    budget: &mut recovery::Budget,
+) -> Result<(), Error> {
+    let key = Digest::from_bytes(action.as_bytes());
+    let Some(registered) = accounting::registrations_recovery(store, budget)?
+        .iter()
+        .copied()
+        .find(|registered| {
+            let allocation = registered.allocation();
+            allocation.class == Class::Action
+                && allocation.kind == kind
+                && allocation.schema == schema
+                && allocation.key == key
+        })
+    else {
+        return Ok(());
+    };
+    forget(
+        publication,
+        store,
+        &[registered],
+        "a running program holds a stale cache entry that a fresh build replaces",
+        budget,
+    )
+}
+
+/// Retire each allocation's seal unit (an action with its bundle, or a
+/// content with every action that names it) and the pins that hold them.
+/// Directories already gone are skipped. A running program's pin on one
+/// refuses with `held`.
+fn forget(
+    publication: &lease::Publication<'_>,
+    store: &Path,
+    allocations: &[Registered],
+    held: &'static str,
+    budget: &mut recovery::Budget,
+) -> Result<(), Error> {
+    let registrations = accounting::registrations_recovery(store, budget)?;
+    let mut released = BTreeSet::new();
+    for lost in allocations.iter().copied() {
+        released.insert(lost.reference());
+        let allocation = lost.allocation();
+        for action in registrations.iter().copied().filter(|action| {
+            action.allocation().class == Class::Action
+                && match allocation.class {
+                    Class::Action => *action == lost,
+                    Class::Bundle => action_owns_bundle(*action, lost),
+                    Class::Content => {
+                        action.allocation().kind == allocation.kind
+                            && action.allocation().schema == allocation.schema
+                            && action.content() == lost.content()
+                    }
+                }
+        }) {
+            released.insert(action.reference());
+            if let Some(bundle) = registrations
+                .iter()
+                .copied()
+                .find(|bundle| action_owns_bundle(action, *bundle))
+            {
+                released.insert(bundle.reference());
+            }
+        }
+    }
+    let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
+    if !pins::forget(
+        publication,
+        store,
+        snapshot,
+        &released,
+        &registrations,
+        budget,
+    )? {
+        // A running program holds one; its pin keeps it until it ends.
+        return Err(Error::CleanupRequired(held));
+    }
+    let mut selected = registrations
+        .iter()
+        .copied()
+        .filter(|registered| released.contains(&registered.reference()))
+        .collect::<Vec<_>>();
+    selected.sort_unstable_by_key(|registered| registered.reference());
+    accounting::begin_eviction(publication, store, &selected, budget)?;
+    retire_allocations(publication, store, &selected, true, budget)?;
+    accounting::finish_eviction(publication, store, budget)
 }
 
 fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {

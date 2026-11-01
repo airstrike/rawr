@@ -22,6 +22,19 @@ pub enum Error {
     Allocation,
 }
 
+impl Error {
+    /// Whether a cache entry this request read went stale before it was
+    /// used (`crate::Error::is_stale`), so the run prepares again (#613).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        match self {
+            Self::Node(error) => error.is_stale(),
+            Self::Native(error) => error.is_stale(),
+            Self::Surface(_) | Self::Limit { .. } | Self::Allocation => false,
+        }
+    }
+}
+
 /// The generated Rust disagrees with what rawr read of the crates: only a
 /// rawr bug can cause it, so it panics naming the invariant.
 #[track_caller]

@@ -85,11 +85,11 @@ impl crate::Profile for Plain {
     fn prepare(
         &self,
         target: &rawr::project::Target,
-        graph: Option<rawr::package::Graph>,
+        mut graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     ) -> Result<crate::Prepared, crate::Error> {
-        prepare(target, graph, revision, scope)
+        crate::again_while_stale(|| prepare(target, graph.take(), revision, scope))
     }
 }
 
@@ -321,26 +321,6 @@ fn prove(
     Ok(())
 }
 
-/// How many times one preparation starts again for entries that went stale.
-const STALE_RESTARTS: usize = 2;
-
-/// A failure that may be an entry gone stale while the run used it.
-trait Stale {
-    fn is_stale(&self) -> bool;
-}
-
-impl Stale for rawr_import::Error {
-    fn is_stale(&self) -> bool {
-        rawr_import::Error::is_stale(self)
-    }
-}
-
-impl Stale for rawr_import::checked::Error {
-    fn is_stale(&self) -> bool {
-        rawr_import::checked::Error::is_stale(self)
-    }
-}
-
 /// Resolve, extract, check and seal a program's runner with no host profile.
 fn prepare(
     target: &rawr::project::Target,
@@ -378,15 +358,8 @@ fn prepare(
     // on the call's receiver and lexical scope (D650), proved from the
     // dependencies' intrinsic facts, acquired once.
     let mut applications = Vec::new();
-    // A cache entry that went stale while this run used it starts the run
-    // again, whose lookup rebuilds it (#609); inputs that keep changing end
-    // the restarts with their error.
-    let mut restarts = 0;
-    let mut restart = |error: &dyn Stale| {
-        let again = error.is_stale() && restarts < STALE_RESTARTS;
-        restarts += usize::from(again);
-        again
-    };
+    // A cache entry that goes stale while this run uses it is `Error::Stale`,
+    // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
         let mut request_demand = crate_demand.clone();
         request_demand.extend(seed.iter().cloned());
@@ -411,17 +384,11 @@ fn prepare(
             Err(error) => return Err(Error::other(error)),
         };
         remembered = false;
-        let mut prepared = match request.prepare_cached_in(&limits, scope) {
-            Ok(prepared) => prepared,
-            Err(error) if restart(&error) => continue,
-            Err(error) => return Err(Error::other(error)),
-        };
+        let mut prepared = request
+            .prepare_cached_in(&limits, scope)
+            .map_err(Error::cache)?;
         settlement.absorb(prepared.settlement());
-        let api = match prepared.retain_api(&limits) {
-            Ok(api) => api,
-            Err(error) if restart(&error) => continue,
-            Err(error) => return Err(Error::other(error)),
-        };
+        let api = prepared.retain_api(&limits).map_err(Error::cache)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
         let adapter = &*current_adapter.insert(adapter(keyed.as_ref()));
@@ -439,8 +406,7 @@ fn prepare(
         let warm = match warm {
             Ok(warm) => warm,
             Err(rawr_import::checked::Evaluation::Transform(error)) => return Err(error),
-            Err(rawr_import::checked::Evaluation::Cache(error)) if restart(&error) => continue,
-            Err(rawr_import::checked::Evaluation::Cache(error)) => return Err(Error::other(error)),
+            Err(rawr_import::checked::Evaluation::Cache(error)) => return Err(Error::cache(error)),
         };
         break match warm {
             Ok(warm) => (warm.demand, warm.profile, warm.checked, warm.native),
@@ -513,11 +479,8 @@ fn prepare(
                         continue;
                     }
                     Err(rawr_import::checked::Evaluation::Transform(error)) => return Err(error),
-                    Err(rawr_import::checked::Evaluation::Cache(error)) if restart(&error) => {
-                        continue;
-                    }
                     Err(rawr_import::checked::Evaluation::Cache(error)) => {
-                        return Err(Error::other(error));
+                        return Err(Error::cache(error));
                     }
                 };
                 let rawr_import::composition::Completed {
@@ -529,7 +492,7 @@ fn prepare(
                 let brand = rawr::package::import::Brand::replay(&facade).map_err(Error::other)?;
                 let demand = cached
                     .replay_demand(brand, &contract, expected, &limits)
-                    .map_err(Error::other)?
+                    .map_err(Error::cache)?
                     .with_trusted_runner(true, &facade, &contract)
                     .map_err(Error::other)?;
                 rawr_import::composition::record_resolved(&contract, &demand, adapter, &policy)
@@ -557,10 +520,10 @@ fn prepare(
         &cached,
         &limits,
     )
-    .map_err(Error::other)?;
+    .map_err(Error::cache)?;
     let request = demand
         .request_retained(native, profile, revision)
-        .map_err(Error::other)?;
+        .map_err(Error::cache)?;
     let inputs = rawr::reload::source::Inputs::from_graph(&source).with_imported(request.watch());
     Ok(
         crate::Prepared::new(request, transport, project, inputs, &graph, limits)
