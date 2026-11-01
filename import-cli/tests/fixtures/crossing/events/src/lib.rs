@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 
+pub mod classic;
 pub mod color;
 pub mod controls;
 pub mod conversions;
@@ -646,6 +647,53 @@ pub mod widgets {
 
         fn press(&self, label: &str) -> Option<Message> {
             (self.content.to_string() == label)
+                .then(|| self.on_press.clone())
+                .flatten()
+        }
+    }
+
+    /// A button whose content is itself a widget, as iced's `Button<'a,
+    /// Message, W, Theme>` is: its impl of `Widget` holds only when its
+    /// content's does, and a string literal's is the impl for `&str` in
+    /// `controls`.
+    pub struct Tile<'a, Message, W, Theme = crate::Theme> {
+        content: W,
+        on_press: Option<Message>,
+        look: std::marker::PhantomData<&'a Theme>,
+    }
+
+    /// A tile showing `content`.
+    pub fn tile<'a, Message, W, Theme>(content: W) -> Tile<'a, Message, W, Theme> {
+        Tile {
+            content,
+            on_press: None,
+            look: std::marker::PhantomData,
+        }
+    }
+
+    impl<Message, W, Theme> Tile<'_, Message, W, Theme> {
+        /// The message a press sends.
+        pub fn on_press(mut self, message: Message) -> Self {
+            self.on_press = Some(message);
+            self
+        }
+    }
+
+    impl<Message: Clone, W, Theme, Renderer> Widget<Message, Theme, Renderer>
+        for Tile<'_, Message, W, Theme>
+    where
+        W: Widget<Message, Theme, Renderer>,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            let mut content = Vec::new();
+            self.content.labels(&mut content);
+            labels.push(format!("<{}>", content.join(" ")));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            let mut content = Vec::new();
+            self.content.labels(&mut content);
+            (content.join(" ").trim_matches('\'') == label)
                 .then(|| self.on_press.clone())
                 .flatten()
         }

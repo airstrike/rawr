@@ -70,6 +70,24 @@ pub enum Pattern {
     Tuple(Box<[Pattern]>),
     /// A type without variables, as Freya's `Fill` or `Color` is.
     Type(host::type_ref::Type),
+    /// An imported type that names an implementation's type parameters,
+    /// as iced's `From<Text<'a, Theme, Renderer>> for Element<'a, Message,
+    /// Theme, Renderer>` does: each is the parameter [`case_variable`]
+    /// names.
+    Generic(host::type_ref::Type),
+}
+
+/// The name an implementation's type parameter `index` has in a
+/// [`Pattern::Generic`].
+#[must_use]
+pub fn case_variable(index: u32) -> String {
+    format!("__RawrCase{index}")
+}
+
+/// The implementation's type parameter `name` stands for in a
+/// [`Pattern::Generic`], when it is one.
+pub(crate) fn case_index(name: &str) -> Option<u32> {
+    name.strip_prefix("__RawrCase")?.parse().ok()
 }
 
 impl Relation {

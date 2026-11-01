@@ -12293,10 +12293,20 @@ impl<'a> Parser<'a> {
             return Err(Selection::None(ty.name(&self.models).to_string()));
         };
         self.inference.commit(checkpoint);
-        // A bound on a bare variable waits for one that fixes it.
+        // A bound on a bare variable waits for one that fixes it. The impl
+        // is chosen by its self type and the trait's arguments alone, as
+        // rustc selects one, and its where-clause bounds are obligations
+        // it proves afterwards: a bound no header fits, as iced's `W:
+        // Widget<..>` for a `&str` content whose impl the facade can't
+        // write, fixes nothing more and leaves the impl chosen.
         for _ in 0..2 {
             for (bounded, trait_identity, bound_arguments) in &bounds {
-                self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)?;
+                let checkpoint = self.inference.checkpoint();
+                match self.select_impl(bounded, *trait_identity, bound_arguments, owner, depth + 1)
+                {
+                    Ok(()) => self.inference.commit(checkpoint),
+                    Err(_) => self.inference.rollback(checkpoint),
+                }
             }
         }
         Ok(())
@@ -18190,6 +18200,23 @@ impl<'a> Parser<'a> {
                 self.inference.rollback(checkpoint);
                 fits
             }
+            // Whether the type fits; its variables are bound where the
+            // case is chosen, as its type is unified with the argument.
+            (Pattern::Generic(expected), _) => {
+                let checkpoint = self.inference.checkpoint();
+                let fits = self
+                    .instantiate_host_type(
+                        expected,
+                        &mut BTreeMap::new(),
+                        "",
+                        Span::NONE,
+                        owner,
+                        None,
+                    )
+                    .is_ok_and(|expected| self.unify_type(&expected, &ty));
+                self.inference.rollback(checkpoint);
+                fits
+            }
             (Pattern::Variable(index), _) => match bindings.get(index) {
                 Some(bound) => *bound == ty,
                 None => {
@@ -18264,8 +18291,36 @@ impl<'a> Parser<'a> {
                     })
                     .collect::<Result<_, _>>()?,
             ),
+            // A type that names the item's parameters, as `Element<'a,
+            // Message, Theme, Renderer>` of `impl Into<Element<..>>`, names
+            // the call's.
             Pattern::Type(ty) => {
-                self.instantiate_host_type(ty, &mut BTreeMap::new(), operation, span, owner, None)?
+                self.instantiate_host_type(ty, parameters, operation, span, owner, None)?
+            }
+            // The item's parameters are its own, and each of the impl's is
+            // its variable's binding.
+            Pattern::Generic(ty) => {
+                for (index, bound) in bindings.iter() {
+                    parameters.insert(
+                        crate::host::signature::case_variable(*index).into(),
+                        bound.clone(),
+                    );
+                }
+                let ty = self.instantiate_host_type(ty, parameters, operation, span, owner, None);
+                let variables = parameters
+                    .keys()
+                    .filter(|name| crate::host::signature::case_index(name).is_some())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for name in variables {
+                    if let (Some(index), Some(bound)) = (
+                        crate::host::signature::case_index(&name),
+                        parameters.remove(&name),
+                    ) {
+                        bindings.insert(index, bound);
+                    }
+                }
+                ty?
             }
         })
     }

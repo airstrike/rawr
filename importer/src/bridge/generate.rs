@@ -11816,9 +11816,13 @@ fn render_give(
         ty if is_value(ty) => writeln!(output, "    Ok({value}.into_inner())"),
         convert::Type::Script { .. } => writeln!(output, "    Ok({value}.0.into_dynamic())"),
         // A value that carries the lifetime of the scope frame's region the
-        // call runs in stays there (D558 tier 1).
-        convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
-            let family = family_of(ty).ok_or_else(|| request::drift("a scoped value's family"))?;
+        // call runs in stays there (D558 tier 1), when its type has a name:
+        // one that leaves an argument to rustc is held as any native value.
+        convert::Type::Nominal { .. }
+            if IN_REGION.get()
+                && carries_lifetime(ty)
+                && let Some(family) = family_of(ty) =>
+        {
             writeln!(
                 output,
                 "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
@@ -12196,9 +12200,13 @@ fn render_to_dynamic(
             write!(output, "Ok::<Dynamic, Error>({value}.0.into_dynamic())")
         }
         // A value that borrows, made in a scope frame: its region holds it
-        // (D558 tier 1).
-        convert::Type::Nominal { .. } if IN_REGION.get() && carries_lifetime(ty) => {
-            let family = family_of(ty).ok_or_else(|| request::drift("a scoped value's family"))?;
+        // (D558 tier 1), when its type has a name: one that leaves an
+        // argument to rustc is held as any native value.
+        convert::Type::Nominal { .. }
+            if IN_REGION.get()
+                && carries_lifetime(ty)
+                && let Some(family) = family_of(ty) =>
+        {
             write!(
                 output,
                 "Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>({value})))"
@@ -13205,15 +13213,30 @@ fn carries_lifetime(ty: &convert::Type) -> bool {
 
 /// The name of the scope family of the imported type spelled `text` at
 /// `'x`, whose own path and lifetimes are `path` and `lifetimes`. The
-/// family is declared in `rawr_families`.
-fn family(text: String, lifetimes: Lifetimes) -> String {
-    FAMILIES.with_borrow_mut(|families| {
+/// family is declared in `rawr_families`. A type that leaves an argument
+/// to rustc's inference, spelled `_`, has none: an associated type names
+/// its type in full, so its value is held as one no region holds.
+fn family(text: String, lifetimes: Lifetimes) -> Option<String> {
+    if names_inferred(&text) {
+        return None;
+    }
+    Some(FAMILIES.with_borrow_mut(|families| {
         let next = families.len();
         families
             .entry(text)
             .or_insert_with(|| (format!("RawrFamily{next}"), lifetimes))
             .0
             .clone()
+    }))
+}
+
+/// Whether the Rust type spelled `text` has an argument `_`.
+fn names_inferred(text: &str) -> bool {
+    let identifier = |character: Option<char>| {
+        character.is_some_and(|character| character.is_alphanumeric() || character == '_')
+    };
+    text.match_indices('_').any(|(at, _)| {
+        !identifier(text[..at].chars().next_back()) && !identifier(text[at + 1..].chars().next())
     })
 }
 
@@ -13226,7 +13249,7 @@ fn family_of(ty: &convert::Type) -> Option<String> {
         return None;
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
-    Some(family(scoped_type(ty)?, lifetimes))
+    family(scoped_type(ty)?, lifetimes)
 }
 
 /// The family of a method's container, spelled `container` as
@@ -13269,7 +13292,7 @@ fn container_family(path: &str, container: &str) -> Option<String> {
         None if rest.is_empty() => format!("{path}<{marks}>"),
         None => return None,
     };
-    Some(family(text, lifetimes))
+    family(text, lifetimes)
 }
 
 /// `rest`, a container's type arguments as Rust spells them, with each

@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 34;
+const SCHEMA: u32 = 35;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -3432,6 +3432,18 @@ fn relations(
             representability::convert::Type::Option(element) => {
                 Type::Option(Box::new(pattern(element, parameters)?))
             }
+            // A crate type that names the impl's own parameters, as
+            // `Text<'a, Theme, Renderer>` of `From<Text<..>> for Element<..>`.
+            representability::convert::Type::Nominal {
+                definition,
+                arguments,
+            } => Type::Nominal {
+                identity: *definition.as_bytes(),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| pattern(argument, parameters))
+                    .collect::<Result<_, _>>()?,
+            },
             other => ty(other, parameters)?,
         })
     }

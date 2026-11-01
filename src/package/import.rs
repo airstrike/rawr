@@ -3236,8 +3236,52 @@ fn converted_pattern(
         } if !names_impl_parameter(ty) => {
             Pattern::Type(Types::convert_charged(ty, parameters).ok()?)
         }
+        // A crate type that names the impl's own parameters, as `Text<'a,
+        // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
+        // named as the case's variable.
+        Type::Nominal { .. } => {
+            let mut indices = Vec::new();
+            impl_parameters(ty, &mut indices);
+            let mut named = parameters.to_vec();
+            for index in indices {
+                named.push(representability::signature::Parameter::new(
+                    index,
+                    host::signature::case_variable(index & !IMPL_PARAMETER).into(),
+                    representability::signature::Kind::Type,
+                ));
+            }
+            Pattern::Generic(Types::convert_charged(ty, &named).ok()?)
+        }
         _ => return None,
     })
+}
+
+/// The indexes of the implementation's own type parameters `ty` names.
+fn impl_parameters(ty: &representability::convert::Type, found: &mut Vec<u32>) {
+    use representability::convert::Type;
+    match ty {
+        Type::Parameter(index) if index & representability::signature::IMPL_PARAMETER != 0 => {
+            if !found.contains(index) {
+                found.push(*index);
+            }
+        }
+        Type::Nominal { arguments, .. }
+        | Type::Tuple(arguments)
+        | Type::Script { arguments, .. } => {
+            for argument in arguments {
+                impl_parameters(argument, found);
+            }
+        }
+        Type::Option(element)
+        | Type::Borrowed { ty: element, .. }
+        | Type::Range(element)
+        | Type::Sequence { element, .. } => impl_parameters(element, found),
+        Type::Result(ok, err) => {
+            impl_parameters(ok, found);
+            impl_parameters(err, found);
+        }
+        _ => {}
+    }
 }
 
 /// Whether `ty` names an implementation's own type parameter.
