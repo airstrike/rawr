@@ -10279,7 +10279,7 @@ fn render_slot(
     // type the instance gives a synthetic output is (`W` of iced's
     // `ViewFn`, a `Column<'a, ..>`).
     let family = if call.borrows() || carries_lifetime(&returned) {
-        Some(family_of(&returned).ok_or(drift("a slot's borrowing output"))?)
+        Some(family_of(&returned).ok_or_else(|| drift("a slot's borrowing output"))?)
     } else {
         None
     };
@@ -10298,7 +10298,7 @@ fn render_slot(
             convert::Type::Borrowed { mutable: true, ty }
                 if matches!(**ty, convert::Type::Script { .. }) =>
             {
-                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: &{lifetime}mut {rust}"));
                 values.push(format!("{name}.0.lend_mut()"));
                 mutable.push(position.to_string());
@@ -10309,7 +10309,7 @@ fn render_slot(
             convert::Type::Borrowed { mutable: false, ty }
                 if matches!(**ty, convert::Type::Script { .. }) =>
             {
-                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: &{lifetime}{rust}"));
                 values.push(format!("{name}.0.lend()"));
                 pins.get_or_insert_with(|| format!("{name}.0.pins()"));
@@ -10325,7 +10325,7 @@ fn render_slot(
                     && !is_value(ty)
                     && !carries_lifetime(ty) =>
             {
-                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: &{rust}"));
                 let mut converted = String::new();
                 render_to_dynamic(ty, &format!("Clone::clone({name})"), 0, &mut converted)?;
@@ -10344,7 +10344,7 @@ fn render_slot(
                 && !is_value(ty)
                 && !carries_lifetime(ty) =>
             {
-                let rust = concrete_type(ty).ok_or(drift("a slot's input"))?;
+                let rust = concrete_type(ty).ok_or_else(|| drift("a slot's input"))?;
                 let borrow = if *borrowed_mutably { "&mut " } else { "&" };
                 parameters.push(format!("{name}: {borrow}{rust}"));
                 values.push(lent_value(position, *borrowed_mutably, &rust));
@@ -10354,7 +10354,8 @@ fn render_slot(
                 mutable: borrowed_mutably,
                 ty,
             } if family.is_none() && is_copied(ty) && place::available(ty) => {
-                let rust = concrete_type(ty).ok_or(drift("a slot's native sequence input"))?;
+                let rust =
+                    concrete_type(ty).ok_or_else(|| drift("a slot's native sequence input"))?;
                 let borrow = if *borrowed_mutably { "&mut " } else { "&" };
                 parameters.push(format!("{name}: {borrow}{rust}"));
                 values.push(format!("place_{position}.clone()"));
@@ -10370,7 +10371,7 @@ fn render_slot(
                 ));
             }
             input => {
-                let rust = concrete_type(input).ok_or(drift("a slot's input"))?;
+                let rust = concrete_type(input).ok_or_else(|| drift("a slot's input"))?;
                 parameters.push(format!("{name}: {rust}"));
                 let mut converted = String::new();
                 render_to_dynamic(input, &name, 0, &mut converted)?;
@@ -10431,7 +10432,8 @@ fn render_slot(
     let mutable = mutable.join(", ");
     let (generics, rust, body) = match &family {
         Some(family) => {
-            let pins = pins.ok_or(drift("a slot's borrowing output with no script value lent"))?;
+            let pins =
+                pins.ok_or_else(|| drift("a slot's borrowing output with no script value lent"))?;
             (
                 "<'x>",
                 format!("<{family} as __rawr_internal::scope::Family>::Of<'x>"),
@@ -10450,7 +10452,7 @@ fn render_slot(
             )
         }
         None => {
-            let rust = concrete_type(&returned).ok_or(drift("a slot's output"))?;
+            let rust = concrete_type(&returned).ok_or_else(|| drift("a slot's output"))?;
             let mut converted = String::new();
             render_from_dynamic(&returned, "value", 0, &mut converted)?;
             let native_output = holds_native(&returned);
@@ -13098,13 +13100,14 @@ fn render_impl(
 ) -> Result<(), request::Error> {
     let drift = request::drift;
     let generics = script.generics();
-    let owner = impl_type(script.owner(), generics).ok_or(drift("a script impl's owner"))?;
+    let owner =
+        impl_type(script.owner(), generics).ok_or_else(|| drift("a script impl's owner"))?;
     let arguments = script
         .arguments()
         .iter()
         .map(|argument| impl_type(argument, generics))
         .collect::<Option<Vec<_>>>()
-        .ok_or(drift("a script impl's trait arguments"))?;
+        .ok_or_else(|| drift("a script impl's trait arguments"))?;
     // Each lifetime argument is the impl's own, as `'_` writes it.
     let arguments = (0..script.lifetimes())
         .map(|_| "'_".to_owned())
@@ -13129,7 +13132,7 @@ fn render_impl(
     };
     let mut body = String::new();
     for (name, ty) in script.associated() {
-        let ty = impl_type(ty, generics).ok_or(drift("a script impl's associated type"))?;
+        let ty = impl_type(ty, generics).ok_or_else(|| drift("a script impl's associated type"))?;
         body.push_str(&format!("    type {name} = {ty};\n"));
     }
     for function in script.functions() {
@@ -13179,7 +13182,8 @@ fn render_impl_function(
     for (position, input) in function.inputs().iter().enumerate() {
         let name = format!("input_{position}");
         let at = values.len();
-        let rust = impl_type(input, generics).ok_or(drift("a script impl function's input"))?;
+        let rust =
+            impl_type(input, generics).ok_or_else(|| drift("a script impl function's input"))?;
         parameters.push(format!("{name}: {rust}"));
         if names_parameter(input) {
             return Err(drift(
@@ -13239,7 +13243,8 @@ fn render_impl_function(
                 && !is_value(ty)
                 && !carries_lifetime(ty) =>
             {
-                let target = concrete_type(ty).ok_or(drift("a script impl function's input"))?;
+                let target =
+                    concrete_type(ty).ok_or_else(|| drift("a script impl function's input"))?;
                 values.push(lent_value(position, *borrowed_mutably, &target));
                 lends.push((position, *borrowed_mutably, target));
             }
@@ -13269,7 +13274,8 @@ fn render_impl_function(
             "a script impl function's output names a type parameter of the impl",
         ));
     }
-    let rust = impl_type(returned, generics).ok_or(drift("a script impl function's output"))?;
+    let rust =
+        impl_type(returned, generics).ok_or_else(|| drift("a script impl function's output"))?;
     let in_arena = |body: &str| {
         format!(
             "with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {body} }})"
