@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 72;
+const CLASSIFIER_VERSION: u32 = 73;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -4862,13 +4862,12 @@ impl<P: api::Phase> Context<'_, P> {
             {
                 Some(reject::Kind::GenericImplementation)
             }
-            // A trait's impl for another type that names this one, as
-            // crossterm's `impl<D> AsRef<ContentStyle> for StyledContent<D>`
-            // names `ContentStyle`, has no members of this type: its `as_ref`
-            // is `StyledContent`'s.
-            _ if matches!(implementation.trait_ref(), model::Trait::Trait { .. })
-                && matches!(implementation.self_type(), model::Type::Definition { id, .. } if id != target) =>
-            {
+            // An impl for another type that names this one has no members
+            // of this type. Crossterm's `impl<D> AsRef<ContentStyle> for
+            // StyledContent<D>` names `ContentStyle`, and its `as_ref` is
+            // `StyledContent`'s. Palette's inherent `impl<T> Hsl<Srgb, T>`
+            // names `Srgb`, and its `new_srgb` is `Hsl`'s.
+            _ if matches!(implementation.self_type(), model::Type::Definition { id, .. } if id != target) => {
                 Some(reject::Kind::GenericImplementation)
             }
             // `as_ref` of one of several `AsRef<T>` impls, as a type that is
@@ -11041,6 +11040,86 @@ mod tests {
             panic!("a member of another type is not this type's");
         };
         assert_eq!(reason.kind(), Kind::GenericImplementation);
+    }
+
+    /// An inherent impl for another type that fixes one of its arguments
+    /// to this one, as palette's `impl<T> Hsl<Srgb, T>` does to `Srgb`,
+    /// gives this type no members: `new_srgb` is `Hsl`'s, not `Srgb`'s.
+    /// So does one that fixes every argument and declares no parameter.
+    #[test]
+    fn an_inherent_impl_for_another_type_gives_no_members() {
+        use super::representability::reject::Kind;
+        use crate::api::model;
+
+        let graph = crate::test_fixture::graph();
+        let limits = crate::cargo::Limits::standard();
+        let context = super::Context::new(&graph, super::Authority::production(&limits))
+            .expect("fixture context is bounded");
+        let definition = graph
+            .definitions()
+            .next()
+            .expect("fixture retains a definition");
+        let hsl = crate::test_fixture::representability_families()
+            .definitions()
+            .next()
+            .expect("family fixture retains a distinct definition")
+            .id()
+            .clone();
+        let this = || {
+            model::Argument::Type(model::Type::Definition {
+                id: definition.id().clone(),
+                arguments: Box::default(),
+            })
+        };
+        let generic = model::Generics::new(
+            Box::from([model::Parameter::new(
+                hsl.clone(),
+                0,
+                "T".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            )]),
+            Box::default(),
+        );
+        let parameter = model::Argument::Type(model::Type::Parameter {
+            owner: hsl.clone(),
+            index: 0,
+        });
+        for (arguments, generics) in [
+            (Box::from([this(), parameter]), generic),
+            (Box::from([this()]), rejection_generics()),
+        ] {
+            let implementation = model::Implementation::new(
+                "fixture-impl".into(),
+                hsl.clone(),
+                Box::from([definition.id().clone(), hsl.clone()]),
+                model::Trait::Inherent,
+                model::Type::Definition {
+                    id: hsl.clone(),
+                    arguments,
+                },
+                model::Safety::Safe,
+                model::Polarity::Positive,
+                false,
+                false,
+                generics,
+                Box::default(),
+                rejection_span(),
+                model::Origin::Source,
+            );
+            let evidence = context
+                .classify_associated(&implementation, definition, &[], definition.id())
+                .expect("the implementation is classified");
+            let super::OutcomeEvidence::Inline(representability) = evidence else {
+                panic!("a member of another type is rejected inline");
+            };
+            let Representability::Rejected(reason) = representability.as_ref() else {
+                panic!("a member of another type is not this type's: {representability:?}");
+            };
+            assert_eq!(reason.kind(), Kind::GenericImplementation);
+        }
     }
 
     /// A lifetime-only implementation that fixes a type argument to its
