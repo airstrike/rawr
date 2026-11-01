@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 28;
+const SCHEMA: u32 = 29;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -478,12 +478,6 @@ pub struct TypeDefinition {
     /// Whether the crate implements `Iterator` for the native type.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
-    /// Whether the native type is an iced view type (D558 tier 2).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    view: bool,
-    /// Whether iced implements `Widget` for the view type.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    widget: bool,
     /// Whether the type is the opaque `impl Trait` a function gives, which
     /// Rust code can't write (`surface::opaque`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1187,8 +1181,6 @@ impl Plan {
                             lifetimes: 0,
                             covariant: false,
                             iterator: false,
-                            view: false,
-                            widget: false,
                             opaque: true,
                             shape: Shape::Struct {
                                 form: Form::Record,
@@ -1633,8 +1625,6 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         lifetimes: 0,
         covariant: false,
         iterator: false,
-        view: false,
-        widget: false,
         opaque: false,
         associated: Box::default(),
         shape: Shape::Struct {
@@ -1711,8 +1701,6 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 lifetimes: 0,
                 covariant: false,
                 iterator: false,
-                view: false,
-                widget: false,
                 opaque: false,
                 associated: Box::default(),
                 shape: Shape::Struct {
@@ -1758,8 +1746,6 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         lifetimes: 0,
         covariant: false,
         iterator: false,
-        view: false,
-        widget: false,
         opaque: false,
         associated: Box::default(),
         shape: Shape::Struct {
@@ -1835,8 +1821,6 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
         lifetimes: 0,
         covariant: false,
         iterator: false,
-        view: false,
-        widget: false,
         opaque: false,
         shape: Shape::Struct {
             form: Form::Unit,
@@ -2837,11 +2821,6 @@ impl TypeDefinition {
     pub const fn iterator(&self) -> bool {
         self.iterator
     }
-    /// Return whether the native type is an iced view type (D558 tier 2).
-    pub const fn view(&self) -> bool {
-        self.view
-    }
-
     /// Return whether the type is the opaque `impl Trait` a function gives.
     pub const fn opaque(&self) -> bool {
         self.opaque
@@ -2852,11 +2831,6 @@ impl TypeDefinition {
         self.associated.iter().map(|(associated, position)| {
             (associated.trait_identity(), associated.name(), *position)
         })
-    }
-    /// Return whether the native type is a view type iced implements
-    /// `Widget` for.
-    pub const fn widget(&self) -> bool {
-        self.widget
     }
     /// Return the exact nominal shape.
     pub const fn shape(&self) -> &Shape {
@@ -3027,21 +3001,9 @@ fn type_definition(
         .definition()
         .ok_or(super::Error::ForeignIdentity)?;
     let borrowing = match outcome.representability() {
-        Representability::Struct(plan) => (
-            plan.lifetimes(),
-            plan.iterator(),
-            plan.view(),
-            plan.widget(),
-            plan.covariant(),
-        ),
-        Representability::Enum(plan) => (
-            plan.lifetimes(),
-            plan.iterator(),
-            false,
-            false,
-            plan.covariant(),
-        ),
-        _ => (0, false, false, false, false),
+        Representability::Struct(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
+        Representability::Enum(plan) => (plan.lifetimes(), plan.iterator(), plan.covariant()),
+        _ => (0, false, false),
     };
     let (parameters, defaults, copyable, default, debug, clone, compare, shape) =
         match outcome.representability() {
@@ -3111,10 +3073,8 @@ fn type_definition(
         eq: compare[1],
         hash: compare[2],
         lifetimes: borrowing.0,
-        covariant: borrowing.4,
+        covariant: borrowing.2,
         iterator: borrowing.1,
-        view: borrowing.2,
-        widget: borrowing.3,
         opaque: false,
         associated: Box::default(),
         shape,

@@ -166,8 +166,8 @@ fn plan() -> Box<[u8]> {
 }
 
 #[test]
-fn retained_install_authenticates_structural_and_event_rows() {
-    let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
+fn retained_install_authenticates_structural_rows() {
+    let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
     let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
@@ -186,35 +186,14 @@ fn retained_install_authenticates_structural_and_event_rows() {
         runner::authenticate_generated_structural_retained(&definitions, &[row], &mut native)
             .unwrap();
     assert_eq!(bindings.len(), 1);
-    let producer = identity::Selector::Function {
-        item: identity::Definition::authenticated([21; 32]),
-    };
-    let events = runner::authenticate_generated_events_retained(
-        &definitions,
-        &[runner::EventRow::new(
-            "native",
-            producer.fingerprint(),
-            [41; 32],
-            [42; 32],
-            0,
-            [11; 32],
-            "target",
-            "target::Event",
-            [9; 16],
-        )],
-        &mut native,
-    )
-    .unwrap();
-    assert_eq!(events.len(), 1);
 }
 
 fn runtime_fixture() -> (
     Engine,
     Box<[host::facade::Definition]>,
     runner::StructuralRow,
-    runner::EventRow,
 ) {
-    let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
+    let carrier = carrier_entries(&[([31; 32], [32; 32], 0)]);
     let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
     let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
@@ -230,20 +209,6 @@ fn runtime_fixture() -> (
             [32; 32],
             0,
             runner::StructuralKind::Constructor,
-        ),
-        runner::EventRow::new(
-            "native",
-            identity::Selector::Function {
-                item: identity::Definition::authenticated([21; 32]),
-            }
-            .fingerprint(),
-            [41; 32],
-            [42; 32],
-            0,
-            [11; 32],
-            "target",
-            "target::Event",
-            [9; 16],
         ),
     )
 }
@@ -264,15 +229,6 @@ fn bind_runtime(
                 .bind_imported_structural(adapter, |_, _| Ok(crate::Dynamic::UNIT))
                 .unwrap();
         }
-        for adapter in scope
-            .events()
-            .iter()
-            .filter(|adapter| adapter.root() == definition.root())
-        {
-            builder
-                .bind_event_replay(adapter, |_, _| Ok(crate::Dynamic::UNIT))
-                .unwrap();
-        }
         registry.install(builder.finish()).unwrap();
     }
     registry
@@ -280,11 +236,9 @@ fn bind_runtime(
 
 #[test]
 fn runtime_scope_binds_authenticated_rows_and_refuses_a_duplicate_binding() {
-    let (engine, definitions, structural, event) = runtime_fixture();
+    let (engine, definitions, structural) = runtime_fixture();
     let mut live = engine.begin_imported_runtime().unwrap();
     live.authenticate_structural(&definitions, &[structural])
-        .unwrap();
-    live.authenticate_events(&definitions, std::slice::from_ref(&event))
         .unwrap();
     let registry = bind_runtime(&live, &definitions);
     live.finish(registry).unwrap();
@@ -321,7 +275,7 @@ fn native_account_runtime_cannot_finish_incomplete_authentication() {
 
 #[test]
 fn structural_row_outside_the_manifest_panics() {
-    let (engine, definitions, structural, _) = runtime_fixture();
+    let (engine, definitions, structural) = runtime_fixture();
     let native = engine.imported_native.as_ref().unwrap();
     let mut attempt = native.attempt().unwrap();
     // A row the empty carrier lacks is a rawr bug, so it panics.

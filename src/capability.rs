@@ -32,14 +32,10 @@ pub enum Kind {
     /// An imported type the crate implements `Iterator` for: a `for` loop
     /// walks it by its `next` (D558 slice 2). Never derived.
     Iterator,
-    /// An imported iced view type iced implements `Widget` for, as
-    /// pane_grid's `PaneGrid`: a view shows its value as an element, which
-    /// its recipe makes at each lowering (D558 tier 2). Never derived.
-    Widget,
 }
 
 impl Kind {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 12] = [
         Self::Default,
         Self::Debug,
         Self::Clone,
@@ -52,7 +48,6 @@ impl Kind {
         Self::Send,
         Self::Static,
         Self::Iterator,
-        Self::Widget,
     ];
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
@@ -92,7 +87,6 @@ impl Kind {
             Self::Send => "Send",
             Self::Static => "Static",
             Self::Iterator => "Iterator",
-            Self::Widget => "Widget",
         }
     }
 
@@ -110,7 +104,6 @@ impl Kind {
             Self::Ord => 1 << 9,
             Self::Hash => 1 << 10,
             Self::Iterator => 1 << 11,
-            Self::Widget => 1 << 12,
         }
     }
 }
@@ -140,7 +133,6 @@ enum Name {
     Send,
     Static,
     Iterator,
-    Widget,
 }
 
 impl Set {
@@ -211,7 +203,6 @@ impl From<Kind> for Name {
             Kind::Send => Self::Send,
             Kind::Static => Self::Static,
             Kind::Iterator => Self::Iterator,
-            Kind::Widget => Self::Widget,
         }
     }
 }
@@ -245,7 +236,6 @@ impl crate::digest::Write for Fingerprint {
                 Name::Ord => 0x222a,
                 Name::Hash => 0x222b,
                 Name::Iterator => 0x222c,
-                Name::Widget => 0x222d,
             });
         }
         Ok(())
@@ -268,7 +258,6 @@ fn write_kind(writer: &mut crate::digest::Writer, capability: Kind) {
         Kind::Ord => 0x223a,
         Kind::Hash => 0x223b,
         Kind::Iterator => 0x223c,
-        Kind::Widget => 0x223d,
     });
 }
 

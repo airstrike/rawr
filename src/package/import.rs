@@ -1905,7 +1905,6 @@ fn build(
                     plan.eq(),
                     plan.hash(),
                     plan.iterator(),
-                    plan.widget(),
                 ]),
             ),
             Representability::Enum(plan) => (
@@ -1920,7 +1919,6 @@ fn build(
                     plan.eq(),
                     plan.hash(),
                     plan.iterator(),
-                    false,
                 ]),
             ),
             // A type alias of a builtin, as iced's `markdown::Uri` is `String`.
@@ -3372,7 +3370,7 @@ fn names(
 /// The traits a crate implements for a type, in the order `copy`,
 /// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
 /// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 9]) -> Vec<crate::capability::Kind> {
+pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -3383,7 +3381,6 @@ pub(crate) fn implemented(traits: [bool; 9]) -> Vec<crate::capability::Kind> {
         Kind::Eq,
         Kind::Hash,
         Kind::Iterator,
-        Kind::Widget,
     ]
     .into_iter()
     .zip(traits)

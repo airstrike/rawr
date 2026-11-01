@@ -2376,7 +2376,6 @@ fn imported_runtime(
     )?;
     let mut native = engine.begin_imported_runtime()?;
     native.authenticate_structural(definitions, STRUCTURAL_ROWS)?;
-    native.authenticate_events(definitions, EVENT_ROWS)?;
     let mut builders = definitions
         .iter()
         .cloned()
@@ -2394,9 +2393,6 @@ fn imported_runtime(
             if !builder.has_type_attestation(&path) {
                 builder.bind_type_attestation(path, native_attestation)?;
             }
-        }
-        for event in native.events().iter().filter(|event| event.root() == definition.root()) {
-            builder.bind_event_replay(event, runtime_project)?;
         }
         for adapter in adapters().copied().filter(|adapter| adapter.bound && adapter.root == definition.root()) {
             // Each instance of a generic item has its own adapter, which
@@ -5553,7 +5549,6 @@ fn render_source(
         }
     }
     output.write_all(b"];\n\n").map_err(request::unwritable)?;
-    render_event_rows(plans, profile, output)?;
     render_execution_tests(modules.keys(), output)?;
     let runner = if profile.owns_product_lifecycle() {
         LIFECYCLE_PROFILE_RUNNER_MAIN
@@ -6018,61 +6013,6 @@ pub(crate) fn decode_sources(mut bytes: &[u8]) -> Result<Vec<(&str, &[u8])>, req
         return Err(request::drift("generated source paths"));
     }
     Ok(sources)
-}
-
-fn render_event_rows(
-    plans: &[Plan],
-    profile: &crate::profile::Proof,
-    output: &mut Vec<u8>,
-) -> Result<(), request::Error> {
-    writeln!(
-        output,
-        "static EVENT_ROWS: &[__rawr_internal::package::import::runner::EventRow] = &["
-    )
-    .map_err(request::unwritable)?;
-    for plan in plans {
-        let Some(mapper) = event_mapper(plan)? else {
-            continue;
-        };
-        validate_event_projection(mapper, profile)?;
-        let witness = mapper.projection();
-        let projection = profile
-            .projections()
-            .iter()
-            .find(|projection| projection.selector() == witness.profile_projection())
-            .ok_or_else(|| request::drift("event runtime projection"))?;
-        let target = profile
-            .alias_targets()
-            .iter()
-            .find(|target| target.selector() == projection.alias_selector())
-            .ok_or_else(|| request::drift("event runtime target"))?;
-        let selector = plan
-            .selector()
-            .ok_or_else(|| request::drift("event runtime producer"))?;
-        write!(
-            output,
-            "    __rawr_internal::package::import::runner::EventRow::new({:?}, ",
-            plan.export().root_alias()
-        )
-        .map_err(request::unwritable)?;
-        byte_array(output, selector)?;
-        output.write_all(b", ").map_err(request::unwritable)?;
-        byte_array(output, plan.identity().as_bytes())?;
-        output.write_all(b", ").map_err(request::unwritable)?;
-        byte_array(output, &signature(plan)?)?;
-        write!(output, ", {}, ", arguments(plan)?).map_err(request::unwritable)?;
-        byte_array(output, witness.source().as_bytes())?;
-        write!(
-            output,
-            ", {:?}, {:?}, ",
-            target.root(),
-            format!("{}::{}", target.root(), target.path())
-        )
-        .map_err(request::unwritable)?;
-        byte_array(output, mapper.seal())?;
-        writeln!(output, "),").map_err(request::unwritable)?;
-    }
-    writeln!(output, "];\n").map_err(request::unwritable)
 }
 
 fn render_profile_projection_bindings(
@@ -7250,7 +7190,7 @@ fn render_adapter_body(
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
                 }
                 .map_err(request::unwritable)?;
-                if let Some(element) = facade_task_output(returned, facade, profile) {
+                if let Some(element) = future_output(returned) {
                     render_give_task(element, "output", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
@@ -7471,7 +7411,7 @@ fn render_adapter_body(
                     .write_all(b").await\n    });\n")
                     .map_err(request::unwritable)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
-                let element = facade_task_output(returned, facade, profile)
+                let element = future_output(returned)
                     .ok_or_else(|| request::drift("borrowed async method output"))?;
                 render_give_task(element, "output", output)?;
             } else if let Some(guard) = signature.guard()
@@ -7635,7 +7575,7 @@ fn render_adapter_body(
                 // A method that takes `self` by value may give a Rust
                 // future, as `Response::text` does.
                 let returned = &substituted(signature.output(), signature, substitutions)?;
-                match facade_task_output(returned, facade, profile) {
+                match future_output(returned) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
                         render_give_task(element, "output", output)?;
                     }
@@ -11813,12 +11753,8 @@ fn range_inclusive_element(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// The `T` of an output that is the iced facade's `Task<T>`.
-fn facade_task_output<'a>(
-    ty: &'a convert::Type,
-    facade: Option<&crate::surface::facade::Plan>,
-    profile: &crate::profile::Proof,
-) -> Option<&'a convert::Type> {
+/// The `T` of an output that is a Rust future of `T`.
+fn future_output(ty: &convert::Type) -> Option<&convert::Type> {
     let convert::Type::Nominal {
         definition,
         arguments,
@@ -11829,21 +11765,7 @@ fn facade_task_output<'a>(
     let [element] = arguments.as_ref() else {
         return None;
     };
-    if *definition == crate::surface::identity::Definition::future() {
-        return Some(element);
-    }
-    // Only a host profile has a `Task` of its own to project iced's into.
-    // With the neutral one, iced's `Task` is a crate type as any other,
-    // which iced takes back from `update` (D601).
-    if !profile.has_generated_projections() {
-        return None;
-    }
-    facade?
-        .facades()
-        .filter(|facade| facade.root() == "iced")
-        .flat_map(crate::surface::facade::Facade::types)
-        .any(|ty| ty.identity() == definition.as_bytes() && ty.path() == "Task")
-        .then_some(element)
+    (*definition == crate::surface::identity::Definition::future()).then_some(element)
 }
 
 /// Project an iced `Task<T>`, or a Rust future of `T`, into the facade's

@@ -10,7 +10,6 @@ build = "build.rs"
 path = "src/lib.rs"
 
 [features]
-canonical-selector-diagnostic = []
 default = []
 rustc-driver = ["unicode-hosts", "unicode-names"]
 # UTS46 processing of non-ASCII and uppercase host names in manifest URLs.

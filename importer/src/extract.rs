@@ -1,11 +1,7 @@
 //! Correlated sidecar decoding and deterministic normal-API canonicalization.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-#[cfg(feature = "canonical-selector-diagnostic")]
-use std::fmt;
 use std::path::{Path, PathBuf};
-#[cfg(feature = "canonical-selector-diagnostic")]
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use serde::Serialize;
 
@@ -15,392 +11,6 @@ use crate::{Error, Result};
 
 const CANONICAL_EVIDENCE_ITEMS: usize = 25_000_000;
 const CANONICAL_EVIDENCE_BYTES: usize = 2 * 1024 * 1024 * 1024;
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_STAGE: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_REASON: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_KIND: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TARGET_CRATE: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TARGET_HIGH: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TARGET_LOW: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TARGET_NAMESPACE: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TERMINAL_CRATE: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TERMINAL_HIGH: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TERMINAL_LOW: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_TERMINAL_NAMESPACE: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_SOURCE_CRATE: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_SOURCE_HIGH: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_SOURCE_LOW: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_SOURCE_NAMESPACE: AtomicU8 = AtomicU8::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_TARGET_CRATE: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_TARGET_HIGH: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_TARGET_LOW: AtomicU64 = AtomicU64::new(0);
-#[cfg(feature = "canonical-selector-diagnostic")]
-static SELECTOR_EDGE_TARGET_NAMESPACE: AtomicU8 = AtomicU8::new(0);
-
-/// Private exact-selector state retained only by the diagnostic test feature.
-#[cfg(feature = "canonical-selector-diagnostic")]
-#[doc(hidden)]
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct CanonicalSelectorDiagnostic {
-    stage: &'static str,
-    reason: Option<&'static str>,
-    target: Option<DiagnosticIdentity>,
-    terminal: Option<DiagnosticIdentity>,
-    edge_source: Option<DiagnosticIdentity>,
-    edge_target: Option<DiagnosticIdentity>,
-    edge_kind: Option<&'static str>,
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct DiagnosticIdentity {
-    stable_crate_id: u64,
-    def_path_high: u64,
-    def_path_low: u64,
-    namespace: u8,
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-impl fmt::Debug for DiagnosticIdentity {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{:016x}/{:016x}{:016x}/{}",
-            self.stable_crate_id,
-            self.def_path_high,
-            self.def_path_low,
-            diagnostic_namespace(self.namespace),
-        )
-    }
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-impl fmt::Debug for CanonicalSelectorDiagnostic {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CanonicalSelectorDiagnostic")
-            .field("stage", &self.stage)
-            .field("reason", &self.reason)
-            .field("target", &self.target)
-            .field("terminal", &self.terminal)
-            .field("edge_source", &self.edge_source)
-            .field("edge_target", &self.edge_target)
-            .field("edge_kind", &self.edge_kind)
-            .finish()
-    }
-}
-
-/// Return the private finalization state for the exact iced Element selector.
-#[cfg(feature = "canonical-selector-diagnostic")]
-#[doc(hidden)]
-#[must_use]
-pub fn canonical_selector_diagnostic() -> Option<CanonicalSelectorDiagnostic> {
-    let stage = SELECTOR_STAGE.load(Ordering::Acquire);
-    Some(CanonicalSelectorDiagnostic {
-        stage: diagnostic_stage(stage)?,
-        reason: diagnostic_reason(SELECTOR_REASON.load(Ordering::Relaxed)),
-        target: load_diagnostic_identity(
-            &SELECTOR_TARGET_CRATE,
-            &SELECTOR_TARGET_HIGH,
-            &SELECTOR_TARGET_LOW,
-            &SELECTOR_TARGET_NAMESPACE,
-        ),
-        terminal: load_diagnostic_identity(
-            &SELECTOR_TERMINAL_CRATE,
-            &SELECTOR_TERMINAL_HIGH,
-            &SELECTOR_TERMINAL_LOW,
-            &SELECTOR_TERMINAL_NAMESPACE,
-        ),
-        edge_source: load_diagnostic_identity(
-            &SELECTOR_EDGE_SOURCE_CRATE,
-            &SELECTOR_EDGE_SOURCE_HIGH,
-            &SELECTOR_EDGE_SOURCE_LOW,
-            &SELECTOR_EDGE_SOURCE_NAMESPACE,
-        ),
-        edge_target: load_diagnostic_identity(
-            &SELECTOR_EDGE_TARGET_CRATE,
-            &SELECTOR_EDGE_TARGET_HIGH,
-            &SELECTOR_EDGE_TARGET_LOW,
-            &SELECTOR_EDGE_TARGET_NAMESPACE,
-        ),
-        edge_kind: diagnostic_edge_kind(SELECTOR_EDGE_KIND.load(Ordering::Relaxed)),
-    })
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn reset_canonical_selector_diagnostic() {
-    for value in [
-        &SELECTOR_REASON,
-        &SELECTOR_EDGE_KIND,
-        &SELECTOR_TARGET_NAMESPACE,
-        &SELECTOR_TERMINAL_NAMESPACE,
-        &SELECTOR_EDGE_SOURCE_NAMESPACE,
-        &SELECTOR_EDGE_TARGET_NAMESPACE,
-    ] {
-        value.store(0, Ordering::Relaxed);
-    }
-    for value in [
-        &SELECTOR_TARGET_CRATE,
-        &SELECTOR_TARGET_HIGH,
-        &SELECTOR_TARGET_LOW,
-        &SELECTOR_TERMINAL_CRATE,
-        &SELECTOR_TERMINAL_HIGH,
-        &SELECTOR_TERMINAL_LOW,
-        &SELECTOR_EDGE_SOURCE_CRATE,
-        &SELECTOR_EDGE_SOURCE_HIGH,
-        &SELECTOR_EDGE_SOURCE_LOW,
-        &SELECTOR_EDGE_TARGET_CRATE,
-        &SELECTOR_EDGE_TARGET_HIGH,
-        &SELECTOR_EDGE_TARGET_LOW,
-    ] {
-        value.store(0, Ordering::Relaxed);
-    }
-    SELECTOR_STAGE.store(0, Ordering::Release);
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn exact_element_selector(key: &Key) -> bool {
-    key.alias.as_ref() == "iced"
-        && key.namespace == identity::Namespace::Type
-        && key.path.len() == 1
-        && key.path[0].as_ref() == "Element"
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn record_fixed_selector(
-    candidate: &Candidate,
-    nodes: &[identity::Definition],
-    states: &[FixedNode],
-    edges: &[FixedEdge<'_>],
-) {
-    let Some(export) = candidate
-        .exports
-        .iter()
-        .find_map(|(key, export)| exact_element_selector(key).then_some(export))
-    else {
-        SELECTOR_STAGE.store(1, Ordering::Release);
-        return;
-    };
-    let ExportTarget::Available(target) = &export.target else {
-        let reason = match &export.target {
-            ExportTarget::ExternalAuthorityUnavailable { .. } => 4,
-            ExportTarget::UnsupportedPublicPath { .. } => 5,
-            ExportTarget::Available(_) => 0,
-        };
-        SELECTOR_REASON.store(reason, Ordering::Relaxed);
-        SELECTOR_STAGE.store(3, Ordering::Release);
-        return;
-    };
-    store_diagnostic_identity(
-        target,
-        &SELECTOR_TARGET_CRATE,
-        &SELECTOR_TARGET_HIGH,
-        &SELECTOR_TARGET_LOW,
-        &SELECTOR_TARGET_NAMESPACE,
-    );
-    let Ok(node) = nodes.binary_search(target) else {
-        SELECTOR_STAGE.store(8, Ordering::Release);
-        return;
-    };
-    let Some(terminal) = states[node].rejection_terminal else {
-        SELECTOR_STAGE.store(2, Ordering::Release);
-        return;
-    };
-    let terminal_id = &nodes[terminal];
-    store_diagnostic_identity(
-        terminal_id,
-        &SELECTOR_TERMINAL_CRATE,
-        &SELECTOR_TERMINAL_HIGH,
-        &SELECTOR_TERMINAL_LOW,
-        &SELECTOR_TERMINAL_NAMESPACE,
-    );
-    SELECTOR_REASON.store(
-        candidate
-            .rejected
-            .get(terminal_id)
-            .map_or(1, |rejected| diagnostic_reason_code(&rejected.reason)),
-        Ordering::Relaxed,
-    );
-    if let Some(edge) = states[node]
-        .rejection_edge
-        .and_then(|index| edges.get(index))
-    {
-        store_diagnostic_identity(
-            &nodes[edge.source],
-            &SELECTOR_EDGE_SOURCE_CRATE,
-            &SELECTOR_EDGE_SOURCE_HIGH,
-            &SELECTOR_EDGE_SOURCE_LOW,
-            &SELECTOR_EDGE_SOURCE_NAMESPACE,
-        );
-        store_diagnostic_identity(
-            &nodes[edge.target],
-            &SELECTOR_EDGE_TARGET_CRATE,
-            &SELECTOR_EDGE_TARGET_HIGH,
-            &SELECTOR_EDGE_TARGET_LOW,
-            &SELECTOR_EDGE_TARGET_NAMESPACE,
-        );
-        SELECTOR_EDGE_KIND.store(
-            match edge.kind {
-                FixedEdgeKind::Admission | FixedEdgeKind::Relevance => 1,
-                FixedEdgeKind::Support {
-                    role: ledger::SupportRole::Definition,
-                    ..
-                } => 2,
-                FixedEdgeKind::Support {
-                    role: ledger::SupportRole::Implementation,
-                    ..
-                } => 3,
-            },
-            Ordering::Relaxed,
-        );
-    }
-    SELECTOR_STAGE.store(3, Ordering::Release);
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn record_final_selector(stage: u8, rejection: Option<&ledger::Reason>) {
-    if let Some(reason) = rejection {
-        SELECTOR_REASON.store(diagnostic_reason_code(reason), Ordering::Relaxed);
-    }
-    SELECTOR_STAGE.store(stage, Ordering::Release);
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn diagnostic_reason_code(reason: &ledger::Reason) -> u8 {
-    match reason {
-        ledger::Reason::UnresolvedDefinition(_) => 1,
-        ledger::Reason::UnnameablePrivate(_) => 2,
-        ledger::Reason::UnknownCompilerShape { .. } => 3,
-        ledger::Reason::ExternalAuthorityUnavailable { .. } => 4,
-        ledger::Reason::UnsupportedPublicPath { .. } => 5,
-        ledger::Reason::InvalidAliasChain => 6,
-        ledger::Reason::ConflictingIdentity => 7,
-    }
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn store_diagnostic_identity(
-    id: &identity::Definition,
-    crate_id: &AtomicU64,
-    high: &AtomicU64,
-    low: &AtomicU64,
-    namespace: &AtomicU8,
-) {
-    let Some(stable_crate_id) = parse_hex_u64(id.unit().stable_crate_id()) else {
-        return;
-    };
-    let Some(def_path_hash) = parse_hex_u128(id.def_path_hash()) else {
-        return;
-    };
-    crate_id.store(stable_crate_id, Ordering::Relaxed);
-    high.store((def_path_hash >> 64) as u64, Ordering::Relaxed);
-    low.store(def_path_hash as u64, Ordering::Relaxed);
-    namespace.store(
-        match id.namespace() {
-            identity::Namespace::Type => 1,
-            identity::Namespace::Value => 2,
-            identity::Namespace::Macro => 3,
-        },
-        Ordering::Relaxed,
-    );
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn load_diagnostic_identity(
-    crate_id: &AtomicU64,
-    high: &AtomicU64,
-    low: &AtomicU64,
-    namespace: &AtomicU8,
-) -> Option<DiagnosticIdentity> {
-    let namespace = namespace.load(Ordering::Relaxed);
-    (namespace != 0).then(|| DiagnosticIdentity {
-        stable_crate_id: crate_id.load(Ordering::Relaxed),
-        def_path_high: high.load(Ordering::Relaxed),
-        def_path_low: low.load(Ordering::Relaxed),
-        namespace,
-    })
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn parse_hex_u64(value: &str) -> Option<u64> {
-    (value.len() == 16)
-        .then(|| u64::from_str_radix(value, 16).ok())
-        .flatten()
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-fn parse_hex_u128(value: &str) -> Option<u128> {
-    (value.len() == 32)
-        .then(|| u128::from_str_radix(value, 16).ok())
-        .flatten()
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-const fn diagnostic_stage(stage: u8) -> Option<&'static str> {
-    match stage {
-        1 => Some("candidate-absent"),
-        2 => Some("fixed-complete"),
-        3 => Some("fixed-rejected"),
-        4 => Some("final-imported"),
-        5 => Some("final-rejected"),
-        6 => Some("final-excluded"),
-        7 => Some("graph-sealed"),
-        8 => Some("fixed-target-absent"),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-const fn diagnostic_reason(reason: u8) -> Option<&'static str> {
-    match reason {
-        1 => Some("unresolved-definition"),
-        2 => Some("unnameable-private"),
-        3 => Some("unknown-compiler-shape"),
-        4 => Some("external-authority-unavailable"),
-        5 => Some("unsupported-public-path"),
-        6 => Some("invalid-alias-chain"),
-        7 => Some("conflicting-identity"),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-const fn diagnostic_edge_kind(kind: u8) -> Option<&'static str> {
-    match kind {
-        1 => Some("admission"),
-        2 => Some("definition-support"),
-        3 => Some("implementation-support"),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "canonical-selector-diagnostic")]
-const fn diagnostic_namespace(namespace: u8) -> &'static str {
-    match namespace {
-        1 => "type",
-        2 => "value",
-        3 => "macro",
-        _ => "invalid",
-    }
-}
 
 #[cfg(feature = "rustc-driver")]
 #[allow(
@@ -4017,8 +3627,6 @@ impl Candidate {
         allocation: &mut Allocation,
         seal: SealMode<'_>,
     ) -> Result<api::Graph<api::Captured>> {
-        #[cfg(feature = "canonical-selector-diagnostic")]
-        reset_canonical_selector_diagnostic();
         // Extraction reads only demanded items, so an exclusion for an
         // item that was never read has nothing to exclude.
         allocation.category(EvidenceCategory::Raw);
@@ -4036,10 +3644,6 @@ impl Candidate {
         allocation.category(EvidenceCategory::Retained);
         let mut paths = Vec::new();
         for export in self.exports.into_values() {
-            #[cfg(feature = "canonical-selector-diagnostic")]
-            let exact_selector = export.key.root_alias() == "iced"
-                && export.key.namespace() == identity::Namespace::Type
-                && export.key.path().eq(["Element"]);
             let path_key = key(&export.key, allocation)?;
             let rejection = match &export.target {
                 ExportTarget::Available(target) => match outcomes.get(target) {
@@ -4088,10 +3692,6 @@ impl Candidate {
                 .get(path_key.alias.as_ref())
                 .and_then(|paths| paths.get(path_key.path.as_ref()))
             {
-                #[cfg(feature = "canonical-selector-diagnostic")]
-                if exact_selector {
-                    record_final_selector(6, None);
-                }
                 allocation.string(&exclusion.reason)?;
                 allocation.span(&exclusion.span)?;
                 allocation.cloned_ownership(2);
@@ -4105,10 +3705,6 @@ impl Candidate {
                 continue;
             }
             if let Some(rejection) = rejection {
-                #[cfg(feature = "canonical-selector-diagnostic")]
-                if exact_selector {
-                    record_final_selector(5, Some(&rejection.reason));
-                }
                 allocation.reserve(&mut paths, 1)?;
                 paths.push(ledger::Path::Rejected {
                     key: export.key,
@@ -4116,10 +3712,6 @@ impl Candidate {
                     span: rejection.span,
                 });
             } else {
-                #[cfg(feature = "canonical-selector-diagnostic")]
-                if exact_selector {
-                    record_final_selector(4, None);
-                }
                 let ExportTarget::Available(target) = export.target else {
                     return Err(extraction(
                         "missing-external-rejection",
@@ -4556,8 +4148,6 @@ impl Candidate {
         }
         allocation.fixed_population(nodes.len(), edges.len(), outcomes.len());
         allocation.fixed_queue(forward_entries, reverse_entries, retained_entries);
-        #[cfg(feature = "canonical-selector-diagnostic")]
-        record_fixed_selector(self, &nodes, &states, &edges);
         Ok(FixedClosure {
             definitions: definitions.into_boxed_slice(),
             implementations: implementations.into_boxed_slice(),
@@ -7057,40 +6647,6 @@ mod allocation {
         ));
         assert!(queue.is_empty());
         assert_eq!(refused.usage(), before);
-    }
-}
-
-#[cfg(all(test, feature = "canonical-selector-diagnostic"))]
-mod canonical_selector_diagnostic_tests {
-    use std::sync::atomic::Ordering;
-
-    use super::{
-        canonical_selector_diagnostic, record_final_selector, reset_canonical_selector_diagnostic,
-        SELECTOR_STAGE,
-    };
-    use crate::api::ledger;
-
-    #[test]
-    fn exact_selector_scalar_distinguishes_absent_pass_and_rejected() {
-        reset_canonical_selector_diagnostic();
-        SELECTOR_STAGE.store(1, Ordering::Release);
-        let absent = canonical_selector_diagnostic().expect("absent stage is recorded");
-        assert_eq!(absent.stage, "candidate-absent");
-        assert_eq!(absent.reason, None);
-
-        reset_canonical_selector_diagnostic();
-        SELECTOR_STAGE.store(2, Ordering::Release);
-        record_final_selector(4, None);
-        let complete = canonical_selector_diagnostic().expect("complete stage is recorded");
-        assert_eq!(complete.stage, "final-imported");
-        assert_eq!(complete.reason, None);
-
-        reset_canonical_selector_diagnostic();
-        SELECTOR_STAGE.store(3, Ordering::Release);
-        record_final_selector(5, Some(&ledger::Reason::InvalidAliasChain));
-        let rejected = canonical_selector_diagnostic().expect("rejected stage is recorded");
-        assert_eq!(rejected.stage, "final-rejected");
-        assert_eq!(rejected.reason, Some("invalid-alias-chain"));
     }
 }
 
