@@ -374,6 +374,22 @@ fn an_option_of_a_widget_boxes_through_the_crates_impl_for_option() {
     );
 }
 
+/// iced's websocket and screenshot: `caption`, a generic crate function
+/// whose name a macro and a module share, is passed as a value to
+/// `Iterator::map` over `&String` and to `Option::map` over `u8`. The
+/// closure's input fixes its `impl ToString`, and the view's widget fixes
+/// its theme, as rustc infers them. The output is `cargo run`'s.
+#[test]
+fn a_generic_crate_function_named_as_a_value_maps_as_rustc_infers_it() {
+    let (rawr, cargo) = both_printed("crossing-valued", "valued.rs", "slide,slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 1..=100@50/None pad 0 \"first\" \"second\" none")
+            && rawr.ends_with("\"at 100\" \"at 100\" \"100\""),
+        "{rawr}"
+    );
+}
+
 /// iced's styling and delineate: crate constants that aren't scalars, a
 /// struct (`Font::MONOSPACE`) and a `&'static [Self]` (`Theme::ALL`), are
 /// read by their paths, and a macro's `$crate::Alias::new(..)` reaches the

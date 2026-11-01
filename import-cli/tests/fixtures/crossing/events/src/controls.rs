@@ -860,6 +860,12 @@ macro_rules! controls_caption {
 
 pub use crate::controls_caption as caption;
 
+/// The caption's module, as iced's `widget::text` module: a module, a
+/// macro and a function share the name `caption`, each in its namespace.
+pub mod caption {
+    pub use super::Caption;
+}
+
 /// Text a widget borrows, as iced's `Text<'a>` borrows what `text(impl
 /// IntoFragment<'a>)` takes.
 pub struct Quote<'a, Theme> {

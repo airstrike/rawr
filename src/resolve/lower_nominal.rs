@@ -37197,6 +37197,9 @@ impl<'a> Parser<'a> {
                 owner,
             } = binding.target
         {
+            // Not called, the name is in the value namespace, as rustc's:
+            // `.map(text)` names the function a macro shares its name with.
+            let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             #[cfg(feature = "rust-import")]
             if items.len() == 1
                 && items[0].imported_identity().is_some()
@@ -37205,11 +37208,11 @@ impl<'a> Parser<'a> {
                     crate::host::item::Kind::Function | crate::host::item::Kind::AssociatedFunction
                 )
             {
-                // The name's own text, which the item's proof points at.
+                // The name's own text, which the item's proof points at. A
+                // std method Rawr runs takes it as the closure that calls it.
                 let named = span(name_span.start(), text_end(name_span.start(), &name));
-                return self.parse_imported_function_item(items, owner, named);
+                return self.parse_host_function_or_item(items.into(), owner, named);
             }
-            let items = value_or_call(macro_or_value(items.into_vec(), false), false);
             let [item] = items.as_slice() else {
                 // `.map(text)`: an overloaded function as a value is the
                 // closure `|a| text(a)`, whose call picks the overload.
@@ -44894,7 +44897,18 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         if qualified_model.is_none() {
             let path = format!("{owner}::{member}");
-            if let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec)
+            // Without `!`, a path names the value namespace's items, as
+            // rustc's: the function a macro shares its name with.
+            let bang = matches!(self.peek(), Token::Bang);
+            let called = matches!(self.peek(), Token::LeftParen | Token::Unit);
+            if let Some(items) = self.models.host_items(&path).map(|items| {
+                let items = items.to_vec();
+                if bang {
+                    items
+                } else {
+                    value_or_call(macro_or_value(items, false), called)
+                }
+            }) && !items.is_empty()
                 && items.iter().all(|item| item.imported_identity().is_some())
             {
                 let item_owner = self.models.item_owner(&path).cloned();
