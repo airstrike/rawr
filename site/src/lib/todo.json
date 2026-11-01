@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr accepts Cargo setups it used to refuse: a `CARGO_PROFILE_*` variable for another profile, `config` beside `config.toml` (rawr reads `config`, as Cargo does), a Git dependency at a branch, a tag, a short rev or its default branch, pinned by `Cargo.lock`, and a symlinked project or Cargo home.","issues":[485]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.48",
@@ -1069,7 +1074,7 @@
     {"issue":482,"title":"A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer"},
     {"issue":483,"title":"The remaining importer error variants use rawr's internal names","state":"open","category":"Importer"},
     {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc"},
+    {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"closed","category":"Divergences from rustc"},
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health"},
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
@@ -1102,7 +1107,10 @@
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
-    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc"}
+    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc"},
+    {"issue":519,"title":"rawr refuses a dependency from a registry other than crates.io","state":"open","category":"Divergences from rustc"},
+    {"issue":520,"title":"A symlinked .cargo directory or config file is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":521,"title":"A Git dependency with a version is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

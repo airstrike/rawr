@@ -485,7 +485,7 @@
     {"t":"T482","issue":482,"title":"T482: A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T483","issue":483,"title":"T483: The remaining importer error variants use rawr's internal names","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T484","issue":484,"title":"T484: An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T485","issue":485,"title":"T485: rawr refuses Cargo setups Cargo accepts","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T485","issue":485,"title":"T485: rawr refuses Cargo setups Cargo accepts","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"42d0642f8","release":null},
     {"t":"T486","issue":486,"title":"T486: Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D662"],"commit":"e6906ec59","release":null},
     {"t":"T487","issue":487,"title":"T487: Delete the dead host-profile request path","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"e6906ec59","release":"0.3.47"},
     {"t":"T488","issue":488,"title":"T488: Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":["D521","D557"],"commit":null,"release":"0.3.47"},
@@ -518,6 +518,9 @@
     {"t":"T515","issue":515,"title":"T515: Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":{"group":"play","row":"bot-prebuilt-bindings"},"decisions":[],"commit":null,"release":null},
     {"t":"T516","issue":516,"title":"T516: A runner copies its facade definitions twice at start","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T517","issue":517,"title":"T517: A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T518","issue":518,"title":"T518: rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T518","issue":518,"title":"T518: rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T519","issue":519,"title":"T519: rawr refuses a dependency from a registry other than crates.io","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T520","issue":520,"title":"T520: A symlinked .cargo directory or config file is refused","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T521","issue":521,"title":"T521: A Git dependency with a version is refused","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
