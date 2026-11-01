@@ -258,7 +258,6 @@ fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
         Some(cargo) if entry.is_script() => {
             super::manifest::script::materialize(cargo).map_err(|reason| {
                 rawr_import::Error::Request {
-                    field: "script manifest",
                     reason: reason.into_boxed_str(),
                 }
             })
@@ -292,7 +291,6 @@ fn app_crate(
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
             return Err(rawr_import::Error::Request {
-                field: "app crate",
                 reason: format!(
                     "`{}` is a Rust module, so the project root needs a Cargo.toml with a `[package]`",
                     module.path().display()
@@ -321,7 +319,6 @@ fn app_crate(
                 });
             if !shadow.refused.is_empty() {
                 return Err(rawr_import::Error::Request {
-                    field: "native islands",
                     reason: shadow.refused.join("\n").into_boxed_str(),
                 });
             }
@@ -368,16 +365,20 @@ fn app_crate(
             super::polyglot::widened(module.text(), declared_by_rawr, module.path()),
         ));
     }
-    let io = |error: std::io::Error| rawr_import::Error::Request {
-        field: "generated app crate",
-        reason: error.to_string().into_boxed_str(),
+    let io = |operation, path: &Path| {
+        let path = path.to_path_buf();
+        move |source| rawr_import::Error::Io {
+            operation,
+            path,
+            source,
+        }
     };
     for (path, text) in files {
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(io)?;
+                std::fs::create_dir_all(parent).map_err(io("create directory", parent))?;
             }
-            std::fs::write(&path, text).map_err(io)?;
+            std::fs::write(&path, text).map_err(io("write", &path))?;
         }
     }
     Dependency::path(alias, &directory, limits)?
@@ -894,7 +895,6 @@ fn dependencies(config: &Config, limits: &Limits) -> rawr_import::Result<Vec<Dep
             Source::Git { url, rev } => Dependency::git(&configured.alias, url, rev, limits)?,
             Source::Workspace => {
                 return Err(rawr_import::Error::Request {
-                    field: "dependency",
                     reason: format!(
                         "Rust dependency `{}` inherits from a workspace that Cargo did not resolve",
                         configured.alias

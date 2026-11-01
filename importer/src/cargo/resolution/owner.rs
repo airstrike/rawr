@@ -102,7 +102,7 @@ impl Ready {
             replay,
             evaluation,
         } = self;
-        evaluation.request.require_limits(limits)?;
+        evaluation.request.require_limits(limits);
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
             .map_err(|source| crate::Error::Node {
@@ -139,7 +139,7 @@ impl Ready {
             replay,
             evaluation,
         } = self;
-        evaluation.request.require_limits(limits)?;
+        evaluation.request.require_limits(limits);
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
             .map_err(|source| crate::Error::Node {
@@ -430,7 +430,7 @@ fn capture_context_in(
     limits: &Limits,
     graph_budget: &node::GraphBudget,
 ) -> Result<crate::context::Context, node::Error> {
-    request.require_limits(limits)?;
+    request.require_limits(limits);
     crate::context::Context::capture_config_in(
         &request.project_root,
         &request.config,
@@ -1330,10 +1330,9 @@ impl SharedReady {
     pub(crate) fn retain_api(self, limits: &Limits) -> crate::Result<crate::api::Continuation> {
         use sha2::{Digest as _, Sha256};
         let Self { evaluation, parts } = self;
-        evaluation.request.require_limits(limits)?;
+        evaluation.request.require_limits(limits);
         let stale = || crate::Error::Request {
-            field: "shared bindings",
-            reason: "the remembered resolution is unreadable".into(),
+            reason: "a cached build of the program's dependencies could not be read".into(),
         };
         let rawr = evaluation.cached.context.rawr().to_path_buf();
         let (identity, proof, materials) = match parts {

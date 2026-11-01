@@ -61,9 +61,10 @@ impl Context {
             .map_err(Error::Environment)?
             .ok_or(Error::MissingCargoHome)?;
         let cargo_home = canonical_directory("Cargo home", &cargo_home)?;
-        if target.is_empty() || target.contains('\0') {
-            return Err(Error::Target("must be nonempty and contain no NUL"));
-        }
+        assert!(
+            !target.is_empty() && !target.contains('\0'),
+            "rawr names a target triple"
+        );
         // The target string's size is an accounting target recorded on
         // a classification-stage account, never a refusal.
         crate::classify::Account::new().exceeded(
@@ -74,7 +75,7 @@ impl Context {
         let target: Box<str> = target.into();
         let rawr = crate::location::rawr_directory(&project, &environment);
         fs::create_dir_all(&rawr).map_err(|source| Error::Io {
-            operation: "create the project's Rawr directory",
+            operation: "create directory",
             path: rawr.clone(),
             source,
         })?;
@@ -344,7 +345,7 @@ fn retain_bytes(digest: &mut Sha256, bytes: &[u8]) {
 
 fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf, Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
-        operation: "inspect import context directory",
+        operation: "read directory",
         path: path.to_path_buf(),
         source,
     })?;
@@ -352,11 +353,11 @@ fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf, Erro
         return Err(Error::Path {
             field,
             path: path.to_path_buf(),
-            reason: "must be an existing non-symlink directory",
+            reason: "is missing or is a symbolic link",
         });
     }
     fs::canonicalize(path).map_err(|source| Error::Io {
-        operation: "canonicalize import context directory",
+        operation: "resolve directory",
         path: path.to_path_buf(),
         source,
     })
@@ -365,25 +366,23 @@ fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf, Erro
 /// Independent sealed-context capture failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("sealed import context requires CARGO_HOME or HOME/.cargo authority")]
+    #[error("Cargo couldn't find your home directory: neither `CARGO_HOME` nor `HOME` is set")]
     MissingCargoHome,
-    #[error("sealed import context rejected its environment: {0}")]
+    #[error("{0}")]
     Environment(#[source] crate::Error),
-    #[error("invalid import context {field} path `{path}`: {reason}")]
+    #[error("the {field} directory `{path}` {reason}")]
     Path {
         field: &'static str,
         path: PathBuf,
         reason: &'static str,
     },
-    #[error("invalid import context target: {0}")]
-    Target(&'static str),
     #[error("{resource} exceeded limit {limit} with observed size {actual}")]
     Limit {
         resource: &'static str,
         limit: usize,
         actual: usize,
     },
-    #[error("import context I/O failed while attempting to {operation} at {path}")]
+    #[error("failed to {operation} `{path}`: {source}")]
     Io {
         operation: &'static str,
         path: PathBuf,

@@ -318,7 +318,6 @@ pub(super) fn execute(
 
 fn error(failure: Failure) -> Error {
     Error::Request {
-        field: "test launch script",
         reason: failure.to_string().into_boxed_str(),
     }
 }

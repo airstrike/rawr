@@ -390,10 +390,9 @@ impl Prepared {
     pub fn publish(self, limits: &Limits) -> Result<crate::api::Graph<crate::api::Extracted>> {
         match self.owner {
             resolution::owner::Resolved::Owner(owner) => owner.publish(limits),
-            resolution::owner::Resolved::Shared(_) => Err(Error::Request {
-                field: "API publication",
-                reason: "shared bindings publish through the retained API".into(),
-            }),
+            resolution::owner::Resolved::Shared(_) => {
+                unreachable!("shared bindings publish through the retained API, never `publish`")
+            }
         }
     }
 
@@ -1222,23 +1221,17 @@ impl RequestAllocation {
                 operation: "request formatted string",
                 source,
             })?;
-        fmt::write(&mut value, retained).map_err(|_| Error::Request {
-            field: "request formatted allocation",
-            reason: "formatted request rendering failed".into(),
-        })?;
+        fmt::write(&mut value, retained).expect("formatting into a `String` never fails");
         Ok(value)
     }
 
     pub(crate) fn transfer(&mut self, retained: Self) -> Result<()> {
-        if self.item_limit != retained.item_limit
-            || self.byte_limit != retained.byte_limit
-            || self.string_limit != retained.string_limit
-        {
-            return Err(Error::Request {
-                field: "dependency allocation",
-                reason: "was sealed under a different request limit profile".into(),
-            });
-        }
+        assert!(
+            self.item_limit == retained.item_limit
+                && self.byte_limit == retained.byte_limit
+                && self.string_limit == retained.string_limit,
+            "a retained allocation transfers only between accounts of one limits profile"
+        );
         let items = self
             .items
             .checked_add(retained.items)
@@ -1316,14 +1309,10 @@ impl Request {
     /// No metadata probe is scheduled and this result cannot publish an API.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn native_inputs(mut self, native: &Native, limits: &Limits) -> Result<Resolution> {
-        if self.inventory || !self.demand.is_empty() {
-            return Err(Error::Request {
-                field: "application native inputs",
-                reason:
-                    "native input capture cannot also request intrinsic or contextual API facts"
-                        .into(),
-            });
-        }
+        assert!(
+            !self.inventory && self.demand.is_empty(),
+            "native input capture never also captures API facts"
+        );
         self.inputs_only = true;
         self.resolve(native, limits)
     }
@@ -1365,10 +1354,9 @@ impl Request {
             if !seen.insert(package_id) {
                 continue;
             }
-            let package = metadata.package(package_id).ok_or_else(|| Error::Request {
-                field: "inventory closure",
-                reason: format!("`{package_id}` has no resolved package").into_boxed_str(),
-            })?;
+            let package = metadata
+                .package(package_id)
+                .expect("each unit Cargo builds belongs to a package of its metadata");
             units.push((output, package));
         }
         let aliases = closure_aliases(units.iter().map(|(output, package)| {
@@ -1383,31 +1371,26 @@ impl Request {
                     config::Dependency::path(alias, package.root(), limits)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. }
-                    if cargo_id.starts_with(
-                        "registry+https://github.com/rust-lang/crates.io-index",
-                    ) || cargo_id.starts_with("sparse+https://index.crates.io/") =>
+                    if cargo_id
+                        .starts_with("registry+https://github.com/rust-lang/crates.io-index")
+                        || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
-                    config::Dependency::registry(
-                        alias,
-                        &format!("={}", package.version()),
-                        limits,
-                    )?
+                    config::Dependency::registry(alias, &format!("={}", package.version()), limits)?
                 }
                 unit::PackageSource::Git { cargo_id, oid } => {
                     let url = cargo_id
                         .strip_prefix("git+")
                         .and_then(|rest| rest.split(['?', '#']).next())
-                        .ok_or_else(|| Error::Request {
-                            field: "inventory closure",
-                            reason: format!("`{package_id}` has no git URL").into_boxed_str(),
-                        })?;
+                        .expect("Cargo names each git source `git+<url>`");
                     config::Dependency::git(alias, url, oid, limits)?
                 }
-                unit::PackageSource::Registry { .. } => {
+                unit::PackageSource::Registry { cargo_id, .. } => {
                     return Err(Error::Request {
-                        field: "inventory closure",
                         reason: format!(
-                            "`{package_id}` comes from a registry other than crates.io, which an intrinsic inventory cannot declare yet"
+                            "the crate `{} v{}` comes from the registry `{cargo_id}`, and rawr \
+                             reads crates from crates.io, git and paths only",
+                            package.name(),
+                            package.version(),
                         )
                         .into_boxed_str(),
                     });
@@ -1424,10 +1407,7 @@ impl Request {
             let witness = resolution
                 .input
                 .partition(output.semantic_key())
-                .ok_or_else(|| Error::Request {
-                    field: "inventory closure",
-                    reason: format!("`{package_id}` has no native input witness").into_boxed_str(),
-                })?;
+                .expect("an input-only resolution witnesses each library it builds");
             closure
                 .units
                 .push((name.into(), output.semantic_key().into(), witness));
@@ -1469,12 +1449,10 @@ impl Request {
         limits: &Limits,
         scope: &crate::supervisor::snapshot::attempt::Scope,
     ) -> Result<Prepared> {
-        if self.inventory {
-            return Err(Error::Request {
-                field: "intrinsic inventory",
-                reason: "use independent uncached acquisition; demand replay is not a completeness proof".into(),
-            });
-        }
+        assert!(
+            !self.inventory,
+            "an intrinsic acquisition resolves uncached; demand replay is not complete"
+        );
         resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current)
             .map(|owner| Prepared { owner })
             .map_err(|source| Error::Node {
@@ -1486,13 +1464,11 @@ impl Request {
     /// Resolve through the shared toolchain node before any tool discovery or
     /// version child is launched. Evidence-only callers retain [`Self::resolve`].
     pub fn resolve_cached(mut self, limits: &Limits) -> Result<Resolution> {
-        if self.inventory {
-            return Err(Error::Request {
-                field: "intrinsic inventory",
-                reason: "use independent uncached acquisition; demand replay is not a completeness proof".into(),
-            });
-        }
-        self.require_limits(limits)?;
+        assert!(
+            !self.inventory,
+            "an intrinsic acquisition resolves uncached; demand replay is not complete"
+        );
+        self.require_limits(limits);
         if self.universe.is_some() {
             let provisional_manifest = self.charge_provisional_manifest(limits)?;
             if let Some(catalog) = self.universe.as_ref() {
@@ -1506,7 +1482,6 @@ impl Request {
             limits,
         )
         .map_err(|error| Error::Request {
-            field: "toolchain node context",
             reason: error.to_string().into_boxed_str(),
         })?;
         let attestation =
@@ -1535,7 +1510,6 @@ impl Request {
             limits,
         )
         .map_err(|error| Error::Request {
-            field: "toolchain node context",
             reason: error.to_string().into_boxed_str(),
         })?;
         let attestation =
@@ -1566,7 +1540,7 @@ impl Request {
         limits: &Limits,
         cached: Option<&CachedToolchain>,
     ) -> Result<Resolution> {
-        self.require_limits(limits)?;
+        self.require_limits(limits);
         let native = native.production();
         let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
@@ -1587,7 +1561,7 @@ impl Request {
         limits: &Limits,
         evidence: &process::EvidenceSession,
     ) -> Result<Resolution> {
-        self.require_limits(limits)?;
+        self.require_limits(limits);
         let native = native.evidence(evidence);
         let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
@@ -1624,7 +1598,6 @@ impl Request {
                 limits,
             )
             .map_err(|error| Error::Request {
-                field: "resolution node context",
                 reason: error.to_string().into_boxed_str(),
             })?,
         });
@@ -2349,15 +2322,11 @@ impl Request {
         Ok(())
     }
 
-    fn require_limits(&self, limits: &Limits) -> Result<()> {
-        if self.allocation.matches(limits) {
-            Ok(())
-        } else {
-            Err(Error::Request {
-                field: "request limits",
-                reason: "differ from the limits that sealed this request".into(),
-            })
-        }
+    fn require_limits(&self, limits: &Limits) {
+        assert!(
+            self.allocation.matches(limits),
+            "a request runs under the limits that sealed it"
+        );
     }
 }
 
@@ -2451,10 +2420,8 @@ impl Request {
             #[cfg(feature = "rustc-driver")]
             closure_units,
         } = harness;
-        let mut allocation = request_allocation.ok_or_else(|| Error::Request {
-            field: "legacy workspace inputs",
-            reason: "original request account is absent".into(),
-        })?;
+        let mut allocation =
+            request_allocation.expect("a harness completes with its request's account");
         workspace.require(&mut crate::input::workspace::Account::borrow(
             &mut allocation,
             node_context.graph_budget(),
@@ -3038,7 +3005,7 @@ impl Builder {
     /// Select a supported target triple instead of the pinned host.
     pub fn target(mut self, target: &str) -> Result<Self> {
         self.allocation.string(target)?;
-        self.target = Some(nonempty("Cargo target", target)?);
+        self.target = Some(target.into());
         Ok(self)
     }
 
@@ -3047,12 +3014,10 @@ impl Builder {
         let valid = profile.bytes().enumerate().all(|(index, byte)| {
             byte.is_ascii_alphanumeric() || byte == b'_' || index > 0 && byte == b'-'
         });
-        if profile.is_empty() || !valid {
-            return Err(Error::Request {
-                field: "Cargo profile",
-                reason: format!("`{profile}` is not a Cargo profile name").into_boxed_str(),
-            });
-        }
+        assert!(
+            !profile.is_empty() && valid,
+            "rawr selects only Cargo profile names, never `{profile}`"
+        );
         self.allocation.string(profile)?;
         self.profile = profile.into();
         Ok(self)
@@ -3062,12 +3027,6 @@ impl Builder {
     pub fn dependency(mut self, dependency: config::Dependency) -> Result<Self> {
         self.allocation
             .transfer_with_items(dependency.allocation(), 1)?;
-        self.dependencies
-            .try_reserve(1)
-            .map_err(|error| Error::Request {
-                field: "Rust dependencies",
-                reason: error.to_string().into_boxed_str(),
-            })?;
         self.dependencies.push(dependency);
         Ok(self)
     }
@@ -3075,12 +3034,10 @@ impl Builder {
     /// Bind one preselected framework resolution universe to this request.
     #[doc(hidden)]
     pub fn resolution_universe(mut self, universe: universe::Catalog) -> Result<Self> {
-        if self.universe.is_some() {
-            return Err(Error::Request {
-                field: "resolution universe",
-                reason: "may be selected exactly once".into(),
-            });
-        }
+        assert!(
+            self.universe.is_none(),
+            "a request selects one resolution universe"
+        );
         self.universe = Some(universe);
         Ok(self)
     }
@@ -3095,21 +3052,17 @@ impl Builder {
     pub fn demand<'a>(mut self, path: impl IntoIterator<Item = &'a str>) -> Result<Self> {
         let mut segments = Vec::new();
         for segment in path {
-            if segment.is_empty() {
-                return Err(Error::Request {
-                    field: "Rust demand path",
-                    reason: "segments must be nonempty".into(),
-                });
-            }
+            assert!(
+                !segment.is_empty(),
+                "a demanded Rust path has no empty segment"
+            );
             self.allocation.string(segment)?;
             segments.push(Box::<str>::from(segment));
         }
-        if segments.len() < 2 {
-            return Err(Error::Request {
-                field: "Rust demand path",
-                reason: "must name an item below a dependency alias".into(),
-            });
-        }
+        assert!(
+            segments.len() >= 2,
+            "a demanded Rust path names an item below a crate"
+        );
         self.allocation.items(1)?;
         self.demand.insert(segments.into_boxed_slice());
         Ok(self)
@@ -3124,12 +3077,10 @@ impl Builder {
 
     /// Promote loose request fields into canonical path/config/authority proof.
     pub fn build(mut self) -> Result<Request> {
-        if self.inventory && !self.demand.is_empty() {
-            return Err(Error::Request {
-                field: "intrinsic inventory",
-                reason: "intrinsic acquisition cannot contain consuming-program demand".into(),
-            });
-        }
+        assert!(
+            !self.inventory || self.demand.is_empty(),
+            "an intrinsic acquisition carries no program demand"
+        );
         let limits = &self.limits;
         let project_root = canonical_directory("project root", &self.project_root)?;
         let expected_cache = project_root.join("target/rawr/cache");
@@ -3142,67 +3093,58 @@ impl Builder {
             });
         }
         reject_existing_symlink(&project_root, &expected_cache)?;
-        let environment = self.environment.ok_or_else(|| Error::Request {
-            field: "Cargo environment",
-            reason: "must be captured or explicitly supplied".into(),
-        })?;
+        let environment = self
+            .environment
+            .expect("each request is built with its Cargo environment");
         self.allocation.items(environment.entries().len())?;
         for (key, value) in environment.entries() {
             self.allocation.string(key)?;
             self.allocation.string(value)?;
         }
-        let policy = self.policy.ok_or_else(|| Error::Request {
-            field: "Rust exclusion policy",
-            reason: "must be derived from the validated Rawr manifest".into(),
-        })?;
-        if self.dependencies.is_empty() {
-            return Err(Error::Request {
-                field: "Rust dependencies",
-                reason: "at least one selected library is required".into(),
-            });
-        }
+        let policy = self
+            .policy
+            .expect("each request is built with its exclusion policy");
         let internal = internal::Seed::transform(&crate::host::root()?, &mut self.allocation)?;
         let count = self.dependencies.len().saturating_add(1);
         self.allocation
             .exceeded("Rust dependencies", limits.packages, count);
         self.allocation.items(count)?;
-        let mut dependencies = Vec::new();
-        dependencies
-            .try_reserve_exact(count)
-            .map_err(|error| Error::Request {
-                field: "Rust dependencies",
-                reason: error.to_string().into_boxed_str(),
-            })?;
+        let mut dependencies = Vec::with_capacity(count);
         for dependency in self.dependencies {
             dependencies.push(dependency.seal(&project_root, &mut self.allocation)?);
         }
+        // A package imports Rust only when it has a dependency or Rust
+        // modules, whose crate is then a dependency too; the internal
+        // dependency below brings the runtime and compiler roles.
+        assert!(
+            dependencies
+                .iter()
+                .any(|dependency| dependency.roles().contains(config::Role::Library)),
+            "a request declares at least one library"
+        );
         let internal_dependency = internal.dependency(limits)?;
         self.allocation.transfer(internal_dependency.allocation())?;
         dependencies.push(internal_dependency.seal(&project_root, &mut self.allocation)?);
         dependencies.sort_unstable_by(|left, right| left.alias().cmp(right.alias()));
-        if dependencies
+        // A dependency may share the name of the package's own library, as
+        // Cargo allows; both are crates of the one program rawr builds.
+        if let Some(pair) = dependencies
             .windows(2)
-            .any(|pair| pair[0].alias() == pair[1].alias())
+            .find(|pair| pair[0].alias() == pair[1].alias())
         {
+            let manifest = self
+                .cargo_authority
+                .as_deref()
+                .unwrap_or_else(|| Path::new("Cargo.toml"));
             return Err(Error::Request {
-                field: "Rust dependencies",
-                reason: "dependency aliases must be unique".into(),
+                reason: format!(
+                    "two crates of this package are named `{}`; give the dependency \
+                     another name in `{}`",
+                    pair[0].alias(),
+                    manifest.display(),
+                )
+                .into_boxed_str(),
             });
-        }
-        for role in [
-            config::Role::Library,
-            config::Role::Runtime,
-            config::Role::Compiler,
-        ] {
-            if !dependencies
-                .iter()
-                .any(|dependency| dependency.roles().contains(role))
-            {
-                return Err(Error::Request {
-                    field: "final-form Cargo universe",
-                    reason: format!("missing {role:?} dependency role").into_boxed_str(),
-                });
-            }
         }
 
         let toolchain = toolchain::Requirement::pinned();
@@ -3216,9 +3158,7 @@ impl Builder {
         };
         if !toolchain.supports_target(&target) {
             return Err(Error::Request {
-                field: "Cargo target",
-                reason: format!("`{target}` is outside the pinned supported target set")
-                    .into_boxed_str(),
+                reason: format!("rawr does not support the target `{target}`").into_boxed_str(),
             });
         }
 
@@ -3251,10 +3191,14 @@ impl Builder {
                 .iter()
                 .any(|dependency| dependency.alias() == path[0].as_ref())
         }) {
+            // Reached by a remembered path whose crate the package no longer
+            // declares; the caller forgets the memory and asks again.
             return Err(Error::Request {
-                field: "Rust demand path",
-                reason: format!("`{}` is not a declared dependency alias", path[0])
-                    .into_boxed_str(),
+                reason: format!(
+                    "failed to resolve: use of unresolved module or unlinked crate `{}`",
+                    path[0]
+                )
+                .into_boxed_str(),
             });
         }
         Ok(Request {
@@ -3292,12 +3236,10 @@ impl Resolution {
         self,
         limits: &Limits,
     ) -> Result<crate::applicability::native::Inputs> {
-        if self.capture.is_some() {
-            return Err(Error::Request {
-                field: "application native inputs",
-                reason: "API capture cannot replace a consuming native input proof".into(),
-            });
-        }
+        assert!(
+            self.capture.is_none(),
+            "native inputs come from an input-only resolution, never an API capture"
+        );
         let (proof, partitions) = self.input.prove_partitioned(limits)?;
         Ok(crate::applicability::native::Inputs::from_capture(
             proof, partitions,
@@ -3412,10 +3354,7 @@ impl Resolution {
             &target,
             &profile,
             universe,
-            capture.ok_or_else(|| Error::Request {
-                field: "API publication",
-                reason: "native inputs do not establish compiler API facts".into(),
-            })?,
+            capture.expect("an input-only resolution never publishes an API"),
             input,
             policy,
             limits,
@@ -3719,13 +3658,7 @@ impl Authority {
                     .saturating_add(bytes.len())
             }));
         allocation.retained(1, evidence_bytes)?;
-        let mut evidence = Vec::new();
-        evidence
-            .try_reserve_exact(evidence_bytes)
-            .map_err(|error| Error::Request {
-                field: "Cargo authority evidence allocation",
-                reason: error.to_string().into_boxed_str(),
-            })?;
+        let mut evidence = Vec::with_capacity(evidence_bytes);
         append_framed(&mut evidence, manifest.as_os_str().as_encoded_bytes());
         append_framed(&mut evidence, &bytes);
         if let Some((lock, bytes)) = &lock_evidence {
@@ -4493,12 +4426,10 @@ fn render_manifest_accounted(
     limits: &Limits,
     allocation: &mut RequestAllocation,
 ) -> Result<String> {
-    if !request.allocation.matches(limits) || !allocation.matches(limits) {
-        return Err(Error::Request {
-            field: "harness manifest allocation",
-            reason: "request and rendering limit profiles differ".into(),
-        });
-    }
+    assert!(
+        request.allocation.matches(limits) && allocation.matches(limits),
+        "a manifest renders under its request's limits"
+    );
     allocation.items(12)?;
     for value in [
         "cargo-features",
@@ -5403,13 +5334,7 @@ fn authority_inputs(
         }
     }
     allocation.items(paths.len())?;
-    let mut inputs = Vec::new();
-    inputs
-        .try_reserve_exact(paths.len())
-        .map_err(|error| Error::Request {
-            field: "Cargo authority inputs",
-            reason: error.to_string().into_boxed_str(),
-        })?;
+    let mut inputs = Vec::with_capacity(paths.len());
     for (path, role) in paths {
         if let Some(original) = authority
             .inputs
@@ -5901,16 +5826,6 @@ fn path_string<'a>(field: &'static str, path: &'a Path) -> Result<&'a str> {
         path: path.to_path_buf(),
         reason: "is not valid Unicode Cargo TOML input".into(),
     })
-}
-
-fn nonempty(field: &'static str, value: &str) -> Result<Box<str>> {
-    if value.is_empty() || value.len() > STRING_BYTES {
-        return Err(Error::Request {
-            field,
-            reason: "must contain between 1 byte and 1 MiB".into(),
-        });
-    }
-    Ok(value.into())
 }
 
 pub(crate) fn digest(bytes: &[u8]) -> Digest {
@@ -6999,9 +6914,11 @@ mod authority_boundary_tests {
             .exceedances()
             .axis(super::REQUEST_STRING_RESOURCE)
             .is_some());
-        assert!(parent
-            .transfer(super::RequestAllocation::new(&super::Limits::standard()))
-            .is_err());
+        // Mixing limits profiles is a rawr bug.
+        assert!(std::panic::catch_unwind(move || {
+            let _ = parent.transfer(super::RequestAllocation::new(&super::Limits::standard()));
+        })
+        .is_err());
     }
 
     #[test]

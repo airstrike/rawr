@@ -35,12 +35,13 @@ pub fn root() -> crate::Result<PathBuf> {
     }
     let home = match std::env::var_os("CARGO_HOME") {
         Some(home) => PathBuf::from(home),
-        None => PathBuf::from(
-            std::env::var_os("HOME").ok_or_else(|| crate::Error::Request {
-                field: "Rawr host",
-                reason: "requires CARGO_HOME or HOME".into(),
-            })?,
-        )
+        None => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| {
+            crate::Error::Request {
+                reason: "Cargo couldn't find your home directory: neither `CARGO_HOME` nor `HOME` \
+                         is set"
+                    .into(),
+            }
+        })?)
         .join(".cargo"),
     };
     let hosts = crate::store::home(&home).join("hosts");

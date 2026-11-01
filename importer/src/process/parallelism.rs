@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use crate::{Error, Result};
 
 const SCHEMA: u32 = 1;
-const MAXIMUM_JOBS: usize = 12;
+const MAXIMUM_JOBS: NonZeroUsize = NonZeroUsize::new(12).unwrap();
 
 /// A discovered host capability transformed into one bounded Cargo worker count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,19 +16,15 @@ pub(crate) struct Proof {
 impl Proof {
     pub(crate) fn discover() -> Result<Self> {
         let available = std::thread::available_parallelism().map_err(|source| Error::Request {
-            field: "Cargo parallelism",
-            reason: format!("failed to discover available parallelism: {source}").into_boxed_str(),
+            reason: format!("could not determine the number of CPUs: {source}").into_boxed_str(),
         })?;
         Self::from_available(available)
     }
 
     fn from_available(available: NonZeroUsize) -> Result<Self> {
-        let jobs = available.get().min(MAXIMUM_JOBS);
-        let jobs = NonZeroUsize::new(jobs).ok_or_else(|| Error::Request {
-            field: "Cargo parallelism",
-            reason: "available parallelism produced a zero worker count".into(),
-        })?;
-        Ok(Self { jobs })
+        Ok(Self {
+            jobs: available.min(MAXIMUM_JOBS),
+        })
     }
 
     pub(crate) const fn schema(self) -> u32 {

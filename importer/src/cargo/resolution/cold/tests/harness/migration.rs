@@ -115,17 +115,18 @@ fn exercise() {
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
         let (metadata, units) = documents(request, layout.final_form());
         let mut allocation = request.allocation;
-        // The compatibility constructor still rejects Persisted before commands.
-        assert!(request
-            .prepare_fresh_harness_in(
+        // The compatibility constructor still refuses Persisted before commands.
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = request.prepare_fresh_harness_in(
                 layout,
                 &cached,
                 &limits,
                 &limits,
                 &mut allocation,
-                unit::Allocation::begin(&limits)
-            )
-            .is_err());
+                unit::Allocation::begin(&limits),
+            );
+        }))
+        .is_err());
         let steps = vec![
             expected_reply(
                 request,

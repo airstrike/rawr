@@ -383,12 +383,10 @@ impl Definition {
         cargo_commit: &'static str,
         limits: &Limits,
     ) -> Result<Self> {
-        if name.is_empty() || version == 0 || endpoint_table == 0 {
-            return Err(Error::Request {
-                field: "resolution universe",
-                reason: "name and versions must be nonempty and nonzero".into(),
-            });
-        }
+        assert!(
+            !name.is_empty() && version != 0 && endpoint_table != 0,
+            "a compiled-in resolution universe has a name and nonzero versions"
+        );
         // The seed is compiled-in program text, not admitted input; its
         // size is fixed at build time and an accounting target never refuses it.
         let seed_digest = Digest(Sha256::digest(seed).into());
@@ -3337,7 +3335,6 @@ impl Closure {
         match mismatch {
             None => Ok(()),
             Some(actual) => Err(Error::Request {
-                field: "framework dependency",
                 reason: format!(
                     "this rawr supports {framework} {}; the project uses {framework} {}",
                     describe_framework(expected),

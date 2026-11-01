@@ -182,9 +182,10 @@ impl Projection {
             });
             if !allowed {
                 return Err(Error::Request {
-                    field: "Cargo profile environment authority",
-                    reason: format!("unsupported Cargo profile environment variable `{key}`")
-                        .into_boxed_str(),
+                    reason: format!(
+                        "rawr can't build Rust with the environment variable `{key}` set"
+                    )
+                    .into_boxed_str(),
                 });
             }
         }
@@ -296,13 +297,7 @@ impl Projection {
         // request account; the projection seals every entry.
         allocation.exceeded("environment projection entries", limits.items, values.len());
         allocation.items(values.len())?;
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(values.len())
-            .map_err(|error| Error::Request {
-                field: "environment projection allocation",
-                reason: error.to_string().into_boxed_str(),
-            })?;
+        let mut entries = Vec::with_capacity(values.len());
         for (key, value) in values {
             entries.push(Entry {
                 key: key.into_boxed_str(),
@@ -561,8 +556,8 @@ fn insert(
             Ok(())
         } else {
             Err(Error::Request {
-                field: "environment projection",
-                reason: format!("conflicting semantic environment key `{key}`").into_boxed_str(),
+                reason: format!("the environment gives Cargo's `{key}` two different values")
+                    .into_boxed_str(),
             })
         };
     }
@@ -588,13 +583,7 @@ fn component(
     );
     allocation.items(1)?;
     allocation.bytes(value.len())?;
-    let mut output = String::new();
-    output
-        .try_reserve_exact(value.len())
-        .map_err(|error| Error::Request {
-            field: "environment projection allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
+    let mut output = String::with_capacity(value.len());
     for byte in value.bytes() {
         output.push(if byte == b'-' {
             '_'
@@ -618,10 +607,7 @@ fn derived_key(
         .checked_add(component.len())
         .and_then(|length| length.checked_add(separator.len()))
         .and_then(|length| length.checked_add(suffix.len()))
-        .ok_or_else(|| Error::Request {
-            field: "environment projection key",
-            reason: "derived key length overflow".into(),
-        })?;
+        .expect("an environment key's length fits in memory");
     allocation.exceeded(
         "environment projection key bytes",
         limits.string_bytes,
@@ -629,12 +615,7 @@ fn derived_key(
     );
     allocation.items(1)?;
     allocation.bytes(length)?;
-    let mut key = String::new();
-    key.try_reserve_exact(length)
-        .map_err(|error| Error::Request {
-            field: "environment projection allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
+    let mut key = String::with_capacity(length);
     key.push_str(prefix);
     key.push_str(component);
     key.push_str(separator);
@@ -1107,10 +1088,8 @@ mod tests {
             .expect_err("unmodeled profile environment must reject");
             assert!(matches!(
                 error,
-                crate::Error::Request {
-                    field: "Cargo profile environment authority",
-                    ..
-                }
+                crate::Error::Request { reason }
+                    if reason.starts_with("rawr can't build Rust with the environment variable")
             ));
         }
     }

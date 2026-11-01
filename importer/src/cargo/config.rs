@@ -259,14 +259,17 @@ impl Dependency {
         allocation.string(alias)?;
         allocation.string(version)?;
         let requirement = VersionReq::parse(version).map_err(|error| Error::Request {
-            field: "dependency version",
-            reason: error.to_string().into_boxed_str(),
+            reason: format!(
+                "failed to parse the version requirement `{version}` for dependency \
+                 `{alias}`: {error}"
+            )
+            .into_boxed_str(),
         })?;
         Ok(Self {
             alias: validated_library_alias(alias)?,
             package: None,
             source: Source::Registry {
-                manifest: validated_nonempty("dependency version", version)?,
+                manifest: version.into(),
                 requirement,
             },
             features: Box::default(),
@@ -281,8 +284,11 @@ impl Dependency {
         let valid = revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit());
         if !valid {
             return Err(Error::Request {
-                field: "dependency git revision",
-                reason: "must be a full 40-digit hexadecimal commit".into(),
+                reason: format!(
+                    "the git revision `{revision}` of dependency `{alias}` is not a full \
+                     40-digit commit hash, which rawr needs to pin the dependency"
+                )
+                .into_boxed_str(),
             });
         }
         let mut allocation = RequestAllocation::new(limits);
@@ -294,7 +300,7 @@ impl Dependency {
             alias: validated_library_alias(alias)?,
             package: None,
             source: Source::Git {
-                url: validated_nonempty("dependency git URL", url)?,
+                url: url.into(),
                 rev: revision.to_ascii_lowercase().into_boxed_str(),
             },
             features: Box::default(),
@@ -307,12 +313,10 @@ impl Dependency {
     /// Begin an exact local framework-profile package selected by its host.
     #[doc(hidden)]
     pub fn profile_path(alias: &str, package: &str, path: &Path, limits: &Limits) -> Result<Self> {
-        if !valid_package_name(package) {
-            return Err(Error::Request {
-                field: "profile package",
-                reason: format!("`{package}` is not a Cargo package name").into_boxed_str(),
-            });
-        }
+        assert!(
+            valid_package_name(package),
+            "a host profile names a Cargo package, never `{package}`"
+        );
         let mut allocation = RequestAllocation::new(limits);
         allocation.items(1)?;
         allocation.string(alias)?;
@@ -333,8 +337,11 @@ impl Dependency {
     pub fn package(mut self, package: &str) -> Result<Self> {
         if !valid_package_name(package) {
             return Err(Error::Request {
-                field: "dependency package",
-                reason: format!("`{package}` is not a Cargo package name").into_boxed_str(),
+                reason: format!(
+                    "invalid package name `{package}` for dependency `{}`",
+                    self.alias
+                )
+                .into_boxed_str(),
             });
         }
         self.allocation.string(package)?;
@@ -352,12 +359,13 @@ impl Dependency {
         for feature in features {
             let feature = feature.as_ref();
             self.allocation.string(feature)?;
-            retained.try_reserve(1).map_err(|error| Error::Request {
-                field: "dependency features",
-                reason: error.to_string().into_boxed_str(),
-            })?;
-            let feature = validated_nonempty("dependency feature", feature)?;
-            retained.push(feature);
+            if feature.is_empty() {
+                return Err(Error::Request {
+                    reason: format!("dependency `{}` names an empty feature", self.alias)
+                        .into_boxed_str(),
+                });
+            }
+            retained.push(Box::<str>::from(feature));
         }
         retained.sort_unstable();
         retained.dedup();
@@ -433,13 +441,13 @@ impl Environment {
         let mut values = BTreeMap::new();
         let mut total = 0_usize;
         for (key, value) in env::vars_os() {
-            let key = key.into_string().map_err(|_| Error::Request {
-                field: "Cargo environment",
-                reason: "contains a non-Unicode variable name".into(),
+            let key = key.into_string().map_err(|key| Error::Request {
+                reason: format!("the environment variable {key:?} has a name that is not Unicode")
+                    .into_boxed_str(),
             })?;
             let value = value.into_string().map_err(|_| Error::Request {
-                field: "Cargo environment",
-                reason: format!("variable `{key}` contains a non-Unicode value").into_boxed_str(),
+                reason: format!("the environment variable `{key}` has a value that is not Unicode")
+                    .into_boxed_str(),
             })?;
             insert_owned_environment(&mut values, &mut total, key, value)?;
         }
@@ -493,10 +501,6 @@ impl Environment {
                 actual: values.len().saturating_add(1),
             });
         }
-        values.try_reserve(1).map_err(|error| Error::Request {
-            field: "Cargo environment",
-            reason: format!("failed to reserve environment entry: {error}").into_boxed_str(),
-        })?;
         values.push((key.into(), value.into()));
         values.sort_unstable_by(|left, right| left.0.cmp(&right.0));
         Ok(Self {
@@ -508,8 +512,7 @@ impl Environment {
     pub fn removing(self, key: &str) -> Result<Self> {
         if key.is_empty() || key.contains('=') || key.contains('\0') {
             return Err(Error::Request {
-                field: "Cargo environment",
-                reason: format!("invalid environment variable `{key}`").into_boxed_str(),
+                reason: format!("invalid environment variable name `{key}`").into_boxed_str(),
             });
         }
         let mut values = self.values.into_vec();
@@ -587,13 +590,7 @@ impl Environment {
                 actual: bytes,
             });
         }
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(items)
-            .map_err(|error| Error::Request {
-                field: "Cargo environment",
-                reason: format!("failed to reserve command environment: {error}").into_boxed_str(),
-            })?;
+        let mut values = Vec::with_capacity(items);
         for (key, value) in retained {
             values.push((OsString::from(key.as_ref()), OsString::from(value.as_ref())));
         }
@@ -722,8 +719,7 @@ fn validate_environment_entry(
 ) -> Result<usize> {
     if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
         return Err(Error::Request {
-            field: "Cargo environment",
-            reason: format!("invalid environment entry `{key}`").into_boxed_str(),
+            reason: format!("invalid environment variable `{key}`").into_boxed_str(),
         });
     }
     if key.len() > MAX_VALUE_BYTES || value.len() > MAX_VALUE_BYTES {
@@ -738,15 +734,13 @@ fn validate_environment_entry(
         || key.starts_with(UNSTABLE_ENVIRONMENT_PREFIX)
     {
         return Err(Error::Request {
-            field: "Cargo environment authority",
-            reason: format!("environment variable `{key}` conflicts with importer control")
+            reason: format!("rawr can't build Rust with the environment variable `{key}` set")
                 .into_boxed_str(),
         });
     }
     if values.contains_key(key) {
         return Err(Error::Request {
-            field: "Cargo environment",
-            reason: format!("duplicate environment variable `{key}`").into_boxed_str(),
+            reason: format!("the environment variable `{key}` is set twice").into_boxed_str(),
         });
     }
     let entries = values.len().saturating_add(1);
@@ -772,17 +766,10 @@ fn validate_environment_entry(
 }
 
 fn environment_values(values: BTreeMap<String, String>) -> Result<Box<[EnvironmentValue]>> {
-    let mut retained = Vec::new();
-    retained
-        .try_reserve_exact(values.len())
-        .map_err(|error| Error::Request {
-            field: "Cargo environment allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
-    for (key, value) in values {
-        retained.push((key.into_boxed_str(), value.into_boxed_str()));
-    }
-    Ok(retained.into_boxed_slice())
+    Ok(values
+        .into_iter()
+        .map(|(key, value)| (key.into_boxed_str(), value.into_boxed_str()))
+        .collect())
 }
 
 impl fmt::Debug for Environment {
@@ -965,21 +952,20 @@ impl Provenance {
             .count();
         if project_has_config && authority_extra_count != 0 {
             return Err(Error::Request {
-                field: "Cargo config authority",
-                reason:
-                    "project and selected Cargo authority expose different hierarchical configs"
-                        .into(),
+                reason: format!(
+                    "Cargo reads different `.cargo/config.toml` files for `{}` than for the \
+                     project directory `{}`",
+                    authority_manifest
+                        .map_or(project_root, |path| path)
+                        .display(),
+                    project_root.display(),
+                )
+                .into_boxed_str(),
             });
         }
         let explicit = if !project_has_config {
             allocation.items(authority_extra_count)?;
-            let mut explicit = Vec::new();
-            explicit
-                .try_reserve_exact(authority_extra_count)
-                .map_err(|error| Error::Request {
-                    field: "Cargo config authority allocation",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
+            let mut explicit = Vec::with_capacity(authority_extra_count);
             for candidate in authority.iter().filter(|candidate| {
                 matches!(candidate.state, State::Present(_))
                     && !project.iter().any(|project| project.path == candidate.path)
@@ -995,7 +981,7 @@ impl Provenance {
         if let Some(cargo_home) = environment.cargo_home()? {
             let home_start = candidates.len();
             append_pair_candidates(&mut candidates, &cargo_home, allocation)?;
-            reject_pair_conflict(&candidates[home_start..], "Cargo home config")?;
+            reject_pair_conflict(&candidates[home_start..])?;
         }
         candidates.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         candidates.dedup_by(|left, right| left.path == right.path);
@@ -1009,14 +995,7 @@ impl Provenance {
                 // A byte is a conservative upper bound for every retained TOML
                 // node and byte.  Prove the complete owned DOM before parsing.
                 allocation.retained(bytes.len(), bytes.len())?;
-                let text = std::str::from_utf8(&bytes).map_err(|error| Error::Schema {
-                    document: "Cargo config",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
-                let document = text.parse::<DocumentMut>().map_err(|error| Error::Schema {
-                    document: "Cargo config",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
+                let document = parse_config(&candidate.path, &bytes)?;
                 validate_config_authority(&document, &candidate.path)?;
                 if let Some(value) = document
                     .get("build")
@@ -1024,17 +1003,20 @@ impl Provenance {
                     .and_then(|build| build.get("rustc"))
                 {
                     let value = value.as_str().ok_or_else(|| Error::Request {
-                        field: "Cargo project compiler",
-                        reason: "build.rustc must be a program path string".into(),
+                        reason: format!(
+                            "invalid configuration for key `build.rustc`: expected a string \
+                             in `{}`",
+                            candidate.path.display()
+                        )
+                        .into_boxed_str(),
                     })?;
-                    let directory = candidate.path.parent().ok_or_else(|| Error::Request {
-                        field: "Cargo project compiler",
-                        reason: "config has no containing directory".into(),
-                    })?;
-                    let base = directory.parent().ok_or_else(|| Error::Request {
-                        field: "Cargo project compiler",
-                        reason: "config has no relative-path base".into(),
-                    })?;
+                    let directory = candidate
+                        .path
+                        .parent()
+                        .expect("a Cargo config file has a directory");
+                    let base = directory
+                        .parent()
+                        .expect("a Cargo config file's directory has a parent");
                     let priority = if directory.file_name() == Some(std::ffi::OsStr::new(".cargo"))
                         && project_root.starts_with(base)
                     {
@@ -1071,13 +1053,7 @@ impl Provenance {
                 })
         });
         allocation.retained(1, digest_bytes)?;
-        let mut digest_input = Vec::new();
-        digest_input
-            .try_reserve_exact(digest_bytes)
-            .map_err(|error| Error::Request {
-                field: "Cargo config provenance digest allocation",
-                reason: error.to_string().into_boxed_str(),
-            })?;
+        let mut digest_input = Vec::with_capacity(digest_bytes);
         for candidate in &candidates {
             append_framed(
                 &mut digest_input,
@@ -1201,14 +1177,7 @@ impl Provenance {
                 let bytes =
                     read_config_budgeted(&candidate.path, crate::process::TAIL_BYTES, allocation)?;
                 allocation.retained(bytes.len(), bytes.len())?;
-                let text = std::str::from_utf8(&bytes).map_err(|error| Error::Schema {
-                    document: "Cargo config",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
-                let document = text.parse::<DocumentMut>().map_err(|error| Error::Schema {
-                    document: "Cargo config",
-                    reason: error.to_string().into_boxed_str(),
-                })?;
+                let document = parse_config(&candidate.path, &bytes)?;
                 validate_config_authority(&document, &candidate.path)?;
                 cargo_env_overrides |= document.get("env").is_some();
             }
@@ -1269,8 +1238,11 @@ fn validate_config_authority(document: &DocumentMut, path: &Path) -> Result<()> 
         });
     if configured_build || configured_environment {
         return Err(Error::Request {
-            field: "Cargo compiler wrapper",
-            reason: format!("config `{}` defines a wrapper chain", path.display()).into_boxed_str(),
+            reason: format!(
+                "rawr can't build Rust with a `rustc` wrapper, and `{}` sets one",
+                path.display()
+            )
+            .into_boxed_str(),
         });
     }
     let unstable = document
@@ -1281,9 +1253,8 @@ fn validate_config_authority(document: &DocumentMut, path: &Path) -> Result<()> 
     });
     if build_std {
         return Err(Error::Request {
-            field: "Cargo build-std authority",
             reason: format!(
-                "config `{}` defines unsupported build-std authority",
+                "rawr can't build Rust with `unstable.build-std`, and `{}` sets it",
                 path.display()
             )
             .into_boxed_str(),
@@ -1291,9 +1262,8 @@ fn validate_config_authority(document: &DocumentMut, path: &Path) -> Result<()> 
     }
     if unstable.is_some_and(|table| table.contains_key("advanced-env")) {
         return Err(Error::Request {
-            field: "Cargo advanced environment authority",
             reason: format!(
-                "config `{}` enables unsupported advanced-env authority",
+                "rawr can't build Rust with `unstable.advanced-env`, and `{}` sets it",
                 path.display()
             )
             .into_boxed_str(),
@@ -1309,17 +1279,12 @@ fn append_hierarchy_candidates(
 ) -> Result<usize> {
     let count = start.ancestors().count().saturating_mul(2);
     allocation.items(count)?;
-    candidates
-        .try_reserve_exact(count)
-        .map_err(|error| Error::Request {
-            field: "Cargo config hierarchy allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
+    candidates.reserve_exact(count);
     for directory in start.ancestors() {
         let pair_start = candidates.len();
         append_candidate(candidates, directory, ".cargo/config.toml", allocation)?;
         append_candidate(candidates, directory, ".cargo/config", allocation)?;
-        reject_pair_conflict(&candidates[pair_start..], "Cargo config authority")?;
+        reject_pair_conflict(&candidates[pair_start..])?;
     }
     Ok(candidates.len())
 }
@@ -1330,12 +1295,6 @@ fn append_pair_candidates(
     allocation: &mut RequestAllocation,
 ) -> Result<()> {
     allocation.items(2)?;
-    candidates
-        .try_reserve_exact(2)
-        .map_err(|error| Error::Request {
-            field: "Cargo config pair allocation",
-            reason: error.to_string().into_boxed_str(),
-        })?;
     append_candidate(candidates, directory, "config.toml", allocation)?;
     append_candidate(candidates, directory, "config", allocation)
 }
@@ -1359,14 +1318,33 @@ fn append_candidate(
     Ok(())
 }
 
-fn reject_pair_conflict(candidates: &[Candidate], field: &'static str) -> Result<()> {
+/// One Cargo config file's TOML, failing as Cargo words it.
+fn parse_config(path: &Path, bytes: &[u8]) -> Result<DocumentMut> {
+    let unparsable = |error: &dyn fmt::Display| Error::Request {
+        reason: format!(
+            "could not parse TOML configuration in `{}`: {error}",
+            path.display()
+        )
+        .into_boxed_str(),
+    };
+    std::str::from_utf8(bytes)
+        .map_err(|error| unparsable(&error))?
+        .parse::<DocumentMut>()
+        .map_err(|error| unparsable(&error))
+}
+
+fn reject_pair_conflict(candidates: &[Candidate]) -> Result<()> {
     if candidates
         .iter()
         .all(|candidate| matches!(&candidate.state, State::Present(_)))
     {
+        let directory = candidates[0].path.parent().unwrap_or(Path::new(""));
         return Err(Error::Request {
-            field,
-            reason: "both `config.toml` and legacy `config` exist at one hierarchy level".into(),
+            reason: format!(
+                "both `config` and `config.toml` exist in `{}`; remove one",
+                directory.display()
+            )
+            .into_boxed_str(),
         });
     }
     Ok(())
@@ -1544,8 +1522,8 @@ fn validated_alias(alias: &str) -> Result<Box<str>> {
         Ok(alias.into())
     } else {
         Err(Error::Request {
-            field: "dependency alias",
-            reason: format!("`{alias}` is not a Rust identifier").into_boxed_str(),
+            reason: format!("invalid dependency name `{alias}`: a crate name is a Rust identifier")
+                .into_boxed_str(),
         })
     }
 }
@@ -1553,8 +1531,7 @@ fn validated_alias(alias: &str) -> Result<Box<str>> {
 fn validated_library_alias(alias: &str) -> Result<Box<str>> {
     if alias == INTERNAL_ALIAS {
         return Err(Error::Request {
-            field: "dependency alias",
-            reason: format!("`{alias}` is reserved for Rawr's internal package").into_boxed_str(),
+            reason: format!("the dependency name `{alias}` is reserved by rawr").into_boxed_str(),
         });
     }
     validated_alias(alias)
@@ -1568,17 +1545,6 @@ fn valid_package_name(name: &str) -> bool {
         && characters.all(|character| {
             character.is_ascii_alphanumeric() || character == '_' || character == '-'
         })
-}
-
-fn validated_nonempty(field: &'static str, value: &str) -> Result<Box<str>> {
-    if value.is_empty() || value.len() > MAX_VALUE_BYTES {
-        Err(Error::Request {
-            field,
-            reason: "must contain between 1 byte and 1 MiB".into(),
-        })
-    } else {
-        Ok(value.into())
-    }
 }
 
 #[cfg(test)]
@@ -1804,10 +1770,8 @@ mod tests {
             OWNED_INPUT_CONFIG_CANDIDATES.with(|owned| owned.set(0));
             assert!(matches!(
                 provenance.input_config_accounted(&mut allocation),
-                Err(Error::Schema {
-                    document: "Cargo config",
-                    ..
-                })
+                Err(Error::Request { reason })
+                    if reason.starts_with("could not parse TOML configuration in")
             ));
             assert_eq!(
                 (allocation.items, allocation.bytes),
@@ -2064,7 +2028,9 @@ mod tests {
         ] {
             let error = Environment::from_pairs([(key, "unsupported")])
                 .expect_err("private importer controls reject");
-            assert!(format!("{error}").contains("importer control"));
+            assert!(
+                format!("{error}").contains("rawr can't build Rust with the environment variable")
+            );
         }
     }
 
@@ -2186,7 +2152,7 @@ mod tests {
             .expect("inline wrapper fixture is valid TOML");
         let error = validate_config_authority(&document, Path::new("/fixture/config.toml"))
             .expect_err("inline build wrapper rejects");
-        assert!(format!("{error}").contains("wrapper chain"));
+        assert!(format!("{error}").contains("rawr can't build Rust with a `rustc` wrapper"));
     }
 
     /// Two registry dependencies with the same requirement and no
