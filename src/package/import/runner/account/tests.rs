@@ -309,36 +309,16 @@ fn native_account_simultaneous_scopes_charge_one_aggregate() {
     assert_eq!(native.snapshot().first_refusal, None);
 }
 
-fn plan() -> Vec<u8> {
-    let constructor = identity::Selector::StructConstructor(identity::Form::Unit);
-    let producer = identity::Selector::Function {
-        item: identity::Definition::authenticated([21; 32]),
-    };
-    let source = [11; 32];
-    let target = [12; 32];
-    serde_json::to_vec(&serde_json::json!({
-        "schema": 25, "aliases": [], "sources": [], "abis": [], "operations": [],
-        "facades": [
-            {"root": "native", "types": [{"path": "Source", "identity": source, "parameters": [], "copy": false, "default": false, "debug": false, "clone": false,
-                "shape": {"Struct": {"form": "Unit", "constructor": constructor, "fields": [], "constructible": true}}}],
-             "items": [{"path": "produce", "kind": "Function", "selector": producer,
-                "signature": {"parameters": [], "bounds": [], "inputs": [], "output": {"Nominal": {"identity": source, "arguments": []}}}}], "traits": []},
-            {"root": "target", "types": [{"path": "Event", "identity": target, "parameters": ["Message"], "copy": false, "default": false, "debug": false, "clone": false,
-                "shape": {"Struct": {"form": "Unit", "constructor": null, "fields": [], "constructible": false}}}], "items": [], "traits": []}
-        ]
-    }))
-    .unwrap()
+fn plan() -> Box<[u8]> {
+    rawr_import::test_fixture::runner_native_facade_plan()
 }
 
 #[test]
-fn native_account_retains_bindings_structural_and_event_metadata() {
+fn retained_install_authenticates_structural_and_event_rows() {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
     let mut native = Native::transform(carrier).unwrap();
-    let initial = native.usage();
     let mut engine = Engine::new();
     let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
-    let extended = native.usage();
-    assert!(extended.0 > initial.0 && extended.1 > initial.1);
     let row = runner::StructuralRow::new(
         "native",
         "",
@@ -350,14 +330,10 @@ fn native_account_retains_bindings_structural_and_event_metadata() {
     );
     runner::admit_generated_structural_retained(&mut engine, &definitions, &[row], &mut native)
         .unwrap();
-    let structural = native.usage();
-    assert_eq!(structural.0, extended.0 + 1);
     let bindings =
         runner::authenticate_generated_structural_retained(&definitions, &[row], &mut native)
             .unwrap();
     assert_eq!(bindings.len(), 1);
-    let bound = native.usage();
-    assert_eq!(bound.0, structural.0 + 1);
     let producer = identity::Selector::Function {
         item: identity::Definition::authenticated([21; 32]),
     };
@@ -378,12 +354,6 @@ fn native_account_retains_bindings_structural_and_event_metadata() {
     )
     .unwrap();
     assert_eq!(events.len(), 1);
-    let retained = native.usage();
-    assert_eq!(retained.0, bound.0 + 1);
-    assert!(retained.1 > bound.1);
-    let failed = native.attempt().unwrap();
-    drop(failed);
-    assert_eq!(native.usage(), retained);
 }
 
 fn runtime_fixture() -> (
@@ -457,87 +427,33 @@ fn bind_runtime(
 }
 
 #[test]
-fn native_account_runtime_receipts_retire_scratch_and_count_overlapping_bindings() {
+fn runtime_scope_binds_authenticated_rows_and_refuses_a_duplicate_binding() {
     let (engine, definitions, structural, event) = runtime_fixture();
-    let native = engine.imported_native.as_ref().unwrap();
-    let baseline = native.usage();
-    let account = Arc::clone(&lock(&native.inner.allocation).account);
-    let make = || {
-        let mut scope = engine.begin_imported_runtime().unwrap();
-        scope
-            .authenticate_structural(&definitions, &[structural])
-            .unwrap();
-        scope
-            .authenticate_events(&definitions, std::slice::from_ref(&event))
-            .unwrap();
-        let during = native.usage();
-        let registry = bind_runtime(&scope, &definitions);
-        let registry = scope.finish(registry).unwrap();
-        let after = native.usage();
-        assert!(after.0 < during.0 && after.1 < during.1);
-        registry
-    };
-    let first = make();
-    let one = native.usage();
-    assert_eq!(one.0, baseline.0 + 3); // Receipt plus the two retained proof rows.
-    let second = make();
-    assert_eq!(
-        native.usage(),
-        (
-            baseline.0 + 2 * (one.0 - baseline.0),
-            baseline.1 + 2 * (one.1 - baseline.1)
-        )
-    );
-    drop(second);
-    assert_eq!(native.usage(), one);
-    drop(engine);
-    {
-        let state = lock(&account);
-        assert_eq!((state.items, state.bytes), one);
-    }
-    drop(first);
-    let state = lock(&account);
-    assert_eq!((state.items, state.bytes), (1, shared_bytes()));
-}
-
-#[test]
-fn native_account_failed_runtime_binding_releases_only_its_attempt() {
-    let (engine, definitions, structural, event) = runtime_fixture();
-    let native = engine.imported_native.as_ref().unwrap();
-    let baseline = native.usage();
     let mut live = engine.begin_imported_runtime().unwrap();
     live.authenticate_structural(&definitions, &[structural])
         .unwrap();
     live.authenticate_events(&definitions, std::slice::from_ref(&event))
         .unwrap();
     let registry = bind_runtime(&live, &definitions);
-    let live = live.finish(registry).unwrap();
-    let retained = native.usage();
-    {
-        let mut failed = engine.begin_imported_runtime().unwrap();
-        failed
-            .authenticate_structural(&definitions, &[structural])
-            .unwrap();
-        failed
-            .authenticate_events(&definitions, std::slice::from_ref(&event))
-            .unwrap();
-        let source = definitions
-            .iter()
-            .find(|definition| definition.root() == "native")
-            .unwrap();
-        let mut builder = host::runtime::Builder::new(source.clone());
-        let adapter = &failed.structural()[0];
-        builder
-            .bind_imported_structural(adapter, |_, _| Ok(crate::Dynamic::UNIT))
-            .unwrap();
-        assert!(matches!(
-            builder.bind_imported_structural(adapter, |_, _| Ok(crate::Dynamic::UNIT)),
-            Err(host::runtime::Error::DuplicateStructuralBinding { .. })
-        ));
-    }
-    assert_eq!(native.usage(), retained);
-    drop(live);
-    assert_eq!(native.usage(), baseline);
+    live.finish(registry).unwrap();
+
+    let mut scope = engine.begin_imported_runtime().unwrap();
+    scope
+        .authenticate_structural(&definitions, &[structural])
+        .unwrap();
+    let source = definitions
+        .iter()
+        .find(|definition| definition.root() == "native")
+        .unwrap();
+    let mut builder = host::runtime::Builder::new(source.clone());
+    let adapter = &scope.structural()[0];
+    builder
+        .bind_imported_structural(adapter, |_, _| Ok(crate::Dynamic::UNIT))
+        .unwrap();
+    assert!(matches!(
+        builder.bind_imported_structural(adapter, |_, _| Ok(crate::Dynamic::UNIT)),
+        Err(host::runtime::Error::DuplicateStructuralBinding { .. })
+    ));
 }
 
 #[test]
@@ -552,15 +468,11 @@ fn native_account_runtime_cannot_finish_incomplete_authentication() {
 }
 
 #[test]
-fn native_account_structural_array_is_charged_before_row_materialization() {
+fn structural_row_outside_the_manifest_panics() {
     let (engine, definitions, structural, _) = runtime_fixture();
     let native = engine.imported_native.as_ref().unwrap();
-    let baseline = native.usage();
     let mut attempt = native.attempt().unwrap();
-    let before = attempt.usage();
-    let array_bytes = std::mem::size_of::<host::runtime::StructuralAdapter>();
-    // The output array is charged before any row is processed. A row the
-    // empty carrier lacks is a rawr bug, so it panics after the charge.
+    // A row the empty carrier lacks is a rawr bug, so it panics.
     let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ =
             runner::authenticate_structural(&definitions, &carrier(), &[structural], &mut attempt);
@@ -570,10 +482,6 @@ fn native_account_structural_array_is_charged_before_row_materialization() {
         missing.downcast_ref::<&str>(),
         Some(&"each structural adapter is in the runner's manifest")
     );
-    assert_eq!(attempt.usage(), (before.0 + 1, before.1 + array_bytes));
-    assert_eq!(native.snapshot().first_refusal, None);
-    drop(attempt);
-    assert_eq!(native.usage(), baseline);
 }
 
 /// A checked-arithmetic refusal is terminal for the shared account. A

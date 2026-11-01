@@ -1775,6 +1775,106 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
     .into_boxed_slice()
 }
 
+/// A runner's two facades: `native` has a constructible unit `Source` and
+/// `produce() -> Source`, and `target` has `Event<Message>`. Built from the
+/// typed plan, so it is always at the current schema.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn runner_native_fixture() -> Box<[u8]> {
+    use super::identity::{Definition, Form as Selected, Selector};
+    let unit = |path: &str,
+                identity: [u8; 32],
+                parameters: &[&str],
+                constructor: Option<Selector>| TypeDefinition {
+        path: path.into(),
+        identity,
+        parameters: parameters.iter().map(|&name| name.into()).collect(),
+        defaults: Box::default(),
+        copy: false,
+        default: false,
+        debug: false,
+        clone: false,
+        partial_eq: false,
+        eq: false,
+        hash: false,
+        lifetimes: 0,
+        covariant: false,
+        iterator: false,
+        view: false,
+        widget: false,
+        opaque: false,
+        shape: Shape::Struct {
+            form: Form::Unit,
+            constructible: constructor.is_some(),
+            constructor,
+            fields: Box::default(),
+        },
+    };
+    let facade = |root: &str, types, items| Facade {
+        root: root.into(),
+        types,
+        items,
+        traits: Box::default(),
+        builtins: Box::default(),
+        variants: Box::default(),
+        type_aliases: Box::default(),
+        macros: Box::default(),
+        trait_headers: Box::default(),
+        impls: Box::default(),
+        std_reexports: Box::default(),
+    };
+    let source = [11; 32];
+    let produce = Item {
+        path: "produce".into(),
+        kind: ItemKind::Function,
+        selector: Selector::Function {
+            item: Definition::authenticated([21; 32]),
+        },
+        signature: Signature {
+            parameters: Box::default(),
+            bounds: Box::default(),
+            inputs: Box::default(),
+            output: Type::Nominal {
+                identity: source,
+                arguments: Box::default(),
+            },
+            relations: Box::default(),
+            guard: None,
+            scope: None,
+            crossing: false,
+            instance: None,
+        },
+        values: None,
+    };
+    let plan = Plan {
+        schema: SCHEMA,
+        aliases: Box::default(),
+        sources: Box::default(),
+        abis: Box::default(),
+        operations: Box::default(),
+        facades: Box::from([
+            facade(
+                "native",
+                Box::from([unit(
+                    "Source",
+                    source,
+                    &[],
+                    Some(Selector::StructConstructor(Selected::Unit)),
+                )]),
+                Box::from([produce]),
+            ),
+            facade(
+                "target",
+                Box::from([unit("Event", [12; 32], &["Message"], None)]),
+                Box::default(),
+            ),
+        ]),
+    };
+    plan.validate().expect("the runner fixture is canonical");
+    serde_json::to_vec(&plan)
+        .expect("the runner fixture encodes")
+        .into_boxed_slice()
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 const ROOT_FIXTURE: &str = "iced";
 

@@ -176,6 +176,12 @@ pub fn iced_projection_facade_plan() -> Box<[u8]> {
     crate::surface::facade::iced_projection_fixture()
 }
 
+/// Return an encoded runner plan: a `native` root with a constructible unit
+/// `Source` and `produce() -> Source`, and a `target` root with `Event<Message>`.
+pub fn runner_native_facade_plan() -> Box<[u8]> {
+    crate::surface::facade::runner_native_fixture()
+}
+
 fn iced_profile_graph(
     retain_text_widget: bool,
     case: IcedElementCase,
