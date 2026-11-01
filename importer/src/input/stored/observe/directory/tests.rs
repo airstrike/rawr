@@ -228,22 +228,9 @@ fn fallback_failure_prevents_the_next_metadata_operation() {
             Ok(fixture.file)
         },
     )
-    .expect("exceeding path checks are recorded, not refused");
+    .expect("admitted");
     assert_eq!(calls, 2);
-    let record = graph.exceedances();
-    let axis = record
-        .axis(node::PATHS_RESOURCE)
-        .expect("path axis recorded");
-    assert_eq!(axis.target as usize, node::MAX_PATH_CHECKS_PER_GRAPH);
-    assert_eq!(
-        axis.first_requested as usize,
-        node::MAX_PATH_CHECKS_PER_GRAPH + 1
-    );
-    assert_eq!(
-        axis.high_water as usize,
-        node::MAX_PATH_CHECKS_PER_GRAPH + 2
-    );
-    assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
+    assert!(allocation.bytes(0).is_ok());
     // A genuine failure latched during one fallback operation (test-only cause
     // injection) refuses that operation's charge and prevents the next one.
     for remaining in [0, 1] {
@@ -277,10 +264,6 @@ fn fallback_failure_prevents_the_next_metadata_operation() {
             graph.census_usage().expect("graph census").1,
             node::MAX_PATH_CHECKS_PER_GRAPH,
             "a latched account charges no further path check"
-        );
-        assert!(
-            !graph.exceedances().is_exceeded(),
-            "a refused charge is a failure, not an exceedance"
         );
         assert!(matches!(
             allocation.bytes(0),

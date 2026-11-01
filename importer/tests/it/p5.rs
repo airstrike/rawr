@@ -90,9 +90,9 @@ pub struct Definition {
 }
 
 impl Definition {
-    pub fn new(mode: Mode, lease: Option<PathBuf>, limits: &rawr_import::cargo::Limits) -> Self {
+    pub fn new(mode: Mode, lease: Option<PathBuf>) -> Self {
         Self {
-            identity: profile::Identity::new("rawr.test.profile-clock", limits),
+            identity: profile::Identity::new("rawr.test.profile-clock"),
             version: profile::Version::new(1),
             mode,
             lease,
@@ -169,17 +169,17 @@ pub fn profile_contract(
     project: &Project,
     mode: Mode,
     lease: Option<PathBuf>,
-) -> (Definition, profile::Contract, rawr_import::cargo::Limits) {
+) -> (Definition, profile::Contract) {
     let limits = rawr_import::cargo::Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let graph = request(project.path(), &limits)
         .resolve(&native, &limits)
         .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
-    let definition = Definition::new(mode, lease, &limits);
+    let definition = Definition::new(mode, lease);
     let contract = profile::classify(&definition, &graph, &limits)
         .expect("the exact synthetic profile contract seals");
-    (definition, contract, limits)
+    (definition, contract)
 }
 
 pub fn generated(
@@ -215,7 +215,7 @@ pub fn generation_request(
         .resolve(&native, &limits)
         .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
-    let definition = Definition::new(mode, lease, &limits);
+    let definition = Definition::new(mode, lease);
     let profile_contract = profile::classify(&definition, &graph, &limits)
         .expect("the exact synthetic profile contract seals");
     let contract = graph
@@ -228,7 +228,7 @@ pub fn generation_request(
         .expect("the synthetic demand compiler starts");
     let mut position = 0_u32;
     for outcome in contract.outcomes() {
-        require_outcome(&mut compiler, outcome, &entry, &limits, &mut position);
+        require_outcome(&mut compiler, outcome, &entry, &mut position);
         if let Representability::Struct(plan) = outcome.representability()
             && let Some(selector) = plan.constructor()
         {
@@ -247,7 +247,7 @@ pub fn generation_request(
         }
         for implementation in outcome.implementations() {
             for associated in implementation.associated() {
-                require_outcome(&mut compiler, associated, &entry, &limits, &mut position);
+                require_outcome(&mut compiler, associated, &entry, &mut position);
             }
         }
     }
@@ -272,7 +272,6 @@ fn require_outcome<B>(
     compiler: &mut rawr_import::surface::Compiler<'_, B>,
     outcome: rawr_import::classify::Outcome<'_>,
     entry: &str,
-    limits: &rawr_import::cargo::Limits,
     position: &mut u32,
 ) {
     if !outcome.representability().is_demandable() {
@@ -281,7 +280,7 @@ fn require_outcome<B>(
     compiler
         .require(
             outcome.identity().clone(),
-            Origin::checked(entry, *position, *position + 1, limits)
+            Origin::checked(entry, *position, *position + 1)
                 .expect("the synthetic Rawr origin is bounded"),
         )
         .expect("the synthetic outcome is demanded");
@@ -311,7 +310,7 @@ fn snapshot_transport(
         .file(entry, source)
         .expect("the transport source is bounded");
     capture
-        .bind(expected, limits)
+        .bind(expected)
         .expect("the profile transport matches its snapshot")
 }
 
@@ -331,7 +330,7 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
     rawr_import::cargo::Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the P5 request builder seals")
         .environment(environment)
-        .policy(extract::Policy::manifest(limits).seal())
+        .policy(extract::Policy::manifest().seal())
         .expect("the manifest policy fits")
         .dependency(
             Dependency::path("clock", &fixture, limits)

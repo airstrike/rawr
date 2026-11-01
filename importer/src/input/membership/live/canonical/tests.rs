@@ -132,123 +132,6 @@ fn malformed_native_results_and_unsupported_are_outer_terminal_errors() {
 }
 
 #[test]
-fn every_original_ownership_floor_records_exceedance_with_one_complete_native_call() {
-    let path = b"/p";
-    let output = b"/resolved";
-    let (_, _, complete) = run(path, bytes(output), usize::MAX, usize::MAX, 1);
-    // Ownership targets are measured, never gates. Every floor still
-    // makes exactly one native call and owns the complete record; the
-    // crossed axis records a truthful high water and nothing latches.
-    for item_limit in 7..=complete.items {
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1).unwrap();
-        let mut allocation = input::Allocation::with_limits(item_limit, complete.bytes, usize::MAX);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        let mut native = Native::new(bytes(output));
-        acquire(
-            path,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut native,
-        )
-        .expect("items past the target are owned");
-        assert_eq!(native.queries.len(), 1);
-        assert_eq!(allocation.usage(), complete);
-        let exceeded = allocation.exceedances();
-        if item_limit == complete.items {
-            assert!(!exceeded.is_exceeded());
-        } else {
-            let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-            // Items are charged one at a time: the first crossing request is
-            // exactly one past the target.
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (
-                    item_limit as u64,
-                    item_limit as u64 + 1,
-                    complete.items as u64
-                )
-            );
-            assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-        }
-        assert!(allocation.items(0).is_ok(), "nothing latched");
-    }
-    // Byte charges in ownership order: query path, terminated native path,
-    // then the native output.
-    let charges = [
-        31 + path.len(),
-        31 + path.len() + path.len() + 1,
-        31 + path.len() + path.len() + 1 + output.len(),
-    ];
-    assert_eq!(charges[2], complete.bytes);
-    for byte_limit in 31..=complete.bytes {
-        let (result, native, usage) = run(path, bytes(output), complete.items, byte_limit, 1);
-        result.expect("bytes past the target are owned");
-        assert_eq!(native.queries.len(), 1);
-        assert_eq!(usage.bytes, complete.bytes);
-    }
-    for byte_limit in 31..complete.bytes {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(complete.items, byte_limit, usize::MAX);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        let mut native = Native::new(bytes(output));
-        acquire(
-            path,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut native,
-        )
-        .unwrap();
-        let axis = allocation
-            .exceedances()
-            .axis(input::INPUT_BYTES_RESOURCE)
-            .copied()
-            .unwrap();
-        let crossing = charges
-            .iter()
-            .copied()
-            .find(|charge| *charge > byte_limit)
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (byte_limit as u64, crossing as u64, complete.bytes as u64)
-        );
-        assert!(allocation
-            .exceedances()
-            .axis(input::INPUT_ITEMS_RESOURCE)
-            .is_none());
-    }
-    // The graph's path-check target is likewise recorded, not refused.
-    let (result, native, _) = run(path, bytes(output), complete.items, complete.bytes, 0);
-    result.expect("the lookup past the target is still made");
-    assert_eq!(native.queries.len(), 1);
-    // A genuinely latched account makes no native call and owns nothing.
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
-    allocation.refuse();
-    let mut native = Native::new(bytes(output));
-    assert!(matches!(
-        acquire(
-            path,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut native,
-        ),
-        Err(Error::Input(crate::Error::InputAccountRefused))
-    ));
-    assert!(native.queries.is_empty());
-    assert_eq!(allocation.usage().bytes, 0);
-}
-
-#[test]
 fn output_refusal_latches_original_account_and_prevents_another_native_call() {
     let graph = node::GraphBudget::new();
     // The first input spends five bytes; the nine-byte output overflows the
@@ -275,7 +158,6 @@ fn output_refusal_latches_original_account_and_prevents_another_native_call() {
     ));
     assert_eq!(native.queries.len(), 1);
     assert_eq!(allocation.usage().bytes, usize::MAX);
-    assert!(!allocation.exceedances().is_exceeded());
 
     // Crossing the byte target instead is recorded and never latches: the
     // output is owned and another native call is still made.
@@ -293,15 +175,6 @@ fn output_refusal_latches_original_account_and_prevents_another_native_call() {
     acquire(b"/p", &mut budget, &mut native).expect("nothing latched");
     assert_eq!(native.queries.len(), 2);
     assert_eq!(allocation.usage().bytes, 28);
-    let axis = allocation
-        .exceedances()
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (10, 14, 28)
-    );
 }
 
 #[test]
@@ -320,58 +193,6 @@ fn invalid_observation_queries_do_not_call_native() {
         let (result, native, _) = run(path, bytes(b"/unused"), usize::MAX, usize::MAX, 1);
         assert!(matches!(result, Err(Error::Encoding(_))));
         assert!(native.queries.is_empty());
-    }
-}
-
-#[test]
-fn input_and_output_string_exceedances_are_recorded_on_the_shared_path_account() {
-    for oversized_input in [false, true] {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 2);
-        let mut native = Native::new(bytes(b"/resolved"));
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let query = if oversized_input {
-            b"/oversized".as_slice()
-        } else {
-            b"/p"
-        };
-        // Input and output paths share one string target; crossing it
-        // is recorded with the first crossing length and never latches.
-        acquire(query, &mut budget, &mut native).expect("oversized paths are owned");
-        assert_eq!(native.queries.len(), 1);
-        let axis = budget
-            .allocation
-            .exceedances()
-            .axis("membership native path bytes")
-            .copied()
-            .unwrap();
-        let first = if oversized_input { 10 } else { 9 };
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (2, first, first)
-        );
-        // This query fits the string target and the aggregate accounts have
-        // ample space; nothing prevents another call.
-        native.reply = Some(bytes(b"/resolved"));
-        acquire(b"/p", &mut budget, &mut native).expect("nothing latched");
-        assert_eq!(native.queries.len(), 2);
-        let first_call = if oversized_input {
-            10 + 11 + 9
-        } else {
-            2 + 3 + 9
-        };
-        assert_eq!(allocation.usage().bytes, first_call + 2 + 3 + 9);
-        assert_eq!(
-            allocation
-                .exceedances()
-                .axis("membership native path bytes")
-                .unwrap()
-                .high_water,
-            first
-        );
     }
 }
 

@@ -198,10 +198,10 @@ impl<B> GenerationRequestKey<B> {
             return generate::cached::materialize_historical(self, limits);
         }
         if self.profile.node_chain().is_some() {
-            return generate::cached::materialize(self, limits);
+            return generate::cached::materialize(self);
         }
         crate::metrics::executed(crate::metrics::NodeKind::Overlay, || {
-            generate::materialize(self, limits)
+            generate::materialize(self)
         })
     }
 }
@@ -281,7 +281,7 @@ pub fn fixture_lifecycle_generation_application<B: crate::surface::Runner>(
     let native =
         crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
     let profile =
-        crate::profile::Proof::fixture_lifecycle_with_chain_application(chain, application, limits)
+        crate::profile::Proof::fixture_lifecycle_with_chain_application(chain, application)
             .map_err(request::misread)?;
     let build = build_request_key(&request, &native, &profile)?;
     Ok(GenerationRequestKey {

@@ -3,7 +3,7 @@ use std::io::Write as _;
 use std::path::{Component, Path};
 
 use super::{index, Account, Buffer, Legacy};
-use crate::cargo::{universe, Limits};
+use crate::cargo::universe;
 use crate::input::build::Evidence;
 use crate::input::proof::{Canonical, ProtectedEntry, TreeDirectory, TreeFile};
 use crate::{Error, Result};
@@ -37,13 +37,6 @@ impl Account for Legacy<'_> {
     }
     fn policy(&mut self, code: &'static str, reason: impl fmt::Display) -> Error {
         crate::input::input(code, reason)
-    }
-    /// Every `limited` comparison in the protected projection is an
-    /// accounting target; record a crossing on the input account and continue.
-    fn limited(&mut self, resource: &'static str, limit: usize, actual: usize) -> Result<()> {
-        self.0.check()?;
-        self.0.exceeded(resource, limit, actual);
-        Ok(())
     }
     fn join(&mut self) -> Result<()> {
         self.0.items(1)
@@ -127,13 +120,8 @@ impl Account for Legacy<'_> {
     fn files(&mut self, value: &[TreeFile]) -> Result<Box<[TreeFile]>> {
         Ok(value.into())
     }
-    fn canonical(
-        &mut self,
-        entries: &[ProtectedEntry],
-        limits: &Limits,
-    ) -> Result<universe::BuildProjection> {
-        // The projection size is an accounting target recorded on the
-        // input account; the buffer itself is bounded by `try_reserve`.
+    fn canonical(&mut self, entries: &[ProtectedEntry]) -> Result<universe::BuildProjection> {
+        // The buffer is bounded by `try_reserve`.
         let mut canonical = Canonical { bytes: Vec::new() };
         let encoded = serde_json::to_writer(
             &mut canonical,
@@ -147,11 +135,6 @@ impl Account for Legacy<'_> {
             code: "protected-build-encoding",
             reason: error.to_string().into_boxed_str(),
         })?;
-        self.0.exceeded(
-            "protected source/build projection bytes",
-            limits.input_proof_bytes,
-            canonical.bytes.len(),
-        );
         self.0.bytes(canonical.bytes.len())?;
         Ok(universe::BuildProjection::from_canonical(
             canonical.bytes.into_boxed_slice(),

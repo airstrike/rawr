@@ -503,17 +503,6 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
         assert!(!script.live);
         assert_eq!(script.events, baseline);
         assert_eq!(allocation.usage(), total);
-        let exceeded = allocation.exceedances();
-        if bytes == total.bytes {
-            assert!(!exceeded.is_exceeded());
-        } else {
-            let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-            assert_eq!(
-                (axis.target, axis.high_water),
-                (bytes as u64, total.bytes as u64)
-            );
-            assert!(axis.first_requested > bytes as u64);
-        }
     }
     // Checked-arithmetic overflow is a genuine refusal at the same boundaries.
     // Every refused case must close any successfully acquired File.
@@ -545,7 +534,7 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
         );
     }
     // Two path checks pay for cleanup and open; the descriptor-metadata check
-    // crosses the target, which is recorded while the read completes.
+    // past the graph path constant is still made and the read completes.
     let graph = node::GraphBudget::new();
     graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2).unwrap();
     let mut allocation = input::Allocation::new(&limits);
@@ -562,16 +551,6 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
     .expect("path checks past the target are still made");
     assert!(!script.live);
     assert_eq!(script.events[..2], [Native::Open, Native::Length]);
-    let axis = graph
-        .exceedances()
-        .axis(node::PATHS_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-    assert_eq!(
-        axis.first_requested,
-        node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-    );
     // Overflowing the graph account at the same point is a genuine refusal
     // that keeps the prepaid cleanup and stops native work.
     let graph = node::GraphBudget::new();
@@ -594,7 +573,7 @@ fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
 }
 
 #[test]
-fn git_read_oversize_error_records_or_refuses_and_still_closes_the_live_descriptor_once() {
+fn git_read_oversize_error_refuses_and_still_closes_the_live_descriptor_once() {
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::new(&limits);
@@ -611,41 +590,11 @@ fn git_read_oversize_error_records_or_refuses_and_still_closes_the_live_descript
     )
     .unwrap();
     let required = measured.usage();
-    // One byte below the required ownership is a recorded exceedance;
-    // the oversize error is still constructed and the descriptor closed once.
-    let graph = node::GraphBudget::new();
-    let mut allocation =
-        input::Allocation::with_limits(required.items, required.bytes - 1, limits.string_bytes);
-    let mut script = Script::new(b"");
-    script.lengths = [Ok(65537)].into();
-    acquire(
-        PATH,
-        Role::DiscoveryPath,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        },
-        &mut script,
-    )
-    .expect("bytes past the target are owned");
-    assert_eq!(script.events, [Native::Open, Native::Length, Native::Close]);
-    assert!(!script.live);
-    assert_eq!(allocation.usage(), required);
-    let axis = allocation
-        .exceedances()
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        (axis.target, axis.high_water),
-        (required.bytes as u64 - 1, required.bytes as u64)
-    );
     // A genuine refusal while the oversize error is built: the account's
     // checked arithmetic overflowing on its last byte latches the account and
     // still closes the live descriptor once.
     let graph = node::GraphBudget::new();
-    let mut allocation =
-        input::Allocation::with_limits(required.items, usize::MAX, limits.string_bytes);
+    let mut allocation = input::Allocation::new(&limits);
     allocation.bytes(usize::MAX - (required.bytes - 1)).unwrap();
     let mut script = Script::new(b"");
     script.lengths = [Ok(65537)].into();
@@ -662,47 +611,4 @@ fn git_read_oversize_error_records_or_refuses_and_still_closes_the_live_descript
     assert_eq!(script.events, [Native::Open, Native::Length, Native::Close]);
     assert!(!script.live);
     assert!(allocation.check().is_err(), "overflow latches the account");
-    // The oversize message crossing the string target is recorded on
-    // the decoded-string axis; the error is still constructed with the same
-    // ownership, the account never latches and the descriptor closes once.
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(required.items, usize::MAX, PATH.len());
-    let mut script = Script::new(b"");
-    script.lengths = [Ok(65537)].into();
-    acquire(
-        PATH,
-        Role::DiscoveryPath,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        },
-        &mut script,
-    )
-    .expect("the oversize message past the string target is owned");
-    assert_eq!(script.events, [Native::Open, Native::Length, Native::Close]);
-    assert!(!script.live);
-    assert_eq!(allocation.usage(), required);
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    let message = format!(
-        "Refusing to open files larger than {} bytes, '{}' was {} bytes large",
-        65536,
-        std::path::Path::new(std::ffi::OsStr::from_bytes(PATH)).display(),
-        65537
-    );
-    let record = allocation.exceedances();
-    let mut axes = record.axes();
-    let axis = axes
-        .next()
-        .copied()
-        .expect("the string target crossing is recorded");
-    assert!(axes.next().is_none(), "{record:?}");
-    assert_eq!(axis.name, "membership decoded TOML string bytes");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (
-            PATH.len() as u64,
-            message.len() as u64,
-            message.len() as u64
-        )
-    );
 }

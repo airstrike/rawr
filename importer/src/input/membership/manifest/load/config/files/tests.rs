@@ -328,18 +328,16 @@ fn nested_include_frames_and_owners_drop_on_a_small_native_stack() {
 }
 
 #[test]
-fn original_item_and_byte_floors_cover_file_read_frames_and_merge() {
-    use crate::input::membership::manifest::tests::one_short;
+fn refused_original_account_stops_every_later_load() {
     let image = image(&[
         ("/p/root.toml", "include=['a.toml']\nroot=true"),
         ("/p/a.toml", "answer=1"),
     ]);
-    // `latched` injects a genuine original-account failure; accounting
-    // targets alone never refuse.
-    let run = |items, bytes, latched| {
+    // `latched` injects a genuine original-account failure.
+    let run = |latched| {
         let limits = cargo::Limits::standard();
         let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = host::Host::from_image(
@@ -389,33 +387,11 @@ fn original_item_and_byte_floors_cover_file_read_frames_and_merge() {
             drop(host);
         }
         assert_eq!(allocation.check().is_ok(), !latched);
-        (result, allocation.usage(), allocation.exceedances())
+        result
     };
-    let (result, usage, _) = run(usize::MAX, usize::MAX, false);
-    result.unwrap();
-    let (result, exact, exceeded) = run(usage.items, usage.bytes, false);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(!exceeded.is_exceeded());
-    // One short of an aggregate target admits and records that axis.
-    let (result, exact, exceeded) = run(usage.items - 1, usage.bytes, false);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items
-    ));
-    let (result, exact, exceeded) = run(usage.items, usage.bytes - 1, false);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes
-    ));
+    run(false).unwrap();
     // A genuinely refused account stops every later load without allocating.
-    assert!(run(usage.items, usage.bytes, true).0.is_err());
+    assert!(run(true).is_err());
 }
 
 #[test]

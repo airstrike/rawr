@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{scan, Declarations};
 use crate::cargo::{self, toolchain};
-use crate::input::{Allocation, Usage, INPUT_BYTES_RESOURCE, INPUT_ITEMS_RESOURCE};
+use crate::input::{Allocation, Usage};
 use crate::{Error, Result};
 
 struct Fixture(PathBuf);
@@ -35,7 +35,6 @@ impl Fixture {
             toolchain::supported_cargo_commit(),
             "fixture-package",
             &self.out(),
-            &cargo::Limits::standard(),
             allocation,
         )
     }
@@ -203,7 +202,7 @@ fn scanner_never_consults_the_string_target() {
 }
 
 #[test]
-fn legacy_collector_matches_events_and_exact_original_charge_order() {
+fn legacy_collector_matches_events_and_exact_original_charges() {
     let fixture = Fixture::new();
     let bytes = b"noise\ncargo:rerun-if-changed=src\ncargo::rerun-if-env-changed=KEY\ncargo:rustc-cfg=flag\n";
     let expected = events(bytes).expect("shared parser observations");
@@ -245,54 +244,6 @@ fn legacy_collector_matches_events_and_exact_original_charge_order() {
             bytes: prior.bytes + usage.bytes,
         }
     );
-    assert!(!allocation.exceedances().is_exceeded());
-    // One item (or byte) under the exact total is an accounting
-    // exceedance, not a refusal. The collector still completes, the recorded
-    // axis has a high water equal to the exact charge total, and nothing latches.
-    for (item_floor, byte_floor) in [(1, 0), (0, 1)] {
-        let mut allocation = Allocation::with_limits(
-            prior.items + usage.items - item_floor,
-            prior.bytes + usage.bytes - byte_floor,
-            cargo::Limits::standard().string_bytes,
-        );
-        allocation.items(prior.items).expect("prior items");
-        allocation.bytes(prior.bytes).expect("prior bytes");
-        fixture
-            .read(bytes, &mut allocation)
-            .expect("one under the exact account still collects");
-        assert_eq!(
-            allocation.usage(),
-            Usage {
-                items: prior.items + usage.items,
-                bytes: prior.bytes + usage.bytes,
-            }
-        );
-        let (exceeded, untouched, total) = if item_floor == 1 {
-            (
-                INPUT_ITEMS_RESOURCE,
-                INPUT_BYTES_RESOURCE,
-                prior.items + usage.items,
-            )
-        } else {
-            (
-                INPUT_BYTES_RESOURCE,
-                INPUT_ITEMS_RESOURCE,
-                prior.bytes + usage.bytes,
-            )
-        };
-        let axis = *allocation
-            .exceedances()
-            .axis(exceeded)
-            .expect("the one-under axis records the exact charge total");
-        assert_eq!(
-            (axis.target, axis.high_water),
-            ((total - 1) as u64, total as u64)
-        );
-        assert!(allocation.exceedances().axis(untouched).is_none());
-        allocation
-            .items(0)
-            .expect("an accounting exceedance never latches the account");
-    }
 }
 
 #[test]
@@ -314,45 +265,7 @@ fn legacy_collector_charges_directive_before_empty_payload_failure() {
             bytes: base.bytes + text.len(),
         }
     );
-    assert!(!allocation.exceedances().is_exceeded());
-    // With room for one item less, the directive is still charged before
-    // the empty payload fails the grammar: the item axis records the exact
-    // directive charge (two items) past its target while the byte total stays
-    // exact, the grammar failure is still returned and nothing latches.
-    let mut allocation = Allocation::with_limits(
-        base.items + 1,
-        base.bytes + text.len(),
-        cargo::Limits::standard().string_bytes,
-    );
-    let error = fixture
-        .read(bytes, &mut allocation)
-        .err()
-        .expect("empty rerun path still fails the grammar");
-    assert_eq!(code(error), "malformed-saved-output");
-    assert_eq!(
-        allocation.usage(),
-        Usage {
-            items: base.items + 2,
-            bytes: base.bytes + text.len(),
-        }
-    );
-    let axis = *allocation
-        .exceedances()
-        .axis(INPUT_ITEMS_RESOURCE)
-        .expect("the directive item charge records the item axis");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (
-            (base.items + 1) as u64,
-            (base.items + 2) as u64,
-            (base.items + 2) as u64
-        )
-    );
-    assert!(allocation
-        .exceedances()
-        .axis(INPUT_BYTES_RESOURCE)
-        .is_none());
     allocation
         .bytes(0)
-        .expect("an accounting exceedance never latches the account");
+        .expect("a grammar failure does not latch the account");
 }

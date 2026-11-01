@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest as _, Sha256};
 
-use super::{file, limited_file, optional_file, packages, scalar};
+use super::{file, optional_file, owned_file, packages, scalar};
 use crate::cargo::{unit, Limits};
 use crate::input::proof::{Entry, Role};
 use crate::input::stored::observe::slots::Slots;
@@ -155,16 +155,9 @@ fn scalar_storage_uses_original_exact_floors_without_graph_decode_and_latches() 
                 bytes: PRIOR.bytes + bytes
             }
         );
-        let record = budget.exceedances();
         if input_floor == 0 {
-            assert!(!record.is_exceeded(), "exact ownership");
         } else {
-            let axis = record
-                .axis(crate::input::INPUT_BYTES_RESOURCE)
-                .expect("one-under byte axis recorded");
-            assert_eq!(axis.target as usize, PRIOR.bytes + bytes - 1);
-            assert_eq!(axis.high_water as usize, PRIOR.bytes + bytes);
-            assert!(budget.check().is_ok(), "an exceedance never latches");
+            assert!(budget.check().is_ok());
             // A genuine failure latches; a latched account consumes no recipe.
             budget.refuse();
             let remaining = cursor.len();
@@ -190,20 +183,6 @@ fn scalar_storage_uses_original_exact_floors_without_graph_decode_and_latches() 
         &mut budget,
     )
     .expect("the entry slot is owned, not gated");
-    let record = budget.exceedances();
-    let axis = record
-        .axis(crate::input::INPUT_BYTES_RESOURCE)
-        .expect("slot byte axis recorded");
-    assert_eq!(
-        axis.target as usize,
-        PRIOR.bytes + std::mem::size_of::<Entry>() - 1
-    );
-    assert_eq!(
-        axis.first_requested as usize,
-        PRIOR.bytes + std::mem::size_of::<Entry>(),
-        "the slot reservation precedes every scalar text charge"
-    );
-    assert_eq!(axis.high_water as usize, PRIOR.bytes + bytes);
     assert_eq!(budget.usage().bytes, PRIOR.bytes + bytes);
 }
 
@@ -268,7 +247,7 @@ fn authority_then_optional_config_preserves_presence_digest_and_handoff() {
     let absent = fixture.0.join("absent.toml");
     fs::write(&source, b"data").expect("authority file");
     let digest: [u8; 32] = Sha256::digest(b"data").into();
-    for mode in 0..4 {
+    for mode in [0, 1, 3] {
         let recipes = [
             Recipe::File {
                 role: Role::Authority,
@@ -288,15 +267,13 @@ fn authority_then_optional_config_preserves_presence_digest_and_handoff() {
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         let mut entries = Slots::new();
         let mut cursor = recipes.iter();
-        let result = limited_file(
+        let result = owned_file(
             &mut cursor,
             &mut entries,
             Role::Authority,
             &source,
             if mode == 1 { &[0; 32] } else { &digest },
             &fixture.0,
-            "authority",
-            if mode == 2 { 3 } else { 4 },
             &mut budget,
         );
         if mode == 1 {
@@ -306,24 +283,12 @@ fn authority_then_optional_config_preserves_presence_digest_and_handoff() {
             continue;
         }
         result.expect("the supplied authority digest matches");
-        // The authority's byte bound is an accounting target; a file one
-        // byte over it is observed, digested and recorded on the bound's axis.
-        let record = budget.exceedances();
-        let axis = record.axis("authority");
-        if mode == 2 {
-            let axis = axis.expect("authority bound axis recorded");
-            assert_eq!((axis.target, axis.high_water), (3, 4));
-            assert!(budget.check().is_ok(), "an exceedance never latches");
-        } else {
-            assert!(axis.is_none());
-        }
         let result = optional_file(
             &mut cursor,
             &mut entries,
             &absent,
             if mode == 3 { Some(&digest) } else { None },
             &fixture.0,
-            4,
             &mut budget,
         );
         if mode == 3 {

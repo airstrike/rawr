@@ -134,46 +134,20 @@ fn failure_retention_and_output_allocation_use_one_terminal_account() {
 }
 
 #[test]
-fn expansion_uses_exact_original_limits_and_empty_output_needs_no_allocation() {
-    use crate::input::membership::manifest::tests::admits_one_short;
+fn expansion_completes_and_empty_output_needs_no_allocation() {
     use crate::input::membership::Budget;
     use crate::{input, node};
     let raw = "#!/bin/cargo\n---cargo\n[workspace]\n---\nfn main() {}";
-    let run = |items, bytes, string| {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, string);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = Session::new(&mut budget);
-        let result = expand(raw, &mut session);
-        let result = session.finish(result);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (result.is_ok(), allocation.usage(), allocation.exceedances())
+    let graph = node::GraphBudget::new();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
     };
-    let (ok, usage, _) = run(usize::MAX, usize::MAX, usize::MAX);
-    assert!(ok);
-    // Whole-document ownership is independent of the decoded-scalar cap.
-    assert_eq!(
-        run(usage.items, usage.bytes, 0),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(usage.items - 1, usage.bytes, 0),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(usage.items, usage.bytes - 1, 0),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
+    let mut session = Session::new(&mut budget);
+    let result = expand(raw, &mut session);
+    assert!(session.finish(result).is_ok());
+    assert!(allocation.check().is_ok());
     let mut account = Account::default();
     let mut session = Session::new(&mut account);
     storage::ALLOCATIONS.with(|count| count.set(0));

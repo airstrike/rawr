@@ -30,17 +30,6 @@ impl Record<'_> {
             if !layout.budget().shares_with(budget.graph()) {
                 return Err(Error::Encoding("resolution record graph account differs"));
             }
-            budget.limited(
-                "retained resolution record bytes",
-                budget.limits.input_proof_bytes,
-                self.encoded.len(),
-            )?;
-            for (resource, bytes) in [
-                ("retained Cargo metadata bytes", self.metadata),
-                ("retained Cargo unit bytes", self.units),
-            ] {
-                budget.limited(resource, budget.limits.json_bytes, bytes.len())?;
-            }
             let digest = budget.digest(self.encoded)?;
             let path = layout.paths().record();
             admit_path(path, budget)?;
@@ -88,9 +77,7 @@ impl Commitment {
     }
 
     /// Decode the bundle's record commitment. The record extent is a store
-    /// payload bound by the physical content ceiling, like the bundle seal;
-    /// the `input_proof_bytes` accounting target is measured against it by
-    /// `read`, on the account that spends the read.
+    /// payload bound by the physical content ceiling, like the bundle seal.
     pub(crate) fn decode(bytes: &[u8; 40]) -> Result<Self> {
         let mut length = [0; 8];
         length.copy_from_slice(&bytes[..8]);
@@ -113,11 +100,6 @@ impl Commitment {
     pub(crate) fn read(&self, paths: &layout::Paths, budget: &mut Budget<'_>) -> Result<Vec<u8>> {
         let result = (|| {
             budget.check()?;
-            budget.limited(
-                "retained resolution record bytes",
-                budget.limits.input_proof_bytes,
-                self.length,
-            )?;
             let path = paths.record();
             admit_path(path, budget)?;
             budget.paths(2)?;

@@ -131,7 +131,6 @@ impl Selection {
         }
         allocation.path(package.root())?;
         allocation.path(manifest)?;
-        allocation.string_exceeded("input owned string bytes", selector_len);
         allocation.items(1)?;
         allocation.bytes(selector_len)?;
 

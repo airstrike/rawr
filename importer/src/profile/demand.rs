@@ -58,20 +58,13 @@ pub struct Builder<'contract> {
     abis: Vec<contract::ExtensionAbi>,
     endpoints: Vec<contract::OperationEndpoint>,
     projections: Vec<contract::Projection>,
-    item_limit: usize,
-    byte_limit: usize,
-    string_limit: usize,
-    account: crate::surface::account::Account,
 }
 
 /// Demand-bound output for exact generated profile projections.
 pub struct Generator<'demand> {
     demand: &'demand Demand,
     chunks: Vec<Chunk>,
-    byte_limit: usize,
-    string_limit: usize,
     bytes: usize,
-    account: crate::surface::account::Account,
 }
 
 struct Chunk {
@@ -149,14 +142,12 @@ impl Demand {
         contract: &Contract,
         checked: &C,
         chain: crate::node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         Self::decode_owned(
             bytes,
             contract,
             checked.profile_fingerprint(),
             checked.profile_payload(),
-            limits,
         )
         .map(|parts| parts.into_current(chain))
     }
@@ -166,52 +157,9 @@ impl Demand {
         contract: &Contract,
         checked_fingerprint: [u8; 32],
         checked_payload: &[u8],
-        limits: &crate::cargo::Limits,
     ) -> Result<Parts, Error> {
-        // Document, payload and item sizes are accounting targets
-        // recorded on a profile account for this replay; the physical bound is
-        // the node content ceiling that already admitted the bytes.
-        let mut account = crate::surface::account::Account::profile();
-        Self::decode_owned_accounted(
-            bytes,
-            contract,
-            checked_fingerprint,
-            checked_payload,
-            limits,
-            &mut account,
-        )
-    }
-
-    pub(crate) fn decode_owned_accounted(
-        bytes: &[u8],
-        contract: &Contract,
-        checked_fingerprint: [u8; 32],
-        checked_payload: &[u8],
-        limits: &crate::cargo::Limits,
-        account: &mut crate::surface::account::Account,
-    ) -> Result<Parts, Error> {
-        account.exceeded("profile demand bytes", limits.json_bytes, bytes.len());
         let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a profile demand serializes");
-        let items = stored
-            .hooks
-            .len()
-            .checked_add(stored.aliases.len())
-            .and_then(|items| items.checked_add(stored.sources.len()))
-            .and_then(|items| items.checked_add(stored.abis.len()))
-            .and_then(|items| items.checked_add(stored.endpoints.len()))
-            .and_then(|items| items.checked_add(stored.projections.len()))
-            .ok_or(Error::Limit {
-                resource: "profile demand items",
-                limit: limits.items,
-                actual: usize::MAX,
-            })?;
-        account.exceeded(
-            "profile checked payload bytes",
-            limits.string_bytes,
-            stored.payload.len(),
-        );
-        account.exceeded("profile demand items", limits.items, items);
         if canonical.as_slice() != bytes
             || stored.schema != 7
             || stored.identity != *contract.identity().as_bytes()
@@ -414,16 +362,8 @@ impl<'contract> Builder<'contract> {
         contract: &'contract Contract,
         checked: [u8; 32],
         payload: &[u8],
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
-        // The payload size is an accounting target recorded on this
-        // demand's profile account; the reservation below is the physical bound.
-        let mut account = crate::surface::account::Account::profile();
-        account.exceeded(
-            "profile checked payload bytes",
-            limits.string_bytes,
-            payload.len(),
-        );
+        // The reservation below is the physical bound.
         let mut retained = Vec::new();
         retained
             .try_reserve_exact(payload.len())
@@ -439,18 +379,7 @@ impl<'contract> Builder<'contract> {
             abis: Vec::new(),
             endpoints: Vec::new(),
             projections: Vec::new(),
-            item_limit: limits.items,
-            byte_limit: limits.json_bytes,
-            string_limit: limits.string_bytes,
-            account,
         })
-    }
-
-    /// The accounting axes this demand crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
     }
 
     /// Demand one named hook derived from classified compiler evidence.
@@ -459,9 +388,6 @@ impl<'contract> Builder<'contract> {
             self.contract.contains(&evidence) && !name.is_empty(),
             "a profile demands named hooks on its own contract's evidence"
         );
-        // The name length is an accounting target, recorded not refused.
-        self.account
-            .exceeded("profile hook name bytes", self.string_limit, name.len());
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.profile.hook/v1");
         digest.update(evidence.digest());
@@ -474,13 +400,6 @@ impl<'contract> Builder<'contract> {
         match self.hooks.binary_search(&hook) {
             Ok(_) => panic!("a profile demands each hook once"),
             Err(position) => {
-                let actual = self.hooks.len().checked_add(1).ok_or(Error::Limit {
-                    resource: "profile hook items",
-                    limit: self.item_limit,
-                    actual: usize::MAX,
-                })?;
-                self.account
-                    .exceeded("profile hook items", self.item_limit, actual);
                 self.hooks
                     .try_reserve_exact(1)
                     .map_err(|_| Error::Allocation)?;
@@ -490,7 +409,7 @@ impl<'contract> Builder<'contract> {
         }
     }
 
-    pub(crate) fn seal(mut self) -> Result<Demand, Error> {
+    pub(crate) fn seal(self) -> Result<Demand, Error> {
         let canonical = serde_json::to_vec(&Canonical {
             schema: 7,
             identity: self.contract.identity().as_bytes(),
@@ -506,8 +425,6 @@ impl<'contract> Builder<'contract> {
             projections: &self.projections,
         })
         .expect("a profile demand serializes");
-        self.account
-            .exceeded("profile demand bytes", self.byte_limit, canonical.len());
         Ok(Demand {
             identity: self.contract.identity(),
             version: self.contract.version(),
@@ -527,29 +444,18 @@ impl<'contract> Builder<'contract> {
 }
 
 impl<'demand> Generator<'demand> {
-    pub(crate) fn new(demand: &'demand Demand, limits: &crate::cargo::Limits) -> Self {
+    pub(crate) fn new(demand: &'demand Demand) -> Self {
         Self {
             demand,
             chunks: Vec::new(),
-            byte_limit: limits.json_bytes,
-            string_limit: limits.string_bytes,
             bytes: 0,
-            account: crate::surface::account::Account::profile(),
         }
-    }
-
-    /// The accounting axes this generation crossed so far.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn exceedances(&self) -> crate::exceedance::Record {
-        self.account.exceedances()
     }
 
     /// Emit one bounded Rust projection for an exact demanded hook.
     ///
-    /// Projection and cumulative byte sizes are accounting targets
-    /// recorded on the profile account; the reservations are the physical
-    /// bound and checked-arithmetic overflow stays terminal.
+    /// The reservations are the physical bound and checked-arithmetic
+    /// overflow is terminal.
     pub fn projection(&mut self, hook: Hook, source: &[u8]) -> Result<(), Error> {
         assert!(
             self.demand.hooks.binary_search(&hook).is_ok() && !source.is_empty(),
@@ -559,18 +465,10 @@ impl<'demand> Generator<'demand> {
             self.chunks.iter().all(|chunk| chunk.hook != hook),
             "a profile generates each hook's source once"
         );
-        self.account.exceeded(
-            "generated profile projection bytes",
-            self.string_limit,
-            source.len(),
-        );
-        let actual = self.bytes.checked_add(source.len()).ok_or(Error::Limit {
-            resource: "generated profile bytes",
-            limit: self.byte_limit,
-            actual: usize::MAX,
-        })?;
-        self.account
-            .exceeded("generated profile bytes", self.byte_limit, actual);
+        let actual = self
+            .bytes
+            .checked_add(source.len())
+            .ok_or(Error::Allocation)?;
         let mut owned = Vec::new();
         owned
             .try_reserve_exact(source.len())
@@ -600,8 +498,6 @@ impl<'demand> Generator<'demand> {
             .checked_mul(1 + 32 + 8)
             .ok_or(Error::Allocation)?;
         let capacity = self.bytes.checked_add(framing).ok_or(Error::Allocation)?;
-        self.account
-            .exceeded("generated profile bytes", self.byte_limit, capacity);
         let mut source = Vec::new();
         source
             .try_reserve_exact(capacity)
@@ -684,13 +580,12 @@ mod owned_tests {
     use super::{Builder, Demand, Generator};
     use crate::profile::{contract, Contract, Identity, Proof, Version};
 
-    fn contract(limits: &crate::cargo::Limits) -> Contract {
+    fn contract() -> Contract {
         let graph = crate::test_fixture::graph();
         contract::Builder::new(
-            Identity::new("rawr.profile.owned-demand-test", limits),
+            Identity::new("rawr.profile.owned-demand-test"),
             Version::new(1),
             &graph,
-            limits,
         )
         .seal()
         .expect("empty contract")
@@ -699,13 +594,13 @@ mod owned_tests {
     #[test]
     fn owned_demand_replays_exact_captured_checked_data_without_current_authority() {
         let limits = crate::cargo::Limits::standard();
-        let contract = contract(&limits);
-        let demand = Builder::new(&contract, [7; 32], b"checked payload", &limits)
+        let contract = contract();
+        let demand = Builder::new(&contract, [7; 32], b"checked payload")
             .expect("builder")
             .seal()
             .expect("demand");
         let bytes = demand.encode(limits.json_bytes).expect("canonical demand");
-        let parts = Demand::decode_owned(&bytes, &contract, [7; 32], b"checked payload", &limits)
+        let parts = Demand::decode_owned(&bytes, &contract, [7; 32], b"checked payload")
             .expect("owned replay");
         assert!(parts.value().node_chain().is_none());
         assert_eq!(
@@ -713,115 +608,29 @@ mod owned_tests {
             bytes
         );
         assert_eq!(parts.value().digest(), demand.digest());
-        assert!(
-            Demand::decode_owned(&bytes, &contract, [8; 32], b"checked payload", &limits).is_err()
-        );
-        assert!(
-            Demand::decode_owned(&bytes, &contract, [7; 32], b"other payload", &limits).is_err()
-        );
+        assert!(Demand::decode_owned(&bytes, &contract, [8; 32], b"checked payload").is_err());
+        assert!(Demand::decode_owned(&bytes, &contract, [7; 32], b"other payload").is_err());
         let mut noncanonical = bytes.to_vec();
         noncanonical.push(b' ');
-        assert!(Demand::decode_owned(
-            &noncanonical,
-            &contract,
-            [7; 32],
-            b"checked payload",
-            &limits
-        )
-        .is_err());
-        // One byte under the document size is an accounting target: the
-        // demand still replays and the axis records the truthful size.
-        let mut bounded = crate::cargo::Limits::standard();
-        bounded.json_bytes = bytes.len() - 1;
-        let mut account = crate::surface::account::Account::profile();
-        let replayed = Demand::decode_owned_accounted(
-            &bytes,
-            &contract,
-            [7; 32],
-            b"checked payload",
-            &bounded,
-            &mut account,
-        )
-        .expect("the owned demand replays past the JSON target");
-        assert_eq!(replayed.value().digest(), demand.digest());
-        let axis = *account
-            .exceedances()
-            .axis("profile demand bytes")
-            .expect("the demand byte target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (bytes.len() - 1) as u64,
-                bytes.len() as u64,
-                bytes.len() as u64
-            )
+        assert!(
+            Demand::decode_owned(&noncanonical, &contract, [7; 32], b"checked payload",).is_err()
         );
-        let mut exact = crate::cargo::Limits::standard();
-        exact.json_bytes = bytes.len();
-        let mut account = crate::surface::account::Account::profile();
-        Demand::decode_owned_accounted(
-            &bytes,
-            &contract,
-            [7; 32],
-            b"checked payload",
-            &exact,
-            &mut account,
-        )
-        .expect("the exact JSON target admits");
-        assert!(!account.exceedances().is_exceeded());
-    }
-
-    /// The checked payload and hook name string targets are accounting
-    /// on the demand builder; the demand still seals and records them.
-    #[test]
-    fn demand_builder_string_targets_record_without_refusal() {
-        let limits = crate::cargo::Limits::standard();
-        let contract = contract(&limits);
-        let payload = b"checked payload";
-        let mut exact = limits;
-        exact.string_bytes = payload.len();
-        let builder = Builder::new(&contract, [7; 32], payload, &exact).expect("exact builder");
-        assert!(!builder.exceedances().is_exceeded());
-        builder.seal().expect("exact demand seals");
-        let mut short = limits;
-        short.string_bytes = payload.len() - 1;
-        let builder = Builder::new(&contract, [7; 32], payload, &short)
-            .expect("a payload past the string target still builds");
-        let axis = *builder
-            .exceedances()
-            .axis("profile checked payload bytes")
-            .expect("the payload target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (payload.len() - 1) as u64,
-                payload.len() as u64,
-                payload.len() as u64
-            )
-        );
-        let demand = builder
-            .seal()
-            .expect("the demand seals past the string target");
-        assert_eq!(demand.payload.as_ref(), payload);
     }
 
     #[test]
     fn owned_generated_replay_preserves_digests_and_rejects_lifecycle_and_version_drift() {
         let limits = crate::cargo::Limits::standard();
-        let contract = contract(&limits);
-        let demand = Builder::new(&contract, [7; 32], &[7; 32], &limits)
+        let contract = contract();
+        let demand = Builder::new(&contract, [7; 32], &[7; 32])
             .expect("builder")
             .seal()
             .expect("demand");
         for lifecycle in [false, true] {
-            let proof = Generator::new(&demand, &limits)
-                .seal(lifecycle)
-                .expect("proof");
+            let proof = Generator::new(&demand).seal(lifecycle).expect("proof");
             let bytes = proof
                 .encode_owner(limits.json_bytes)
                 .expect("canonical owner");
-            let parts =
-                Proof::decode_owned(&bytes, &demand, lifecycle, &limits).expect("owned replay");
+            let parts = Proof::decode_owned(&bytes, &demand, lifecycle).expect("owned replay");
             assert!(parts.value().node_chain().is_none());
             assert_eq!(
                 parts
@@ -836,42 +645,15 @@ mod owned_tests {
                 parts.value().application_semantic(),
                 proof.application_semantic()
             );
-            assert!(Proof::decode_owned(&bytes, &demand, !lifecycle, &limits).is_err());
+            assert!(Proof::decode_owned(&bytes, &demand, !lifecycle).is_err());
             let mut stored: super::super::StoredOwnerCanonical =
                 serde_json::from_slice(&bytes).expect("stored owner");
             stored.version += 1;
             let foreign = serde_json::to_vec(&stored).expect("foreign canonical owner");
-            assert!(Proof::decode_owned(&foreign, &demand, lifecycle, &limits).is_err());
+            assert!(Proof::decode_owned(&foreign, &demand, lifecycle).is_err());
             let mut noncanonical = bytes.to_vec();
             noncanonical.push(b' ');
-            assert!(Proof::decode_owned(&noncanonical, &demand, lifecycle, &limits).is_err());
-            // One byte under the proof size is an accounting target: the
-            // proof still replays and the axis records the truthful size.
-            let mut bounded = crate::cargo::Limits::standard();
-            bounded.json_bytes = bytes.len() - 1;
-            let mut account = crate::surface::account::Account::profile();
-            let replayed =
-                Proof::decode_owned_accounted(&bytes, &demand, lifecycle, &bounded, &mut account)
-                    .expect("the owned proof replays past the JSON target");
-            assert_eq!(replayed.value().fingerprint(), proof.fingerprint());
-            let axis = *account
-                .exceedances()
-                .axis("generated profile proof bytes")
-                .expect("the proof byte target records its axis");
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (
-                    (bytes.len() - 1) as u64,
-                    bytes.len() as u64,
-                    bytes.len() as u64
-                )
-            );
-            let mut exact = crate::cargo::Limits::standard();
-            exact.json_bytes = bytes.len();
-            let mut account = crate::surface::account::Account::profile();
-            Proof::decode_owned_accounted(&bytes, &demand, lifecycle, &exact, &mut account)
-                .expect("the exact JSON target admits");
-            assert!(!account.exceedances().is_exceeded());
+            assert!(Proof::decode_owned(&noncanonical, &demand, lifecycle).is_err());
         }
     }
 }

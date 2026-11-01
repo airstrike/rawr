@@ -384,9 +384,6 @@ impl<'image> Cursor<'image> {
 }
 
 fn path_matches(host: &mut Host<'_, '_>, path: &[u8], expected: &observed::Path) -> Result<()> {
-    host.budget
-        .allocation
-        .string_exceeded("membership native path bytes", path.len());
     host.budget.allocation.items(path.len())?;
     if !path.starts_with(b"/") || path.contains(&0) {
         return Err(Error::Encoding("expected absolute native path"));

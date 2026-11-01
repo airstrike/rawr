@@ -167,7 +167,7 @@ impl crate::Engine {
             .allocation(limits)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
-        let facade = rawr_import::surface::facade::Plan::encode(contract, limits)
+        let facade = rawr_import::surface::facade::Plan::encode(contract)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         allocation
@@ -521,8 +521,8 @@ impl crate::Engine {
                 )
             }
             .map(|instance| instance.with_impls(crossing))
-            .and_then(|instance| instance.with_function_items(functions.into_boxed_slice(), limits))
-            .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice(), limits))
+            .and_then(|instance| instance.with_function_items(functions.into_boxed_slice()))
+            .and_then(|instance| instance.with_event_mappers(mappers.into_boxed_slice()))
             .map_err(Error::from)
             .map_err(super::Error::import)?;
             compiler

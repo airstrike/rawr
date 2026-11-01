@@ -396,23 +396,17 @@ fn capture_context(
     request: &Request,
     limits: &Limits,
 ) -> Result<crate::context::Context, node::Error> {
-    // A fresh graph account is measured against the captured profile's
-    // graph targets, never against the standard ones unconditionally.
-    capture_context_in(
-        request,
-        limits,
-        &node::GraphBudget::with_targets(limits.graph_targets()),
-    )
+    capture_context_in(request, limits, &node::GraphBudget::new())
 }
 
-/// Capture the owner route's context in the original attempt scope: its graph
-/// account, bound to the captured profile's graph targets.
+/// Capture the owner route's context in the original attempt scope's graph
+/// account.
 fn scoped_context(
     request: &Request,
     limits: &Limits,
     scope: &crate::supervisor::snapshot::attempt::Scope,
 ) -> Result<crate::context::Context, node::Error> {
-    capture_context_in(request, limits, scope.budget_for(limits)?)
+    capture_context_in(request, limits, scope.budget())
 }
 
 /// Test entry to the owner route's scoped context capture.
@@ -456,7 +450,6 @@ fn preflight(
             &request,
             catalog,
             &manifest,
-            limits,
             &mut allocation,
             context.graph_budget(),
         )
@@ -836,7 +829,6 @@ impl Evaluation {
                         observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
                         let lock = definition.candidate_accounted(
                             lock_bytes.into_boxed_slice(),
-                            &self.limits,
                             request_account,
                             graph,
                         )?;
@@ -1406,28 +1398,13 @@ mod tests {
         graph
             .decode((node::MAX_DECODED_BYTES_PER_GRAPH - 2 * BYTES as u64) as usize)
             .unwrap();
-        assert!(!graph.exceedances().is_exceeded());
-        // The decode account is a target. Completion past it still
-        // produces the canonical wire, charges the original graph in full and
-        // records the crossing by exactly the wire's length.
+        // Completion produces the canonical wire and charges the original
+        // graph by exactly the wire's length.
         assert_eq!(product.completed(&graph).unwrap(), facts);
         assert_eq!(
             graph.census_usage().unwrap(),
             (node::MAX_DECODED_BYTES_PER_GRAPH + BYTES as u64, 0, 0)
         );
-        let record = graph.exceedances();
-        let axis = record
-            .axis(node::DECODED_RESOURCE)
-            .expect("completion records the decode crossing");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                node::MAX_DECODED_BYTES_PER_GRAPH,
-                node::MAX_DECODED_BYTES_PER_GRAPH + BYTES as u64,
-                node::MAX_DECODED_BYTES_PER_GRAPH + BYTES as u64,
-            )
-        );
-        assert!(axis.site.is_some());
         // The node content bound is physical and still refuses.
         assert!(matches!(
             <Product as node::Value>::encode(&product, BYTES - 1),
@@ -1542,9 +1519,8 @@ mod tests {
 
     #[test]
     fn wrapped_control_graph_refusal_remains_terminal() {
-        // Crossing a graph accounting target is not an error at all. The
-        // control read admits its seven path checks in full on the spent
-        // account, records the crossing, and fails only for its own reason.
+        // The control read charges its seven path checks in full on the
+        // spent account and fails only for its own reason.
         let graph = node::GraphBudget::new();
         graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1).unwrap();
         let mut request = cargo::RequestAllocation::new(&Limits::standard());
@@ -1559,12 +1535,6 @@ mod tests {
             !refusal(&error),
             "a missing control is not a refusal: {error:?}"
         );
-        let record = graph.exceedances();
-        let axis = record
-            .axis(node::PATHS_RESOURCE)
-            .expect("the spent graph records the control read's path checks");
-        assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(axis.first_requested, axis.target + 6);
         // A real control past the target still reads; only the physical byte
         // bound refuses, and that refusal stays terminal.
         let root = std::env::temp_dir().join(format!(
@@ -1579,14 +1549,6 @@ mod tests {
         assert_eq!(
             read(&control, 1024, &mut request, &graph).unwrap(),
             b"sixteen bytes!!!"
-        );
-        assert!(
-            graph
-                .exceedances()
-                .axis(node::PATHS_RESOURCE)
-                .unwrap()
-                .high_water
-                > axis.high_water
         );
         let physical = read(&control, 8, &mut request, &graph).unwrap_err();
         assert!(matches!(&physical, node::Error::Importer(inner)

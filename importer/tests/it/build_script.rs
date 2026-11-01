@@ -310,7 +310,7 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
                 .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
                 .expect("the package-member environment seals"),
         )
-        .policy(Policy::manifest(&limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("fallback", &added_copy, &limits)
@@ -373,7 +373,7 @@ fn request(project: &Project, environment: Environment, limits: &Limits) -> Requ
     Request::builder(&project.0, &project.cache(), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("freshness", &fixture("freshness-api"), limits)
@@ -400,7 +400,7 @@ fn single_request(
     Request::builder(&project.0, &project.cache(), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("freshness", dependency, limits)
@@ -420,7 +420,7 @@ fn extract_fallback(
 ) -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
     Request::builder(&project.0, &project.cache(), limits)?
         .environment(Environment::capture()?.setting("CARGO_NET_OFFLINE", "true")?)
-        .policy(Policy::manifest(limits).seal())?
+        .policy(Policy::manifest().seal())?
         .dependency(Dependency::path("fallback", dependency, limits)?.package("fallback-api")?)?
         .build()?
         .resolve(native, limits)

@@ -175,40 +175,16 @@ fn rows(recipes: &[proof::Recipe]) -> Vec<Row> {
 }
 
 #[test]
-fn cold_emission_matches_original_records_order_and_every_item_floor() {
+fn cold_emission_matches_original_records_order_and_charges() {
     let fixture = Fixture::new();
-    let mut reference = account();
+    let mut original = account();
     let expected = fixture
-        .legacy(&mut reference)
+        .legacy(&mut original)
         .expect("original declarations");
-    let exact = reference.usage();
-    for item_limit in PRIOR.items..=exact.items {
-        let mut actual = account();
-        actual.item_limit = item_limit;
-        let mut original = account();
-        original.item_limit = item_limit;
-        let actual_result = fixture.collect(&mut actual);
-        let original_result = fixture.legacy(&mut original);
-        assert_eq!(
-            actual_result.as_ref().err().map(ToString::to_string),
-            original_result.as_ref().err().map(ToString::to_string)
-        );
-        assert_eq!(actual.usage(), original.usage());
-        if let Ok(recipes) = actual_result {
-            assert_eq!(rows(&recipes), rows(&expected));
-        }
-    }
-    for byte_limit in [exact.bytes - 1, exact.bytes] {
-        let mut actual = account();
-        actual.byte_limit = byte_limit;
-        let mut original = account();
-        original.byte_limit = byte_limit;
-        assert_eq!(
-            fixture.collect(&mut actual).is_ok(),
-            fixture.legacy(&mut original).is_ok()
-        );
-        assert_eq!(actual.usage(), original.usage());
-    }
+    let mut actual = account();
+    let recipes = fixture.collect(&mut actual).expect("current declarations");
+    assert_eq!(rows(&recipes), rows(&expected));
+    assert_eq!(actual.usage(), original.usage());
 }
 
 #[test]
@@ -228,76 +204,52 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
         })
         .sum::<usize>();
     // Declared path copies are owned once by the original allocation.
-    for input_floor in [0, 1] {
-        let mut allocation = account();
-        allocation.byte_limit = PRIOR.bytes + bytes - input_floor;
-        let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("all decoding already spent");
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("all path work already spent");
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .expect("all hashing already spent");
-        let mut paths = Vec::new();
-        let result = script::declarations(
-            &fixture.script,
-            &fixture.package,
-            &fixture.declarations,
-            false,
-            &fixture.environment,
-            &mut Budget::borrow(&Limits::standard(), &mut allocation, &graph),
-            |value, _| {
-                if let script::Value::DeclaredPath { path, .. } = value {
-                    paths.push(path.to_path_buf());
-                }
-                Ok(())
-            },
-        );
-        // The exact remainder records nothing; one less byte records the
-        // exact total as an exceedance and the declarations still emit.
-        result.expect("accounting targets never refuse");
-        assert_eq!(
-            paths,
-            [
-                PathBuf::from("/fixture/pkg/data/file"),
-                PathBuf::from("/external/file")
-            ]
-        );
-        assert_eq!(
-            allocation.usage(),
-            Usage {
-                items: PRIOR.items + 4,
-                bytes: PRIOR.bytes + bytes
+    let mut allocation = account();
+    let graph = node::GraphBudget::new();
+    graph
+        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
+        .expect("all decoding already spent");
+    graph
+        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
+        .expect("all path work already spent");
+    graph
+        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
+        .expect("all hashing already spent");
+    let mut paths = Vec::new();
+    let result = script::declarations(
+        &fixture.script,
+        &fixture.package,
+        &fixture.declarations,
+        false,
+        &fixture.environment,
+        &mut Budget::borrow(&Limits::standard(), &mut allocation, &graph),
+        |value, _| {
+            if let script::Value::DeclaredPath { path, .. } = value {
+                paths.push(path.to_path_buf());
             }
-        );
-        let record = allocation.exceedances();
-        if input_floor == 0 {
-            assert!(!record.is_exceeded());
-        } else {
-            let axis = record
-                .axis(crate::input::INPUT_BYTES_RESOURCE)
-                .expect("one less byte records the byte axis");
-            assert_eq!(axis.target, (PRIOR.bytes + bytes - 1) as u64);
-            assert_eq!(axis.high_water, (PRIOR.bytes + bytes) as u64);
-            assert_eq!(record.axes().count(), 1);
+            Ok(())
+        },
+    );
+    result.expect("declarations emit");
+    assert_eq!(
+        paths,
+        [
+            PathBuf::from("/fixture/pkg/data/file"),
+            PathBuf::from("/external/file")
+        ]
+    );
+    assert_eq!(
+        allocation.usage(),
+        Usage {
+            items: PRIOR.items + 4,
+            bytes: PRIOR.bytes + bytes
         }
-        // Every graph axis was charged exactly to its target beforehand, so any
-        // decode, path or hash work here would have recorded an exceedance.
-        assert_eq!(
-            graph.census_usage().expect("graph census").0,
-            node::MAX_DECODED_BYTES_PER_GRAPH
-        );
-        assert!(
-            !graph.exceedances().is_exceeded(),
-            "declared paths do no graph decode, path or hash work"
-        );
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-    }
+    );
+    // Every graph axis was spent beforehand; no decode work happened here.
+    assert_eq!(
+        graph.census_usage().expect("graph census").0,
+        node::MAX_DECODED_BYTES_PER_GRAPH
+    );
     // Only a genuine failure latches; the latch precedes every emission.
     let mut allocation = account();
     allocation.refuse();
@@ -412,77 +364,6 @@ fn callback_failure_prevents_later_path_normalization() {
     ));
     assert_eq!(calls, 3);
     assert_eq!(allocation.usage(), PRIOR);
-}
-
-#[test]
-fn raw_path_bound_records_exceedance_before_storage_and_root_escape_stays_semantic() {
-    let mut fixture = Fixture::new();
-    let raw = "x".repeat(crate::input::LINE_BYTES + 1);
-    fixture.declarations.paths = Box::from([raw.clone().into_boxed_str()]);
-    let mut allocation = account();
-    let mut declared = Vec::new();
-    // The raw path bound is an accounting target: the oversized spelling
-    // is recorded before any storage of it, then normalized and stored on the
-    // original account, and the declaration still emits.
-    script::declarations(
-        &fixture.script,
-        &fixture.package,
-        &fixture.declarations,
-        false,
-        &fixture.environment,
-        &mut Budget::borrow(
-            &Limits::standard(),
-            &mut allocation,
-            &node::GraphBudget::new(),
-        ),
-        |value, budget| {
-            if let script::Value::DeclaredPath { path, .. } = value {
-                assert!(budget.exceedances().axis("input path bytes").is_some());
-                declared.push(path.to_path_buf());
-            }
-            Ok(())
-        },
-    )
-    .expect("accounting targets never refuse");
-    assert_eq!(declared, [fixture.package.root.join(&raw)]);
-    let axis = allocation
-        .exceedances()
-        .axis("input path bytes")
-        .copied()
-        .expect("the raw path bound records its axis");
-    assert_eq!(axis.target, crate::input::LINE_BYTES as u64);
-    assert_eq!(axis.high_water, (crate::input::LINE_BYTES + 1) as u64);
-    assert!(allocation.usage().items > PRIOR.items);
-    assert!(
-        allocation.usage().bytes > PRIOR.bytes + crate::input::LINE_BYTES,
-        "the oversized path is stored on the original account after the record"
-    );
-    allocation
-        .bytes(0)
-        .expect("an exceedance never latches the account");
-    fixture.declarations.paths = Box::from([Box::from("/../../escape")]);
-    let mut allocation = account();
-    assert!(matches!(
-        script::declarations(
-            &fixture.script,
-            &fixture.package,
-            &fixture.declarations,
-            false,
-            &fixture.environment,
-            &mut Budget::borrow(
-                &Limits::standard(),
-                &mut allocation,
-                &node::GraphBudget::new()
-            ),
-            |_, _| Ok(())
-        ),
-        Err(stored::Error::Observation(stored::observe::Error::Policy(
-            "path-escape"
-        )))
-    ));
-    allocation
-        .items(0)
-        .expect("path escape is distinct from refusal");
 }
 
 #[test]

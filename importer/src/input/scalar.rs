@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::proof::{Recipe, Role};
 use super::{Allocation, HexDigest};
-use crate::cargo::{config, internal, toolchain, Limits};
+use crate::cargo::{config, internal, toolchain};
 use crate::Result;
 
 pub(in crate::input) mod account;
@@ -52,24 +52,12 @@ impl Value<'_> {
 pub(crate) fn config<A: Account>(
     projection: &config::projection::Projection,
     provenance: &[u8; 32],
-    limits: &Limits,
     allocation: &mut A,
     mut emit: impl FnMut(Value<'_>, &mut A) -> std::result::Result<(), A::Error>,
 ) -> std::result::Result<(), A::Error> {
     allocation.check()?;
     for (key, value) in projection.entries() {
-        allocation.bounded(
-            "Cargo environment projection key",
-            limits.string_bytes,
-            key.len(),
-        )?;
-        if let Some(value) = value {
-            allocation.bounded(
-                "Cargo environment projection value",
-                limits.string_bytes,
-                value.len(),
-            )?;
-        }
+        allocation.check()?;
         emit(
             Value::EnvironmentProjection {
                 schema: projection.schema(),

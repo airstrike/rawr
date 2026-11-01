@@ -498,59 +498,6 @@ mod tests {
             .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
             .is_err());
         fs::write(&external, b"before").unwrap();
-        // A graph account spent to its target is not a gate. Revalidation
-        // on such an account still completes and records the crossing axis.
-        for resource in 0..3 {
-            let exhausted = GraphBudget::new();
-            let (name, target) = match resource {
-                0 => {
-                    exhausted
-                        .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                        .unwrap();
-                    (
-                        crate::node::HASHED_RESOURCE,
-                        crate::node::MAX_HASHED_BYTES_PER_GRAPH,
-                    )
-                }
-                1 => {
-                    exhausted
-                        .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                        .unwrap();
-                    (
-                        crate::node::DECODED_RESOURCE,
-                        crate::node::MAX_DECODED_BYTES_PER_GRAPH,
-                    )
-                }
-                _ => {
-                    exhausted
-                        .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-                        .unwrap();
-                    (
-                        crate::node::PATHS_RESOURCE,
-                        crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                    )
-                }
-            };
-            assert!(!exhausted.exceedances().is_exceeded());
-            assert_eq!(
-                namespace
-                    .revalidate_inventory(
-                        &stored,
-                        &root,
-                        Mode::Pending,
-                        &mut allocation,
-                        &exhausted
-                    )
-                    .unwrap(),
-                6
-            );
-            let record = exhausted.exceedances();
-            let axis = record
-                .axis(name)
-                .expect("the spent axis records its crossing");
-            assert_eq!(axis.target, target);
-            assert!(axis.high_water > target);
-        }
         fs::write(&archive, b"after!").unwrap();
         stored.replay(&root, Mode::Pending, &graph).unwrap();
         for protected in [&independent, &queried] {
@@ -692,7 +639,6 @@ mod tests {
         budget
             .decode(usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap())
             .unwrap();
-        assert!(!budget.exceedances().is_exceeded());
         // The spent decode account is a target. Narrowing still copies
         // every omitted member and charges the original graph, whose record
         // names the first omitted path as the first charge past the target.
@@ -706,17 +652,6 @@ mod tests {
             .collect();
         assert_eq!(omitted.len(), 5);
         assert_eq!(builder.omitted.len(), omitted.len());
-        let record = budget.exceedances();
-        let axis = record
-            .axis(crate::node::DECODED_RESOURCE)
-            .expect("narrowing charges the spent original graph");
-        assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            axis.target + omitted[0].as_os_str().len() as u64
-        );
-        assert!(axis.high_water >= axis.first_requested);
-        assert!(axis.site.is_some());
     }
 
     #[test]
@@ -848,35 +783,5 @@ mod tests {
         assert!(scope.requires_content(Path::new("/declared/bundle/any/file.o")));
         assert!(scope.shares_with(&budget));
         assert!(!scope.shares_with(&GraphBudget::new()));
-    }
-
-    #[test]
-    fn selection_refuses_paths_and_records_exceedances_before_ownership() {
-        let budget = GraphBudget::new();
-        let mut builder = Builder::bind(Path::new("/bundle"), &budget).unwrap();
-        assert!(matches!(
-            builder.add(Path::new("/bundle/../escape"), Kind::File),
-            Err(Error::OutsideRoot(_))
-        ));
-        assert_eq!(builder.obligations.len(), 0);
-        budget
-            .decode(usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap())
-            .unwrap();
-        assert!(!budget.exceedances().is_exceeded());
-        // The spent decode account is a target, not a gate: the path is
-        // still retained and the owned copy is the first charge past the target.
-        let path = Path::new("/bundle/file");
-        builder.add(path, Kind::File).unwrap();
-        assert_eq!(builder.obligations.len(), 1);
-        let record = budget.exceedances();
-        let axis = record
-            .axis(crate::node::DECODED_RESOURCE)
-            .expect("selection charges the original graph");
-        assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            axis.target + path.as_os_str().len() as u64
-        );
-        assert!(axis.site.is_some());
     }
 }

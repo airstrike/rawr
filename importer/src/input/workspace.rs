@@ -24,17 +24,11 @@ pub(crate) struct Image {
 
 pub(crate) trait Storage {
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()>;
-    /// Record a measured amount against an accounting target on the
-    /// original account; never refuses.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize);
 }
 
 impl Storage for cargo::RequestAllocation {
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
         self.retained(items, bytes)
-    }
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        cargo::RequestAllocation::exceeded(self, resource, target, actual);
     }
 }
 
@@ -42,9 +36,6 @@ impl Storage for Allocation {
     fn retain(&mut self, items: usize, bytes: usize) -> Result<()> {
         self.items(items)?;
         self.bytes(bytes)
-    }
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        Allocation::exceeded(self, resource, target, actual);
     }
 }
 
@@ -195,14 +186,7 @@ impl document::Admission for Account<'_> {
     fn admit(&mut self, request: document::Request) -> Result<()> {
         match request {
             document::Request::Items(items) => self.retain(items, 0),
-            document::Request::String(bytes) => {
-                self.storage.exceeded(
-                    "workspace TOML string bytes",
-                    self.limits.string_bytes,
-                    bytes,
-                );
-                Ok(())
-            }
+            document::Request::String(_) => Ok(()),
             document::Request::Allocation { bytes, alignment } => {
                 std::alloc::Layout::from_size_align(bytes, alignment).map_err(|_| overflow())?;
                 self.retain(0, bytes)
@@ -438,11 +422,6 @@ fn scan(
         let text = path
             .to_str()
             .ok_or_else(|| drift("workspace path is not UTF-8"))?;
-        account.storage.exceeded(
-            "workspace path bytes",
-            account.limits.string_bytes,
-            text.len(),
-        );
         account.retain(1, text.len())?;
         let mut value = String::new();
         value.try_reserve_exact(text.len()).map_err(allocation)?;
@@ -491,11 +470,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
         crate::process::TAIL_BYTES,
         length,
     )?;
-    account.storage.exceeded(
-        "workspace manifest bytes",
-        account.limits.manifest_bytes,
-        length,
-    );
     account.retain(1, length)?;
     let mut bytes = Vec::new();
     bytes.try_reserve_exact(length).map_err(allocation)?;

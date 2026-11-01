@@ -223,54 +223,6 @@ fn malformed_results_truncations_and_old_schema_are_rejected() {
     old[b"rawr-package-observations\0".len()] = 2;
     assert!(stored::Stored::decode(&old, &mut budget).is_err());
 }
-fn budget_run(items: usize, bytes: usize) -> (Result<()>, input::Usage, crate::exceedance::Record) {
-    let image = sample();
-    let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
-    let result = (|| {
-        let mut host = Host::from_image(
-            &image,
-            Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-        )?;
-        consume(&mut host)?;
-        host.finish()?;
-        Ok(())
-    })();
-    (result, allocation.usage(), allocation.exceedances())
-}
-#[test]
-fn cursor_uses_the_original_exact_account() {
-    let (result, usage, _) = budget_run(usize::MAX, usize::MAX);
-    result.unwrap();
-    let (result, exact, exceeded) = budget_run(usage.items, usage.bytes);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(!exceeded.is_exceeded());
-    // One less on either axis still completes the cursor and records
-    // that axis with the exact total as its high water.
-    let (result, actual, exceeded) = budget_run(usage.items - 1, usage.bytes);
-    result.unwrap();
-    assert_eq!(actual, usage);
-    let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-    assert_eq!(
-        (axis.target, axis.high_water),
-        (usage.items as u64 - 1, usage.items as u64)
-    );
-    assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-    let (result, actual, exceeded) = budget_run(usage.items, usage.bytes - 1);
-    result.unwrap();
-    assert_eq!(actual, usage);
-    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-    assert_eq!(
-        (axis.target, axis.high_water),
-        (usage.bytes as u64 - 1, usage.bytes as u64)
-    );
-    assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-}
-
 #[test]
 fn same_image_cursors_cannot_transfer_work_or_completion_to_another_host() {
     let image = sample();

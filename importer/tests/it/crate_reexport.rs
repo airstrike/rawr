@@ -161,8 +161,8 @@ fn an_item_naming_another_facades_type_is_unavailable_by_itself() {
     let contract = graph
         .classify(&rawr_import::classify::Policy::standard(), &limits)
         .expect("the split fixture classifies");
-    let plan = rawr_import::surface::facade::Plan::encode(&contract, &limits)
-        .and_then(|bytes| rawr_import::surface::facade::Plan::decode(&bytes, &limits))
+    let plan = rawr_import::surface::facade::Plan::encode(&contract)
+        .and_then(|bytes| rawr_import::surface::facade::Plan::decode(&bytes))
         .expect("the split facade plan round-trips");
     let facade = |root: &str| {
         plan.facades()
@@ -246,7 +246,7 @@ fn request(project: &Project, limits: &Limits, dependencies: &[(&str, &str)]) ->
     )
     .expect("the limits-bound request builder seals")
     .environment(environment)
-    .policy(Policy::manifest(limits).seal())
+    .policy(Policy::manifest().seal())
     .expect("the manifest policy fits the request");
     for (alias, package) in dependencies {
         builder = builder

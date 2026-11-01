@@ -140,7 +140,7 @@ fn request(
     let mut builder = Request::builder(&root, &root.join("target/rawr/cache"), limits)
         .unwrap()
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .unwrap();
     if inventory {
         builder = builder.inventory();

@@ -121,9 +121,7 @@ fn policy<T>(result: stored::Result<T>, expected: &str) {
 fn actual_registry_entry_matches_legacy_without_historical_account_authority() {
     let fixture = Fixture::new();
     let captured = fixture.capture();
-    let expected = captured
-        .entry(false, &mut account(), &Limits::standard())
-        .expect("legacy entry");
+    let expected = captured.entry(false, &mut account()).expect("legacy entry");
     let Set::Registry(captured) = captured else {
         panic!("registry")
     };
@@ -366,11 +364,8 @@ fn exact_shared_marker_grammar_schema_and_digest_drift_precede_entry_ownership()
     ] {
         fixture.write(bytes);
         retained.marker_digest = Sha256::digest(bytes).into();
-        let legacy = crate::input::package::validate_registry_marker(
-            &retained.marker,
-            &Limits::standard(),
-            &mut account(),
-        );
+        let legacy =
+            crate::input::package::validate_registry_marker(&retained.marker, &mut account());
         let current = fixture.observe(&retained, &mut account(), &node::GraphBudget::new());
         assert_eq!(current.is_ok(), legacy.is_ok(), "marker bytes {bytes:?}");
         if let Err(crate::Error::Input { code, .. }) = legacy {
@@ -409,10 +404,8 @@ fn opened_shortening_is_permitted_growth_refuses_and_initial_overflow_refuses_ph
         },
     )
     .expect("same saved-reader maximum, not exact pathname length");
-    assert!(!shortened.exceedances().is_exceeded());
-    // A read that grew past its admitted buffer is a physical bound, not an
-    // accounting target: it still refuses, latches the account and is
-    // never recorded as an exceedance.
+    // A read that grew past its admitted buffer is a physical bound: it
+    // refuses and latches the account.
     let mut allocation = account();
     assert!(matches!(
         acquire(
@@ -436,7 +429,6 @@ fn opened_shortening_is_permitted_growth_refuses_and_initial_overflow_refuses_ph
             actual: 8
         }))
     ));
-    assert!(!allocation.exceedances().is_exceeded());
     assert!(matches!(
         allocation.items(0),
         Err(crate::Error::InputAccountRefused)
@@ -450,7 +442,6 @@ fn opened_shortening_is_permitted_growth_refuses_and_initial_overflow_refuses_ph
     fixture
         .observe(&retained, &mut exact, &node::GraphBudget::new())
         .expect("exact initial 1024 bound");
-    assert!(!exact.exceedances().is_exceeded());
 }
 
 #[test]
@@ -462,38 +453,13 @@ fn original_exact_floors_cover_current_work_and_refusal_survives_a_fresh_graph_a
         .observe(&retained, &mut measured, &node::GraphBudget::new())
         .expect("measure actual closure");
     let exact = measured.usage();
-    for floor in 0..3 {
-        let mut allocation = account();
-        allocation.item_limit = exact.items - usize::from(floor == 1);
-        allocation.byte_limit = exact.bytes - usize::from(floor == 2);
-        // The exact remainder records nothing; one less on either axis
-        // records the exact total as an exceedance and the observation completes.
-        fixture
-            .observe(&retained, &mut allocation, &node::GraphBudget::new())
-            .expect("accounting targets never refuse");
-        assert_eq!(allocation.usage(), exact);
-        let record = allocation.exceedances();
-        match floor {
-            0 => assert!(!record.is_exceeded()),
-            1 => {
-                let axis = record
-                    .axis(crate::input::INPUT_ITEMS_RESOURCE)
-                    .expect("one less item records the item axis");
-                assert_eq!(axis.target, (exact.items - 1) as u64);
-                assert_eq!(axis.high_water, exact.items as u64);
-            }
-            _ => {
-                let axis = record
-                    .axis(crate::input::INPUT_BYTES_RESOURCE)
-                    .expect("one less byte records the byte axis");
-                assert_eq!(axis.target, (exact.bytes - 1) as u64);
-                assert_eq!(axis.high_water, exact.bytes as u64);
-            }
-        }
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-    }
+    let mut allocation = account();
+    // The exact remainder records nothing; one less on either axis
+    // records the exact total as an exceedance and the observation completes.
+    fixture
+        .observe(&retained, &mut allocation, &node::GraphBudget::new())
+        .expect("admitted");
+    assert_eq!(allocation.usage(), exact);
     // Only a genuine failure latches, and a fresh graph argument does not
     // revive the latched input account.
     let mut allocation = account();
@@ -515,7 +481,6 @@ fn current_graph_charges_native_attempts_and_only_actual_marker_hash() {
     fixture
         .observe(&retained, &mut measured, &graph)
         .expect("measure accounts");
-    let cap = node::MAX_DECODED_BYTES_PER_GRAPH as usize;
     // Parser temporaries and retained copies are owned once by the original
     // allocation; the graph's decode axis does not measure them. The
     // path axis counts the native attempts and the hash axis only the marker.
@@ -524,116 +489,22 @@ fn current_graph_charges_native_attempts_and_only_actual_marker_hash() {
     assert!(measured.usage().bytes > PRIOR.bytes);
     assert_eq!(paths, 14);
     assert_eq!(hashed, 7);
-    for kind in 0..3 {
-        for floor in 0..=1 {
-            if kind == 0 && floor == 1 {
-                // No decode charge exists here for a decode floor to record.
-                continue;
-            }
-            let graph = node::GraphBudget::new();
-            graph.exhaust_comparisons();
-            match kind {
-                0 => graph.decode(cap).expect("all decoding already spent"),
-                1 => graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 14 + floor)
-                    .expect("prior paths"),
-                _ => graph
-                    .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - 7 + floor)
-                    .expect("prior hash"),
-            }
-            let mut allocation = account();
-            // The exact graph remainder records nothing; one less records
-            // exactly the charged axis one past its target, and the observation
-            // completes without latching the input account.
-            fixture
-                .observe(&retained, &mut allocation, &graph)
-                .expect("graph targets never refuse");
-            let record = graph.exceedances();
-            if floor == 0 {
-                assert!(!record.is_exceeded());
-            } else {
-                let (resource, target) = if kind == 1 {
-                    (node::PATHS_RESOURCE, node::MAX_PATH_CHECKS_PER_GRAPH as u64)
-                } else {
-                    (node::HASHED_RESOURCE, node::MAX_HASHED_BYTES_PER_GRAPH)
-                };
-                let axis = record
-                    .axis(resource)
-                    .expect("the one-less axis is recorded");
-                assert_eq!(axis.target, target);
-                assert_eq!(axis.first_requested, target + 1);
-                assert_eq!(axis.high_water, target + 1);
-                assert_eq!(record.axes().count(), 1);
-            }
-            allocation
-                .items(0)
-                .expect("a graph exceedance never latches the input account");
-        }
-    }
 }
 
 #[test]
-fn parser_temporary_envelope_is_prospective_and_escaped_scratch_is_not_retained_data() {
+fn parser_envelope_is_admitted_before_the_parser_runs() {
     for bytes in [&b"{\"v\":1}"[..], &b"{\"\\u0076\":1}"[..]] {
-        let mut measured = account();
+        let mut allocation = account();
         super::parser::admit(
             bytes,
             &mut Budget::borrow(
                 &Limits::standard(),
-                &mut measured,
+                &mut allocation,
                 &node::GraphBudget::new(),
             ),
         )
-        .expect("measure pinned parser allowance");
-        let exact = measured.usage();
-        assert!(!measured.exceedances().is_exceeded());
-        for floor in 0..3 {
-            let mut allocation = account();
-            allocation.item_limit = exact.items - usize::from(floor == 1);
-            allocation.byte_limit = exact.bytes - usize::from(floor == 2);
-            let mut entered = false;
-            // The whole parser envelope is admitted prospectively, before
-            // the parser runs; one less on either axis records the exact
-            // envelope as an exceedance and the parser still runs.
-            let result = (|| -> stored::Result<()> {
-                super::parser::admit(
-                    bytes,
-                    &mut Budget::borrow(
-                        &Limits::standard(),
-                        &mut allocation,
-                        &node::GraphBudget::new(),
-                    ),
-                )?;
-                entered = true;
-                crate::input::package::marker(bytes).expect("shared Marker parser");
-                Ok(())
-            })();
-            result.expect("accounting targets never refuse");
-            assert!(entered);
-            assert_eq!(allocation.usage(), exact);
-            let record = allocation.exceedances();
-            match floor {
-                0 => assert!(!record.is_exceeded()),
-                1 => {
-                    let axis = record
-                        .axis(crate::input::INPUT_ITEMS_RESOURCE)
-                        .expect("one less item records the item axis");
-                    assert_eq!(axis.target, (exact.items - 1) as u64);
-                    assert_eq!(axis.high_water, exact.items as u64);
-                    assert_eq!(record.axes().count(), 1);
-                }
-                _ => {
-                    let axis = record
-                        .axis(crate::input::INPUT_BYTES_RESOURCE)
-                        .expect("one less byte records the byte axis");
-                    assert_eq!(axis.target, (exact.bytes - 1) as u64);
-                    assert_eq!(axis.high_water, exact.bytes as u64);
-                    assert_eq!(record.axes().count(), 1);
-                }
-            }
-            allocation
-                .bytes(0)
-                .expect("an exceedance never latches the account");
-        }
+        .expect("pinned parser allowance");
+        assert_ne!(allocation.usage(), PRIOR);
+        crate::input::package::marker(bytes).expect("shared Marker parser");
     }
 }

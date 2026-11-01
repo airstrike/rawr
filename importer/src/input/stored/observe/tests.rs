@@ -209,7 +209,7 @@ fn every_other_recipe_rejects_without_filesystem_or_account_work() {
 }
 
 #[test]
-fn actual_directory_ownership_obeys_exact_prior_usage_and_terminal_floors() {
+fn actual_directory_ownership_obeys_exact_prior_usage_and_terminal_refusal() {
     let fixture = Fixture::new();
     fs::write(fixture.0.join("source"), b"one").expect("source");
     fs::create_dir(fixture.0.join("empty")).expect("empty directory");
@@ -227,57 +227,37 @@ fn actual_directory_ownership_obeys_exact_prior_usage_and_terminal_floors() {
     )
     .expect("measured real ownership");
     let usage = measured.usage();
-    for floor in 0..3 {
-        let mut allocation = Allocation::for_proof(prior, &limits);
-        allocation.item_limit = usage.items - usize::from(floor == 1);
-        allocation.byte_limit = usage.bytes - usize::from(floor == 2);
-        let graph = node::GraphBudget::new();
-        graph.exhaust_comparisons();
-        let result = entry(
+    let mut allocation = Allocation::for_proof(prior, &limits);
+    let graph = node::GraphBudget::new();
+    graph.exhaust_comparisons();
+    let result = entry(
+        recipe.view(),
+        &fixture.0,
+        &mut Budget::borrow(&limits, &mut allocation, &graph),
+    );
+    // The directory's ownership is charged in full.
+    result.expect("directory ownership is owned");
+    assert_eq!(allocation.usage(), usage);
+    // A genuine failure latches the account terminally.
+    allocation.refuse();
+    let spent = allocation.usage();
+    assert!(matches!(
+        entry(
             recipe.view(),
             &fixture.0,
-            &mut Budget::borrow(&limits, &mut allocation, &graph),
-        );
-        // The directory's ownership is charged in full either way; a
-        // ceiling one under records the axis with the exact total as high water.
-        result.expect("directory ownership is owned, not gated");
-        assert_eq!(allocation.usage(), usage, "floor {floor}");
-        let record = allocation.exceedances();
-        if floor == 0 {
-            assert!(!record.is_exceeded(), "exact prior usage");
-        } else {
-            let (name, total) = if floor == 1 {
-                (crate::input::INPUT_ITEMS_RESOURCE, usage.items)
-            } else {
-                (crate::input::INPUT_BYTES_RESOURCE, usage.bytes)
-            };
-            let axis = record.axis(name).expect("one-under axis recorded");
-            assert_eq!(axis.target as usize, total - 1);
-            assert_eq!(axis.high_water as usize, total);
-            assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-            // A genuine failure latches the account terminally.
-            allocation.refuse();
-            let spent = allocation.usage();
-            assert!(matches!(
-                entry(
-                    recipe.view(),
-                    &fixture.0,
-                    &mut Budget::borrow(&limits, &mut allocation, &node::GraphBudget::new())
-                ),
-                Err(stored::Error::Refused)
-            ));
-            assert_eq!(allocation.usage(), spent);
-            assert!(matches!(
-                allocation.bytes(0),
-                Err(crate::Error::InputAccountRefused)
-            ));
-        }
-    }
+            &mut Budget::borrow(&limits, &mut allocation, &node::GraphBudget::new())
+        ),
+        Err(stored::Error::Refused)
+    ));
+    assert_eq!(allocation.usage(), spent);
+    assert!(matches!(
+        allocation.bytes(0),
+        Err(crate::Error::InputAccountRefused)
+    ));
 }
 
 #[test]
-fn file_graph_paths_and_hashing_have_exact_floors_per_new_identity_and_metadata_storage_adds_no_decode(
-) {
+fn file_graph_paths_and_hashing_are_exact_per_new_identity_and_metadata_storage_adds_no_decode() {
     let fixture = Fixture::new();
     let source = fixture.0.join("source");
     fs::write(&source, b"one").expect("source");
@@ -301,88 +281,22 @@ fn file_graph_paths_and_hashing_have_exact_floors_per_new_identity_and_metadata_
     // Path copies and the canonical output are owned once by the original
     // allocation; the graph's decode axis measures decoding, not copies.
     let limits = cargo::Limits::standard();
-    for account in 0..3 {
-        for floor in [0, 1] {
-            if account == 2 && floor == 1 {
-                // No decode charge exists here for a decode floor to refuse.
-                continue;
-            }
-            // Each measurement reads a new physical identity; an
-            // unchanged one would reuse its digest with no read at all.
-            fs::set_permissions(
-                &source,
-                fs::metadata(&source).expect("source").permissions(),
-            )
-            .expect("status change");
-            let graph = node::GraphBudget::new();
-            match account {
-                0 => graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 8 + floor)
-                    .expect("prior paths"),
-                1 => graph
-                    .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - 3 + floor)
-                    .expect("prior hashing"),
-                _ => graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("all decoding already spent"),
-            }
-            let mut allocation = Allocation::for_proof(
-                Usage {
-                    items: 7,
-                    bytes: 31,
-                },
-                &limits,
-            );
-            let result = entry(
-                recipe.view(),
-                &fixture.0,
-                &mut Budget::borrow(&limits, &mut allocation, &graph),
-            );
-            // The graph axes are charged in full either way; prior work
-            // one over the exact floor records the axis with the exact total.
-            result.unwrap_or_else(|error| panic!("graph account {account} floor {floor}: {error}"));
-            let (name, target) = match account {
-                0 => (node::PATHS_RESOURCE, node::MAX_PATH_CHECKS_PER_GRAPH as u64),
-                1 => (node::HASHED_RESOURCE, node::MAX_HASHED_BYTES_PER_GRAPH),
-                _ => (node::DECODED_RESOURCE, node::MAX_DECODED_BYTES_PER_GRAPH),
-            };
-            if account == 2 {
-                assert_eq!(
-                    graph.census_usage().expect("graph census").0,
-                    node::MAX_DECODED_BYTES_PER_GRAPH,
-                    "metadata storage adds no decode"
-                );
-            }
-            let record = graph.exceedances();
-            if floor == 0 {
-                assert!(!record.is_exceeded(), "exact graph account {account}");
-                // One more unit of work past the exact floor is recorded.
-                let exhausted = match account {
-                    0 => graph.paths(1),
-                    1 => graph.hash(1),
-                    _ => graph.decode(1),
-                };
-                exhausted.expect("one over the target is recorded, not refused");
-                let record = graph.exceedances();
-                let axis = record.axis(name).expect("axis recorded");
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (target, target + 1, target + 1)
-                );
-            } else {
-                let axis = record
-                    .axis(name)
-                    .expect("one-over prior work axis recorded");
-                assert_eq!(axis.target, target);
-                assert_eq!(
-                    axis.high_water,
-                    target + 1,
-                    "exact floor: eight path checks or three hashed bytes"
-                );
-                assert!(allocation.items(0).is_ok(), "an exceedance never latches");
-            }
-        }
-    }
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::for_proof(
+        Usage {
+            items: 7,
+            bytes: 31,
+        },
+        &limits,
+    );
+    entry(
+        recipe.view(),
+        &fixture.0,
+        &mut Budget::borrow(&limits, &mut allocation, &graph),
+    )
+    .expect("file entry");
+    // Eight path checks, three hashed bytes and no decode.
+    assert_eq!(graph.census_usage().expect("graph census"), (0, 8, 3));
 }
 
 #[test]
@@ -410,10 +324,6 @@ fn initial_refusal_prevents_io_and_read_length_changes_cannot_succeed() {
     graph
         .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
         .expect("no filesystem admission occurred");
-    assert!(
-        !graph.exceedances().is_exceeded(),
-        "no path check was charged by the latched account"
-    );
     let source = fixture.0.join("source");
     fs::write(&source, b"one").expect("source");
     for expected in [0, 2, 4] {
@@ -423,14 +333,6 @@ fn initial_refusal_prevents_io_and_read_length_changes_cannot_succeed() {
             &source,
             expected,
             &mut Budget::borrow(&limits, &mut allocation, &graph),
-        );
-        // The buffer was admitted at the expected length, so an opened length
-        // past it is a physical read bound: it still refuses with a
-        // physical `Error::Limit`, latches the account and records nothing. A
-        // shorter opened length remains source drift and latches nothing.
-        assert!(
-            !allocation.exceedances().is_exceeded(),
-            "a physical bound is never an exceedance"
         );
         if expected < 3 {
             assert!(
@@ -453,7 +355,6 @@ fn initial_refusal_prevents_io_and_read_length_changes_cannot_succeed() {
                 matches!(result, Err(stored::Error::Observation(Error::Drift(_)))),
                 "expected {expected}"
             );
-            assert!(allocation.bytes(0).is_ok(), "drift never latches");
         }
     }
 }
@@ -479,7 +380,7 @@ fn reserved_entry_slot_is_not_charged_again_by_push() {
 }
 
 #[test]
-fn bounded_file_records_oversize_and_optional_config_rejects_directories() {
+fn file_refusal_latches_and_optional_config_rejects_directories() {
     let fixture = Fixture::new();
     let file = fixture.0.join("config");
     fs::write(&file, b"12345").expect("fixture input");
@@ -493,37 +394,13 @@ fn bounded_file_records_oversize_and_optional_config_rejects_directories() {
         &limits,
     );
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    // The producer's byte bound is an accounting target; an oversize
-    // file is observed in full and the axis records its actual length.
-    let entry = super::limited_file(
-        proof::Role::Config,
-        None,
-        &file,
-        &fixture.0,
-        "fixture bounded file",
-        4,
-        &mut budget,
-    )
-    .expect("an oversize bound is recorded, not refused");
+    let entry = super::file(proof::Role::Config, None, &file, &fixture.0, &mut budget)
+        .expect("the file is observed");
     assert!(matches!(entry, proof::Entry::File { bytes: 5, .. }));
-    let record = budget.exceedances();
-    let axis = record
-        .axis("fixture bounded file")
-        .expect("bounded file axis recorded");
-    assert_eq!((axis.target, axis.high_water), (4, 5));
-    assert!(budget.check().is_ok(), "an exceedance never latches");
     // A genuine failure latches; the latched account observes nothing more.
     budget.refuse();
     assert!(matches!(
-        super::limited_file(
-            proof::Role::Config,
-            None,
-            &file,
-            &fixture.0,
-            "fixture bounded file",
-            4,
-            &mut budget
-        ),
+        super::file(proof::Role::Config, None, &file, &fixture.0, &mut budget),
         Err(stored::Error::Refused)
     ));
     assert!(matches!(budget.check(), Err(stored::Error::Refused)));
@@ -537,13 +414,11 @@ fn bounded_file_records_oversize_and_optional_config_rejects_directories() {
     );
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     assert!(matches!(
-        super::limited_optional_file(
+        super::optional_file(
             proof::Role::Config,
             None,
             &fixture.0,
             &fixture.0,
-            "fixture bounded file",
-            4,
             &mut budget
         ),
         Err(stored::Error::Observation(Error::Policy(
@@ -610,15 +485,7 @@ fn config_candidates_follow_symlinks_and_other_inputs_refuse_them() {
         let graph = node::GraphBudget::new();
         let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-        let optional = super::limited_optional_file(
-            role,
-            None,
-            &spelled,
-            &fixture.0,
-            "Cargo config provenance",
-            limits.manifest_bytes,
-            &mut budget,
-        );
+        let optional = super::optional_file(role, None, &spelled, &fixture.0, &mut budget);
         let path = entry::<()>(
             super::super::view::View::Path {
                 role,

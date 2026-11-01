@@ -2,8 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{cargo, node, Scope};
+use super::Scope;
 use crate::supervisor::snapshot::Bytes;
+use crate::{cargo, node};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 const SOURCE: &[u8] = b"before";
@@ -48,16 +49,14 @@ fn snapshot(root: &std::path::Path, source: &[u8]) -> Bytes {
     framed.entry(entry.to_str().unwrap()).unwrap();
     framed.file(manifest.to_str().unwrap(), MANIFEST).unwrap();
     framed.file(entry.to_str().unwrap(), source).unwrap();
-    framed.bind(snapshot.seal().unwrap(), &limits).unwrap()
+    framed.bind(snapshot.seal().unwrap()).unwrap()
 }
 
 #[test]
 fn original_attempt_accumulates_initial_post_compile_and_final_source_checks() {
     let fixture = Fixture::new();
     let scope = Scope::begin();
-    let proof = scope
-        .observe(&fixture.bytes, &cargo::Limits::standard())
-        .unwrap();
+    let proof = scope.observe(&fixture.bytes).unwrap();
     assert!(proof.matches(&fixture.bytes));
     assert!(!proof.matches(&snapshot(&fixture.root, b"after!")));
     let first = scope.budget().census_usage().unwrap();
@@ -79,9 +78,7 @@ fn original_attempt_accumulates_initial_post_compile_and_final_source_checks() {
 fn freshness_keeps_its_original_scope_and_rejects_manifest_drift() {
     let fixture = Fixture::new();
     let scope = Scope::begin();
-    let proof = scope
-        .observe(&fixture.bytes, &cargo::Limits::standard())
-        .unwrap();
+    let proof = scope.observe(&fixture.bytes).unwrap();
     let budget = scope.budget().clone();
     drop(scope);
     proof.revalidate().unwrap();
@@ -98,67 +95,15 @@ fn freshness_keeps_its_original_scope_and_rejects_manifest_drift() {
 }
 
 #[test]
-fn resident_observation_records_each_exhausted_original_graph_cap() {
+fn resident_observation_charges_the_original_graph() {
     let fixture = Fixture::new();
-    let limits = cargo::Limits::standard();
-    // Exact per-observation charges, measured on a fresh original account.
     let probe = Scope::begin();
     assert!(probe
-        .observe(&fixture.bytes, &limits)
+        .observe(&fixture.bytes)
         .unwrap()
         .matches(&fixture.bytes));
     let (decoded, paths, hashed) = probe.budget().census_usage().unwrap();
     assert!(decoded > 0 && paths > 0 && hashed > 0);
-    assert!(!probe.budget().exceedances().is_exceeded());
-    // An exhausted original target never refuses the observation. Each
-    // axis keeps charging the same cumulative account and records exactly the
-    // observation's own charge past its target, and only that axis.
-    for resource in ["decode", "paths", "hash"] {
-        let scope = Scope::begin();
-        match resource {
-            "decode" => scope
-                .budget()
-                .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                .unwrap(),
-            "paths" => scope
-                .budget()
-                .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-                .unwrap(),
-            "hash" => scope
-                .budget()
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                .unwrap(),
-            _ => unreachable!(),
-        }
-        let (expected, target, charged) = match resource {
-            "decode" => (
-                node::DECODED_RESOURCE,
-                node::MAX_DECODED_BYTES_PER_GRAPH,
-                decoded,
-            ),
-            "paths" => (
-                node::PATHS_RESOURCE,
-                node::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                paths as u64,
-            ),
-            "hash" => (
-                node::HASHED_RESOURCE,
-                node::MAX_HASHED_BYTES_PER_GRAPH,
-                hashed,
-            ),
-            _ => unreachable!(),
-        };
-        let proof = scope
-            .observe(&fixture.bytes, &limits)
-            .expect("an accounting axis never refuses");
-        assert!(proof.matches(&fixture.bytes));
-        let record = scope.budget().exceedances();
-        assert_eq!(record.axes().count(), 1, "{resource}");
-        let axis = record.axis(expected).unwrap();
-        assert_eq!(axis.target, target, "{resource}");
-        assert_eq!(axis.high_water, target + charged, "{resource}");
-        assert!(axis.first_requested > target && axis.first_requested <= axis.high_water);
-    }
 }
 
 #[test]
@@ -166,7 +111,7 @@ fn full_preparation_context_and_resident_proof_share_one_cumulative_account() {
     let fixture = Fixture::new();
     let scope = Scope::begin();
     let limits = cargo::Limits::standard();
-    let proof = scope.observe(&fixture.bytes, &limits).unwrap();
+    let proof = scope.observe(&fixture.bytes).unwrap();
     let before_fallback = scope.budget().census_usage().unwrap();
     let cargo_home = fixture.root.join("cargo-home");
     fs::create_dir(&cargo_home).unwrap();
@@ -188,15 +133,9 @@ fn full_preparation_context_and_resident_proof_share_one_cumulative_account() {
     );
     let cloned = context.clone().without_toolchain_memo();
     assert!(cloned.graph_budget().shares_with(scope.budget()));
-    cloned
-        .graph_budget()
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - before_fallback.1)
-        .unwrap();
-    assert!(!scope.budget().exceedances().is_exceeded());
     // The proof keeps charging the one cumulative account the context
-    // clones share. A deleted source distinguishes that charge, recorded past
-    // the exhausted target before the path is touched, from a fresh account:
-    // the revalidation fails for its own I/O reason, never for accounting.
+    // clones share; the revalidation of a deleted source charges its path
+    // checks there and fails for its own I/O reason.
     fs::remove_file(fixture.root.join("main.rs")).unwrap();
     assert!(matches!(
         proof.revalidate(),
@@ -206,115 +145,10 @@ fn full_preparation_context_and_resident_proof_share_one_cumulative_account() {
         })
     ));
     let (_, paths_after, _) = context.graph_budget().census_usage().unwrap();
-    let axis = context
-        .graph_budget()
-        .exceedances()
-        .axis(node::PATHS_RESOURCE)
-        .copied()
-        .expect("the shared account recorded the revalidation path checks");
-    assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-    assert_eq!(axis.high_water, paths_after as u64);
-    assert!(axis.first_requested > axis.target);
+    assert!(paths_after > before_fallback.1);
+    context.graph_budget().paths(1).unwrap();
     assert_eq!(
-        scope.budget().exceedances().axis(node::PATHS_RESOURCE),
-        Some(&axis)
+        cloned.graph_budget().census_usage().unwrap().1,
+        paths_after + 1
     );
-    context
-        .graph_budget()
-        .paths(1)
-        .expect("an accounting axis never refuses");
-    assert_eq!(
-        cloned
-            .graph_budget()
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .map(|axis| axis.high_water),
-        Some(paths_after as u64 + 1)
-    );
-}
-
-/// A configured `[rust.limits]` graph target is the profile the
-/// attempt's one account measures against on every route. The resident
-/// observation's own path checks cross `graph-path-checks = 1` and are recorded
-/// against that target; the owner route's context then shares the same bound
-/// account, and a different profile cannot rebind it.
-#[test]
-fn configured_graph_targets_bind_the_attempt_account_and_record_path_exceedance() {
-    let fixture = Fixture::new();
-    let mut limits = cargo::Limits::standard();
-    limits.configure("graph-path-checks", 1).unwrap();
-    assert_eq!(limits.graph_targets().paths, 1);
-    let scope = Scope::begin();
-    let proof = scope
-        .observe(&fixture.bytes, &limits)
-        .expect("an accounting axis never refuses");
-    assert!(proof.matches(&fixture.bytes));
-    let (_, paths, _) = scope.budget().census_usage().unwrap();
-    assert!(
-        paths > 1,
-        "the observation performs more than one path check"
-    );
-    let record = scope.budget().exceedances();
-    assert_eq!(record.axes().count(), 1, "only the configured axis crossed");
-    let axis = record
-        .axis(node::PATHS_RESOURCE)
-        .expect("the configured path-check target is crossed and recorded");
-    assert_eq!(axis.target, 1);
-    assert_eq!(axis.high_water, paths as u64);
-    assert!(axis.first_requested > 1 && axis.first_requested <= axis.high_water);
-    assert_eq!(scope.budget().targets(), limits.graph_targets());
-
-    // The owner route captures its context in the same bound account.
-    let cargo_home = fixture.root.join("cargo-home");
-    fs::create_dir(&cargo_home).unwrap();
-    let environment =
-        cargo::config::Environment::from_pairs([("CARGO_HOME", cargo_home.to_str().unwrap())])
-            .unwrap();
-    let context = crate::context::Context::capture_in(
-        &fixture.root,
-        environment,
-        "attempt-target",
-        &limits,
-        scope.budget_for(&limits).unwrap(),
-    )
-    .unwrap();
-    assert!(context.graph_budget().shares_with(scope.budget()));
-    assert_eq!(context.graph_budget().targets(), limits.graph_targets());
-    context
-        .graph_budget()
-        .paths(1)
-        .expect("an accounting axis never refuses");
-    assert_eq!(
-        scope
-            .budget()
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .unwrap()
-            .high_water,
-        paths as u64 + 1
-    );
-
-    // One attempt has one profile: another profile is drift, not a rebind.
-    assert!(matches!(
-        scope.budget_for(&cargo::Limits::standard()),
-        Err(node::Error::State(_))
-    ));
-    assert!(matches!(
-        scope.observe(&fixture.bytes, &cargo::Limits::standard()),
-        Err(node::Error::State(_))
-    ));
-    assert_eq!(scope.budget().targets(), limits.graph_targets());
-    assert_eq!(
-        scope.budget().census_usage().unwrap().1,
-        paths + 1,
-        "the refused drift charged nothing"
-    );
-    // An unbound scope measures against the standard targets, and the standard
-    // profile then binds it as the same account.
-    let standard = Scope::begin();
-    assert_eq!(standard.budget().targets(), node::GraphTargets::STANDARD);
-    assert!(standard
-        .budget_for(&cargo::Limits::standard())
-        .unwrap()
-        .shares_with(standard.budget()));
 }

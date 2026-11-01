@@ -944,19 +944,7 @@ impl Population {
 
 #[cfg(test)]
 pub(crate) fn decode(bytes: &[u8], limits: &cargo::Limits) -> Result<Document> {
-    decode_recorded(bytes, limits).map(|(document, _)| document)
-}
-
-/// Decode under a fresh canonical account and return that account, so a test
-/// can assert the exceedance record the scan left behind.
-#[cfg(test)]
-pub(crate) fn decode_recorded(
-    bytes: &[u8],
-    limits: &cargo::Limits,
-) -> Result<(Document, super::Allocation)> {
-    let mut allocation = super::Allocation::new(limits);
-    let document = decode_accounted(bytes, limits, &mut allocation)?;
-    Ok((document, allocation))
+    decode_accounted(bytes, limits, &mut super::Allocation::new(limits))
 }
 
 pub(crate) fn decode_accounted(
@@ -964,14 +952,7 @@ pub(crate) fn decode_accounted(
     limits: &cargo::Limits,
     allocation: &mut super::Allocation,
 ) -> Result<Document> {
-    // The sidecar document size is an accounting target recorded on the
-    // canonical account.
-    allocation.exceeded("sidecar bytes", limits.json_bytes, bytes.len());
-    // The scan's crossings are folded into the account on every exit path, so
-    // a document that crosses a target and then fails to scan keeps them.
-    let mut exceeded = crate::exceedance::Record::new();
-    let scanned = scan(bytes, limits, false, &mut exceeded);
-    allocation.absorb_exceedances(&exceeded);
+    let scanned = scan(bytes, limits, false);
     let usage = scanned?;
     allocation.items(usage.items)?;
     allocation.bytes(usage.bytes)?;
@@ -1055,30 +1036,14 @@ pub(crate) fn accounted_decodes() -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum ArrayClass {
-    Other,
-    Packages,
-    Definitions,
-    Edges,
-}
-
-#[derive(Clone, Copy)]
 enum Frame {
-    Object {
-        pending: ArrayClass,
-        width: usize,
-    },
-    Array {
-        class: ArrayClass,
-        elements: usize,
-        width: usize,
-    },
+    Object { width: usize },
+    Array { elements: usize, width: usize },
 }
 
 pub(crate) struct Preflight {
     pub(crate) items: usize,
     pub(crate) bytes: usize,
-    pub(crate) admission_bytes: usize,
 }
 
 /// Reuse the fixed-stack scanner for the closed selected-API allocation sites.
@@ -1087,8 +1052,8 @@ pub(crate) fn selected_preflight(bytes: &[u8], limits: &cargo::Limits) -> Result
     preflight(bytes, limits, true)
 }
 
-/// The selected-API scan for a canonical transaction: the targets it crosses
-/// reach `allocation` on every exit, including a scan that then fails.
+/// The selected-API scan for a canonical transaction; a scan failure is
+/// reported through `allocation`.
 #[cfg_attr(
     not(feature = "rustc-driver"),
     allow(dead_code, reason = "stored API replay is driver-only")
@@ -1098,52 +1063,34 @@ pub(crate) fn selected_preflight_accounted(
     limits: &cargo::Limits,
     allocation: &super::Allocation,
 ) -> Result<Preflight> {
-    let mut exceeded = crate::exceedance::Record::new();
-    let scanned = scan(bytes, limits, true, &mut exceeded);
-    allocation.absorb_exceedances(&exceeded);
+    let scanned = scan(bytes, limits, true);
     let scanned = scanned.map_err(|error| allocation.failure(error))?;
     Ok(Preflight {
         items: scanned.items,
         bytes: scanned.bytes,
-        admission_bytes: scanned.admission_bytes,
     })
 }
 
 #[cfg(test)]
 fn preflight(bytes: &[u8], limits: &cargo::Limits, selected: bool) -> Result<Preflight> {
-    let mut exceeded = crate::exceedance::Record::new();
-    let scanned = scan(bytes, limits, selected, &mut exceeded)?;
+    let scanned = scan(bytes, limits, selected)?;
     Ok(Preflight {
         items: scanned.items,
         bytes: scanned.bytes,
-        admission_bytes: scanned.admission_bytes,
     })
 }
 
 struct Scanned {
     items: usize,
     bytes: usize,
-    admission_bytes: usize,
 }
 
-/// The fixed-stack scan. Accounting crossings are written to `exceeded` as
-/// they happen, so the caller keeps them even when the scan then fails.
-fn scan(
-    bytes: &[u8],
-    limits: &cargo::Limits,
-    selected: bool,
-    exceeded: &mut crate::exceedance::Record,
-) -> Result<Scanned> {
-    let mut stack = [Frame::Object {
-        pending: ArrayClass::Other,
-        width: 0,
-    }; 256];
+/// The fixed-stack scan.
+fn scan(bytes: &[u8], limits: &cargo::Limits, selected: bool) -> Result<Scanned> {
+    let mut stack = [Frame::Object { width: 0 }; 256];
     let mut shape = crate::api::decode::Shape::default();
     let mut depth = 0_usize;
     let mut containers = 0_usize;
-    let mut packages = 0_usize;
-    let mut definitions = 0_usize;
-    let mut edges = 0_usize;
     let mut items = 0_usize;
     let mut strings = 0_usize;
     let mut string_bytes = 0_usize;
@@ -1152,28 +1099,13 @@ fn scan(
     while index < bytes.len() {
         match bytes[index] {
             b'{' => {
-                count_element(
-                    &mut stack[..depth],
-                    &mut items,
-                    &mut packages,
-                    &mut definitions,
-                    &mut edges,
-                    limits,
-                    exceeded,
-                )?;
+                count_element(&mut stack[..depth], &mut items);
                 containers = containers.saturating_add(1);
-                target(
-                    exceeded,
-                    "sidecar containers",
-                    limits.containers,
-                    containers,
-                );
                 limited("sidecar depth", limits.depth, depth.saturating_add(1))?;
                 if depth == stack.len() {
                     return Err(schema("sidecar fixed-depth preflight exceeded"));
                 }
                 stack[depth] = Frame::Object {
-                    pending: ArrayClass::Other,
                     width: crate::api::decode::Shape::widest(),
                 };
                 depth += 1;
@@ -1184,41 +1116,17 @@ fn scan(
                 index += 1;
             }
             b'[' => {
-                count_element(
-                    &mut stack[..depth],
-                    &mut items,
-                    &mut packages,
-                    &mut definitions,
-                    &mut edges,
-                    limits,
-                    exceeded,
-                )?;
+                count_element(&mut stack[..depth], &mut items);
                 containers = containers.saturating_add(1);
-                target(
-                    exceeded,
-                    "sidecar containers",
-                    limits.containers,
-                    containers,
-                );
-                let (class, width) = match stack[..depth].last_mut() {
-                    Some(Frame::Object { pending, width }) => {
-                        let class = *pending;
-                        *pending = ArrayClass::Other;
-                        (class, *width)
-                    }
-                    Some(Frame::Array { .. }) | None => {
-                        (ArrayClass::Other, crate::api::decode::Shape::widest())
-                    }
+                let width = match stack[..depth].last() {
+                    Some(Frame::Object { width }) => *width,
+                    Some(Frame::Array { .. }) | None => crate::api::decode::Shape::widest(),
                 };
                 limited("sidecar depth", limits.depth, depth.saturating_add(1))?;
                 if depth == stack.len() {
                     return Err(schema("sidecar fixed-depth preflight exceeded"));
                 }
-                stack[depth] = Frame::Array {
-                    class,
-                    elements: 0,
-                    width,
-                };
+                stack[depth] = Frame::Array { elements: 0, width };
                 depth += 1;
                 if selected {
                     shape.depth(depth);
@@ -1242,20 +1150,13 @@ fn scan(
                 index += 1;
             }
             b'"' => {
-                let (end, decoded) = string_end(bytes, index)?;
-                target(exceeded, "sidecar string", limits.string_bytes, decoded);
+                let end = string_end(bytes, index)?;
                 strings = strings.saturating_add(1);
                 if selected {
                     shape.string(&bytes[index + 1..end - 1]);
                 }
                 string_bytes = string_bytes.saturating_add(end.saturating_sub(index + 2));
-                target(
-                    exceeded,
-                    "sidecar aggregate string bytes",
-                    limits.json_bytes,
-                    string_bytes,
-                );
-                if let Some(Frame::Object { pending, width }) = stack[..depth].last_mut() {
+                if let Some(Frame::Object { width }) = stack[..depth].last_mut() {
                     let mut cursor = end;
                     while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
                         cursor += 1;
@@ -1265,32 +1166,15 @@ fn scan(
                         if key.contains(&b'\\') {
                             return Err(schema("escaped JSON object keys are not canonical"));
                         }
-                        *pending = array_class(key);
                         if selected {
                             *width = crate::api::decode::Shape::array_width(key, depth);
                             shape.key(key);
                         }
                     } else if value_pending {
-                        count_element(
-                            &mut stack[..depth],
-                            &mut items,
-                            &mut packages,
-                            &mut definitions,
-                            &mut edges,
-                            limits,
-                            exceeded,
-                        )?;
+                        count_element(&mut stack[..depth], &mut items);
                     }
                 } else if value_pending {
-                    count_element(
-                        &mut stack[..depth],
-                        &mut items,
-                        &mut packages,
-                        &mut definitions,
-                        &mut edges,
-                        limits,
-                        exceeded,
-                    )?;
+                    count_element(&mut stack[..depth], &mut items);
                 }
                 value_pending = false;
                 index = end;
@@ -1325,15 +1209,7 @@ fn scan(
                     }
                 }
                 if value_pending {
-                    count_element(
-                        &mut stack[..depth],
-                        &mut items,
-                        &mut packages,
-                        &mut definitions,
-                        &mut edges,
-                        limits,
-                        exceeded,
-                    )?;
+                    count_element(&mut stack[..depth], &mut items);
                     value_pending = false;
                 }
                 index += 1;
@@ -1343,131 +1219,38 @@ fn scan(
     if depth != 0 {
         return Err(schema("unclosed JSON container"));
     }
-    let (bytes, admission_bytes) = if selected {
+    let bytes = if selected {
         shape.bytes(string_bytes)
     } else {
-        (string_bytes, string_bytes)
+        string_bytes
     };
     Ok(Scanned {
         items: items.saturating_add(containers).saturating_add(strings),
         bytes,
-        admission_bytes,
     })
 }
 
-/// A scanned count crossing an accounting target is recorded with its
-/// truthful running total; the scan continues and never refuses on it.
-fn target(
-    exceeded: &mut crate::exceedance::Record,
-    resource: &'static str,
-    target: usize,
-    actual: usize,
-) {
-    if actual > target {
-        exceeded.exceeded(resource, target as u64, actual as u64, None);
+fn count_element(stack: &mut [Frame], items: &mut usize) {
+    if let Some(Frame::Array { elements, .. }) = stack.last_mut() {
+        *elements = elements.saturating_add(1);
+        *items = items.saturating_add(1);
     }
 }
 
-fn count_element(
-    stack: &mut [Frame],
-    items: &mut usize,
-    packages: &mut usize,
-    definitions: &mut usize,
-    edges: &mut usize,
-    limits: &cargo::Limits,
-    exceeded: &mut crate::exceedance::Record,
-) -> Result<()> {
-    let Some(Frame::Array {
-        class, elements, ..
-    }) = stack.last_mut()
-    else {
-        return Ok(());
-    };
-    *elements = elements.saturating_add(1);
-    *items = items.saturating_add(1);
-    target(exceeded, "sidecar items", limits.items, *items);
-    match class {
-        ArrayClass::Other => {}
-        ArrayClass::Packages => {
-            *packages = packages.saturating_add(1);
-            target(exceeded, "sidecar packages", limits.packages, *packages);
-        }
-        ArrayClass::Definitions => {
-            *definitions = definitions.saturating_add(1);
-            target(exceeded, "sidecar definitions", limits.units, *definitions);
-        }
-        ArrayClass::Edges => {
-            *edges = edges.saturating_add(1);
-            target(exceeded, "sidecar edges", limits.edges, *edges);
-        }
-    }
-    Ok(())
-}
-
-fn array_class(key: &[u8]) -> ArrayClass {
-    const DEFINITIONS: &[&[u8]] = &[b"definitions"];
-    const EDGES: &[&[u8]] = &[
-        b"reachable",
-        b"implementations",
-        b"aliases",
-        b"reexports",
-        b"relevance",
-        b"associated",
-        b"arguments",
-        b"captures",
-        b"inputs",
-        b"bounds",
-        b"supertraits",
-        b"predicates",
-        b"fields",
-        b"variants",
-        b"parameters",
-        b"binders",
-        b"artifacts",
-        b"path",
-        b"from",
-        b"to",
-        b"display_path",
-        b"elements",
-        b"features",
-        b"dependencies",
-        b"target_kinds",
-        b"crate_types",
-    ];
-    if matches!(
-        key,
-        b"fragments" | b"sysroot" | b"loaded_crates" | b"external_crates"
-    ) {
-        ArrayClass::Packages
-    } else if DEFINITIONS.contains(&key) {
-        ArrayClass::Definitions
-    } else if EDGES.contains(&key) {
-        ArrayClass::Edges
-    } else {
-        ArrayClass::Other
-    }
-}
-
-/// Locate the end of one JSON string already held in memory. The decoded
-/// length is measured whole and compared with the string target by the caller.
-fn string_end(bytes: &[u8], start: usize) -> Result<(usize, usize)> {
+/// Locate the end of one JSON string already held in memory.
+fn string_end(bytes: &[u8], start: usize) -> Result<usize> {
     let mut index = start + 1;
-    let mut decoded = 0_usize;
     while index < bytes.len() {
         match bytes[index] {
-            b'"' => return Ok((index + 1, decoded)),
+            b'"' => return Ok(index + 1),
             b'\\' => {
                 index = index.saturating_add(2);
                 if index > bytes.len() {
                     return Err(schema("truncated JSON escape"));
                 }
-                decoded = decoded.saturating_add(1);
             }
             byte if byte < 0x20 => return Err(schema("control byte in JSON string")),
-            _byte => {
-                index += 1;
-                decoded = decoded.saturating_add(1);
-            }
+            _byte => index += 1,
         }
     }
     Err(schema("unterminated JSON string"))
@@ -1501,21 +1284,18 @@ mod physical_ceilings {
     use crate::extract::Allocation;
     use crate::Error;
 
-    /// A document that crosses a configurable target and then fails to scan
-    /// (truncation, depth) still leaves the crossing on the original account.
+    /// A document that fails to scan (truncation, depth) charges nothing.
     #[test]
-    fn scan_failure_keeps_the_crossing_already_recorded() {
+    fn scan_failure_charges_nothing() {
         let mut limits = Limits::standard();
-        limits.containers = 1;
-        limits.string_bytes = 1;
-        for (bytes, axis) in [
-            (&br#"[[],["ab","\"#[..], "sidecar containers"),
-            (&br#"["abc","\"#[..], "sidecar string"),
-            (&br#"[[],[]"#[..], "sidecar containers"),
+        for bytes in [
+            &br#"[[],["ab","\"#[..],
+            &br#"["abc","\"#[..],
+            &br#"[[],[]"#[..],
         ] {
             let mut allocation = Allocation::new(&limits);
             let error = decode_accounted(bytes, &limits, &mut allocation)
-                .expect_err("malformed input fails after the crossing");
+                .expect_err("malformed input fails");
             assert!(
                 matches!(
                     error,
@@ -1526,19 +1306,13 @@ mod physical_ceilings {
                 ),
                 "{error:?}"
             );
-            assert!(
-                allocation.exceedances().axis(axis).is_some(),
-                "`{axis}` survives the failed scan"
-            );
             assert_eq!(allocation.usage(), (0, 0));
         }
 
-        limits = Limits::standard();
-        limits.containers = 1;
         limits.depth = 2;
         let mut allocation = Allocation::new(&limits);
         let error = decode_accounted(b"[[[]]]", &limits, &mut allocation)
-            .expect_err("the depth bound refuses after the crossing");
+            .expect_err("the depth bound refuses");
         assert!(
             matches!(
                 error,
@@ -1549,9 +1323,5 @@ mod physical_ceilings {
             ),
             "{error:?}"
         );
-        assert!(allocation
-            .exceedances()
-            .axis("sidecar containers")
-            .is_some());
     }
 }

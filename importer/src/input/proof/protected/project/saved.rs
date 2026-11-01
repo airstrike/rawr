@@ -7,7 +7,7 @@ use serde::{Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
 use super::Account;
-use crate::cargo::{universe::MetadataProof, Limits};
+use crate::cargo::universe::MetadataProof;
 use crate::input::build::Evidence;
 use crate::input::proof::Entry;
 
@@ -19,7 +19,6 @@ pub(super) fn project<A: Account>(
     expected: &str,
     evidence: &Evidence,
     protected: &MetadataProof,
-    limits: &Limits,
     account: &mut A,
 ) -> Result<Box<str>, A::Error> {
     // Reserve bounded borrowed slots once, avoiding a second full scan of all
@@ -56,7 +55,7 @@ pub(super) fn project<A: Account>(
         }
         original.push(value);
     }
-    let digest = hash(&Saved(&original), limits, account)?;
+    let digest = hash(&Saved(&original), account)?;
     let actual = account.format(format_args!("{digest:x}"))?;
     if actual != expected {
         return Err(account.policy(
@@ -69,7 +68,7 @@ pub(super) fn project<A: Account>(
         let value = account.normalized(value, evidence, protected)?;
         normalized.push(account.boxed(value)?);
     }
-    let digest = hash(&Saved(&normalized), limits, account)?;
+    let digest = hash(&Saved(&normalized), account)?;
     let value = account.format(format_args!("{digest:x}"))?;
     account.boxed(value)
 }
@@ -102,7 +101,6 @@ impl<T: AsRef<str>> Serialize for Rerun<'_, T> {
 
 fn hash<A: Account>(
     value: &impl Serialize,
-    limits: &Limits,
     account: &mut A,
 ) -> Result<sha2::digest::Output<Sha256>, A::Error> {
     let mut writer = Writer {
@@ -115,11 +113,7 @@ fn hash<A: Account>(
     if writer.overflow {
         return Err(account.policy("protected-saved-output-size", "serialized size overflow"));
     }
-    account.limited(
-        "protected saved-output bytes",
-        limits.json_bytes,
-        writer.bytes,
-    )?;
+    account.check()?;
     account.hash_work(writer.bytes)?;
     writer.hash = Some(Sha256::new());
     serde_json::to_writer(&mut writer, value)
@@ -153,6 +147,7 @@ impl io::Write for Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cargo::Limits;
     use crate::input::proof::protected::account::{Current, Legacy};
     use crate::input::stored::Budget;
     use crate::input::{Allocation, Usage};
@@ -213,7 +208,6 @@ mod tests {
                 &expected(&values),
                 &evidence,
                 &protected,
-                &limits,
                 &mut Legacy(&mut allocation, &graph),
             )
             .expect("cold");
@@ -226,7 +220,6 @@ mod tests {
                 &expected(&values),
                 &evidence,
                 &protected,
-                &limits,
                 &mut Current(&mut budget),
             )
             .expect("current");
@@ -270,7 +263,6 @@ mod tests {
                 &original,
                 &evidence,
                 &protected,
-                &limits,
                 &mut Legacy(&mut allocation, &graph)
             )
             .is_err());
@@ -308,7 +300,6 @@ mod tests {
                 &expected(&values),
                 &evidence,
                 &protected,
-                &limits,
                 &mut Legacy(&mut allocation, &graph),
             )
             .expect("relocated projection")
@@ -332,16 +323,9 @@ mod tests {
             let (evidence, protected) = fixture();
             let limits = Limits::standard();
             let graph = GraphBudget::new();
-            graph
-                .hash(
-                    usize::try_from(crate::node::MAX_HASHED_BYTES_PER_GRAPH)
-                        .expect("test platform"),
-                )
-                .expect("exhaust hash account");
             let mut allocation = Allocation::new(&limits);
-            // Hash work past the target is recorded on the graph with
-            // the exact serialized size (the original digest first, then the
-            // normalized one); both accounts still project and neither latches.
+            // Both accounts project and hash the exact serialized size, the
+            // original digest first and then the normalized one.
             let projected = if current {
                 let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
                 project(
@@ -351,7 +335,6 @@ mod tests {
                     &expected(&[]),
                     &evidence,
                     &protected,
-                    &limits,
                     &mut Current(&mut budget),
                 )
             } else {
@@ -362,32 +345,16 @@ mod tests {
                     &expected(&[]),
                     &evidence,
                     &protected,
-                    &limits,
                     &mut Legacy(&mut allocation, &graph),
                 )
                 .map_err(|_| crate::input::stored::Error::Refused)
             };
+            assert_eq!(projected.expect("admitted").as_ref(), expected(&[]));
             assert_eq!(
-                projected
-                    .expect("the hash target is recorded, not refused")
-                    .as_ref(),
-                expected(&[])
+                graph.census_usage().expect("graph census").2,
+                2 * serialized
             );
-            let axis = *graph
-                .exceedances()
-                .axis(crate::node::HASHED_RESOURCE)
-                .expect("saved-output hashing records the hash axis");
-            assert_eq!(
-                (axis.target, axis.first_requested, axis.high_water),
-                (
-                    crate::node::MAX_HASHED_BYTES_PER_GRAPH,
-                    crate::node::MAX_HASHED_BYTES_PER_GRAPH + serialized,
-                    crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2 * serialized
-                )
-            );
-            allocation
-                .check()
-                .expect("an accounting exceedance never latches the account");
+            allocation.check().expect("the account is not latched");
             // Checked-arithmetic overflow of the hash account is a genuine
             // failure: both accounts refuse and latch the original allocation.
             let hashed = graph.census_usage().expect("graph census").2;
@@ -404,7 +371,6 @@ mod tests {
                         &expected(&[]),
                         &evidence,
                         &protected,
-                        &limits,
                         &mut Current(&mut budget)
                     ),
                     Err(crate::input::stored::Error::Graph(
@@ -420,7 +386,6 @@ mod tests {
                         &expected(&[]),
                         &evidence,
                         &protected,
-                        &limits,
                         &mut Legacy(&mut allocation, &graph)
                     ),
                     Err(crate::Error::Input {
@@ -478,7 +443,6 @@ mod tests {
             &expected(&[]),
             &evidence,
             &protected,
-            &limits,
             &mut Current(&mut budget),
         )
         .expect("one-pass selection fits remaining original budget");

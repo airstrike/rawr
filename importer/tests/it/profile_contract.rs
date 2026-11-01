@@ -6,7 +6,7 @@ use rawr_import::profile;
 fn synthetic_profile_contract_retains_only_exact_graph_evidence() {
     let _turn = rawr_import::store::test_turn();
     let project = p5::Project::new("profile-contract");
-    let (_definition, contract, _limits) = p5::profile_contract(&project, p5::Mode::Success, None);
+    let (_definition, contract) = p5::profile_contract(&project, p5::Mode::Success, None);
     let evidence = contract.evidence().collect::<Vec<_>>();
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0].kind(), profile::contract::Kind::Definition);
@@ -19,7 +19,7 @@ fn synthetic_profile_contract_retains_only_exact_graph_evidence() {
 #[test]
 #[should_panic(expected = "rawr names each profile")]
 fn an_unnamed_profile_is_a_rawr_bug() {
-    let _ = profile::Identity::new("", &rawr_import::cargo::Limits::standard());
+    let _ = profile::Identity::new("");
 }
 
 #[test]

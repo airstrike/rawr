@@ -76,7 +76,7 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
     capture
         .file("application.rs", b"exact")
         .expect("file frame");
-    capture.bind(expected, &limits).expect("exact digest binds");
+    capture.bind(expected).expect("exact digest binds");
 
     let mut drifted = rawr_import::supervisor::snapshot::Bytes::capture(&limits);
     drifted.entry("application.rs").expect("entry frame");
@@ -84,7 +84,7 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
         .file("application.rs", b"drifted")
         .expect("file frame");
     assert!(matches!(
-        drifted.bind(expected, &limits),
+        drifted.bind(expected),
         Err(rawr_import::supervisor::snapshot::Error::Mismatch)
     ));
 
@@ -94,7 +94,7 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
         .file("application.rs", b"exact")
         .expect("exact file frame");
     assert!(matches!(
-        entry_drift.bind(expected, &limits),
+        entry_drift.bind(expected),
         Err(rawr_import::supervisor::snapshot::Error::Mismatch)
     ));
 
@@ -106,7 +106,7 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
         .file("other.rs", b"exact")
         .expect("other file frame");
     assert!(matches!(
-        path_drift.bind(expected, &limits),
+        path_drift.bind(expected),
         Err(rawr_import::supervisor::snapshot::Error::Mismatch)
     ));
 
@@ -124,7 +124,6 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
         rawr_import::supervisor::snapshot::Bytes::decode(
             rawr_import::surface::Snapshot::from_rawr_digest(digest),
             duplicate.into_boxed_slice(),
-            &limits,
         ),
         Err(rawr_import::supervisor::snapshot::Error::Order)
     ));
@@ -132,7 +131,6 @@ fn snapshot_transport_binds_exact_frames_and_rejects_drift_or_bad_shape() {
         rawr_import::supervisor::snapshot::Bytes::decode(
             rawr_import::surface::Snapshot::from_rawr_digest([0; 32]),
             Box::from(*b"malformed"),
-            &limits,
         ),
         Err(rawr_import::supervisor::snapshot::Error::Malformed)
     ));

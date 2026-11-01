@@ -74,11 +74,8 @@ struct Budget<'budget> {
 }
 
 impl Budget<'_> {
-    /// Own one string. Its size is an accounting target recorded on the
-    /// original account; the checked charge in `bytes` is the admission.
+    /// Own one string; the checked charge in `bytes` is the admission.
     fn string(&mut self, value: &[u8]) -> Result<Vec<u8>> {
-        self.allocation
-            .string_exceeded("membership owned string bytes", value.len());
         self.bytes(value)
     }
 

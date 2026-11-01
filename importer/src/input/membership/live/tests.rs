@@ -465,7 +465,7 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
 }
 
 #[test]
-fn original_prior_ownership_exact_and_floor_limits_cover_full_replacements() {
+fn original_prior_ownership_covers_full_replacements() {
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::new(&limits);
@@ -495,58 +495,6 @@ fn original_prior_ownership_exact_and_floor_limits_cover_full_replacements() {
         total.bytes,
         19 + PATH.len() + PATH.len() + 1 + 1 + 2 + 4 + 8
     );
-    // One less on either axis still acquires the complete file and
-    // records that axis; the final eight-byte replacement layout is the
-    // crossing request for the byte floor, proving full-layout charging.
-    for (items, bytes, axis_name) in [
-        (total.items, total.bytes, None),
-        (
-            total.items - 1,
-            total.bytes,
-            Some(input::INPUT_ITEMS_RESOURCE),
-        ),
-        (
-            total.items,
-            total.bytes - 1,
-            Some(input::INPUT_BYTES_RESOURCE),
-        ),
-    ] {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, limits.string_bytes);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut script = Script::new(steps.clone());
-        file::acquire(
-            PATH,
-            8,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut script,
-        )
-        .expect("ownership targets never refuse");
-        assert_eq!(script.closed(), 1);
-        assert_eq!(allocation.usage(), total);
-        let exceeded = allocation.exceedances();
-        match axis_name {
-            None => assert!(!exceeded.is_exceeded()),
-            Some(name) => {
-                let axis = exceeded.axis(name).unwrap();
-                let exact = if name == input::INPUT_ITEMS_RESOURCE {
-                    total.items
-                } else {
-                    total.bytes
-                };
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (exact as u64 - 1, exact as u64, exact as u64)
-                );
-                assert_eq!(exceeded.axes().count(), 1);
-            }
-        }
-        assert!(allocation.items(0).is_ok(), "nothing latched");
-    }
 }
 
 #[test]
@@ -578,22 +526,7 @@ fn every_graph_floor_refuses_before_the_next_syscall_and_still_closes() {
         assert_eq!(script.events, baseline.events);
         assert!(!script.live);
         assert_eq!(script.closed(), 1);
-        let exceeded = graph.exceedances();
-        if available == required {
-            assert!(!exceeded.is_exceeded());
-        } else {
-            let axis = exceeded.axis(node::PATHS_RESOURCE).unwrap();
-            assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-            assert_eq!(
-                axis.first_requested,
-                node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            assert_eq!(
-                axis.high_water,
-                (node::MAX_PATH_CHECKS_PER_GRAPH + required - available) as u64
-            );
-        }
-        assert!(allocation.items(0).is_ok(), "nothing latched");
+        assert!(allocation.items(0).is_ok());
     }
     // Checked-arithmetic overflow of the graph account is a genuine refusal:
     // saturating it leaves exactly `available` charges before the next path
@@ -689,16 +622,6 @@ fn interrupted_open_and_read_charge_the_original_attempt_budget_past_its_target(
         assert!(!script.live);
         let (_, paths, _) = graph.census_usage().unwrap();
         assert!(paths > node::MAX_PATH_CHECKS_PER_GRAPH);
-        let exceeded = graph.exceedances();
-        let axis = exceeded
-            .axis(node::PATHS_RESOURCE)
-            .expect("the retried attempts cross the path-check target");
-        assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            axis.first_requested,
-            node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert_eq!(axis.high_water, paths as u64, "truthful high water");
         assert!(
             allocation.items(0).is_ok(),
             "an exceedance never latches the account"
@@ -738,15 +661,6 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
     })
     .expect("bytes past the target are owned");
     assert_eq!(file::RESERVATIONS.with(std::cell::Cell::get), 1);
-    let axis = allocation
-        .exceedances()
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (1, 2, 2)
-    );
 
     // The terminated native path overflows the account before any syscall or
     // reservation.
@@ -791,19 +705,6 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
     assert_eq!(acquired.record().value, observed::Value::Absent);
     assert_eq!(script.events, [Event::Stat, Event::Open, Event::Stat]);
     assert_eq!(file::RESERVATIONS.with(std::cell::Cell::get), 1);
-    let axis = allocation
-        .exceedances()
-        .axis(input::INPUT_BYTES_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (
-            (PATH.len() + PATH.len()) as u64,
-            (PATH.len() + PATH.len() + 1) as u64,
-            (PATH.len() + PATH.len() + 1) as u64
-        )
-    );
 }
 
 #[test]

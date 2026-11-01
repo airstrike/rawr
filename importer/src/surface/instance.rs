@@ -291,46 +291,9 @@ impl Arguments {
         callable: Option<super::callable::Class>,
         limits: &crate::cargo::Limits,
     ) -> Result<Self, super::Error> {
-        // Argument count, token and byte sizes are accounting targets
-        // recorded on a surface account for this instance; only checked
-        // arithmetic and the physical type depth refuse.
-        let mut account = super::account::Account::surface();
-        let items = types
-            .len()
-            .checked_add(constants.len())
-            .and_then(|items| items.checked_add(binders.len()))
-            .ok_or(super::Error::Limit {
-                resource: "surface instance arguments",
-                limit: limits.items,
-                actual: usize::MAX,
-            })?;
-        account.exceeded("surface instance arguments", limits.items, items);
-        let mut bytes = 0_usize;
         for ty in &types {
-            bytes = bytes
-                .checked_add(concrete_type_bytes(ty, 0, limits.depth)?)
-                .ok_or(super::Error::Limit {
-                    resource: "surface instance bytes",
-                    limit: limits.json_bytes,
-                    actual: usize::MAX,
-                })?;
+            concrete_type(ty, 0, limits.depth)?;
         }
-        for value in &constants {
-            account.exceeded(
-                "surface constant token bytes",
-                limits.string_bytes,
-                value.ty().len().max(value.value().len()),
-            );
-            bytes = bytes
-                .checked_add(value.ty().len())
-                .and_then(|bytes| bytes.checked_add(value.value().len()))
-                .ok_or(super::Error::Limit {
-                    resource: "surface instance bytes",
-                    limit: limits.json_bytes,
-                    actual: usize::MAX,
-                })?;
-        }
-        account.exceeded("surface instance bytes", limits.json_bytes, bytes);
         Ok(Self {
             types,
             constants,
@@ -372,7 +335,6 @@ impl Arguments {
     pub fn with_function_items(
         mut self,
         functions: Box<[FunctionItem]>,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, super::Error> {
         if !functions
             .windows(2)
@@ -380,12 +342,6 @@ impl Arguments {
         {
             return Err(super::Error::InstanceMismatch);
         }
-        // The item count is an accounting target, recorded not refused.
-        super::account::Account::surface().exceeded(
-            "surface instance function items",
-            limits.items,
-            functions.len(),
-        );
         self.functions = functions;
         Ok(self)
     }
@@ -393,17 +349,7 @@ impl Arguments {
     /// Attach exact non-authoritative script event-mapper seals selected by
     /// checked Rawr source. They remain disjoint from imported function items.
     #[doc(hidden)]
-    pub fn with_event_mappers(
-        mut self,
-        mappers: Box<[EventMapper]>,
-        limits: &crate::cargo::Limits,
-    ) -> Result<Self, super::Error> {
-        // The item count is an accounting target, recorded not refused.
-        super::account::Account::surface().exceeded(
-            "surface instance event mappers",
-            limits.items,
-            mappers.len(),
-        );
+    pub fn with_event_mappers(mut self, mappers: Box<[EventMapper]>) -> Result<Self, super::Error> {
         if !mappers
             .windows(2)
             .all(|pair| pair[0].position < pair[1].position)
@@ -832,11 +778,7 @@ impl Binder {
     }
 }
 
-fn concrete_type_bytes(
-    ty: &convert::Type,
-    depth: usize,
-    limit: usize,
-) -> Result<usize, super::Error> {
+fn concrete_type(ty: &convert::Type, depth: usize, limit: usize) -> Result<(), super::Error> {
     let actual = depth.checked_add(1).ok_or(super::Error::Limit {
         resource: "surface type depth",
         limit,
@@ -851,68 +793,27 @@ fn concrete_type_bytes(
     }
     match ty {
         convert::Type::Parameter(_) => Err(super::Error::UnconstrainedGeneric),
+        convert::Type::FunctionItem { .. } => Err(super::Error::InstanceMismatch),
         convert::Type::Nominal { arguments, .. } | convert::Type::Script { arguments, .. } => {
             arguments
                 .iter()
-                .try_fold(std::mem::size_of::<convert::Type>(), |bytes, argument| {
-                    bytes
-                        .checked_add(concrete_type_bytes(argument, actual, limit)?)
-                        .ok_or(super::Error::Limit {
-                            resource: "surface instance bytes",
-                            limit: usize::MAX,
-                            actual: usize::MAX,
-                        })
-                })
+                .try_for_each(|argument| concrete_type(argument, actual, limit))
         }
-        convert::Type::FunctionItem { .. } => Err(super::Error::InstanceMismatch),
-        convert::Type::Tuple(members) => {
-            members
-                .iter()
-                .try_fold(std::mem::size_of::<convert::Type>(), |bytes, member| {
-                    bytes
-                        .checked_add(concrete_type_bytes(member, actual, limit)?)
-                        .ok_or(super::Error::Limit {
-                            resource: "surface instance bytes",
-                            limit: usize::MAX,
-                            actual: usize::MAX,
-                        })
-                })
-        }
+        convert::Type::Tuple(members) => members
+            .iter()
+            .try_for_each(|member| concrete_type(member, actual, limit)),
         convert::Type::Option(element)
         | convert::Type::Borrowed { ty: element, .. }
         | convert::Type::Range(element)
-        | convert::Type::Sequence { element, .. } => concrete_type_bytes(element, actual, limit)
-            .and_then(|bytes| {
-                bytes
-                    .checked_add(std::mem::size_of::<convert::Type>())
-                    .ok_or(super::Error::Limit {
-                        resource: "surface instance bytes",
-                        limit: usize::MAX,
-                        actual: usize::MAX,
-                    })
-            }),
+        | convert::Type::Sequence { element, .. }
+        | convert::Type::ProfileMessage {
+            payload: element, ..
+        } => concrete_type(element, actual, limit),
         convert::Type::Result(ok, err) => {
-            let ok = concrete_type_bytes(ok, actual, limit)?;
-            let err = concrete_type_bytes(err, actual, limit)?;
-            ok.checked_add(err)
-                .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<convert::Type>()))
-                .ok_or(super::Error::Limit {
-                    resource: "surface instance bytes",
-                    limit: usize::MAX,
-                    actual: usize::MAX,
-                })
+            concrete_type(ok, actual, limit)?;
+            concrete_type(err, actual, limit)
         }
-        convert::Type::ProfileMessage { payload, .. } => {
-            concrete_type_bytes(payload, actual, limit).and_then(|bytes| {
-                bytes.checked_add(16).ok_or(super::Error::Limit {
-                    resource: "surface instance bytes",
-                    limit: usize::MAX,
-                    actual: usize::MAX,
-                })
-            })
-        }
-        convert::Type::Inferred => Ok(std::mem::size_of::<convert::Type>()),
-        convert::Type::Unit | convert::Type::Builtin(_) => Ok(std::mem::size_of::<convert::Type>()),
+        convert::Type::Inferred | convert::Type::Unit | convert::Type::Builtin(_) => Ok(()),
     }
 }
 
@@ -950,28 +851,18 @@ pub fn key_with_slots(types: &[convert::Type], slots: &[Slot]) -> [u8; 32] {
 mod tests {
     use crate::classify::representability::convert;
 
-    /// The argument item and byte targets are accounting; an instance
-    /// past them is still sealed with its exact arguments.
+    /// An instance seals with its exact arguments and attaches function items.
     #[test]
-    fn instance_arguments_past_their_targets_are_sealed() {
+    fn instance_arguments_are_sealed() {
         let types: Box<[convert::Type]> = Box::new([convert::Type::Unit, convert::Type::Unit]);
         let standard = crate::cargo::Limits::standard();
-        let exact = super::Arguments::new(
-            types.clone(),
-            Box::default(),
-            Box::default(),
-            None,
-            &standard,
-        )
-        .expect("arguments under the standard targets seal");
-        assert_eq!(exact.types.len(), 2);
-        let bounded = crate::cargo::Limits::fixture(0, 1, 0);
-        let past = super::Arguments::new(types, Box::default(), Box::default(), None, &bounded)
-            .expect("arguments past the item and byte targets still seal");
-        assert_eq!(past.types.len(), 2);
-        let functions = past
-            .with_function_items(Box::default(), &bounded)
-            .expect("function items attach past the item target");
+        let arguments =
+            super::Arguments::new(types, Box::default(), Box::default(), None, &standard)
+                .expect("arguments seal");
+        assert_eq!(arguments.types.len(), 2);
+        let functions = arguments
+            .with_function_items(Box::default())
+            .expect("function items attach");
         assert!(functions.functions.is_empty());
     }
 }

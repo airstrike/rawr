@@ -1088,7 +1088,7 @@ impl Prepared {
             ));
         }
         let store = self.context.open_store()?;
-        let freshness = snapshot.freshness(store.graph_budget(), &self.context.limits())?;
+        let freshness = snapshot.freshness(store.graph_budget())?;
         freshness.revalidate(store.graph_budget())?;
         self.proof.snapshot = Some(freshness);
         Ok(())
@@ -1327,32 +1327,16 @@ mod tests {
         let graph = super::super::GraphBudget::new();
         let mut pairs = Vec::with_capacity(8);
         let mut admitted = 0;
-        let bytes = std::mem::size_of::<(Entry, Witness)>();
-        graph
-            .decode(super::super::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes)
-            .unwrap();
         reserve_pairs(&mut pairs, &mut admitted, 1, &graph).unwrap();
         assert_eq!(admitted, 1);
         assert!(pairs.capacity() >= 8);
-        assert!(
-            !graph.exceedances().is_exceeded(),
-            "the exact decoded-byte target is not an exceedance"
-        );
-        // Allocator surplus never substitutes for the account. The two
-        // requested slots are charged in full to the original account, which
-        // records the exceedance instead of refusing them.
+        // Allocator surplus never substitutes for the account: the two
+        // requested slots are charged in full.
+        let before = graph.census_usage().unwrap().0;
         reserve_pairs(&mut pairs, &mut admitted, 2, &graph).unwrap();
         assert_eq!(admitted, 2);
-        let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-        let decoded = graph
-            .exceedances()
-            .axis(super::super::DECODED_RESOURCE)
-            .copied()
-            .expect("unadmitted slots charge the decoded-byte account");
-        assert_eq!(decoded.target, target);
-        assert_eq!(decoded.first_requested, target + 2 * bytes as u64);
-        assert_eq!(decoded.high_water, target + 2 * bytes as u64);
-        assert_eq!(graph.usage.lock().unwrap().decoded, decoded.high_water);
+        let bytes = std::mem::size_of::<(Entry, Witness)>() as u64;
+        assert_eq!(graph.census_usage().unwrap().0 - before, 2 * bytes);
     }
 
     struct LineageValue;
@@ -1470,29 +1454,6 @@ mod tests {
     // Composition past the decoded-byte target still takes ownership on
     // the original account; the account records the pair array as the first
     // exceeding charge and the retained arrays as its truthful high water.
-    #[test]
-    fn lineage_composition_charges_original_account_and_records_exceedance() {
-        let graph = super::super::GraphBudget::new();
-        let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-        graph.decode(usize::try_from(target).unwrap()).unwrap();
-        assert!(!graph.exceedances().is_exceeded());
-        let fragment = lineage_fragment(&[], Digest::from_bytes([5; 32]), &graph)
-            .expect("composition past the accounting target still composes");
-        assert_eq!(fragment.len(), 1);
-        assert!(fragment.graph.shares_with(&graph));
-        let pairs = std::mem::size_of::<(Entry, Witness)>() as u64;
-        let retained = (std::mem::size_of::<Entry>() + std::mem::size_of::<Witness>()) as u64;
-        let decoded = graph
-            .exceedances()
-            .axis(super::super::DECODED_RESOURCE)
-            .copied()
-            .expect("composition charges the decoded-byte account");
-        assert_eq!(decoded.target, target);
-        assert_eq!(decoded.first_requested, target + pairs);
-        assert_eq!(decoded.high_water, target + pairs + retained);
-        assert_eq!(graph.usage.lock().unwrap().decoded, decoded.high_water);
-    }
-
     #[test]
     fn read_set_work_budgets_accept_exact_caps_and_reject_one_more_byte() {
         let mut decode = Budget::new();

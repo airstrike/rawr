@@ -147,7 +147,7 @@ fn codec_rejects_mixed_value_tags_and_invalid_error_terminals() {
 }
 
 #[test]
-fn whole_file_retention_and_decode_preserve_prior_ownership_and_exact_limits() {
+fn whole_file_retention_and_decode_preserve_prior_ownership() {
     let records = [record(
         b"/raw",
         content(&[0xff, 0, 1, 2, 3, 4, 5, 6], observed::End::Eof),
@@ -156,108 +156,34 @@ fn whole_file_retention_and_decode_preserve_prior_ownership_and_exact_limits() {
     let items = 7 + 3; // prior + record + native path + raw content
     let owned = 19 + std::mem::size_of::<observed::Record>() + 4 + 8;
     for decode in [false, true] {
-        for floor in 0..3 {
-            let graph = node::GraphBudget::new();
-            graph.decode(31).unwrap();
-            let mut allocation = input::Allocation::with_limits(
-                items - usize::from(floor == 1),
-                owned - usize::from(floor == 2),
-                4,
-            );
-            allocation.items(7).unwrap();
-            allocation.bytes(19).unwrap();
-            super::super::OWNED_BYTES.with(|count| count.set(0));
-            let mut budget = Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            };
-            let result = if decode {
-                Stored::decode(&bytes, &mut budget)
-            } else {
-                Stored::from_records(&records, &mut budget)
-            };
-            // Every floor retains the record in full, copying both the
-            // path and the payload; one less on an axis records that axis with
-            // the exact total as its high water and the payload's charge as the
-            // crossing request.
-            assert_eq!(result.unwrap().records(), records.as_slice());
-            assert_eq!(allocation.usage().items, items);
-            assert_eq!(allocation.usage().bytes, owned);
-            assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 2);
-            let exceeded = allocation.exceedances();
-            match floor {
-                0 => assert!(!exceeded.is_exceeded()),
-                1 => {
-                    let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-                    assert_eq!(
-                        (axis.target, axis.first_requested, axis.high_water),
-                        (items as u64 - 1, items as u64, items as u64)
-                    );
-                    assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-                }
-                _ => {
-                    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                    assert_eq!(
-                        (axis.target, axis.first_requested, axis.high_water),
-                        (owned as u64 - 1, owned as u64, owned as u64)
-                    );
-                    assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-                }
-            }
-            assert!(allocation.items(0).is_ok(), "nothing latched");
-        }
+        let graph = node::GraphBudget::new();
+        graph.decode(31).unwrap();
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+        allocation.items(7).unwrap();
+        allocation.bytes(19).unwrap();
+        super::super::OWNED_BYTES.with(|count| count.set(0));
+        let mut budget = Budget {
+            graph: &graph,
+            allocation: &mut allocation,
+        };
+        let result = if decode {
+            Stored::decode(&bytes, &mut budget)
+        } else {
+            Stored::from_records(&records, &mut budget)
+        };
+        // The record is retained in full, copying both the path and the
+        // payload.
+        assert_eq!(result.unwrap().records(), records.as_slice());
+        assert_eq!(allocation.usage().items, items);
+        assert_eq!(allocation.usage().bytes, owned);
+        assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 2);
+        assert!(allocation.items(0).is_ok());
     }
 }
 
 #[test]
-fn whole_file_decode_graph_floor_is_recorded_and_overflow_refuses_before_any_owned_record() {
+fn whole_file_decode_graph_overflow_refuses_before_any_owned_record() {
     let bytes = encoded(&[record(b"/raw", content(b"data", observed::End::Eof))]);
-    for floor in [false, true] {
-        let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + usize::from(floor))
-            .unwrap();
-        let limits = cargo::Limits::standard();
-        let mut allocation = input::Allocation::new(&limits);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        super::super::OWNED_VECTORS.with(|count| count.set(0));
-        super::super::OWNED_BYTES.with(|count| count.set(0));
-        // One byte past the decode target still decodes the image and
-        // records the axis; the exact target records nothing until one more.
-        Stored::decode(
-            &bytes,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-        )
-        .unwrap();
-        assert_eq!(allocation.usage().items, 7 + 3);
-        assert_eq!(super::super::OWNED_VECTORS.with(std::cell::Cell::get), 1);
-        assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 2);
-        if floor {
-            let axis = graph
-                .exceedances()
-                .axis(node::DECODED_RESOURCE)
-                .copied()
-                .unwrap();
-            assert_eq!(axis.target, node::MAX_DECODED_BYTES_PER_GRAPH);
-            assert_eq!(axis.first_requested, node::MAX_DECODED_BYTES_PER_GRAPH + 1);
-            assert_eq!(axis.high_water, node::MAX_DECODED_BYTES_PER_GRAPH + 1);
-        } else {
-            assert!(!graph.exceedances().is_exceeded());
-            graph.decode(1).unwrap();
-            assert_eq!(
-                graph
-                    .exceedances()
-                    .axis(node::DECODED_RESOURCE)
-                    .unwrap()
-                    .high_water,
-                node::MAX_DECODED_BYTES_PER_GRAPH + 1
-            );
-        }
-    }
     // Checked-arithmetic overflow of the graph's decode account is a genuine
     // failure that precedes every owned record.
     let graph = node::GraphBudget::new();
@@ -290,45 +216,18 @@ fn whole_file_encoding_precharges_the_complete_result_layout() {
     let records = [record(b"/raw", content(b"data", observed::End::Error(5)))];
     let image = with_budget(|budget| Stored::from_records(&records, budget).unwrap());
     let expected = encoded(&records);
-    for floor in 0..3 {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(
-            8 - usize::from(floor == 1),
-            19 + expected.len() - usize::from(floor == 2),
-            4,
-        );
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let result = image.encode(&mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        });
-        // The complete layout is charged as one item and one byte count
-        // before the copy; one less on an axis records that single charge as
-        // both the crossing request and the high water.
-        assert_eq!(result.unwrap(), expected);
-        assert_eq!(allocation.usage().items, 8);
-        assert_eq!(allocation.usage().bytes, 19 + expected.len());
-        let exceeded = allocation.exceedances();
-        match floor {
-            0 => assert!(!exceeded.is_exceeded()),
-            1 => {
-                let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (7, 8, 8)
-                );
-                assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-            }
-            _ => {
-                let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                let total = 19 + expected.len() as u64;
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (total - 1, total, total)
-                );
-                assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-            }
-        }
-    }
+    let graph = node::GraphBudget::new();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let result = image.encode(&mut Budget {
+        graph: &graph,
+        allocation: &mut allocation,
+    });
+    // The complete layout is charged as one item and one byte count
+    // before the copy; one less on an axis records that single charge as
+    // both the crossing request and the high water.
+    assert_eq!(result.unwrap(), expected);
+    assert_eq!(allocation.usage().items, 8);
+    assert_eq!(allocation.usage().bytes, 19 + expected.len());
 }

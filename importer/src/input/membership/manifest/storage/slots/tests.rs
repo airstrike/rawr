@@ -198,42 +198,26 @@ fn actual_manifest_tiers_borrow_dynamically_added_predecessors() {
 
 #[test]
 fn links_spend_the_original_remaining_budget() {
-    use crate::input::membership::manifest::tests::admits_one_short;
     use crate::input::membership::Budget;
     use crate::{input, node};
 
-    fn run(items: usize, bytes: usize) -> (bool, input::Usage, crate::exceedance::Record) {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
-        allocation.items(9).unwrap();
-        allocation.bytes(27).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = Session::new(&mut budget);
-        let mut slots = Slots::new();
-        let mut writer = slots.writer().unwrap();
-        let result = writer
-            .push(1u64, &mut session)
-            .and_then(|_| writer.push(2, &mut session))
-            .and_then(|_| writer.push(3, &mut session));
-        let ok = session.finish(result).is_ok();
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (ok, allocation.usage(), allocation.exceedances())
-    }
+    let graph = node::GraphBudget::new();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(9).unwrap();
+    allocation.bytes(27).unwrap();
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
+    };
+    let mut session = Session::new(&mut budget);
+    let mut slots = Slots::new();
+    let mut writer = slots.writer().unwrap();
+    let result = writer
+        .push(1u64, &mut session)
+        .and_then(|_| writer.push(2, &mut session))
+        .and_then(|_| writer.push(3, &mut session));
+    assert!(session.finish(result).is_ok());
+    assert!(allocation.check().is_ok());
     let bytes = 27 + 2 * Layout::array::<Slot<u64>>(1).unwrap().size();
-    let exact = input::Usage { items: 12, bytes };
-    assert_eq!(
-        run(12, bytes),
-        (true, exact, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(run(11, bytes), exact, input::INPUT_ITEMS_RESOURCE, 12);
-    admits_one_short(
-        run(12, bytes - 1),
-        exact,
-        input::INPUT_BYTES_RESOURCE,
-        bytes,
-    );
+    assert_eq!(allocation.usage(), input::Usage { items: 12, bytes });
 }

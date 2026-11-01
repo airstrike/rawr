@@ -43,7 +43,7 @@ impl Context {
             environment,
             target,
             limits,
-            &crate::node::GraphBudget::with_targets(limits.graph_targets()),
+            &crate::node::GraphBudget::new(),
         )
     }
 
@@ -64,13 +64,6 @@ impl Context {
         assert!(
             !target.is_empty() && !target.contains('\0'),
             "rawr names a target triple"
-        );
-        // The target string's size is an accounting target recorded on
-        // a classification-stage account, never a refusal.
-        crate::classify::Account::new().exceeded(
-            "import context target bytes",
-            limits.string_bytes,
-            target.len(),
         );
         let target: Box<str> = target.into();
         let rawr = crate::location::rawr_directory(&project, &environment);
@@ -124,7 +117,7 @@ impl Context {
             config,
             target,
             limits,
-            &crate::node::GraphBudget::with_targets(limits.graph_targets()),
+            &crate::node::GraphBudget::new(),
         )
     }
 

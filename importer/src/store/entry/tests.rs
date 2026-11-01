@@ -48,27 +48,23 @@ fn budget(remaining: usize, paths: usize) -> GraphBudget {
     budget
 }
 
-/// The decoded-bytes axis high water once the graph crossed its target.
+/// The decoded bytes charged, once past the standard decoded-byte target.
 fn decoded_high_water(budget: &GraphBudget) -> Option<u64> {
-    budget
-        .exceedances()
-        .axis(node::DECODED_RESOURCE)
-        .map(|axis| axis.high_water)
+    let decoded = budget.census_usage().unwrap().0;
+    (decoded > node::MAX_DECODED_BYTES_PER_GRAPH).then_some(decoded)
 }
 
-/// The path-check axis high water once the graph crossed its target.
+/// The path checks charged, once past the standard path-check target.
 fn paths_high_water(budget: &GraphBudget) -> Option<u64> {
-    budget
-        .exceedances()
-        .axis(node::PATHS_RESOURCE)
-        .map(|axis| axis.high_water)
+    let paths = budget.census_usage().unwrap().1;
+    (paths > node::MAX_PATH_CHECKS_PER_GRAPH).then_some(paths as u64)
 }
 
-/// `budget` sits exactly at its decoded target: nothing is recorded, and
-/// one more byte is still charged while recording the exact cumulative total.
+/// `budget` sits exactly at its decoded target, and one more byte is still
+/// charged.
 fn assert_exact_decoded(budget: &GraphBudget) {
     assert_eq!(decoded_high_water(budget), None);
-    budget.decode(1).expect("an accounting axis never refuses");
+    budget.decode(1).expect("graph work never refuses");
     assert_eq!(
         decoded_high_water(budget),
         Some(node::MAX_DECODED_BYTES_PER_GRAPH + 1)
@@ -78,15 +74,15 @@ fn assert_exact_decoded(budget: &GraphBudget) {
 /// `budget` sits exactly at its path-check target.
 fn assert_exact_paths(budget: &GraphBudget) {
     assert_eq!(paths_high_water(budget), None);
-    budget.paths(1).expect("an accounting axis never refuses");
+    budget.paths(1).expect("graph work never refuses");
     assert_eq!(
         paths_high_water(budget),
         Some(node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
     );
 }
 
-/// One byte less remaining still completes the operation; the exceedance
-/// records exactly one byte past the target, proving the exact charge.
+/// One byte less remaining still completes the operation and lands exactly
+/// one byte past the target, proving the exact charge.
 fn assert_one_over_decoded(budget: &GraphBudget) {
     assert_eq!(
         decoded_high_water(budget),
@@ -136,8 +132,8 @@ fn directory_canonicalization_charges_before_observing_a_missing_path() {
         + 1023;
     // The complete canonicalization ownership is charged before the
     // missing path is observed. With one byte less remaining the observation
-    // still runs and fails for its own reason, while the exceedance records the
-    // exact charge; with the exact remaining nothing is recorded.
+    // still runs and fails for its own reason, one byte past the target; with
+    // the exact remaining it lands on the target.
     let floor = budget(required - 1, 1);
     assert!(matches!(
         super::existing_directory_budgeted(&path, Path::new(""), &floor),
@@ -283,7 +279,7 @@ fn candidate_extent_rejection_keeps_direct_limits_and_prior_account_charges() {
     let graph = budget(0, 1);
     assert!(matches!(
         super::read_file_budgeted_with(&path, 4, &graph, |_| {
-            graph.paths(1).expect("an accounting axis never refuses");
+            graph.paths(1).expect("graph work never refuses");
             Error::Allocation
         }),
         Err(Error::Allocation)

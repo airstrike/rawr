@@ -227,7 +227,6 @@ mod tests {
         .unwrap();
         let observation_paths = measured.census_usage().unwrap().1;
         assert!(observation_paths > 0);
-        assert!(!measured.exceedances().is_exceeded());
         let graph = GraphBudget::new();
         graph.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         let spent = Search::observe(
@@ -240,16 +239,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spent, present);
-        let axis = graph
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            axis.high_water,
-            (crate::node::MAX_PATH_CHECKS_PER_GRAPH + observation_paths) as u64
-        );
         // The canonical account's targets record and never refuse. A
         // zero-target account observes the same selector and records both
         // axes from the first owned path capacity to the truthful high water.
@@ -269,19 +258,6 @@ mod tests {
         assert!(!recorded.is_refused());
         let (items, bytes) = recorded.usage();
         assert!(items > 0 && bytes > 0);
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, 1, items as u64)
-        );
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .unwrap();
-        assert_eq!((axis.target, axis.high_water), (0, bytes as u64));
         // Terminal only through a genuine cause: a latched account owns no path.
         assert!(matches!(
             Search::observe(
@@ -315,14 +291,6 @@ mod tests {
             })
         ));
         assert!(!short.is_refused());
-        let axis = *short
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (1, 2, 2)
-        );
         // A latched account replaces the diagnostic with its own refusal.
         assert!(matches!(
             Search::observe(

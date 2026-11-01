@@ -170,18 +170,11 @@ fn edition_2024_alias_fails_before_inherited_dependency_or_lint() {
     );
 }
 
-fn bounded(
-    items: usize,
-    bytes: usize,
-) -> (
-    Result<(), Error<crate::input::membership::Error>>,
-    input::Usage,
-    crate::exceedance::Record,
-) {
+fn bounded() -> Result<(), Error<crate::input::membership::Error>> {
     let image = image(Vec::new());
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
@@ -190,13 +183,7 @@ fn bounded(
         },
     ) {
         Ok(host) => host,
-        Err(error) => {
-            return (
-                Err(Error::Host(error)),
-                allocation.usage(),
-                allocation.exceedances(),
-            )
-        }
+        Err(error) => return Err(Error::Host(error)),
     };
     let mut paths = slots::Slots::new();
     let mut documents = slots::Slots::new();
@@ -245,34 +232,11 @@ fn bounded(
     let result = session.finish(result);
     drop(owner);
     drop(host);
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (result, allocation.usage(), allocation.exceedances())
+    assert!(allocation.check().is_ok());
+    result
 }
 
 #[test]
-fn exact_and_one_short_original_budget_covers_tail_retention() {
-    use crate::input::membership::manifest::tests::one_short;
-    let (result, used, _) = bounded(usize::MAX, usize::MAX);
-    result.unwrap();
-    let (result, exact, exceeded) = bounded(used.items, used.bytes);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(!exceeded.is_exceeded());
-    // One short of an aggregate target admits and records that axis.
-    let (result, exact, exceeded) = bounded(used.items - 1, used.bytes);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_ITEMS_RESOURCE,
-        used.items
-    ));
-    let (result, exact, exceeded) = bounded(used.items, used.bytes - 1);
-    result.unwrap();
-    assert_eq!(exact, used);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_BYTES_RESOURCE,
-        used.bytes
-    ));
+fn original_budget_covers_tail_retention() {
+    bounded().unwrap();
 }

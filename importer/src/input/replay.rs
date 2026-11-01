@@ -7,7 +7,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::proof::{Entry, Role};
 use super::Allocation;
-use crate::cargo::{self, toolchain};
+use crate::cargo::toolchain;
 use crate::{Error, Result};
 
 pub(in crate::input) mod canonical;
@@ -45,14 +45,12 @@ pub(super) fn dep_info_entry(
     path: &Path,
     package_root: &Path,
     out_directories: &[PathBuf],
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Entry> {
     let dependency = super::dependency::Dependency::read(
         toolchain::supported_cargo_commit(),
         path,
         package_root,
-        limits,
         allocation,
     )?;
     for (key, value) in &dependency.environment {
@@ -92,31 +90,22 @@ pub(super) fn dep_info_entry(
         sources: &sources,
         environment: &dependency.environment,
     };
-    fact(
-        Role::DepInfo,
-        package_id,
-        path,
-        &evidence,
-        limits,
-        allocation,
-    )
+    fact(Role::DepInfo, package_id, path, &evidence, allocation)
 }
 
 pub(super) fn saved_output_entry(
     package_id: &str,
     out_dir: &Path,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Entry> {
     let declarations = super::declaration::Declarations::read_accounted(
         toolchain::supported_cargo_commit(),
         package_id,
         out_dir,
-        limits,
         allocation,
     )?;
     let evidence = SavedOutput::borrow(&declarations);
-    let digest = structured_digest(&evidence, limits, allocation)?;
+    let digest = structured_digest(&evidence, allocation)?;
     allocation.string(package_id)?;
     allocation.path(out_dir)?;
     allocation.string("saved-output")?;
@@ -136,10 +125,9 @@ fn fact(
     package_id: &str,
     path: &Path,
     evidence: &impl Serialize,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<Entry> {
-    let digest = structured_digest(evidence, limits, allocation)?;
+    let digest = structured_digest(evidence, allocation)?;
     allocation.path(path)?;
     let path = super::path_text("structured replay path", path)?;
     let name = allocation.formatted(format_args!("{package_id}:{path}"))?;
@@ -153,11 +141,7 @@ fn fact(
     })
 }
 
-fn structured_digest(
-    evidence: &impl Serialize,
-    limits: &cargo::Limits,
-    allocation: &mut Allocation,
-) -> Result<[u8; 32]> {
+fn structured_digest(evidence: &impl Serialize, allocation: &mut Allocation) -> Result<[u8; 32]> {
     struct Count(usize);
     impl std::io::Write for Count {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -177,7 +161,6 @@ fn structured_digest(
         code: "structured-replay-encoding",
         reason: error.to_string().into_boxed_str(),
     })?;
-    allocation.exceeded("structured replay bytes", limits.json_bytes, count.0);
     allocation.items(1)?;
     allocation.bytes(count.0)?;
     let mut canonical = Vec::new();
@@ -203,42 +186,4 @@ fn hex(bytes: impl AsRef<[u8]>) -> String {
         encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     encoded
-}
-
-#[cfg(test)]
-mod tests {
-    use super::structured_digest;
-    use crate::cargo::Limits;
-    use crate::input::Allocation;
-
-    /// The structured replay size is an accounting target on the input
-    /// account; exact records nothing, one under digests the same bytes and
-    /// records the axis with the truthful size.
-    #[test]
-    fn structured_replay_bytes_record_the_json_target_without_refusal() {
-        let evidence = ("structured replay fixture", 7_u32);
-        let length = serde_json::to_vec(&evidence).unwrap().len();
-        let mut limits = Limits::standard();
-        limits.json_bytes = length;
-        let mut allocation = Allocation::for_replay(&limits);
-        let exact = structured_digest(&evidence, &limits, &mut allocation)
-            .expect("a document at the JSON target digests");
-        assert!(allocation
-            .exceedances()
-            .axis("structured replay bytes")
-            .is_none());
-        limits.json_bytes = length - 1;
-        let mut allocation = Allocation::for_replay(&limits);
-        let floored = structured_digest(&evidence, &limits, &mut allocation)
-            .expect("a document one byte over the JSON target digests");
-        assert_eq!(exact, floored);
-        let axis = *allocation
-            .exceedances()
-            .axis("structured replay bytes")
-            .expect("the document size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((length - 1) as u64, length as u64, length as u64)
-        );
-    }
 }

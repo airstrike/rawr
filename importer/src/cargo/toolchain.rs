@@ -668,7 +668,7 @@ mod tests {
     use super::{
         executable_evidence, executable_evidence_in, Executable, EXECUTABLE_DIGEST_PASSES,
     };
-    use crate::{node, Error};
+    use crate::node;
     use std::fs;
     use std::path::PathBuf;
 
@@ -761,91 +761,6 @@ mod tests {
             executable_evidence("legacy fixture", &path).unwrap()
         );
         fs::remove_file(path).expect("the executable fixture retires");
-    }
-
-    #[test]
-    fn budgeted_executable_evidence_records_hash_exceedance_and_still_hashes() {
-        let path = std::env::temp_dir().join(format!(
-            "rawr-tool-budgeted-exceedance-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        fs::write(&path, b"two").expect("the executable fixture is written");
-        let budget = node::GraphBudget::new();
-        budget
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - 2)
-            .expect("the original account has two hash bytes left");
-        assert!(!budget.exceedances().is_exceeded());
-        let before = EXECUTABLE_DIGEST_PASSES.with(std::cell::Cell::get);
-        // The three-byte hash crosses the target; the original account
-        // keeps the charge, records the axis, and the executable is still
-        // opened and hashed to the same evidence as the legacy path.
-        let actual = executable_evidence_in("fixture", &path, Some(&budget))
-            .expect("the hash past the target still seals the evidence");
-        assert_eq!(
-            EXECUTABLE_DIGEST_PASSES.with(std::cell::Cell::get) - before,
-            1
-        );
-        assert_eq!(
-            actual,
-            executable_evidence("legacy fixture", &path).unwrap()
-        );
-        let (_, paths, hashed) = budget.census_usage().expect("the account is readable");
-        assert_eq!(
-            paths, 5,
-            "metadata probe, reserved open and close, and two bounded reads are admitted"
-        );
-        assert_eq!(hashed, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-        let axis = budget
-            .exceedances()
-            .axis(node::HASHED_RESOURCE)
-            .copied()
-            .expect("the hash records the hashed byte axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                node::MAX_HASHED_BYTES_PER_GRAPH,
-                node::MAX_HASHED_BYTES_PER_GRAPH + 1,
-                hashed
-            ),
-            "the three-byte hash is the single exceeding charge"
-        );
-        fs::remove_file(path).expect("the executable fixture retires");
-    }
-
-    #[test]
-    fn budgeted_executable_evidence_records_path_exceedance_before_missing_path_metadata() {
-        let budget = node::GraphBudget::new();
-        budget
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("the original path account is exhausted");
-        assert!(!budget.exceedances().is_exceeded());
-        // The exhausted path account still admits the probe before any
-        // metadata call and records the axis; only the missing path refuses.
-        assert!(matches!(
-            executable_evidence_in(
-                "fixture",
-                &PathBuf::from("/absent/toolchain"),
-                Some(&budget)
-            ),
-            Err(Error::Io {
-                operation: "inspect toolchain executable",
-                ..
-            })
-        ));
-        let paths = budget.census_usage().expect("the account is readable").1;
-        let axis = budget
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .copied()
-            .expect("the probe records the path-check axis");
-        assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            axis.first_requested,
-            node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert_eq!(axis.high_water, paths as u64);
-        assert!(axis.site.is_some());
     }
 }
 

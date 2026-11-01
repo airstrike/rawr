@@ -14,7 +14,6 @@ use crate::{Error, Result};
 #[derive(Clone, Copy)]
 enum Outcome {
     Success,
-    Exceeded,
     BeforeBuildWorkspaceDrift,
     BuildWorkspaceDrift,
 }
@@ -196,27 +195,6 @@ fn exercise(outcome: Outcome) {
                     unit::Allocation::begin(&cargo_limits),
                 )?;
                 let prepared_bytes = allocation.bytes;
-                if matches!(outcome, Outcome::Exceeded) {
-                    let mut measured = allocation;
-                    harness
-                        .workspace
-                        .require(&mut crate::input::workspace::Account::borrow(
-                            &mut measured,
-                            cached.context.graph_budget(),
-                            &limits,
-                        ))?;
-                    drop(super::super::super::prefix(
-                        request,
-                        layout.final_form().config(),
-                        &mut measured,
-                    )?);
-                    let build_cost = measured.bytes - allocation.bytes;
-                    // Leave one byte less than the measured Build-stage
-                    // usage. The account is a target: Build still runs, and the
-                    // stage's final charge is recorded crossing by exactly that byte.
-                    allocation.bytes(allocation.byte_limit - allocation.bytes - build_cost + 1)?;
-                    assert!(!allocation.exceedances().is_exceeded());
-                }
                 if matches!(outcome, Outcome::BeforeBuildWorkspaceDrift) {
                     fs::write(&ancestor, b"[workspace.package]\nversion='2.0.0'\n").unwrap();
                 }
@@ -229,7 +207,7 @@ fn exercise(outcome: Outcome) {
                     &cargo_limits,
                 );
                 match outcome {
-                    Outcome::Success | Outcome::Exceeded => {
+                    Outcome::Success => {
                         let built = result?;
                         assert_eq!(built.harness.harness_root, layout.final_form().root());
                         assert_eq!(
@@ -248,22 +226,6 @@ fn exercise(outcome: Outcome) {
                         )?;
                         assert_eq!(built.build.usage(), expected.usage());
                         assert!(!layout.extraction().plan().exists());
-                        let record = built.allocation.exceedances();
-                        if matches!(outcome, Outcome::Exceeded) {
-                            // Prior fresh and Build usage share one original
-                            // account: the Build stage's final charge crossed
-                            // by exactly the withheld byte, and later charges
-                            // kept accruing truthfully.
-                            let limit = built.allocation.byte_limit as u64;
-                            let axis = record
-                                .axis(cargo::REQUEST_BYTES_RESOURCE)
-                                .expect("the spent account records the Build-stage crossing");
-                            assert_eq!((axis.target, axis.first_requested), (limit, limit + 1));
-                            assert_eq!(axis.high_water, built.allocation.bytes as u64);
-                            assert!(axis.high_water > axis.first_requested);
-                        } else {
-                            assert!(!record.is_exceeded());
-                        }
                     }
                     Outcome::BeforeBuildWorkspaceDrift | Outcome::BuildWorkspaceDrift => {
                         let error = result
@@ -294,11 +256,6 @@ fn exercise(outcome: Outcome) {
 #[test]
 fn four_commands_preserve_plan_and_both_original_accounts() {
     exercise(Outcome::Success);
-}
-
-#[test]
-fn prior_fresh_and_build_usage_records_exceedance_at_the_build_stage() {
-    exercise(Outcome::Exceeded);
 }
 
 #[test]

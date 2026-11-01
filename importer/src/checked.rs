@@ -30,7 +30,6 @@ pub fn evaluate<B, C, E>(
     profile: &crate::profile::Contract,
     facade: &crate::surface::facade::Cached,
     snapshot: crate::surface::Snapshot,
-    limits: &crate::cargo::Limits,
     execute: impl FnOnce() -> Result<(crate::Demand<crate::Sealed, B>, C), E>,
 ) -> Result<Cached, Evaluation<E>>
 where
@@ -57,7 +56,7 @@ where
     let mut transform = Transform::new();
     let product =
         parent.direct_with_parents::<Product>(&authority, &[profile_parent.parent()], || {
-            transform.capture(contract.fingerprint(), snapshot, limits, execute)
+            transform.capture(contract.fingerprint(), snapshot, execute)
         });
     let product = transform.resolve(product)?;
     Cached::from_validated(parent.context().clone(), product, None).map_err(Evaluation::Cache)
@@ -118,14 +117,11 @@ impl<E> Transform<E> {
         &mut self,
         contract: crate::contract::fingerprint::Fingerprint,
         snapshot: crate::surface::Snapshot,
-        limits: &crate::cargo::Limits,
         execute: impl FnOnce() -> Result<(crate::Demand<crate::Sealed, B>, C), E>,
     ) -> Result<Product, node::Error> {
         match execute() {
-            Ok((demand, checked)) => {
-                Product::capture(&demand, &checked, contract, snapshot, limits)
-                    .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
-            }
+            Ok((demand, checked)) => Product::capture(&demand, &checked, contract, snapshot)
+                .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str())),
             Err(error) => {
                 self.error = Some(error);
                 Err(node::Error::Transform(
@@ -213,20 +209,12 @@ impl Product {
         checked: &C,
         contract: crate::contract::fingerprint::Fingerprint,
         snapshot: crate::surface::Snapshot,
-        limits: &crate::cargo::Limits,
     ) -> Result<Self, Error> {
         assert!(
             demand.contract_fingerprint() == contract && demand.snapshot() == snapshot,
             "rawr checks the program it builds, against the bindings it builds it with"
         );
         let payload = checked.profile_payload();
-        // The payload size is an accounting target recorded on a
-        // classification-stage account; the capture continues.
-        crate::classify::Account::new().exceeded(
-            "checked application profile payload bytes",
-            limits.string_bytes,
-            payload.len(),
-        );
         let mut retained_payload = Vec::new();
         retained_payload
             .try_reserve_exact(payload.len())
@@ -266,11 +254,6 @@ impl Product {
         limits: &crate::cargo::Limits,
         plans: Vec<crate::surface::adapter::Plan>,
     ) -> Result<crate::Demand<crate::Sealed, B>, Error> {
-        crate::classify::Account::new().exceeded(
-            "cached checked profile payload bytes",
-            limits.string_bytes,
-            self.payload.len(),
-        );
         crate::Demand::replay_resolved(
             &self.demand,
             (self.retained_items, self.retained_bytes),
@@ -291,11 +274,6 @@ impl Product {
         snapshot: crate::surface::Snapshot,
         limits: &crate::cargo::Limits,
     ) -> Result<crate::Demand<crate::Sealed, B>, Error> {
-        crate::classify::Account::new().exceeded(
-            "cached checked profile payload bytes",
-            limits.string_bytes,
-            self.payload.len(),
-        );
         crate::Demand::replay_cached(
             &self.demand,
             (self.retained_items, self.retained_bytes),
@@ -464,7 +442,7 @@ mod tests {
 
     impl crate::profile::Definition<Checked> for Definition {
         fn identity(&self) -> crate::profile::Identity {
-            crate::profile::Identity::new("rawr.checked.fixture", &crate::cargo::Limits::standard())
+            crate::profile::Identity::new("rawr.checked.fixture")
         }
 
         fn version(&self) -> crate::profile::Version {
@@ -525,7 +503,7 @@ mod tests {
         compiler
             .require(
                 identity,
-                crate::surface::Origin::checked("/fixture/main.rs", 0, 4, limits)
+                crate::surface::Origin::checked("/fixture/main.rs", 0, 4)
                     .expect("the checked fixture origin is bounded"),
             )
             .expect("the checked fixture demand is admitted");
@@ -603,16 +581,14 @@ mod tests {
         let source = snapshot(&limits);
         let mut transform = super::Transform::new();
         let result =
-            transform
-                .capture::<(), Checked>(contract.fingerprint(), source, &limits, || Err(37_u32));
+            transform.capture::<(), Checked>(contract.fingerprint(), source, || Err(37_u32));
         assert!(matches!(
             transform.resolve(result),
             Err(super::Evaluation::Transform(37))
         ));
 
         let mut transform = super::Transform::new();
-        let _ = transform
-            .capture::<(), Checked>(contract.fingerprint(), source, &limits, || Err(37_u32));
+        let _ = transform.capture::<(), Checked>(contract.fingerprint(), source, || Err(37_u32));
         assert!(matches!(
             transform.resolve::<()>(Err(crate::node::Error::State("cleanup failure"))),
             Err(super::Evaluation::Cache(super::Error::Node(_)))
@@ -637,7 +613,6 @@ mod tests {
             &Checked,
             contract.fingerprint(),
             source,
-            &limits,
         )
         .expect("the checked product captures");
         let bytes = product
@@ -691,7 +666,7 @@ mod tests {
             Ok::<_, ()>((demand(&contract, source, &limits), Checked))
         };
         let cold_started = Instant::now();
-        let cold: Cached = super::evaluate(&contract, &profile, &facade, source, &limits, evaluate)
+        let cold: Cached = super::evaluate(&contract, &profile, &facade, source, evaluate)
             .expect("the cold checked node publishes");
         let cold_demand = cold
             .replay_demand((), &contract, source, &limits)
@@ -701,7 +676,7 @@ mod tests {
         assert_eq!(cold.checked_payload(), b"checked-payload");
 
         let warm_started = Instant::now();
-        let warm: Cached = super::evaluate(&contract, &profile, &facade, source, &limits, || {
+        let warm: Cached = super::evaluate(&contract, &profile, &facade, source, || {
             executions.fetch_add(1, Ordering::Relaxed);
             Ok::<_, ()>((demand(&contract, source, &limits), Checked))
         })

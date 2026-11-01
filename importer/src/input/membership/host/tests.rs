@@ -310,17 +310,6 @@ fn range_and_native_path_rejections_precede_ownership_and_lookup() {
         (3, 15)
     );
     assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 3);
-    let axis = host
-        .budget()
-        .allocation
-        .exceedances()
-        .axis("membership native path bytes")
-        .copied()
-        .expect("string axis");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (4, 5, 5)
-    );
     let (_, paths, _) = graph.census_usage().expect("census");
     assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH - 1);
     // A genuinely latched account refuses before ownership and lookup.
@@ -338,141 +327,88 @@ fn range_and_native_path_rejections_precede_ownership_and_lookup() {
     graph
         .paths(1)
         .expect("refused paths never reached graph lookup");
-    assert!(!graph.exceedances().is_exceeded());
     host.finish()
         .expect("empty image has no records to consume");
 }
 
 #[test]
-fn helper_query_ownership_is_cumulative_with_exact_and_one_over_limits() {
+fn helper_query_ownership_is_cumulative() {
     let image = native_image();
-    let exercise = |items, bytes| {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, 4);
-        allocation.items(7)?;
-        allocation.bytes(19)?;
-        let mut host = Host::from_image(
-            &image,
-            Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-        )?;
-        for _ in 0..2 {
-            host.read(b"/p/\xff", 4, 3)?;
-            host.link(b"/p/\xff")?;
-            host.directory(b"/p/\xff")?;
-        }
-        host.finish()?;
-        Ok::<_, Error>((allocation.usage(), allocation.exceedances()))
-    };
-    let (exact, _) = exercise(usize::MAX, usize::MAX).expect("measure helper ownership");
-    assert_eq!(exact.items, 7 + image.records().len() + 6);
+    let graph = node::GraphBudget::new();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut host = Host::from_image(
+        &image,
+        Budget {
+            graph: &graph,
+            allocation: &mut allocation,
+        },
+    )
+    .expect("host");
+    for _ in 0..2 {
+        host.read(b"/p/\xff", 4, 3).unwrap();
+        host.link(b"/p/\xff").unwrap();
+        host.directory(b"/p/\xff").unwrap();
+    }
+    host.finish().unwrap();
+    let usage = allocation.usage();
+    assert_eq!(usage.items, 7 + image.records().len() + 6);
     assert_eq!(
-        exact.bytes,
+        usage.bytes,
         19 + image.records().len() * std::mem::size_of::<bool>() + 6 * 4
     );
-    let (usage, exceeded) = exercise(exact.items, exact.bytes).expect("exact bound");
-    assert_eq!(usage, exact);
-    assert!(!exceeded.is_exceeded());
-    // One less on either axis still completes every helper and records
-    // that axis with the exact cumulative total as its high water.
-    let (usage, exceeded) = exercise(exact.items - 1, exact.bytes).expect("items target");
-    assert_eq!(usage, exact);
-    let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-    assert_eq!(
-        (axis.target, axis.high_water),
-        (exact.items as u64 - 1, exact.items as u64)
-    );
-    assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-    let (usage, exceeded) = exercise(exact.items, exact.bytes - 1).expect("bytes target");
-    assert_eq!(usage, exact);
-    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-    assert_eq!(
-        (axis.target, axis.high_water),
-        (exact.bytes as u64 - 1, exact.bytes as u64)
-    );
-    assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
 }
 
 #[test]
 fn each_helper_latched_account_refuses_before_copy_or_lookup() {
     let image = native_image();
     for helper in 0..3 {
-        for item_target in [false, true] {
-            let graph = node::GraphBudget::new();
-            graph
-                .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-                .expect("path work at its target");
-            let base_items = 7 + image.records().len();
-            let base_bytes = 19 + image.records().len() * std::mem::size_of::<bool>();
-            let mut allocation = input::Allocation::with_limits(
-                base_items + usize::from(!item_target),
-                base_bytes + if item_target { 4 } else { 3 },
-                4,
-            );
-            allocation.items(7).expect("prior items");
-            allocation.bytes(19).expect("prior bytes");
-            let mut host = Host::from_image(
-                &image,
-                Budget {
-                    graph: &graph,
-                    allocation: &mut allocation,
-                },
-            )
-            .expect("host bitmap admitted");
-            // A query crossing an ownership target is still owned and
-            // looked up; the crossing axis and the graph's path target record
-            // exceedances and nothing latches.
-            super::super::OWNED_BYTES.with(|count| count.set(0));
-            let result = match helper {
-                0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
-                1 => host.link(b"/p/\xff").map(|_| ()),
-                _ => host.directory(b"/p/\xff").map(|_| ()),
-            };
-            result.expect("query past its target is answered");
-            assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 1);
-            assert_eq!(host.budget().allocation.usage().items, base_items + 1);
-            assert_eq!(host.budget().allocation.usage().bytes, base_bytes + 4);
-            let owned = host.budget().allocation.exceedances();
-            let (name, target, high_water) = if item_target {
-                (input::INPUT_ITEMS_RESOURCE, base_items, base_items + 1)
-            } else {
-                (input::INPUT_BYTES_RESOURCE, base_bytes + 3, base_bytes + 4)
-            };
-            let axis = owned.axis(name).expect("crossing axis");
-            assert_eq!(
-                (axis.target, axis.high_water),
-                (target as u64, high_water as u64)
-            );
-            assert_eq!(owned.axes().count(), 1);
-            let axis = graph
-                .exceedances()
-                .axis(node::PATHS_RESOURCE)
-                .copied()
-                .unwrap();
-            assert_eq!(
-                axis.first_requested,
-                node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            // A genuinely latched account refuses before the copy or the lookup.
-            host.budget().allocation.refuse();
-            super::super::OWNED_BYTES.with(|count| count.set(0));
-            let result = match helper {
-                0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
-                1 => host.link(b"/p/\xff").map(|_| ()),
-                _ => host.directory(b"/p/\xff").map(|_| ()),
-            };
-            assert!(matches!(
-                result,
-                Err(Error::Input(crate::Error::InputAccountRefused))
-            ));
-            assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 0);
-            assert_eq!(host.budget().allocation.usage().bytes, base_bytes + 4);
-            let (_, paths, _) = graph.census_usage().expect("census");
-            assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH + 1);
-            assert!(matches!(host.finish(), Err(Error::Unconsumed)));
-        }
+        let graph = node::GraphBudget::new();
+        graph
+            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1)
+            .expect("prior path work");
+        let base_items = 7 + image.records().len();
+        let base_bytes = 19 + image.records().len() * std::mem::size_of::<bool>();
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+        allocation.items(7).expect("prior items");
+        allocation.bytes(19).expect("prior bytes");
+        let mut host = Host::from_image(
+            &image,
+            Budget {
+                graph: &graph,
+                allocation: &mut allocation,
+            },
+        )
+        .expect("host bitmap admitted");
+        // A query is owned and looked up.
+        super::super::OWNED_BYTES.with(|count| count.set(0));
+        let result = match helper {
+            0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
+            1 => host.link(b"/p/\xff").map(|_| ()),
+            _ => host.directory(b"/p/\xff").map(|_| ()),
+        };
+        result.expect("query is answered");
+        assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 1);
+        assert_eq!(host.budget().allocation.usage().items, base_items + 1);
+        assert_eq!(host.budget().allocation.usage().bytes, base_bytes + 4);
+        // A genuinely latched account refuses before the copy or the lookup.
+        host.budget().allocation.refuse();
+        super::super::OWNED_BYTES.with(|count| count.set(0));
+        let result = match helper {
+            0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
+            1 => host.link(b"/p/\xff").map(|_| ()),
+            _ => host.directory(b"/p/\xff").map(|_| ()),
+        };
+        assert!(matches!(
+            result,
+            Err(Error::Input(crate::Error::InputAccountRefused))
+        ));
+        assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 0);
+        assert_eq!(host.budget().allocation.usage().bytes, base_bytes + 4);
+        let (_, paths, _) = graph.census_usage().expect("census");
+        assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
+        assert!(matches!(host.finish(), Err(Error::Unconsumed)));
     }
 }
 
@@ -494,30 +430,16 @@ fn repeated_helper_requests_charge_graph_work_every_time() {
             },
         )
         .expect("recorded host");
-        for remaining in [true, true, false] {
+        for _ in 0..3 {
+            let (_, before, _) = graph.census_usage().expect("census");
             let result = match helper {
                 0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
                 1 => host.link(b"/p/\xff").map(|_| ()),
                 _ => host.directory(b"/p/\xff").map(|_| ()),
             };
             result.expect("every repeat is answered");
-            // The third repeat crosses the path-check target, which the
-            // graph records instead of refusing.
-            if remaining {
-                assert!(!graph.exceedances().is_exceeded());
-            } else {
-                let axis = graph
-                    .exceedances()
-                    .axis(node::PATHS_RESOURCE)
-                    .copied()
-                    .unwrap();
-                assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-                assert_eq!(
-                    axis.first_requested,
-                    node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                );
-                assert_eq!(axis.high_water, node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
-            }
+            let (_, after, _) = graph.census_usage().expect("census");
+            assert!(after > before, "every repeat charges path checks");
         }
     }
 }

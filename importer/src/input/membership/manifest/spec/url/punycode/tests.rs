@@ -263,9 +263,8 @@ fn every_encoder_and_decoder_admission_refusal_is_terminal() {
 }
 
 #[test]
-fn original_account_keeps_prior_usage_exact_layout_and_string_floors() {
+fn original_account_keeps_prior_usage_and_exact_layouts() {
     use crate::input;
-    use crate::input::membership::manifest::tests::one_short;
     use crate::input::membership::Budget;
     use crate::node;
 
@@ -278,83 +277,47 @@ fn original_account_keeps_prior_usage_exact_layout_and_string_floors() {
         .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
         .unwrap();
     // `Bücher` encodes to nine ASCII bytes: growth requests 4 + 8 + 16.
-    // One short of an item, byte or string target still admits the
-    // whole encoding and records only that axis, with the exact total as its
-    // high water and the one-short figure as its target.
-    for (items, bytes, string, exceeded) in [
-        (16, 47, 9, None),
-        (15, 47, 9, Some((input::INPUT_ITEMS_RESOURCE, 16))),
-        (16, 46, 9, Some((input::INPUT_BYTES_RESOURCE, 47))),
-        (16, 47, 8, Some(("membership decoded TOML string bytes", 9))),
-    ] {
-        let mut allocation = input::Allocation::with_limits(items, bytes, string);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let result = encode(&['B', 'ü', 'c', 'h', 'e', 'r'], &mut session);
-        let result = session.finish(result);
-        assert_eq!(result.unwrap().unwrap().as_bytes(), b"Bcher-kva");
-        assert_eq!(allocation.usage.items, 16);
-        assert_eq!(allocation.usage.bytes, 47);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        let record = allocation.exceedances();
-        match exceeded {
-            Some((resource, total)) => {
-                assert!(one_short(&record, resource, total), "{record:?}");
-                let axis = record.axis(resource).unwrap();
-                assert_eq!(axis.target, total as u64 - 1);
-                assert_eq!(axis.first_requested, total as u64);
-            }
-            None => assert!(!record.is_exceeded()),
-        }
-    }
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let result = encode(&['B', 'ü', 'c', 'h', 'e', 'r'], &mut session);
+    let result = session.finish(result);
+    assert_eq!(result.unwrap().unwrap().as_bytes(), b"Bcher-kva");
+    assert_eq!(allocation.usage.items, 16);
+    assert_eq!(allocation.usage.bytes, 47);
+    assert!(allocation.check().is_ok());
 
     let scratch_bytes = 19 + Layout::array::<decoder::Insertion>(4).unwrap().size();
-    for (items, bytes, exceeded) in [
-        (9, scratch_bytes, None),
-        (8, scratch_bytes, Some((input::INPUT_ITEMS_RESOURCE, 9))),
-        (
-            9,
-            scratch_bytes - 1,
-            Some((input::INPUT_BYTES_RESOURCE, scratch_bytes)),
-        ),
-    ] {
-        let mut allocation = input::Allocation::with_limits(items, bytes, 0);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let mut decoder = Decoder::new();
-        let result = (|| {
-            assert_eq!(
-                decoder
-                    .bytes(b"tda", &mut session)?
-                    .unwrap()
-                    .collect::<String>(),
-                "ü"
-            );
-            assert_eq!(
-                decoder.bytes(b"a", &mut session)?.unwrap().next(),
-                Some('\u{80}')
-            );
-            Ok(())
-        })();
-        session.finish(result).unwrap();
-        assert_eq!(allocation.usage.items, 9);
-        assert_eq!(allocation.usage.bytes, scratch_bytes);
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        match exceeded {
-            Some((resource, total)) => {
-                assert!(one_short(&allocation.exceedances(), resource, total))
-            }
-            None => assert!(!allocation.exceedances().is_exceeded()),
-        }
-    }
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let mut decoder = Decoder::new();
+    let result = (|| {
+        assert_eq!(
+            decoder
+                .bytes(b"tda", &mut session)?
+                .unwrap()
+                .collect::<String>(),
+            "ü"
+        );
+        assert_eq!(
+            decoder.bytes(b"a", &mut session)?.unwrap().next(),
+            Some('\u{80}')
+        );
+        Ok(())
+    })();
+    session.finish(result).unwrap();
+    assert_eq!(allocation.usage.items, 9);
+    assert_eq!(allocation.usage.bytes, scratch_bytes);
+    assert!(allocation.check().is_ok());
 }

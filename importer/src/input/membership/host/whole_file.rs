@@ -164,70 +164,33 @@ fn whole_file_and_range_observations_cannot_upgrade_each_other() {
 }
 
 #[test]
-fn whole_file_query_uses_original_ownership_with_exact_and_floor_limits() {
+fn whole_file_query_uses_original_ownership() {
     let image = image(&[record(b"/raw", content(b"content", observed::End::Eof))]);
-    for floor in 0..3 {
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2).unwrap();
-        let mut allocation = input::Allocation::with_limits(
-            10 - usize::from(floor == 1),
-            19 + std::mem::size_of::<bool>() + 8 - usize::from(floor == 2),
-            4,
-        );
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut host = Host::from_image(
-            &image,
-            Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-        )
-        .unwrap();
-        host.file(b"/raw").unwrap();
-        super::super::OWNED_BYTES.with(|count| count.set(0));
-        // The repeated query owns its path and spends its lookup on every
-        // floor; crossing an ownership target is recorded, never refused.
-        let result = host.file(b"/raw");
-        assert_eq!(result.unwrap().unwrap().bytes(), b"content");
-        let total_bytes = 19 + std::mem::size_of::<bool>() + 8;
-        assert_eq!(host.budget().allocation.usage().items, 10);
-        assert_eq!(host.budget().allocation.usage().bytes, total_bytes);
-        assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 1);
-        let (_, paths, _) = graph.census_usage().unwrap();
-        assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
-        assert!(!graph.exceedances().is_exceeded());
-        let owned = host.budget().allocation.exceedances();
-        match floor {
-            0 => {
-                assert!(!owned.is_exceeded());
-                graph.paths(1).expect("past the target is recorded");
-                assert_eq!(
-                    graph
-                        .exceedances()
-                        .axis(node::PATHS_RESOURCE)
-                        .unwrap()
-                        .high_water,
-                    node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                );
-            }
-            1 => {
-                let axis = owned.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-                assert_eq!((axis.target, axis.high_water), (9, 10));
-                assert!(owned.axis(input::INPUT_BYTES_RESOURCE).is_none());
-            }
-            _ => {
-                let axis = owned.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                assert_eq!(
-                    (axis.target, axis.high_water),
-                    (total_bytes as u64 - 1, total_bytes as u64)
-                );
-                assert!(owned.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-            }
-        }
-        assert!(host.budget().allocation.items(0).is_ok(), "nothing latched");
-        host.finish().unwrap();
-    }
+    let graph = node::GraphBudget::new();
+    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2).unwrap();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut host = Host::from_image(
+        &image,
+        Budget {
+            graph: &graph,
+            allocation: &mut allocation,
+        },
+    )
+    .unwrap();
+    host.file(b"/raw").unwrap();
+    super::super::OWNED_BYTES.with(|count| count.set(0));
+    // The repeated query owns its path and spends its lookup.
+    let result = host.file(b"/raw");
+    assert_eq!(result.unwrap().unwrap().bytes(), b"content");
+    let total_bytes = 19 + std::mem::size_of::<bool>() + 8;
+    assert_eq!(host.budget().allocation.usage().items, 10);
+    assert_eq!(host.budget().allocation.usage().bytes, total_bytes);
+    assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 1);
+    let (_, paths, _) = graph.census_usage().unwrap();
+    assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
+    host.finish().unwrap();
 }
 
 #[test]
@@ -254,21 +217,8 @@ fn whole_file_repeated_outcomes_each_spend_original_graph_work() {
         for _ in 0..2 {
             assert!(!matches!(host.file(b"/raw"), Err(Error::Budget(_))));
         }
-        assert!(!graph.exceedances().is_exceeded());
-        // The third repeat crosses the path-check target; the outcome is
-        // still answered from the record and the graph records the exceedance.
+        // The third repeat is still answered from the record.
         assert!(!matches!(host.file(b"/raw"), Err(Error::Budget(_))));
-        let axis = graph
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            axis.first_requested,
-            node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert_eq!(axis.high_water, node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
         host.finish().unwrap();
     }
 }
@@ -303,14 +253,6 @@ fn whole_file_invalid_or_refused_query_cannot_consume_the_image() {
         (1, 5)
     );
     assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 1);
-    let axis = host
-        .budget()
-        .allocation
-        .exceedances()
-        .axis("membership native path bytes")
-        .copied()
-        .expect("string axis");
-    assert_eq!((axis.target, axis.high_water), (4, 5));
     let (_, paths, _) = graph.census_usage().unwrap();
     assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH - 1);
     // A genuinely latched account refuses before ownership and lookup.
@@ -328,6 +270,5 @@ fn whole_file_invalid_or_refused_query_cannot_consume_the_image() {
     graph
         .paths(1)
         .expect("refused paths never reached graph lookup");
-    assert!(!graph.exceedances().is_exceeded());
     assert!(matches!(host.finish(), Err(Error::Unconsumed)));
 }

@@ -21,7 +21,7 @@ use crate::{Error, Result};
 /// Physical child stdout capture bound. `read_bounded` retains at most
 /// this many bytes of one child's stdout and refuses a longer stream as
 /// truncated. It is the 256 MiB envelope held as a safety number: it is
-/// never configurable and never sized from an accounting target.
+/// never configurable.
 pub(crate) const CAPTURE_BYTES: usize = 256 * 1024 * 1024;
 /// Physical child stderr tail (1 MiB stream tails).
 pub(crate) const TAIL_BYTES: usize = 1024 * 1024;
@@ -581,8 +581,7 @@ impl Limits {
     }
 
     /// The physical capture bounds for a Cargo child: `CAPTURE_BYTES` of
-    /// stdout and a `TAIL_BYTES` stderr tail. Accounting targets never
-    /// size this slot.
+    /// stdout and a `TAIL_BYTES` stderr tail.
     pub(crate) const fn capture() -> Self {
         Self {
             stdout: CAPTURE_BYTES,
@@ -1610,19 +1609,6 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
                 ..
             })
         ));
-        let paths = budget
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .expect("the path-check axis crossed its target");
-        assert_eq!(
-            (paths.first_requested, paths.high_water),
-            (
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 2
-            ),
-            "one path check per probe lands on the shared account before any IO"
-        );
         let budget = crate::node::GraphBudget::new();
         budget
             .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
@@ -1634,14 +1620,6 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
                 ..
             })
         ));
-        assert_eq!(
-            budget
-                .exceedances()
-                .axis(crate::node::DECODED_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + canonical_decoded),
-            "canonical storage is charged in full before realpath runs"
-        );
     }
 
     #[test]

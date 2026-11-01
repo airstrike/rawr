@@ -23,7 +23,6 @@ enum Outcome {
     Success,
     ProbeFailure,
     CorruptSidecar,
-    ConfigExceedance,
 }
 
 fn probe(
@@ -221,20 +220,6 @@ fn exercise(outcome: Outcome) {
                     .require_exact_raw(documents.units.bytes(), "retained fixture")?;
                 let build_storage = built.build.fixture_storage();
                 let build_usage = built.build.usage();
-                if matches!(outcome, Outcome::ConfigExceedance) {
-                    let paths = layout.final_form();
-                    let copies = [paths.manifest(), paths.source(), paths.lock()]
-                        .iter()
-                        .map(|path| path.as_os_str().len())
-                        .sum::<usize>();
-                    // Leave one byte less than the three retained path
-                    // copies. The account is a target: completion proceeds and
-                    // the last copy is recorded crossing by exactly that byte.
-                    built
-                        .allocation
-                        .bytes(built.allocation.byte_limit - built.allocation.bytes - copies + 1)?;
-                    assert!(!built.allocation.exceedances().is_exceeded());
-                }
                 let replay_definition = request
                     .universe
                     .as_ref()
@@ -366,7 +351,6 @@ fn exercise(outcome: Outcome) {
                             &replay_request,
                             catalog,
                             &cargo::render_manifest(&replay_request, None, &limits)?,
-                            &limits,
                         )?;
                         let toolchain = cached.attestation.value().proof();
                         let current_context = definition.validate_context(
@@ -394,7 +378,6 @@ fn exercise(outcome: Outcome) {
                             source: Box::new(source),
                         })?;
                         let paths = replay_paths.final_form();
-                        let metadata_bytes = record.metadata().len();
                         fs::remove_file(layout.paths().record()).unwrap();
                         let scope = cargo::resolution::content::Scope::complete(
                             layout.root(),
@@ -416,7 +399,6 @@ fn exercise(outcome: Outcome) {
                                 fs::read(paths.lock())
                                     .expect("current lock")
                                     .into_boxed_slice(),
-                                &limits,
                             )?;
                             let observed = sealed.read_for_replay(budget)?;
                             replay_request.replay_observed_in(
@@ -505,19 +487,6 @@ fn exercise(outcome: Outcome) {
                         );
                         compare(&mut budget, &cargo_limits, &mut resolution.cargo_allocation)
                             .expect("restored closure replays using the same original accounts");
-                        // A Cargo JSON accounting target one byte under the
-                        // metadata is recorded, never refused: replay still joins
-                        // and nothing latches the original input account.
-                        let mut tiny = cargo_limits;
-                        tiny.json_bytes = metadata_bytes - 1;
-                        let mut tiny_account = cargo::unit::Allocation::begin(&tiny);
-                        let under_target = compare(&mut budget, &tiny, &mut tiny_account)
-                            .expect("a JSON accounting target never withholds replay");
-                        assert_eq!(
-                            under_target.decoded.metadata.digest(),
-                            resolution.metadata.digest()
-                        );
-                        assert!(budget.check().is_ok(), "a target crossing never latches");
                         // Only a genuine failure latches the original account, and
                         // the latch is terminal for every later read.
                         budget.refuse();
@@ -546,27 +515,6 @@ fn exercise(outcome: Outcome) {
                         ));
                         assert!(!layout.receipt().exists());
                     }
-                    Outcome::ConfigExceedance => {
-                        let resolution = result?;
-                        assert!(resolution.universe.is_some());
-                        assert!(
-                            layout.receipt().is_file(),
-                            "the complete observation still publishes the assigned receipt"
-                        );
-                        // Config capture keeps every prior request usage on the
-                        // one original account: the third retained path copy
-                        // crossed by exactly the withheld byte, and capture's
-                        // own later charges raised the truthful high water.
-                        let limit = allocation.byte_limit as u64;
-                        let record = allocation.exceedances();
-                        let axis = record
-                            .axis(cargo::REQUEST_BYTES_RESOURCE)
-                            .expect("config capture records the crossing on the original account");
-                        assert_eq!((axis.target, axis.first_requested), (limit, limit + 1));
-                        assert_eq!(axis.high_water, allocation.bytes as u64);
-                        assert!(axis.high_water > axis.first_requested);
-                        assert!(allocation.items(0).is_ok(), "nothing latched");
-                    }
                 }
                 Ok(())
             })
@@ -589,9 +537,4 @@ fn failed_probe_cannot_complete_or_publish_a_receipt() {
 #[test]
 fn invalid_probe_output_cannot_complete_or_publish_a_receipt() {
     exercise(Outcome::CorruptSidecar);
-}
-
-#[test]
-fn baseline_config_capture_keeps_all_prior_request_usage() {
-    exercise(Outcome::ConfigExceedance);
 }

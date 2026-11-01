@@ -2,18 +2,13 @@
 
 use std::sync::OnceLock;
 
-use crate::{cargo, node};
+use crate::node;
 
 /// Accounting scope created when the original parent reload request begins.
 ///
 /// This is accounting ownership, not revision, freshness or admission authority.
 /// Retain this same scope across resident compilation and any full preparation
 /// fallback; creating a new scope would start a different attempt's budget.
-///
-/// The scope begins before the project's `[rust.limits]` profile is read, so
-/// its graph account binds its accounting targets on the first route
-/// that brings the captured profile; every later route of the same attempt
-/// measures against that same profile.
 #[must_use]
 pub struct Scope {
     budget: OnceLock<node::GraphBudget>,
@@ -21,7 +16,7 @@ pub struct Scope {
 
 /// Exact Rawr snapshot source evidence held with its original graph account.
 ///
-/// Every revalidation uses the same cumulative limits, even after the initiating
+/// Every revalidation charges the same cumulative account, even after the initiating
 /// Scope retires. The proof cannot select or substitute another graph account.
 #[must_use]
 pub struct Freshness {
@@ -30,7 +25,7 @@ pub struct Freshness {
 }
 
 impl Scope {
-    /// Begin the original reload attempt's unchanged cumulative graph limits.
+    /// Begin the original reload attempt's cumulative graph account.
     pub fn begin() -> Self {
         Self {
             budget: OnceLock::new(),
@@ -39,13 +34,9 @@ impl Scope {
 
     /// Bind exact snapshot frames and check every retained source/manifest now.
     /// Later post-compile and final checks use the returned proof's account.
-    pub fn observe(
-        &self,
-        bytes: &super::Bytes,
-        limits: &cargo::Limits,
-    ) -> Result<Freshness, node::Error> {
-        let budget = self.budget_for(limits)?;
-        let snapshot = bytes.freshness(budget, limits)?;
+    pub fn observe(&self, bytes: &super::Bytes) -> Result<Freshness, node::Error> {
+        let budget = self.budget();
+        let snapshot = bytes.freshness(budget)?;
         snapshot.revalidate(budget)?;
         Ok(Freshness {
             snapshot,
@@ -53,34 +44,7 @@ impl Scope {
         })
     }
 
-    /// The attempt's one cumulative graph account, measured against the
-    /// captured profile's graph targets.
-    ///
-    /// The first route to bring the profile binds the account's targets. One
-    /// attempt has one captured profile across its resident, owner and
-    /// fallback routes, so a later route bringing different graph targets is a
-    /// configuration drift within the attempt and is refused as invalid state;
-    /// the account is never rebound or replaced.
-    pub(crate) fn budget_for(
-        &self,
-        limits: &cargo::Limits,
-    ) -> Result<&node::GraphBudget, node::Error> {
-        let targets = limits.graph_targets();
-        let budget = self
-            .budget
-            .get_or_init(|| node::GraphBudget::with_targets(targets));
-        if budget.targets() == targets {
-            Ok(budget)
-        } else {
-            Err(node::Error::State(
-                "reload attempt graph targets differ from the profile that began its account",
-            ))
-        }
-    }
-
-    /// The attempt's graph account; a scope no route has bound yet measures
-    /// against the standard targets.
-    #[cfg(test)]
+    /// The attempt's one cumulative graph account.
     pub(crate) fn budget(&self) -> &node::GraphBudget {
         self.budget.get_or_init(node::GraphBudget::new)
     }

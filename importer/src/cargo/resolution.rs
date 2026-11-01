@@ -245,8 +245,7 @@ fn input_digests_budgeted(
     budget: Option<&node::GraphBudget>,
 ) -> Result<([u8; 32], [u8; 32]), node::Error> {
     // Manifest and lock reads are I/O retention bounded by physical
-    // constants (manifest class: `TAIL_BYTES`; lock class: `CAPTURE_BYTES`),
-    // never by an accounting target.
+    // constants (manifest class: `TAIL_BYTES`; lock class: `CAPTURE_BYTES`).
     let manifest = read_hashed_input(
         "cached leaf Cargo manifest",
         manifest,
@@ -254,7 +253,7 @@ fn input_digests_budgeted(
         budget,
     )?;
     // Lock reads are I/O retention, bounded by the physical capture
-    // constant rather than the Cargo JSON accounting target.
+    // constant.
     let lock = read_hashed_input(
         "cached leaf Cargo lock",
         lock,
@@ -1145,10 +1144,7 @@ mod tests {
 
     impl crate::profile::Definition<CachedProfileChecked> for CachedProfileDefinition {
         fn identity(&self) -> crate::profile::Identity {
-            crate::profile::Identity::new(
-                "rawr.profile.fresh-process",
-                &super::super::Limits::standard(),
-            )
+            crate::profile::Identity::new("rawr.profile.fresh-process")
         }
 
         fn version(&self) -> crate::profile::Version {
@@ -1203,7 +1199,7 @@ mod tests {
             .file(ENTRY, SOURCE)
             .expect("the full-DAG transport source is bounded");
         let transport = transport
-            .bind(snapshot, limits)
+            .bind(snapshot)
             .expect("the full-DAG transport matches its snapshot");
         (snapshot, transport)
     }
@@ -1277,24 +1273,6 @@ mod tests {
             ))
         ));
         fs::remove_dir_all(root).expect("the config fixture retires");
-    }
-
-    /// Package-manifest evidence is I/O retention bounded by the physical
-    /// tail constant (locks by the capture constant); a lowered manifest
-    /// accounting target never refuses it.
-    #[test]
-    fn locked_manifest_evidence_binds_to_the_physical_tail_bound() {
-        assert_eq!(process::TAIL_BYTES, 1_048_576);
-        assert_eq!(process::CAPTURE_BYTES, 256 * 1024 * 1024);
-        let fixture = prepare_locked_fixture("locked-manifest-bound");
-        let mut limits = super::super::Limits::standard();
-        limits.manifest_bytes = 1;
-        let raw = locked_metadata(&[&fixture.manifest, &fixture.dependency_manifest]);
-        let locked = Locked::capture(raw, &fixture.manifest, &fixture.lock, &limits)
-            .expect("manifests above the accounting target still capture");
-        locked
-            .revalidate(&fixture.lock, &limits, &node::GraphBudget::new())
-            .expect("manifests above the accounting target still revalidate");
     }
 
     #[test]
@@ -1878,7 +1856,6 @@ mod tests {
                             &profile,
                             &facade,
                             snapshot,
-                            &limits,
                             || {
                                 let compiler =
                                     contract.compiler((), snapshot, &limits).map_err(|_| ())?;

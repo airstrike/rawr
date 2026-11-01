@@ -320,11 +320,6 @@ fn views_have_no_owned_drop_or_account_effect_even_after_refusal() {
         .allocation
         .bytes(1)
         .expect("one over the byte target is recorded");
-    assert!(baseline
-        .allocation
-        .exceedances()
-        .axis(crate::input::INPUT_BYTES_RESOURCE)
-        .is_some());
     let prior = baseline.allocation.usage();
     // A genuine failure latches the account; views still cost nothing.
     baseline.allocation.refuse();
@@ -349,10 +344,6 @@ fn views_have_no_owned_drop_or_account_effect_even_after_refusal() {
     allocation
         .items(1)
         .expect("one over the item target is recorded");
-    assert!(allocation
-        .exceedances()
-        .axis(crate::input::INPUT_ITEMS_RESOURCE)
-        .is_some());
     let prior = allocation.usage();
     allocation.refuse();
     for recipe in stored.recipes() {
@@ -444,57 +435,4 @@ fn live_evaluation_preserves_entries_fingerprint_and_exact_prior_accounting() {
     let expected = proof::Proof::fixture_stored(scalar_entries());
     assert_eq!(actual.fingerprint(), expected.fingerprint());
     assert!(actual.stored_parts().1 == expected.stored_parts().1);
-}
-
-#[test]
-fn live_evaluation_records_item_byte_and_string_exceedances_and_keeps_refusal_terminal() {
-    let baseline = stored::tests::baseline();
-    let limits = cargo::Limits::standard();
-    let prior = Usage {
-        items: 7,
-        bytes: 31,
-    };
-    for account in 0..3 {
-        let mut allocation = Allocation::for_proof(prior, &limits);
-        allocation.item_limit = prior.items + 19 - usize::from(account == 0);
-        allocation.byte_limit = prior.bytes + 82 - usize::from(account == 1);
-        allocation.string_limit = if account == 2 {
-            26
-        } else {
-            limits.string_bytes
-        };
-        // Live evaluation is owned in full; an account one under its
-        // exact floor records that axis with the exact total as high water.
-        proof::evaluate(&baseline.recipes[6..11], false, &limits, &mut allocation)
-            .expect("live evaluation is owned, not gated");
-        let spent = allocation.usage();
-        assert_eq!(
-            spent,
-            Usage {
-                items: 26,
-                bytes: 113
-            }
-        );
-        let record = allocation.exceedances();
-        let (name, target, high_water) = match account {
-            0 => (crate::input::INPUT_ITEMS_RESOURCE, 25, 26),
-            1 => (crate::input::INPUT_BYTES_RESOURCE, 112, 113),
-            _ => (crate::input::INPUT_STRING_RESOURCE, 26, 27),
-        };
-        let axis = record.axis(name).expect("one-under axis recorded");
-        assert_eq!(
-            (axis.target, axis.high_water),
-            (target, high_water),
-            "account {account}"
-        );
-        assert_eq!(record.axes().count(), 1, "account {account}");
-        assert!(allocation.bytes(0).is_ok(), "an exceedance never latches");
-        // A genuine failure latches the account terminally.
-        allocation.refuse();
-        assert!(matches!(
-            proof::evaluate(&baseline.recipes[6..7], false, &limits, &mut allocation),
-            Err(crate::Error::InputAccountRefused)
-        ));
-        assert_eq!(allocation.usage(), spent);
-    }
 }

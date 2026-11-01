@@ -297,12 +297,10 @@ fn bind_universe_seeded(
     cached: &cargo::CachedToolchain,
     seed: &'static [u8],
 ) {
-    let limits = Limits::standard();
-    let definition = universe::Definition::fixture_authenticated(seed, &limits).fixture_context(
+    let definition = universe::Definition::fixture_authenticated(seed).fixture_context(
         &request.target,
         &request.profile,
         cached.attestation.value().proof(),
-        &limits,
     );
     request.universe = Some(universe::Catalog::new(definition));
 }
@@ -454,7 +452,7 @@ fn reserved_cohort_preserves_legacy_identity_and_binds_config_contents() {
 }
 
 #[test]
-fn fresh_request_records_exceedance_on_spent_original_account_before_files_or_children() {
+fn recipe_fields_share_prior_cohort_and_command_admission() {
     let mut fixture = Fixture::open();
     let request = &mut fixture.request;
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
@@ -467,14 +465,51 @@ fn fresh_request_records_exceedance_on_spent_original_account_before_files_or_ch
         };
         let (metadata, units) = documents(request, layout.final_form());
         bind_universe(request, &cached);
+        let (provisional, _) = documents(request, layout.provisional());
+        let value: Value = serde_json::from_slice(&provisional).expect("fixture metadata parses");
+        let package = value["packages"]
+            .as_array()
+            .expect("packages exist")
+            .iter()
+            .find(|package| package["name"] == "rawr")
+            .expect("internal package exists");
+        let id = package["id"].as_str().expect("internal ID exists");
+        let source = id
+            .rsplit_once('#')
+            .expect("internal source has exact suffix")
+            .0;
+        let manifest = Path::new(package["manifest_path"].as_str().expect("manifest exists"));
+        let root = manifest.parent().expect("manifest has a root");
+        let version = package["version"].as_str().expect("version exists");
+        let fields = [
+            id.len(),
+            source.len(),
+            root.as_os_str().len(),
+            version.len(),
+        ];
+        let recipe_bytes: usize = fields.iter().sum();
+
+        // Measure the actual bounded constructors that precede the recipe.
+        // The exercised account below retains both these charges and prior use.
+        // Preparation first renders the provisional harness manifest on
+        // the working account, then charges the cohort and the prefix.
+        let mut prior = request.allocation;
+        drop(cargo::render_manifest_accounted(
+            request,
+            None,
+            &Limits::standard(),
+            &mut prior,
+        )?);
+        super::super::cohort(request, layout.paths(), &mut prior)?;
+        drop(super::super::prefix(
+            request,
+            layout.provisional().config(),
+            &mut prior,
+        )?);
+        let command_bytes = prior.bytes - request.allocation.bytes;
+        let command_items = prior.items - request.allocation.items;
         let mut allocation = request.allocation;
-        allocation.bytes(allocation.byte_limit - allocation.bytes)?;
-        assert!(!allocation.exceedances().is_exceeded());
-        // A spent request account is a target, not a gate. Preparation
-        // still runs all three direct commands and publishes its files; the very
-        // first charge, the provisional harness manifest render's first string
-        // (the `cargo-features` key, charged on this working account), crosses
-        // the target before any file or child and is recorded truthfully.
+        let before = allocation;
         let steps = built::fresh_steps(request, native, layout, &metadata, &units);
         let harness = super::script(layout, steps)
             .run(|| {
@@ -487,161 +522,20 @@ fn fresh_request_records_exceedance_on_spent_original_account_before_files_or_ch
                     unit::Allocation::begin(&Limits::standard()),
                 )
             })
-            .expect("the spent account still reaches exactly the three direct commands")?;
+            .expect("preparation launches every candidate child")?;
         assert!(harness.universe.is_some());
         drop(harness);
-        assert!(layout.provisional().manifest().exists());
-        assert!(layout.final_form().manifest().exists());
-        let record = allocation.exceedances();
-        let axis = record
-            .axis(cargo::REQUEST_BYTES_RESOURCE)
-            .expect("the spent original account records its first crossing");
-        assert_eq!(axis.target, allocation.byte_limit as u64);
-        assert_eq!(
-            axis.first_requested,
-            (allocation.byte_limit + "cargo-features".len()) as u64
-        );
-        assert_eq!(axis.high_water, allocation.bytes as u64);
-        assert!(allocation.items(0).is_ok(), "nothing latched");
+        let manifest = fs::read_to_string(layout.final_form().manifest())
+            .expect("the admitted recipe materializes the final manifest");
+        assert!(manifest.contains("[profile.dev.package."));
+        // Preparation continues past the recipe through the candidate
+        // prefix, every direct command and the universe binding, so usage
+        // exceeds the prior cohort, command and recipe charges.
+        assert!(allocation.items > before.items + command_items + fields.len());
+        assert!(allocation.bytes > before.bytes + command_bytes + recipe_bytes);
         Ok(())
     });
     fixture.retire();
-}
-
-#[test]
-fn recipe_fields_share_prior_cohort_and_command_admission_at_exact_and_floor() {
-    for floor in [0, 1] {
-        let mut fixture = Fixture::open();
-        let request = &mut fixture.request;
-        Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
-            let cached = cargo::CachedToolchain {
-                context: fixture.context.clone(),
-                attestation: fixture
-                    .context
-                    .cached_toolchain()
-                    .expect("fixture attestation"),
-            };
-            let (metadata, units) = documents(request, layout.final_form());
-            bind_universe(request, &cached);
-            let (provisional, _) = documents(request, layout.provisional());
-            let value: Value =
-                serde_json::from_slice(&provisional).expect("fixture metadata parses");
-            let package = value["packages"]
-                .as_array()
-                .expect("packages exist")
-                .iter()
-                .find(|package| package["name"] == "rawr")
-                .expect("internal package exists");
-            let id = package["id"].as_str().expect("internal ID exists");
-            let source = id
-                .rsplit_once('#')
-                .expect("internal source has exact suffix")
-                .0;
-            let manifest = Path::new(package["manifest_path"].as_str().expect("manifest exists"));
-            let root = manifest.parent().expect("manifest has a root");
-            let version = package["version"].as_str().expect("version exists");
-            let fields = [
-                id.len(),
-                source.len(),
-                root.as_os_str().len(),
-                version.len(),
-            ];
-            let recipe_bytes: usize = fields.iter().sum();
-
-            // Measure the actual bounded constructors that precede the recipe.
-            // The exercised account below retains both these charges and prior use.
-            // Preparation first renders the provisional harness manifest on
-            // the working account, then charges the cohort and the prefix.
-            let mut prior = request.allocation;
-            drop(cargo::render_manifest_accounted(
-                request,
-                None,
-                &Limits::standard(),
-                &mut prior,
-            )?);
-            super::super::cohort(request, layout.paths(), &mut prior)?;
-            drop(super::super::prefix(
-                request,
-                layout.provisional().config(),
-                &mut prior,
-            )?);
-            let command_bytes = prior.bytes - request.allocation.bytes;
-            let command_items = prior.items - request.allocation.items;
-            let remaining = command_bytes + recipe_bytes - floor;
-            let mut allocation = request.allocation;
-            allocation.bytes(allocation.byte_limit - allocation.bytes - remaining)?;
-            assert!(!allocation.exceedances().is_exceeded());
-            let before = allocation;
-            // The aggregate account is a target. Preparation completes at
-            // both the exact fit and one byte short, launching every direct
-            // command; the exact recipe charge is proven by where the shared
-            // account records its first crossing.
-            let steps = built::fresh_steps(request, native, layout, &metadata, &units);
-            let harness = super::script(layout, steps)
-                .run(|| {
-                    request.prepare_fresh_harness_in(
-                        layout,
-                        &cached,
-                        &Limits::standard(),
-                        &Limits::standard(),
-                        &mut allocation,
-                        unit::Allocation::begin(&Limits::standard()),
-                    )
-                })
-                .expect("the aggregate account never withholds a candidate child")?;
-            assert!(harness.universe.is_some());
-            drop(harness);
-            let manifest = fs::read_to_string(layout.final_form().manifest())
-                .expect("the admitted recipe materializes the final manifest");
-            assert!(manifest.contains("[profile.dev.package."));
-            // Only a floor is provable on the account here. Previously the
-            // aggregate refused at the recipe stage, so the account stopped at
-            // exactly `admitted` recipe fields; now preparation continues past
-            // the crossing through the candidate prefix, every direct command
-            // and the universe binding, whose charges this test does not
-            // model. All four fields are admitted (the manifest above carries
-            // the recipe), so usage exceeds the prior cohort, command and
-            // recipe charges; the exact recipe-stage charge is proven below by
-            // the shared account's first crossing.
-            assert!(allocation.items > before.items + command_items + fields.len());
-            assert!(allocation.bytes > before.bytes + command_bytes + recipe_bytes);
-            let record = allocation.exceedances();
-            let axis = record
-                .axis(cargo::REQUEST_BYTES_RESOURCE)
-                .expect("the shared account records the recipe-stage crossing");
-            assert_eq!(axis.target, allocation.byte_limit as u64);
-            assert_eq!(
-                record.first().map(|axis| axis.name),
-                Some(cargo::REQUEST_BYTES_RESOURCE),
-                "request bytes are the first and only axis this preparation crosses"
-            );
-            assert_eq!(record.axes().count(), 1);
-            // The one shared request account is charged, in order, by the
-            // provisional render, the prior cohort, the candidate prefix, the
-            // four sealed recipe fields
-            // and then every production manifest render (lost-record
-            // repair: renders charge the shared account, not a copy).
-            let crossing = if floor == 0 {
-                // All four fields fit exactly after the prior cohort and command
-                // usage; the final-form render's first string, the
-                // `cargo-features` key, is the first charge past the target, by
-                // exactly its length.
-                "cargo-features".len()
-            } else {
-                // The version field crosses after the first three admissions by
-                // exactly the one byte withheld from the four fields.
-                assert!(!version.is_empty());
-                1
-            };
-            assert_eq!(
-                axis.first_requested,
-                (allocation.byte_limit + crossing) as u64
-            );
-            assert_eq!(axis.high_water, allocation.bytes as u64);
-            Ok(())
-        });
-        fixture.retire();
-    }
 }
 
 #[test]
@@ -650,7 +544,7 @@ fn provisional_decode_failure_releases_the_shared_checkpoint() {
     fixture.reserve(|layout, native| {
         let request = &fixture.request;
         let limits = Limits::standard();
-        let definition = universe::Definition::fixture_authenticated(SEED, &limits);
+        let definition = universe::Definition::fixture_authenticated(SEED);
         let production = native.production();
         let paths = layout.final_form();
         let mut epoch = unit::Allocation::begin(&limits);

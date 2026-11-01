@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::{outputs, Value};
 use crate::cargo;
-use crate::input::stored::{self, Budget};
+use crate::input::stored::Budget;
 use crate::input::{build, proof, Allocation, Usage};
 use crate::{node, Error};
 
@@ -189,86 +189,6 @@ fn callback_failure_stops_before_later_name_formatting() {
             }
         );
     }
-}
-
-#[test]
-fn formatted_name_records_exceedance_before_callback_and_keeps_original_account_terminal() {
-    let script = script();
-    let exact = Usage {
-        items: PRIOR.items + 2,
-        bytes: PRIOR.bytes + 14,
-    };
-    for floor in 0..3 {
-        let mut allocation = account();
-        allocation.item_limit = exact.items - usize::from(floor == 1);
-        allocation.byte_limit = exact.bytes - usize::from(floor == 2);
-        let mut calls = 0;
-        // The second formatted name crosses the one-less target before its
-        // callback, which already sees the recorded exceedance; every message
-        // still emits and the original account holds the exact total.
-        outputs(
-            &script,
-            "execution",
-            &mut Budget::borrow(
-                &cargo::Limits::standard(),
-                &mut allocation,
-                &node::GraphBudget::new(),
-            ),
-            |_value, budget| {
-                calls += 1;
-                assert_eq!(
-                    budget.exceedances().is_exceeded(),
-                    floor != 0 && calls == 5,
-                    "the formatted name is charged before its callback"
-                );
-                Ok(())
-            },
-        )
-        .expect("accounting targets never refuse");
-        assert_eq!(calls, 5);
-        assert_eq!(allocation.usage(), exact);
-        let record = allocation.exceedances();
-        match floor {
-            0 => assert!(!record.is_exceeded()),
-            1 => {
-                let axis = record
-                    .axis(crate::input::INPUT_ITEMS_RESOURCE)
-                    .expect("one less item records the item axis");
-                assert_eq!(axis.target, (exact.items - 1) as u64);
-                assert_eq!(axis.high_water, exact.items as u64);
-                assert_eq!(record.axes().count(), 1);
-            }
-            _ => {
-                let axis = record
-                    .axis(crate::input::INPUT_BYTES_RESOURCE)
-                    .expect("one less byte records the byte axis");
-                assert_eq!(axis.target, (exact.bytes - 1) as u64);
-                assert_eq!(axis.high_water, exact.bytes as u64);
-                assert_eq!(record.axes().count(), 1);
-            }
-        }
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-    }
-    // Only a genuine failure latches, and the latch is terminal.
-    let mut allocation = account();
-    allocation.refuse();
-    let before = allocation.usage();
-    assert!(matches!(
-        outputs(
-            &script,
-            "execution",
-            &mut Budget::borrow(
-                &cargo::Limits::standard(),
-                &mut allocation,
-                &node::GraphBudget::new(),
-            ),
-            |_value, _budget| panic!("refused account cannot emit")
-        ),
-        Err(stored::Error::Refused)
-    ));
-    assert_eq!(allocation.usage(), before);
 }
 
 #[test]

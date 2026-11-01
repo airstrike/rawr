@@ -91,8 +91,6 @@ pub trait Sink: Send + Sync {
     fn scalar(&self, _scalar: accounting::Scalar, _value: u64) {}
     /// Retain conversion failure as evidence without changing the product result.
     fn scalar_overflow(&self, _scalar: accounting::Scalar) {}
-    /// Observe the same original graph account, including any refused charge.
-    fn graph(&self, _graph: accounting::Graph) {}
     /// Observe fixed actual native-account state from the same authenticated runner.
     fn native(
         &self,
@@ -165,10 +163,6 @@ impl Sink for Current {
 
     fn scalar_overflow(&self, scalar: accounting::Scalar) {
         with_sink(|sink, _| sink.scalar_overflow(scalar));
-    }
-
-    fn graph(&self, graph: accounting::Graph) {
-        record_graph(graph);
     }
 
     fn scope_opened(&self) {}
@@ -275,12 +269,6 @@ pub fn record_scalar_wide(scalar: accounting::Scalar, value: u128) {
         Ok(value) => sink.scalar(scalar, value),
         Err(_) => sink.scalar_overflow(scalar),
     });
-}
-
-/// Record cumulative usage/refusal on the original graph without changing it.
-#[doc(hidden)]
-pub fn record_graph(graph: accounting::Graph) {
-    with_sink(|sink, _| sink.graph(graph));
 }
 
 /// Record actual fixed native-account facts from one authenticated runner lifetime.

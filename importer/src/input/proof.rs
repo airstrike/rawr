@@ -684,9 +684,8 @@ pub(crate) struct TreeDirectory {
     pub(crate) path: Box<str>,
 }
 
-/// Buffer a canonical projection with checked arithmetic. Its size is an
-/// accounting target recorded by the caller; the buffer is bounded only
-/// by `try_reserve`, and a count overflow is a genuine failure.
+/// Buffer a canonical projection with checked arithmetic. The buffer is
+/// bounded only by `try_reserve`, and a count overflow is a genuine failure.
 struct Canonical {
     bytes: Vec<u8>,
 }
@@ -998,7 +997,6 @@ pub(super) fn protected_digest_accounted(
     evidence: &super::build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
     graph: &crate::node::GraphBudget,
 ) -> Result<cargo::universe::BuildProjection> {
@@ -1007,7 +1005,6 @@ pub(super) fn protected_digest_accounted(
         evidence,
         protected,
         target,
-        limits,
         allocation,
         graph,
     )
@@ -1019,17 +1016,9 @@ pub(super) fn protected_digest(
     evidence: &super::build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<cargo::universe::BuildProjection> {
-    protected_entries(
-        &proof.entries,
-        evidence,
-        protected,
-        target,
-        limits,
-        allocation,
-    )
+    protected_entries(&proof.entries, evidence, protected, target, allocation)
 }
 
 #[cfg(test)]
@@ -1038,16 +1027,11 @@ pub(super) fn protected_entries(
     evidence: &super::build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> Result<cargo::universe::BuildProjection> {
-    protected::project::legacy(entries, evidence, protected, target, limits, allocation)
+    protected::project::legacy(entries, evidence, protected, target, allocation)
 }
 
-/// Validate the shape of a protected build projection asset. The projection
-/// size is an accounting target recorded by the input account that produced
-/// the projection, and the bytes were already retained under a physical
-/// bound by their reader; the entry count below is recorded, never refused.
 impl Harness {
     pub(crate) fn manifest(&self) -> &[u8] {
         &self.manifest
@@ -1066,11 +1050,6 @@ pub(super) fn evaluate(
 ) -> Result<Proof> {
     let mut entries = Vec::new();
     for recipe in recipes {
-        allocation.exceeded(
-            "input proof entries",
-            limits.items,
-            entries.len().saturating_add(1),
-        );
         allocation.items(1)?;
         entries.try_reserve(1).map_err(|error| Error::Input {
             code: "input-proof-allocation",
@@ -1093,7 +1072,7 @@ pub(super) fn evaluate(
                 role,
                 package_id,
                 path,
-            } => file_entry(role, package_id, path, allocation, limits)?,
+            } => file_entry(role, package_id, path, allocation)?,
             View::Path {
                 role,
                 package_id,
@@ -1114,14 +1093,13 @@ pub(super) fn evaluate(
                 path,
                 package_root,
                 out_directories,
-                limits,
                 allocation,
             )?,
             View::SavedOutput {
                 package_id,
                 out_dir,
-            } => super::replay::saved_output_entry(package_id, out_dir, limits, allocation)?,
-            View::Package(set) => set.entry(replay_packages, allocation, limits)?,
+            } => super::replay::saved_output_entry(package_id, out_dir, allocation)?,
+            View::Package(set) => set.entry(replay_packages, allocation)?,
             View::Environment {
                 package_id,
                 execution,
@@ -1209,8 +1187,6 @@ pub(super) fn evaluate(
     }
     entries.sort_unstable();
     entries.dedup();
-    // The canonical proof size is an accounting target recorded on the
-    // input account after the complete digest is taken; nothing is refused.
     let mut canonical = Hashing {
         hasher: Sha256::new(),
         bytes: 0,
@@ -1224,11 +1200,6 @@ pub(super) fn evaluate(
         code: "input-encoding",
         reason: error.to_string().into_boxed_str(),
     })?;
-    allocation.exceeded(
-        "input proof canonical bytes",
-        limits.input_proof_bytes,
-        canonical.bytes,
-    );
     Ok(Proof {
         schema: SCHEMA,
         entries: entries.into_boxed_slice(),
@@ -1242,7 +1213,6 @@ fn file_entry(
     package_id: Option<&str>,
     path: &Path,
     allocation: &mut Allocation,
-    limits: &cargo::Limits,
 ) -> Result<Entry> {
     allocation.path(path)?;
     // A config candidate keeps the path Cargo reads; Cargo follows a symlinked
@@ -1258,17 +1228,6 @@ fn file_entry(
         source,
     })?;
     let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-    // The cumulative proof targets below only record.
-    allocation.exceeded(
-        "input proof bytes",
-        limits.input_proof_bytes,
-        allocation.usage.bytes.saturating_add(bytes),
-    );
-    allocation.exceeded(
-        "input proof filesystem items",
-        limits.items,
-        allocation.usage.items.saturating_add(1),
-    );
     allocation.bytes(bytes)?;
     let digest = super::freshness_digest("freshness file", &path, bytes)?;
     allocation.items(1)?;
@@ -1299,9 +1258,7 @@ fn path_entry(
         super::reject_symlinks(&normalized)?;
     }
     match fs::metadata(&normalized) {
-        Ok(metadata) if metadata.is_file() => {
-            file_entry(role, package_id, &normalized, allocation, limits)
-        }
+        Ok(metadata) if metadata.is_file() => file_entry(role, package_id, &normalized, allocation),
         Ok(metadata) if metadata.is_dir() => {
             directory_entry(role, package_id, &normalized, allocation, limits)
         }
@@ -1339,11 +1296,6 @@ fn directory_entry(
 ) -> Result<Entry> {
     allocation.path(path)?;
     let root = super::canonical_directory("freshness directory", path)?;
-    allocation.exceeded(
-        "input proof filesystem items",
-        limits.items,
-        allocation.usage.items.saturating_add(1),
-    );
     allocation.items(1)?;
     let mut pending = Vec::new();
     allocation.items(1)?;
@@ -1366,11 +1318,6 @@ fn directory_entry(
                 path: directory.clone(),
                 source,
             })?;
-            allocation.exceeded(
-                "input proof filesystem items",
-                limits.items,
-                allocation.usage.items.saturating_add(1),
-            );
             allocation.items(1)?;
             reserve(&mut children)?;
             children.push(child);
@@ -1409,11 +1356,6 @@ fn directory_entry(
                 directories.push(TreeDirectory { path: relative });
             } else if metadata.is_file() {
                 let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-                allocation.exceeded(
-                    "input proof bytes",
-                    limits.input_proof_bytes,
-                    allocation.usage.bytes.saturating_add(bytes),
-                );
                 allocation.bytes(bytes)?;
                 let digest = super::freshness_digest("freshness tree file", &child_path, bytes)?;
                 allocation.items(1)?;
@@ -1503,17 +1445,14 @@ mod tests {
 
     const TARGET: &str = "aarch64-apple-darwin";
 
-    fn artifact_profile(limits: &Limits) -> ArtifactProfile {
-        ArtifactProfile::from_build(
-            &serde_json::json!({
-                "opt_level": "0",
-                "debuginfo": 2,
-                "debug_assertions": true,
-                "overflow_checks": true,
-                "test": false,
-            }),
-            limits,
-        )
+    fn artifact_profile() -> ArtifactProfile {
+        ArtifactProfile::from_build(&serde_json::json!({
+            "opt_level": "0",
+            "debuginfo": 2,
+            "debug_assertions": true,
+            "overflow_checks": true,
+            "test": false,
+        }))
         .expect("fixture artifact profile is valid")
     }
 
@@ -1526,7 +1465,6 @@ mod tests {
         target_kind: &str,
         crate_type: &str,
         features: &[&str],
-        limits: &Limits,
     ) -> Artifact {
         Artifact {
             package_id: package_id.into(),
@@ -1543,7 +1481,7 @@ mod tests {
                     .map(|feature| Box::<str>::from(*feature))
                     .collect(),
             },
-            profile: artifact_profile(limits),
+            profile: artifact_profile(),
             fresh: false,
         }
     }
@@ -1596,7 +1534,6 @@ mod tests {
                 target_kind,
                 crate_type,
                 features,
-                &limits,
             ));
         }
         let evidence = Evidence {
@@ -1632,7 +1569,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
     }
@@ -1697,7 +1633,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
         .expect("the protected cross-package source edge seals");
@@ -1775,7 +1710,6 @@ mod tests {
                     "custom-build",
                     "bin",
                     features,
-                    &limits,
                 );
                 artifact.key.crate_name = "build_script_build".into();
                 artifact
@@ -1807,7 +1741,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
     }
@@ -1937,7 +1870,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
         .expect("two protected consumers retain two source-use edges");
@@ -1997,7 +1929,6 @@ mod tests {
                 &structural,
                 &protected,
                 TARGET,
-                &limits,
                 &mut Allocation::new(&limits),
             ),
             Err(Error::Input {
@@ -2056,7 +1987,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
         .expect("an authenticated unprotected package is excluded");
@@ -2083,7 +2013,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
         .expect("an unprotected consumer acquires no shared authority");
@@ -2107,7 +2036,6 @@ mod tests {
                 &evidence,
                 &protected,
                 TARGET,
-                &limits,
                 &mut Allocation::new(&limits),
             ),
             Err(Error::Input {
@@ -2173,7 +2101,6 @@ mod tests {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::new(&limits),
         )
         .expect("the causal protected child owns its source");
@@ -2197,7 +2124,6 @@ mod tests {
                 &ambiguous,
                 &protected,
                 TARGET,
-                &limits,
                 &mut Allocation::new(&limits),
             ),
             Err(Error::Input {
@@ -2242,7 +2168,6 @@ mod tests {
                 &evidence,
                 &protected,
                 TARGET,
-                &limits,
                 &mut Allocation::new(&limits),
             ),
             Err(Error::Input {
@@ -2271,7 +2196,6 @@ mod tests {
                 &evidence,
                 &protected,
                 TARGET,
-                &limits,
                 &mut Allocation::new(&limits),
             ),
             Err(Error::Input {
@@ -2364,71 +2288,11 @@ mod tests {
             root.to_path_buf(),
         );
         let mut allocation = Allocation::new(&limits);
-        let projection = protected_digest(
-            &proof,
-            &evidence,
-            &protected,
-            TARGET,
-            &limits,
-            &mut allocation,
-        )
-        .expect("protected projection seals once");
+        let projection = protected_digest(&proof, &evidence, &protected, TARGET, &mut allocation)
+            .expect("protected projection seals once");
         assert!(projection.bytes().ends_with(b"\n"));
         assert_eq!(allocation.usage.items, 2);
         assert_eq!(allocation.usage.bytes, projection.bytes().len());
-
-        // One byte under the projection size is an accounting target:
-        // the same projection seals, is charged in full, and the input account
-        // records the axis with the truthful size; nothing refuses or latches.
-        let length = projection.bytes().len();
-        let mut floor = limits;
-        floor.input_proof_bytes = length.saturating_sub(1);
-        let mut floored = Allocation::new(&floor);
-        let same = protected_digest(&proof, &evidence, &protected, TARGET, &floor, &mut floored)
-            .expect("the projection byte target records, never refuses");
-        assert_eq!(same.bytes(), projection.bytes());
-        assert_eq!(floored.usage.bytes, length);
-        let axis = *floored
-            .exceedances()
-            .axis("protected source/build projection bytes")
-            .expect("the projection size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((length - 1) as u64, length as u64, length as u64)
-        );
-    }
-
-    /// The input proof canonical size is an accounting target recorded
-    /// on the input account after the complete digest; the proof is unchanged.
-    #[test]
-    fn input_proof_canonical_bytes_record_the_target_without_refusal() {
-        let limits = Limits::standard();
-        let mut allocation = Allocation::new(&limits);
-        let proof = evaluate(&[], false, &limits, &mut allocation).expect("an empty proof seals");
-        let length = serde_json::to_vec(&(SCHEMA, &proof.entries)).unwrap().len();
-        let mut exact = limits;
-        exact.input_proof_bytes = length;
-        let mut allocation = Allocation::new(&exact);
-        let same = evaluate(&[], false, &exact, &mut allocation).expect("exact seals");
-        assert_eq!(same.fingerprint, proof.fingerprint);
-        assert!(allocation
-            .exceedances()
-            .axis("input proof canonical bytes")
-            .is_none());
-        let mut floor = limits;
-        floor.input_proof_bytes = length - 1;
-        let mut allocation = Allocation::new(&floor);
-        let same = evaluate(&[], false, &floor, &mut allocation)
-            .expect("one byte under the canonical size still seals");
-        assert_eq!(same.fingerprint, proof.fingerprint);
-        let axis = *allocation
-            .exceedances()
-            .axis("input proof canonical bytes")
-            .expect("the canonical size records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            ((length - 1) as u64, length as u64, length as u64)
-        );
     }
 
     #[test]

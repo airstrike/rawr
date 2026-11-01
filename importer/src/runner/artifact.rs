@@ -316,7 +316,7 @@ mod tests {
     static FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     #[test]
-    fn artifact_canonicalization_admits_exact_allocations_and_records_one_byte_floor() {
+    fn artifact_canonicalization_charges_its_exact_allocations() {
         let root = std::env::temp_dir().join(format!(
             "rawr-runner-artifact-canonical-budget-{}-{}",
             std::process::id(),
@@ -335,63 +335,14 @@ mod tests {
             + 1
             + 2 * (1024 + 1023);
         let paths = root.components().count() + 2;
-        for floor in [false, true] {
-            let budget = crate::node::GraphBudget::new();
-            budget
-                .decode(
-                    crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize - required
-                        + usize::from(floor),
-                )
-                .unwrap();
-            budget
-                .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - paths)
-                .unwrap();
-            // The exact allocation fills both targets with no
-            // exceedance; one byte less remaining still canonicalizes and
-            // records the decoded axis at exactly target + 1.
-            assert_eq!(
-                canonical_file_budgeted(&executable, Some(&budget)).unwrap(),
-                executable
-            );
-            if floor {
-                let exceeded = budget.exceedances();
-                let axis = exceeded
-                    .axis("typed store decoded candidate bytes per graph")
-                    .unwrap();
-                assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-                assert_eq!(
-                    axis.first_requested,
-                    crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
-                );
-                assert_eq!(
-                    axis.high_water,
-                    crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
-                );
-                assert!(exceeded.axis(crate::node::PATHS_RESOURCE).is_none());
-            } else {
-                assert!(!budget.exceedances().is_exceeded());
-                let (decoded, paths, _) = budget.census_usage().unwrap();
-                assert_eq!(decoded, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-                assert_eq!(paths, crate::node::MAX_PATH_CHECKS_PER_GRAPH);
-                budget.decode(1).unwrap();
-                budget.paths(1).unwrap();
-                let exceeded = budget.exceedances();
-                assert_eq!(
-                    exceeded
-                        .axis(crate::node::DECODED_RESOURCE)
-                        .unwrap()
-                        .high_water,
-                    crate::node::MAX_DECODED_BYTES_PER_GRAPH + 1
-                );
-                assert_eq!(
-                    exceeded
-                        .axis(crate::node::PATHS_RESOURCE)
-                        .unwrap()
-                        .high_water,
-                    crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                );
-            }
-        }
+        let budget = crate::node::GraphBudget::new();
+        assert_eq!(
+            canonical_file_budgeted(&executable, Some(&budget)).unwrap(),
+            executable
+        );
+        let (decoded, charged_paths, _) = budget.census_usage().unwrap();
+        assert_eq!(decoded, required as u64);
+        assert_eq!(charged_paths, paths);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -440,52 +391,18 @@ mod tests {
         let executable = root.join("runner");
         fs::write(&executable, b"four").expect("the artifact fixture writes");
 
-        // A graph at its path target still canonicalizes and records
-        // the shared path axis at exactly target + the canonicalization's own
-        // checks.
+        // Canonicalization spends path checks on the shared graph.
         let measured = crate::node::GraphBudget::new();
         canonical_file_budgeted(&executable, Some(&measured))
             .expect("the fresh graph canonicalizes the artifact");
         let canonical_paths = measured.census_usage().unwrap().1;
         assert!(canonical_paths > 0);
-        let paths = crate::node::GraphBudget::new();
-        paths
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("the exact path cap precharges");
-        assert_eq!(
-            canonical_file_budgeted(&executable, Some(&paths))
-                .expect("the spent graph still canonicalizes"),
-            fs::canonicalize(&executable).unwrap()
-        );
-        let axis = paths
-            .exceedances()
-            .axis("typed store candidate path checks per graph")
-            .copied()
-            .unwrap();
-        assert_eq!(
-            axis.high_water,
-            (crate::node::MAX_PATH_CHECKS_PER_GRAPH + canonical_paths) as u64
-        );
 
-        // Four content bytes plus the EOF probe byte cross a target three
-        // below the cap by exactly two bytes.
+        // Four content bytes plus the EOF probe byte are hashed.
         let hashes = crate::node::GraphBudget::new();
-        hashes
-            .hash((crate::node::MAX_HASHED_BYTES_PER_GRAPH - 3) as usize)
-            .expect("the three-below hash cap precharges");
-        let hashed = hash(executable, Some(&hashes)).expect("the spent graph still hashes");
+        let hashed = hash(executable, Some(&hashes)).expect("the artifact hashes");
         assert_eq!(hashed.bytes, 4);
-        let axis = hashes
-            .exceedances()
-            .axis("typed store hashed candidate bytes per graph")
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, crate::node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2
-        );
-        assert_eq!(axis.high_water, crate::node::MAX_HASHED_BYTES_PER_GRAPH + 2);
+        assert_eq!(hashes.census_usage().unwrap().2, 5);
         fs::remove_dir_all(root).expect("the artifact budget fixture retires");
     }
 }

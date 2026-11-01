@@ -933,14 +933,7 @@ fn original_refusal_precedes_library_work() {
     );
 }
 
-fn library_budget(
-    items: usize,
-    bytes: usize,
-) -> (
-    Result<(), Error<crate::input::membership::Error>>,
-    input::Usage,
-    crate::exceedance::Record,
-) {
+fn library_budget() -> Result<(), Error<crate::input::membership::Error>> {
     // Complete explicit targets still probe unless autolib=false. Consuming the
     // complete image below proves this probe occurred, not only that it could.
     let image = image(vec![
@@ -949,7 +942,7 @@ fn library_budget(
     ]);
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
@@ -958,13 +951,7 @@ fn library_budget(
         },
     ) {
         Ok(host) => host,
-        Err(error) => {
-            return (
-                Err(Error::Host(error)),
-                allocation.usage(),
-                allocation.exceedances(),
-            )
-        }
+        Err(error) => return Err(Error::Host(error)),
     };
     let mut paths = slots::Slots::new();
     let mut config_documents = slots::Slots::new();
@@ -1006,36 +993,13 @@ fn library_budget(
     drop(owner);
     drop(roots);
     let result = result.and_then(|()| host.finish().map(|_| ()).map_err(Error::Host));
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
-    (result, allocation.usage(), allocation.exceedances())
+    assert!(allocation.check().is_ok());
+    result
 }
 
 #[test]
-fn library_pipeline_retains_the_original_exact_account() {
-    use crate::input::membership::manifest::tests::one_short;
-    let (result, usage, _) = library_budget(usize::MAX, usize::MAX);
-    result.unwrap();
-    let (result, exact, exceeded) = library_budget(usage.items, usage.bytes);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(!exceeded.is_exceeded());
-    // One short of an aggregate target admits and records that axis.
-    let (result, exact, exceeded) = library_budget(usage.items - 1, usage.bytes);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items
-    ));
-    let (result, exact, exceeded) = library_budget(usage.items, usage.bytes - 1);
-    result.unwrap();
-    assert_eq!(exact, usage);
-    assert!(one_short(
-        &exceeded,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes
-    ));
+fn library_pipeline_completes_on_the_original_account() {
+    library_budget().unwrap();
 }
 
 #[test]

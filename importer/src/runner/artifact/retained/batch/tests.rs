@@ -161,26 +161,16 @@ fn original_budget_refusal_and_operation_failure_do_not_return_results() {
     observe(&measured, |batch| batch.hash(&path, &metadata)).unwrap();
     let batch_paths = measured.census_usage().unwrap().1;
     assert!(batch_paths > 0);
-    assert!(!measured.exceedances().is_exceeded());
     // The digest is now memoized for this identity, so a repeat skips
     // the read and its final reinspection; a fresh identity repeats the work.
     fs::set_permissions(&path, metadata.permissions()).unwrap();
     let metadata = fs::metadata(&path).unwrap();
     let graph = GraphBudget::new();
-    graph.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
     assert_eq!(
         observe(&graph, |batch| batch.hash(&path, &metadata)).unwrap(),
         <[u8; 32]>::from(Sha256::digest(b"first"))
     );
-    let axis = graph
-        .exceedances()
-        .axis(crate::node::PATHS_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        axis.high_water,
-        (crate::node::MAX_PATH_CHECKS_PER_GRAPH + batch_paths) as u64
-    );
+    assert_eq!(graph.census_usage().unwrap().1, batch_paths);
     let graph = GraphBudget::new();
     assert!(observe(&graph, |batch| {
         batch.hash(&path, &metadata)?;

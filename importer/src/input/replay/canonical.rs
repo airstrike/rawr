@@ -36,8 +36,6 @@ impl io::Write for Canonical {
 /// hash after admission. This adds no decoded storage or filesystem work.
 pub(in crate::input) fn digest(
     evidence: &impl Serialize,
-    resource: &'static str,
-    limit: usize,
     budget: &mut Budget<'_>,
 ) -> Result<[u8; 32]> {
     budget.check()?;
@@ -51,7 +49,7 @@ pub(in crate::input) fn digest(
     if count.overflow {
         return Err(budget.overflow());
     }
-    budget.limited(resource, limit, count.bytes)?;
+    budget.check()?;
     budget.hash(count.bytes)?;
     let mut writer = Canonical {
         hash: Some(Sha256::new()),

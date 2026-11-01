@@ -2,13 +2,12 @@
 
 use std::io;
 
-use crate::cargo::{universe::BuildProjection, Limits};
+use crate::cargo::universe::BuildProjection;
 use crate::input::proof::ProtectedEntry;
 use crate::input::stored::{Budget, Error, Result};
 
 pub(super) fn current(
     entries: &[ProtectedEntry],
-    limits: &Limits,
     budget: &mut Budget<'_>,
 ) -> Result<BuildProjection> {
     budget.check()?;
@@ -26,13 +25,7 @@ pub(super) fn current(
         .bytes
         .checked_add(1)
         .ok_or_else(|| budget.overflow())?;
-    budget.limited(
-        "protected source/build projection bytes",
-        limits
-            .input_proof_bytes
-            .min(budget.limits.input_proof_bytes),
-        bytes,
-    )?;
+    budget.check()?;
     budget.storage(1, bytes)?;
     let mut output = Vec::new();
     output

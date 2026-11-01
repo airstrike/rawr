@@ -674,156 +674,10 @@ fn physical_inventory_checks_registered_placement_and_consumers_check_bytes() {
     fs::remove_dir_all(lost_root).expect("the lost-allocation fixture retires");
 }
 
-// The exact calibrated work fits every target; one path or byte less of
-// headroom still replays the hit and records exactly that axis one past its
-// target, with the other axes left exactly at theirs.
+// A corrupt path, record, ledger or payload is charged in full as the hit
+// is validated; only an oversized payload is a physical limit.
 #[test]
-fn direct_hit_budget_admits_exact_work_and_records_each_one_byte_or_path_exceedance() {
-    #[derive(Clone, Copy, Eq, PartialEq)]
-    enum Floor {
-        Exact,
-        Paths,
-        Decode,
-        Hash,
-    }
-    let root = temporary("direct-hit-budget");
-    let context = prepare_fixture(&root);
-    let store = context.open_store().expect("the cold store opens");
-    let recipe = context
-        .direct::<Artifact>(b"direct-hit-budget", 4_096)
-        .expect("the recipe seals");
-    let value = Evaluator::new(&store, &Counts::default())
-        .direct(&recipe, || {
-            Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
-        })
-        .expect("the cold node publishes");
-    let action = store
-        .root()
-        .join("actions/native-product")
-        .join(super::STORAGE_DIRECTORY)
-        .join(recipe.action().directory());
-    let envelope = fs::metadata(action.join("envelope")).unwrap().len() as usize;
-    let allocation = fs::metadata(action.join("allocation")).unwrap().len() as usize;
-    let ledger = fs::metadata(store.root().join("ledgers/installation"))
-        .unwrap()
-        .len() as usize;
-    let payload = value.value().0.len();
-    let content = store
-        .root()
-        .join("content/native-product")
-        .join(format!("{:08x}", Artifact::SCHEMA))
-        .join(value.content().digest().directory());
-    let decoded = envelope
-        + 2 * allocation
-        + 3 * ledger
-        + composition_bytes(1)
-        + directory_bytes(&action)
-        + directory_bytes(&content);
-    // The payload's allocation SHA-256 and content digest, each hashed once.
-    let hashed = envelope + 2 * payload + 2 * allocation;
-    let sealed = snapshot(store.root());
-    let calibration = fixture_context(&root).open_store().unwrap();
-    let work = calibrated_work(&calibration, || {
-        let hit = Evaluator::new(&calibration, &Counts::default())
-            .direct(&recipe, || panic!("calibration must replay"))
-            .unwrap();
-        assert_eq!(hit.value().0, value.value().0);
-    });
-    assert!(work.0 >= 26 && work.1 >= decoded && work.2 >= hashed);
-    let (paths, decoded, hashed) = work;
-
-    for floor in [Floor::Exact, Floor::Paths, Floor::Decode, Floor::Hash] {
-        let context = fixture_context(&root);
-        let store = context.open_store().expect("a fresh graph opens");
-        let shared = context
-            .open_store()
-            .expect("another evaluator shares its graph");
-        let budget = shared.graph_budget();
-        let used = *budget.usage.lock().unwrap();
-        budget
-            .paths(
-                super::MAX_PATH_CHECKS_PER_GRAPH - used.paths - paths
-                    + usize::from(floor == Floor::Paths),
-            )
-            .unwrap();
-        budget
-            .decode(
-                super::MAX_DECODED_BYTES_PER_GRAPH as usize - used.decoded as usize - decoded
-                    + usize::from(floor == Floor::Decode),
-            )
-            .unwrap();
-        budget
-            .hash(
-                super::MAX_HASHED_BYTES_PER_GRAPH as usize - used.hashed as usize - hashed
-                    + usize::from(floor == Floor::Hash),
-            )
-            .unwrap();
-        let counts = Counts::default();
-        let result = Evaluator::new(&store, &counts).direct(&recipe, || {
-            panic!("an accounting exceedance must never fall back to a transform")
-        });
-        assert_eq!(
-            result
-                .expect("the hit replays at and past the work targets")
-                .value()
-                .0,
-            value.value().0
-        );
-        assert_eq!(counts.hit.load(Ordering::Relaxed), 1);
-        assert_eq!(counts.rejected.load(Ordering::Relaxed), 0);
-        let usage = *budget.usage.lock().unwrap();
-        let over = |axis| u64::from(floor == axis);
-        assert_eq!(
-            usage.paths as u64,
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64 + over(Floor::Paths)
-        );
-        assert_eq!(
-            usage.decoded,
-            super::MAX_DECODED_BYTES_PER_GRAPH + over(Floor::Decode)
-        );
-        assert_eq!(
-            usage.hashed,
-            super::MAX_HASHED_BYTES_PER_GRAPH + over(Floor::Hash)
-        );
-        let exceeded = budget.exceedances();
-        match floor {
-            Floor::Exact => assert!(!exceeded.is_exceeded(), "exact work is not an exceedance"),
-            Floor::Paths | Floor::Decode | Floor::Hash => {
-                let (resource, target) = match floor {
-                    Floor::Paths => (
-                        super::PATHS_RESOURCE,
-                        super::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                    ),
-                    Floor::Decode => (super::DECODED_RESOURCE, super::MAX_DECODED_BYTES_PER_GRAPH),
-                    Floor::Hash => (super::HASHED_RESOURCE, super::MAX_HASHED_BYTES_PER_GRAPH),
-                    Floor::Exact => unreachable!(),
-                };
-                assert_eq!(
-                    exceeded.axes().count(),
-                    1,
-                    "only the one-short axis is recorded"
-                );
-                let axis = exceeded.first().unwrap();
-                assert_eq!(axis.name, resource);
-                assert_eq!(axis.target, target);
-                assert_eq!(axis.high_water, target + 1);
-                assert!(axis.first_requested > target && axis.first_requested <= axis.high_water);
-                assert_eq!(axis.site.is_some(), floor != Floor::Hash);
-            }
-        }
-        assert_eq!(counts.miss.load(Ordering::Relaxed), 0);
-        assert_eq!(snapshot(store.root()), sealed);
-    }
-    store.retire_fixture().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-// The path, decode and hash accounts are targets. Each corrupt candidate
-// still has its path check, metadata decode or payload hash charged to the
-// original account past the target, which records the exceedance; only the
-// physical file-byte limit remains a refusal.
-#[test]
-fn direct_hit_budget_records_exact_charge_for_corrupt_path_decode_or_payload_hash_work() {
+fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
     #[derive(Clone, Copy, Debug)]
     enum Blocked {
         Path,
@@ -869,54 +723,18 @@ fn direct_hit_budget_records_exact_charge_for_corrupt_path_decode_or_payload_has
             .len() as usize;
         let fresh = fixture_context(&root).open_store().unwrap();
         let budget = fresh.graph_budget();
-        let expected = match blocked {
-            Blocked::Path => {
-                fs::remove_file(action.join("envelope")).unwrap();
-                budget.paths(super::MAX_PATH_CHECKS_PER_GRAPH - 5).unwrap();
-                super::PATHS_RESOURCE
-            }
-            Blocked::Envelope => {
-                fs::write(action.join("envelope"), vec![0; envelope]).unwrap();
-                budget
-                    .decode(super::MAX_DECODED_BYTES_PER_GRAPH as usize - envelope + 1)
-                    .unwrap();
-                super::DECODED_RESOURCE
-            }
+        match blocked {
+            Blocked::Path => fs::remove_file(action.join("envelope")).unwrap(),
+            Blocked::Envelope => fs::write(action.join("envelope"), vec![0; envelope]).unwrap(),
             Blocked::Allocation => {
                 fs::write(action.join("allocation"), vec![0; allocation]).unwrap();
-                budget
-                    .decode(super::MAX_DECODED_BYTES_PER_GRAPH as usize - envelope - allocation + 1)
-                    .unwrap();
-                super::DECODED_RESOURCE
             }
             Blocked::Ledger => {
                 fs::write(store.root().join("ledgers/installation"), vec![0; ledger]).unwrap();
-                budget
-                    .decode(
-                        super::MAX_DECODED_BYTES_PER_GRAPH as usize
-                            - envelope
-                            - allocation
-                            - ledger
-                            + 1,
-                    )
-                    .unwrap();
-                super::DECODED_RESOURCE
             }
-            Blocked::Payload => {
-                fs::write(&content, vec![0; 4_097]).unwrap();
-                "typed store file bytes"
-            }
-            Blocked::Hash => {
-                fs::write(&content, b"changed").unwrap();
-                budget
-                    .hash(
-                        super::MAX_HASHED_BYTES_PER_GRAPH as usize - envelope - allocation - 7 + 1,
-                    )
-                    .unwrap();
-                super::HASHED_RESOURCE
-            }
-        };
-        assert!(!budget.exceedances().is_exceeded(), "{blocked:?}");
+            Blocked::Payload => fs::write(&content, vec![0; 4_097]).unwrap(),
+            Blocked::Hash => fs::write(&content, b"changed").unwrap(),
+        }
         let precharged = *budget.usage.lock().unwrap();
         let counts = Counts::default();
         let executions = AtomicUsize::new(0);
@@ -925,174 +743,45 @@ fn direct_hit_budget_records_exact_charge_for_corrupt_path_decode_or_payload_has
             Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
         });
         if matches!(blocked, Blocked::Payload) {
-            // The oversized payload is a physical limit: it still refuses before
-            // any transform, and no accounting axis is involved.
+            // The oversized payload is a physical limit: it refuses before
+            // any transform.
             assert!(
-                matches!(result, Err(Error::Limit { resource, .. }) if resource == expected),
+                matches!(result, Err(Error::Limit { resource, .. }) if resource == "typed store file bytes"),
                 "{blocked:?}"
             );
             assert_eq!(executions.load(Ordering::Relaxed), 0, "{blocked:?}");
-            assert!(!budget.exceedances().is_exceeded(), "{blocked:?}");
         } else {
             assert!(
                 !matches!(result, Err(Error::Limit { .. })),
-                "{blocked:?}: an accounting axis never refuses"
+                "{blocked:?}: graph work never refuses"
             );
-            let axis = budget
-                .exceedances()
-                .axis(expected)
-                .copied()
-                .unwrap_or_else(|| panic!("{blocked:?} charges {expected} past its target"));
-            // The precharge left less headroom than the corrupt record's own
-            // charge; the work charged at least that record in full on top of
-            // it, and the account's high water is the truthful cumulative total.
+            // The work charged at least the corrupt record in full.
             let usage = *budget.usage.lock().unwrap();
-            let (target, charged, record) = match blocked {
-                Blocked::Path => (
-                    super::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                    (usage.paths - precharged.paths) as u64,
-                    6,
-                ),
-                Blocked::Envelope => (
-                    super::MAX_DECODED_BYTES_PER_GRAPH,
-                    usage.decoded - precharged.decoded,
-                    envelope as u64,
-                ),
+            let (charged, record) = match blocked {
+                Blocked::Path => ((usage.paths - precharged.paths) as u64, 6),
+                Blocked::Envelope => (usage.decoded - precharged.decoded, envelope as u64),
                 Blocked::Allocation => (
-                    super::MAX_DECODED_BYTES_PER_GRAPH,
                     usage.decoded - precharged.decoded,
                     (envelope + allocation) as u64,
                 ),
                 Blocked::Ledger => (
-                    super::MAX_DECODED_BYTES_PER_GRAPH,
                     usage.decoded - precharged.decoded,
                     (envelope + allocation + ledger) as u64,
                 ),
                 Blocked::Hash => (
-                    super::MAX_HASHED_BYTES_PER_GRAPH,
                     usage.hashed - precharged.hashed,
                     (envelope + allocation + 7) as u64,
                 ),
                 Blocked::Payload => unreachable!(),
             };
-            assert_eq!(axis.target, target, "{blocked:?}");
-            assert!(axis.first_requested > target, "{blocked:?}");
             assert!(
                 charged >= record,
                 "{blocked:?}: {charged} charged for a record of {record}"
             );
-            assert_eq!(
-                axis.high_water,
-                target + charged - (record - 1),
-                "{blocked:?}: the high water is the truthful cumulative total"
-            );
-            assert!(axis.high_water >= axis.first_requested, "{blocked:?}");
         }
         store.retire_fixture().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ValidationFloor {
-    Exact,
-    Paths,
-    Decode,
-    Hash,
-}
-
-impl ValidationFloor {
-    const ALL: [Self; 4] = [Self::Exact, Self::Paths, Self::Decode, Self::Hash];
-
-    fn precharge(self, budget: &super::GraphBudget, paths: usize, decoded: usize, hashed: usize) {
-        let used = *budget.usage.lock().unwrap();
-        budget
-            .paths(
-                super::MAX_PATH_CHECKS_PER_GRAPH - used.paths - paths
-                    + usize::from(self == Self::Paths),
-            )
-            .unwrap();
-        budget
-            .decode(
-                super::MAX_DECODED_BYTES_PER_GRAPH as usize - used.decoded as usize - decoded
-                    + usize::from(self == Self::Decode),
-            )
-            .unwrap();
-        budget
-            .hash(
-                super::MAX_HASHED_BYTES_PER_GRAPH as usize - used.hashed as usize - hashed
-                    + usize::from(self == Self::Hash),
-            )
-            .unwrap();
-    }
-
-    // The exact calibrated work fits every target and records nothing.
-    // One path or byte short, the work still completes and the original
-    // account records exactly that axis one past its target; the other axes
-    // stay exactly at theirs.
-    fn assert_result(self, result: Result<(), Error>, budget: &super::GraphBudget) {
-        result.unwrap_or_else(|error| {
-            panic!("{self:?}: the work completes at and past its targets: {error:?}")
-        });
-        let used = *budget.usage.lock().unwrap();
-        let over = |floor| u64::from(self == floor);
-        assert_eq!(
-            used.paths as u64,
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64 + over(Self::Paths),
-            "{self:?}"
-        );
-        assert_eq!(
-            used.decoded,
-            super::MAX_DECODED_BYTES_PER_GRAPH + over(Self::Decode),
-            "{self:?}"
-        );
-        assert_eq!(
-            used.hashed,
-            super::MAX_HASHED_BYTES_PER_GRAPH + over(Self::Hash),
-            "{self:?}"
-        );
-        let exceeded = budget.exceedances();
-        match self {
-            Self::Exact => assert!(
-                !exceeded.is_exceeded(),
-                "exact cumulative work is not an exceedance"
-            ),
-            Self::Paths | Self::Decode | Self::Hash => {
-                let (expected, target) = match self {
-                    Self::Paths => (
-                        super::PATHS_RESOURCE,
-                        super::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                    ),
-                    Self::Decode => (super::DECODED_RESOURCE, super::MAX_DECODED_BYTES_PER_GRAPH),
-                    Self::Hash => (super::HASHED_RESOURCE, super::MAX_HASHED_BYTES_PER_GRAPH),
-                    Self::Exact => unreachable!(),
-                };
-                assert_eq!(
-                    exceeded.axes().count(),
-                    1,
-                    "{self:?}: only the short axis records"
-                );
-                let axis = exceeded.first().unwrap();
-                assert_eq!(axis.name, expected, "{self:?}");
-                assert_eq!(axis.target, target, "{self:?}");
-                assert_eq!(axis.high_water, target + 1, "{self:?}");
-                assert!(
-                    axis.first_requested > target && axis.first_requested <= axis.high_water,
-                    "{self:?}"
-                );
-            }
-        }
-    }
-}
-
-/// The recorded exceedance of one graph axis; panics when the axis never
-/// crossed its target.
-fn exceeded_axis(budget: &super::GraphBudget, resource: &str) -> crate::exceedance::Axis {
-    budget
-        .exceedances()
-        .axis(resource)
-        .copied()
-        .unwrap_or_else(|| panic!("{resource} crossed its target"))
 }
 
 // Calibrate one successful operation on an isolated original account. This
@@ -1520,91 +1209,28 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
             && lookup_work.2 >= hashed
     );
 
-    for floor in ValidationFloor::ALL {
-        let fresh = fixture_context(&root).open_store().unwrap();
-        floor.precharge(
-            fresh.graph_budget(),
-            inspect_work.0,
-            inspect_work.1,
-            inspect_work.2,
-        );
-        touch_payload(&fresh, parent);
-        let result = fresh
-            .inspect_candidate::<Artifact>(value.receipt().action(), 4_096, fresh.graph_budget())
-            .map(|value| assert!(value.is_some()));
-        floor.assert_result(result, fresh.graph_budget());
-        assert_eq!(snapshot(store.root()), before);
-
-        let current = fixture_context(&root);
-        let fresh = current.open_store().unwrap();
-        let proof = current_union(&current);
-        floor.precharge(
-            fresh.graph_budget(),
-            union_work.0,
-            union_work.1,
-            union_work.2,
-        );
-        for entry in proof.entries() {
-            touch_payload(&fresh, *entry);
-        }
-        floor.assert_result(proof.revalidate(&fresh), fresh.graph_budget());
-        assert_eq!(snapshot(store.root()), before);
-    }
-
     let fresh = fixture_context(&root).open_store().unwrap();
-    ValidationFloor::Exact.precharge(
-        fresh.graph_budget(),
-        lookup_work.0,
-        lookup_work.1,
-        lookup_work.2,
-    );
     touch_payload(&fresh, parent);
     let hit = Evaluator::new(&fresh, &Counts::default())
         .lookup_discoverable(&recipe, &validate, fresh.graph_budget())
         .unwrap();
     assert!(hit.hit.is_some());
-    ValidationFloor::Exact.assert_result(Ok(()), fresh.graph_budget());
     assert_eq!(snapshot(store.root()), before);
 
     // Exact replay must pay again; a successful prior gate is not fresh authority.
     let current = fixture_context(&root);
     let fresh = current.open_store().unwrap();
     let proof = current_union(&current);
-    ValidationFloor::Exact.precharge(
-        fresh.graph_budget(),
-        2 * union_work.0,
-        2 * union_work.1,
-        2 * union_work.2,
-    );
-    for _ in 0..2 {
-        for entry in proof.entries() {
-            touch_payload(&fresh, *entry);
-        }
-        proof.revalidate(&fresh).unwrap();
-    }
-    ValidationFloor::Exact.assert_result(Ok(()), fresh.graph_budget());
-    // The third replay still pays in full; every work axis records the
-    // whole replay past its target.
-    for entry in proof.entries() {
-        touch_payload(&fresh, *entry);
-    }
-    proof.revalidate(&fresh).unwrap();
-    let paths = exceeded_axis(fresh.graph_budget(), super::PATHS_RESOURCE);
-    assert_eq!(
-        paths.high_water,
-        super::MAX_PATH_CHECKS_PER_GRAPH as u64 + union_work.0 as u64
-    );
-    let decoded = exceeded_axis(fresh.graph_budget(), super::DECODED_RESOURCE);
-    assert_eq!(
-        decoded.high_water,
-        super::MAX_DECODED_BYTES_PER_GRAPH + union_work.1 as u64
-    );
-    let hashed = exceeded_axis(fresh.graph_budget(), super::HASHED_RESOURCE);
-    assert_eq!(
-        hashed.high_water,
-        super::MAX_HASHED_BYTES_PER_GRAPH + union_work.2 as u64
-    );
-    assert_eq!(fresh.graph_budget().exceedances().axes().count(), 3);
+    let replay = || {
+        calibrated_work(&fresh, || {
+            for entry in proof.entries() {
+                touch_payload(&fresh, *entry);
+            }
+            proof.revalidate(&fresh).unwrap();
+        })
+    };
+    let first = replay();
+    assert_eq!(replay(), first);
     assert_eq!(snapshot(store.root()), before);
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
@@ -1664,13 +1290,7 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
             b"changed",
         )
         .unwrap();
-        let used = fresh.graph_budget().usage.lock().unwrap().decoded as usize;
-        fresh
-            .graph_budget()
-            .decode(super::MAX_DECODED_BYTES_PER_GRAPH as usize - used - before_payload - 6)
-            .unwrap();
         let precharged = fresh.graph_budget().usage.lock().unwrap().decoded;
-        assert!(!fresh.graph_budget().exceedances().is_exceeded());
         let result = if final_union {
             proof.as_ref().unwrap().revalidate(&fresh)
         } else {
@@ -1682,13 +1302,11 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
                 )
                 .map(|_| ())
         };
-        // Six bytes short of the metadata plus the seven corrupt payload
-        // bytes, the validation still charges the metadata and the payload in
-        // full past the decoded-byte target and records the exceedance. The
+        // The validation charges the metadata and the payload in full. The
         // corrupt payload is rejected on its own merits, never as a limit.
         assert!(
             !matches!(result, Err(Error::Limit { .. })),
-            "final_union={final_union}: an accounting axis never refuses"
+            "final_union={final_union}: graph work never refuses"
         );
         assert!(
             result.is_err(),
@@ -1699,18 +1317,6 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
             charged >= (before_payload + 7) as u64,
             "final_union={final_union}: {charged} charged for metadata {before_payload} and payload 7"
         );
-        let decoded = exceeded_axis(fresh.graph_budget(), super::DECODED_RESOURCE);
-        assert_eq!(decoded.target, super::MAX_DECODED_BYTES_PER_GRAPH);
-        assert!(
-            decoded.first_requested > super::MAX_DECODED_BYTES_PER_GRAPH,
-            "final_union={final_union}"
-        );
-        assert_eq!(
-            decoded.high_water,
-            precharged + charged,
-            "final_union={final_union}: the high water is the truthful cumulative total"
-        );
-        assert!(decoded.site.is_some());
         store.retire_fixture().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
@@ -1774,12 +1380,6 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     // The revalidation reuses the payload digests the inspection computed.
     assert!(combined_work.2 < hashed + length);
     let fresh = fixture_context(&root).open_store().unwrap();
-    ValidationFloor::Exact.precharge(
-        fresh.graph_budget(),
-        direct_work.0,
-        direct_work.1,
-        direct_work.2,
-    );
     touch_payload(&fresh, entry);
     let hit = Evaluator::new(&fresh, &Counts::default())
         .direct(&recipe, || {
@@ -1787,7 +1387,6 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         })
         .unwrap();
     assert_eq!(hit.value().0.len(), length);
-    ValidationFloor::Exact.assert_result(Ok(()), fresh.graph_budget());
 
     let fresh = fixture_context(&root).open_store().unwrap();
     let current = fresh
@@ -1797,12 +1396,6 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     let proof = Evaluator::new(&fresh, &Counts::default())
         .seal_read_set([current.receipt().read_set().clone()])
         .unwrap();
-    ValidationFloor::Exact.precharge(
-        fresh.graph_budget(),
-        combined_work.0,
-        combined_work.1,
-        combined_work.2,
-    );
     touch_payload(&fresh, entry);
     let hit = fresh
         .inspect_candidate::<Artifact>(recipe.action(), length, fresh.graph_budget())
@@ -1810,7 +1403,6 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         .unwrap();
     assert_eq!(hit.value().0.len(), length);
     proof.revalidate(&fresh).unwrap();
-    ValidationFloor::Exact.assert_result(Ok(()), fresh.graph_budget());
 
     let payload = find_file(&store.root().join("content"), "payload");
     fs::OpenOptions::new()
@@ -1966,14 +1558,7 @@ fn registered_bundle_commitment_retains_records_without_granting_current_admissi
         "a full consumer must reject changed physical charge before admission"
     );
 
-    // The registered controls are still decoded past the decoded-byte
-    // target; the original account records the exceedance instead of refusing.
     let graph = store.graph_budget();
-    let used = graph.usage.lock().unwrap().decoded;
-    graph
-        .decode((super::MAX_DECODED_BYTES_PER_GRAPH - used) as usize)
-        .unwrap();
-    assert!(!graph.exceedances().is_exceeded());
     bundle::validate_commitment(
         store.root(),
         &commitment,
@@ -1982,12 +1567,7 @@ fn registered_bundle_commitment_retains_records_without_granting_current_admissi
         entry.content,
         graph,
     )
-    .expect("registered controls validate past the accounting target");
-    let decoded = exceeded_axis(graph, super::DECODED_RESOURCE);
-    assert_eq!(decoded.target, super::MAX_DECODED_BYTES_PER_GRAPH);
-    assert!(decoded.first_requested > super::MAX_DECODED_BYTES_PER_GRAPH);
-    assert_eq!(decoded.high_water, graph.usage.lock().unwrap().decoded);
-    assert!(decoded.site.is_some());
+    .expect("registered controls validate");
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -2098,53 +1678,28 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
             && lookup_work.2 >= replay_work.2
     );
 
-    for floor in ValidationFloor::ALL {
-        let fresh = fixture_context(&root).open_store().unwrap();
-        floor.precharge(
-            fresh.graph_budget(),
-            replay_work.0,
-            replay_work.1,
-            replay_work.2,
-        );
-        let result = Evaluator::new(&fresh, &Counts::default())
-            .replay_discovered_exact(&recipe, &validate, value.receipt().action())
-            .map(|hit| assert!(hit.is_some()));
-        floor.assert_result(result, fresh.graph_budget());
-
-        let fresh = fixture_context(&root).open_store().unwrap();
-        let counts = Counts::default();
-        let evaluator = Evaluator::new(&fresh, &counts);
-        let current = evaluator
-            .replay_discovered_exact(&recipe, &validate, value.receipt().action())
-            .unwrap()
-            .unwrap();
-        let proof = evaluator
-            .seal_read_set([current.receipt().read_set().clone()])
-            .unwrap();
-        floor.precharge(
-            fresh.graph_budget(),
-            2 * union_work.0,
-            2 * union_work.1,
-            2 * union_work.2,
-        );
-        proof
-            .revalidate(&fresh)
-            .expect("the first complete replay fits");
-        floor.assert_result(proof.revalidate(&fresh), fresh.graph_budget());
-        assert_eq!(snapshot(store.root()), before);
-    }
     let fresh = fixture_context(&root).open_store().unwrap();
-    ValidationFloor::Exact.precharge(
-        fresh.graph_budget(),
-        lookup_work.0,
-        lookup_work.1,
-        lookup_work.2,
-    );
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&fresh, &counts);
+    let current = evaluator
+        .replay_discovered_exact(&recipe, &validate, value.receipt().action())
+        .unwrap()
+        .unwrap();
+    let replayed = evaluator
+        .seal_read_set([current.receipt().read_set().clone()])
+        .unwrap();
+    replayed
+        .revalidate(&fresh)
+        .expect("the first replay revalidates");
+    replayed
+        .revalidate(&fresh)
+        .expect("the second replay revalidates");
+    assert_eq!(snapshot(store.root()), before);
+    let fresh = fixture_context(&root).open_store().unwrap();
     let hit = Evaluator::new(&fresh, &Counts::default())
         .lookup_discoverable(&recipe, &validate, fresh.graph_budget())
         .unwrap();
     assert!(hit.hit.is_some());
-    ValidationFloor::Exact.assert_result(Ok(()), fresh.graph_budget());
     assert_eq!(snapshot(store.root()), before);
 
     #[cfg(unix)]
@@ -2157,14 +1712,8 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
         fs::write(&allocation_path, vec![0; allocation]).unwrap();
         fs::set_permissions(&allocation_path, frozen).unwrap();
         let fresh = fixture_context(&root).open_store().unwrap();
-        let used = fresh.graph_budget().usage.lock().unwrap().decoded as usize;
-        fresh
-            .graph_budget()
-            .decode(super::MAX_DECODED_BYTES_PER_GRAPH as usize - used - allocation + 1)
-            .unwrap();
-        // The malformed allocation record is still charged and read past
-        // the decoded-byte target; it is rejected as corrupt, never as a limit,
-        // and the original account records the exceedance.
+        // The malformed allocation record is charged and read; it is
+        // rejected as corrupt, never as a limit.
         assert!(
             matches!(
                 validate(value.value(), fresh.graph_budget()),
@@ -2174,13 +1723,6 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
                 })
             ),
             "bounded validation rejects the malformed allocation record on its merits"
-        );
-        let decoded = exceeded_axis(fresh.graph_budget(), super::DECODED_RESOURCE);
-        assert_eq!(decoded.target, super::MAX_DECODED_BYTES_PER_GRAPH);
-        assert!(decoded.first_requested > super::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            decoded.high_water,
-            fresh.graph_budget().usage.lock().unwrap().decoded
         );
         assert!(matches!(
             proof.revalidate(&store),
@@ -2363,49 +1905,29 @@ fn miss_reservation_recovers_every_unrelated_temporary() {
 
 #[test]
 fn direct_post_publication_recheck_spends_the_same_graph_budget() {
-    for floor in [false, true] {
-        let root = temporary("direct-published-budget");
-        let context = prepare_fixture(&root);
-        let store = context.open_store().unwrap();
-        let recipe = context
-            .direct::<Artifact>(b"direct-published-budget", 4_096)
-            .unwrap();
-        let counts = Counts::default();
-        let budget = store.graph_budget();
-        let result = Evaluator::new(&store, &counts).direct(&recipe, || {
-            let paths = budget.usage.lock().unwrap().paths;
-            assert_eq!(
-                paths, 4,
-                "both absent-kind lookups check actions and its missing kind"
-            );
-            budget.paths(super::MAX_PATH_CHECKS_PER_GRAPH - paths - 26 + usize::from(floor))?;
-            Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
-        });
-        // The post-publication recheck spends the same account whether
-        // or not it fits; one path short, it completes and records exactly one
-        // check past the target.
-        result.expect("the post-publication recheck completes at and past the path target");
-        assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
-        assert_eq!(counts.published.load(Ordering::Relaxed), 1);
+    let root = temporary("direct-published-budget");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().unwrap();
+    let recipe = context
+        .direct::<Artifact>(b"direct-published-budget", 4_096)
+        .unwrap();
+    let counts = Counts::default();
+    let budget = store.graph_budget();
+    let result = Evaluator::new(&store, &counts).direct(&recipe, || {
+        let paths = budget.usage.lock().unwrap().paths;
         assert_eq!(
-            budget.usage.lock().unwrap().paths,
-            super::MAX_PATH_CHECKS_PER_GRAPH + usize::from(floor)
+            paths, 4,
+            "both absent-kind lookups check actions and its missing kind"
         );
-        if floor {
-            let paths = exceeded_axis(budget, super::PATHS_RESOURCE);
-            assert_eq!(paths.target, super::MAX_PATH_CHECKS_PER_GRAPH as u64);
-            assert_eq!(
-                paths.high_water,
-                super::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            assert!(paths.site.is_some());
-            assert_eq!(budget.exceedances().axes().count(), 1);
-        } else {
-            assert!(!budget.exceedances().is_exceeded());
-        }
-        store.retire_fixture().unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
+        Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
+    });
+    // The post-publication recheck spends the same account.
+    result.expect("the post-publication recheck completes");
+    assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
+    assert_eq!(counts.published.load(Ordering::Relaxed), 1);
+    assert_eq!(budget.usage.lock().unwrap().paths, 4 + 26);
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -2436,290 +1958,61 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
         fn scope_joined(&self) {}
     }
 
-    for floor in [false, true] {
-        let root = temporary("direct-lease-budget");
-        let context = prepare_fixture(&root);
-        let store = context.open_store().unwrap();
-        let recipe = context
-            .direct::<Artifact>(b"direct-lease-budget", 4_096)
-            .unwrap();
-        store
-            .fixture_stage_uncommitted(&recipe, b"bounded")
-            .unwrap();
-        let contender = fixture_context(&root).open_store().unwrap();
-        let budget = contender.graph_budget();
-        let (reached, ready) = std::sync::mpsc::sync_channel(1);
-        let (resume, receiver) = std::sync::mpsc::sync_channel(1);
-        let paused = PausedRejection {
-            counts: Counts::default(),
-            reached,
-            resume: std::sync::Mutex::new(receiver),
-        };
-        let result = std::thread::scope(|scope| {
-            let worker = store
-                .with_ownership(|ownership| {
-                    store.with_action_lease(recipe.action(), || {
-                        let worker = scope.spawn(|| {
-                            Evaluator::new(&contender, &paused).direct(&recipe, || {
-                                panic!("a contender must reuse its winner or reject its budget")
-                            })
-                        });
-                        ready
-                            .recv_timeout(Duration::from_secs(5))
-                            .expect("the first lookup rejects the uncommitted record");
-                        let initial = budget.usage.lock().unwrap().paths;
-                        budget.paths(
-                            super::MAX_PATH_CHECKS_PER_GRAPH - initial - 26 + usize::from(floor),
-                        )?;
-                        store.with_action_reservation(ownership, &recipe, None, || {
-                            Ok(crate::store::Reserved::Publish {
-                                result: (),
-                                recipe: recipe.clone(),
-                                bytes: b"bounded".to_vec().into_boxed_slice(),
-                                bundle: None,
-                            })
-                        })?;
-                        resume.send(()).unwrap();
-                        Ok(worker)
-                    })
-                })
-                .unwrap();
-            worker.join().expect("the contender joins")
-        });
-        // The winner recheck spends the same account; one path short it
-        // still reuses the winner and records exactly one check past the target.
-        result.expect("the winner recheck reuses the winner at and past the path target");
-        assert_eq!(paused.counts.hit.load(Ordering::Relaxed), 1);
-        assert_eq!(paused.counts.rejected.load(Ordering::Relaxed), 1);
-        assert_eq!(paused.counts.miss.load(Ordering::Relaxed), 0);
-        assert_eq!(
-            budget.usage.lock().unwrap().paths,
-            super::MAX_PATH_CHECKS_PER_GRAPH + usize::from(floor)
-        );
-        if floor {
-            let paths = exceeded_axis(budget, super::PATHS_RESOURCE);
-            assert_eq!(paths.target, super::MAX_PATH_CHECKS_PER_GRAPH as u64);
-            assert_eq!(
-                paths.high_water,
-                super::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            assert_eq!(budget.exceedances().axes().count(), 1);
-        } else {
-            assert!(!budget.exceedances().is_exceeded());
-        }
-        store.retire_fixture().unwrap();
-        fs::remove_dir_all(root).unwrap();
-    }
-}
-
-/// Per-graph budgets are accounting targets shared by every clone of a
-/// graph. Crossing one keeps charging cumulatively, records the first exceeding
-/// axis with its target and requested amount, attributes decode and path
-/// charges to their call site, publishes the graph once, and never refuses.
-#[test]
-fn candidate_graph_budget_targets_record_exceedance_and_keep_charging() {
-    let first = super::GraphBudget::new();
-    let second = first.clone();
-    assert_eq!(first.id(), second.id());
-    assert_eq!(first.targets(), super::GraphTargets::STANDARD);
-    for _ in 0..(super::MAX_DEEP_VALIDATIONS_PER_GRAPH / 2) {
-        first.deep().expect("the first graph evaluator admits");
-        second.deep().expect("the second graph evaluator admits");
-    }
-    assert!(
-        !first.exceedances().is_exceeded(),
-        "exact fit is not an exceedance"
-    );
-    first
-        .deep()
-        .expect("the ninth deep validation is admitted past the target");
-    let exceeded = first.exceedances();
-    let deep = exceeded
-        .first()
-        .expect("the first exceeding axis is recorded");
-    assert_eq!(deep.name, super::DEEP_RESOURCE);
-    assert_eq!(
-        (deep.target, deep.first_requested, deep.high_water),
-        (8, 9, 9)
-    );
-    assert!(deep.site.is_none());
-    assert_eq!(
-        second.deep_validations(),
-        9,
-        "clones share one cumulative account"
-    );
-    for _ in 0..super::MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH {
-        first.lookup().expect("the exact lookup target admits");
-    }
-    first
-        .lookup()
-        .expect("the fifth lookup is admitted and recorded");
-    first.lookup().expect("repeated overflow keeps charging");
-    let lookups = first
-        .exceedances()
-        .axis(super::LOOKUPS_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(
-        (lookups.target, lookups.first_requested, lookups.high_water),
-        (4, 5, 6)
-    );
-    let root = temporary("candidate-graph-budget");
+    let root = temporary("direct-lease-budget");
     let context = prepare_fixture(&root);
-    let store = context.open_store().expect("the graph-budget store opens");
-    let candidates = store
-        .candidates::<BundleValue>(super::LookupKey::from_bytes([0x54; 32]), &first)
-        .expect("an absent candidate bucket remains a bounded clean miss");
-    assert!(candidates.actions.is_empty());
-    assert!(!candidates.rejected);
-    let second_store = context
-        .open_store()
-        .expect("the second evaluator store opens");
-    for index in 0..=super::MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH {
-        let current = if index % 2 == 0 {
-            &store
-        } else {
-            &second_store
-        };
-        current
-            .graph_budget()
-            .lookup()
-            .expect("separately opened evaluators share the exact graph lookup account");
-    }
-    assert_eq!(
-        store
-            .graph_budget()
-            .exceedances()
-            .axis(super::LOOKUPS_RESOURCE)
-            .unwrap()
-            .high_water,
-        5
-    );
+    let store = context.open_store().unwrap();
+    let recipe = context
+        .direct::<Artifact>(b"direct-lease-budget", 4_096)
+        .unwrap();
     store
-        .retire_fixture()
-        .expect("the graph-budget store retires");
-    fs::remove_dir_all(root).expect("the graph-budget fixture retires");
-    for _ in 0..super::MAX_CANDIDATE_COMPARISONS_PER_GRAPH {
-        first
-            .comparison()
-            .expect("the exact comparison target admits");
-    }
-    first
-        .comparison()
-        .expect("comparisons past the target are recorded");
-    let inspected_decode = first.usage.lock().unwrap().decoded;
-    first
-        .decode((super::MAX_DECODED_BYTES_PER_GRAPH - inspected_decode) as usize)
-        .expect("the exact decoded-byte target admits");
-    let decode_site = line!() + 1;
-    first
-        .decode(1)
-        .expect("decoded bytes past the target are recorded");
-    let inspected_paths = first.usage.lock().unwrap().paths;
-    first
-        .paths(super::MAX_PATH_CHECKS_PER_GRAPH - inspected_paths)
-        .expect("the exact path-check target admits");
-    first
-        .paths(1)
-        .expect("path checks past the target are recorded");
-    first
-        .paths(1)
-        .expect("repeated path overflow keeps charging");
-    first
-        .hash(super::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("the exact hashed-byte target admits");
-    first
-        .hash(1)
-        .expect("hashed bytes past the target are recorded");
-    let exceeded = first.exceedances();
-    assert_eq!(exceeded.first().unwrap().name, super::DEEP_RESOURCE);
-    assert_eq!(exceeded.axes().count(), 6, "every axis crossed its target");
-    let decoded = exceeded.axis(super::DECODED_RESOURCE).unwrap();
-    assert_eq!(decoded.target, super::MAX_DECODED_BYTES_PER_GRAPH);
-    assert_eq!(decoded.high_water, super::MAX_DECODED_BYTES_PER_GRAPH + 1);
-    let site = decoded
-        .site
-        .expect("decode charges attribute their call site");
-    assert!(site.file().ends_with("node/tests.rs"), "{}", site.file());
-    assert!(
-        (decode_site..=decode_site + 3).contains(&site.line()),
-        "the first exceeding decode is attributed to its call site: {}",
-        site.line()
-    );
-    let paths = exceeded.axis(super::PATHS_RESOURCE).unwrap();
-    assert_eq!(
-        (paths.target, paths.first_requested, paths.high_water),
-        (
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64,
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64 + 2
-        )
-    );
-    assert!(paths.site.is_some());
-    assert_eq!(
-        exceeded.axis(super::HASHED_RESOURCE).unwrap().high_water,
-        super::MAX_HASHED_BYTES_PER_GRAPH + 1
-    );
-    // Six lookups were charged to `first`: four at the target and two past it;
-    // the absent candidate bucket charges no lookup, and the separately opened
-    // stores charge their own shared graph account.
-    assert_eq!(
-        first.census_vector().unwrap(),
-        [
-            6,
-            super::MAX_CANDIDATE_COMPARISONS_PER_GRAPH as u64 + 1,
-            9,
-            super::MAX_DECODED_BYTES_PER_GRAPH + 1,
-            super::MAX_PATH_CHECKS_PER_GRAPH as u64 + 2,
-            super::MAX_HASHED_BYTES_PER_GRAPH + 1,
-        ],
-        "charges continue cumulatively past every target"
-    );
-    // The graph's own record is what the CLI renders: exactly one warning per
-    // graph, naming every exceeded axis with its target and measured figure.
-    // (The process registry is shared with every other test; its deterministic
-    // behavior is proven on isolated instances in `exceedance::tests`.)
-    assert_eq!(
-        first.exceedances(),
-        exceeded,
-        "the record is stable once read"
-    );
-    let warnings = crate::exceedance::warnings(
-        &[crate::exceedance::Exceedance {
-            account: crate::exceedance::Account::Graph,
-            id: first.id(),
-            record: exceeded,
-        }],
-        0,
-    );
-    assert_eq!(warnings.len(), 1, "exactly one warning per graph");
-    assert!(warnings[0].contains(&format!("graph #{}", first.id())));
-    assert!(warnings[0].contains(super::DEEP_RESOURCE));
-    assert!(warnings[0]
-        .contains("typed store candidate path checks per graph reached 65538 (target 65536)"));
-    assert_eq!(
-        warnings[0].matches("reached").count(),
-        6,
-        "every crossed axis is named in the one warning"
-    );
-    assert_eq!(super::MAX_DEEP_VALIDATIONS_PER_LOOKUP, 2);
-
-    // A configured target changes where the exceedance is recorded, not the charge.
-    let configured = super::GraphBudget::with_targets(super::GraphTargets {
-        paths: 3,
-        ..super::GraphTargets::STANDARD
+        .fixture_stage_uncommitted(&recipe, b"bounded")
+        .unwrap();
+    let contender = fixture_context(&root).open_store().unwrap();
+    let budget = contender.graph_budget();
+    let (reached, ready) = std::sync::mpsc::sync_channel(1);
+    let (resume, receiver) = std::sync::mpsc::sync_channel(1);
+    let paused = PausedRejection {
+        counts: Counts::default(),
+        reached,
+        resume: std::sync::Mutex::new(receiver),
+    };
+    let mut initial = 0;
+    let result = std::thread::scope(|scope| {
+        let worker = store
+            .with_ownership(|ownership| {
+                store.with_action_lease(recipe.action(), || {
+                    let worker = scope.spawn(|| {
+                        Evaluator::new(&contender, &paused).direct(&recipe, || {
+                            panic!("a contender must reuse its winner or reject its budget")
+                        })
+                    });
+                    ready
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("the first lookup rejects the uncommitted record");
+                    initial = budget.usage.lock().unwrap().paths;
+                    store.with_action_reservation(ownership, &recipe, None, || {
+                        Ok(crate::store::Reserved::Publish {
+                            result: (),
+                            recipe: recipe.clone(),
+                            bytes: b"bounded".to_vec().into_boxed_slice(),
+                            bundle: None,
+                        })
+                    })?;
+                    resume.send(()).unwrap();
+                    Ok(worker)
+                })
+            })
+            .unwrap();
+        worker.join().expect("the contender joins")
     });
-    configured.paths(3).unwrap();
-    assert!(!configured.exceedances().is_exceeded());
-    configured.paths(1).unwrap();
-    assert_eq!(
-        configured
-            .exceedances()
-            .first()
-            .map(|axis| (axis.target, axis.high_water)),
-        Some((3, 4))
-    );
-    assert_eq!(configured.census_usage().unwrap().1, 4);
+    // The winner recheck spends the same account and reuses the winner.
+    result.expect("the winner recheck reuses the winner");
+    assert_eq!(paused.counts.hit.load(Ordering::Relaxed), 1);
+    assert_eq!(paused.counts.rejected.load(Ordering::Relaxed), 1);
+    assert_eq!(paused.counts.miss.load(Ordering::Relaxed), 0);
+    assert_eq!(budget.usage.lock().unwrap().paths, initial + 26);
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -3338,83 +2631,6 @@ fn equal_parent_content_reuses_downstream_and_rebinds_the_current_read_set() {
 // exceeded axis; the per-lookup physical bound on deep validations is
 // unchanged.
 #[test]
-fn discoverable_speculative_lookup_and_deep_overflow_record_exceedance_and_validate() {
-    assert_eq!(super::MAX_DEEP_VALIDATIONS_PER_LOOKUP, 2);
-    let root = temporary("discoverable-speculative-overflow");
-    let context = prepare_fixture(&root);
-    let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<Derived>(b"speculative-overflow", 4_096)
-        .unwrap();
-    Evaluator::new(&store, &Counts::default())
-        .discover(
-            &recipe,
-            |value| Ok(value.0.clone()),
-            || Ok(Derived(Box::from(b"current".as_slice()))),
-        )
-        .unwrap();
-    for lookup in [true, false] {
-        let fresh = fixture_context(&root).open_store().unwrap();
-        let budget = fresh.graph_budget();
-        if lookup {
-            for _ in 0..super::MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH {
-                budget.lookup().unwrap();
-            }
-        } else {
-            for _ in 0..super::MAX_DEEP_VALIDATIONS_PER_GRAPH {
-                budget.deep().unwrap();
-            }
-        }
-        assert!(
-            !budget.exceedances().is_exceeded(),
-            "exact fit is not an exceedance"
-        );
-        let before = snapshot(fresh.root());
-        let validations = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&validations);
-        let validate: super::read_set::Validator<Derived> = Arc::new(move |value, _| {
-            observed.fetch_add(1, Ordering::Relaxed);
-            Ok(value.0.clone())
-        });
-        let counts = Counts::default();
-        let discovery = Evaluator::new(&fresh, &counts)
-            .lookup_discoverable(&recipe, &validate, budget)
-            .unwrap();
-        assert!(
-            discovery.hit.is_some(),
-            "lookup={lookup}: the candidate is validated past the accounting target"
-        );
-        assert!(!discovery.rejected, "lookup={lookup}");
-        assert_eq!(validations.load(Ordering::Relaxed), 1, "lookup={lookup}");
-        assert_eq!(counts.miss.load(Ordering::Relaxed), 0);
-        assert_eq!(snapshot(fresh.root()), before);
-        let exceeded = budget.exceedances();
-        assert_eq!(
-            exceeded.axes().count(),
-            1,
-            "lookup={lookup}: one axis crossed"
-        );
-        let axis = exceeded.first().unwrap();
-        let (resource, target) = if lookup {
-            (
-                super::LOOKUPS_RESOURCE,
-                super::MAX_DISCOVERABLE_LOOKUPS_PER_GRAPH,
-            )
-        } else {
-            (super::DEEP_RESOURCE, super::MAX_DEEP_VALIDATIONS_PER_GRAPH)
-        };
-        assert_eq!(axis.name, resource);
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (target as u64, target as u64 + 1, target as u64 + 1),
-            "lookup={lookup}"
-        );
-        assert!(axis.site.is_none());
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
 fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
     for kind in 0..4 {
         let root = temporary("discoverable-file-extent");
@@ -3500,25 +2716,11 @@ fn discoverable_replay_preserves_first_genuine_failure_without_executing() {
     let before = snapshot(fresh.root());
     let calls = Arc::new(AtomicUsize::new(0));
     let observed_calls = Arc::clone(&calls);
-    let required = Arc::new(AtomicU64::new(0));
-    let observed_required = Arc::clone(&required);
-    let required = Arc::clone(&observed_required);
     let counts = Counts::default();
     let result = Evaluator::new(&fresh, &counts).discover_budgeted(
         &recipe,
-        move |value, graph| {
+        move |value, _| {
             observed_calls.fetch_add(1, Ordering::Relaxed);
-            observed_required.store(
-                graph.usage.lock().unwrap().hashed + super::MAX_HASHED_BYTES_PER_GRAPH,
-                Ordering::Relaxed,
-            );
-            // Crossing the hashed-byte target is recorded, not refused;
-            // only the genuine arithmetic failure below stops the replay.
-            graph.hash(super::MAX_HASHED_BYTES_PER_GRAPH as usize)?;
-            assert_eq!(
-                graph.exceedances().first().unwrap().high_water,
-                required.load(Ordering::Relaxed)
-            );
             if value.0.as_ref() == b"current" {
                 return Err(Error::Allocation);
             }
@@ -3762,39 +2964,13 @@ fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
         .expect("the final read set seals");
     assert_eq!(proof.len(), 1);
     assert!(proof.contains(validated.receipt().action()));
-    for _ in 0..super::MAX_DEEP_VALIDATIONS_PER_GRAPH {
-        store
-            .graph_budget()
-            .deep()
-            .expect("the speculative candidate budget admits its exact cap");
-    }
-    assert_eq!(
-        store.graph_budget().deep_validations(),
-        super::MAX_DEEP_VALIDATIONS_PER_GRAPH
-    );
-    // The ninth deep validation is admitted and recorded, not refused.
-    store
-        .graph_budget()
-        .deep()
-        .expect("the deep-validation target records an exceedance");
-    assert_eq!(
-        store.graph_budget().exceedances().first().map(|axis| (
-            axis.name,
-            axis.target,
-            axis.high_water
-        )),
-        Some((
-            super::DEEP_RESOURCE,
-            super::MAX_DEEP_VALIDATIONS_PER_GRAPH as u64,
-            super::MAX_DEEP_VALIDATIONS_PER_GRAPH as u64 + 1
-        ))
-    );
+    let deep = store.graph_budget().deep_validations();
     evaluator
         .revalidate_read_set(&proof)
-        .expect("exact witness replay remains available past the candidate target");
+        .expect("exact witness replay remains available");
     assert_eq!(
         store.graph_budget().deep_validations(),
-        super::MAX_DEEP_VALIDATIONS_PER_GRAPH + 1,
+        deep,
         "exact read-set replay must not spend speculative candidate authority"
     );
     assert_eq!(snapshot(store.root()), before);

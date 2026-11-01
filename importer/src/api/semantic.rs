@@ -209,9 +209,8 @@ fn require(expected: &[u8], value: &impl Serialize) -> Result<()> {
 /// Encode one semantic API document. `limit` is a physical bound: every
 /// caller passes `node::MAX_CONTENT_BYTES` (directly or as
 /// `Limits::node_canonical_bytes`), the node-store payload ceiling the encoded
-/// document must fit, so exceeding it refuses. The accounting targets are
-/// measured by `allocation.bytes`, which records a crossing and continues;
-/// no caller may pass an accounting field here.
+/// document must fit, so exceeding it refuses. `allocation.bytes` measures
+/// the encoded size.
 pub(crate) fn encode(
     value: &impl Serialize,
     limit: usize,

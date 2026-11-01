@@ -2628,11 +2628,9 @@ mod tests {
         let mut pending = attempt
             .seal_budgeted(Box::from(&b"seal"[..]), &graph)
             .unwrap();
-        graph.exhaust_paths();
-        assert!(!graph.exceedances().is_exceeded());
+        let sealed = graph.census_usage().unwrap().1;
         // Publication keeps charging the one original account it was
-        // sealed with. Its very first path check lands past the exhausted
-        // target and is recorded there, proving the budget was never reset.
+        // sealed with, proving the budget was never reset.
         pending
             .publish(
                 Kind::Runner,
@@ -2641,17 +2639,8 @@ mod tests {
                 LeaseKey::Execution(execution(1)),
                 Digest::from_bytes([2; 32]),
             )
-            .expect("an accounting axis never refuses publication");
-        let axis = graph
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .expect("publication path checks were charged to the original graph");
-        assert_eq!(
-            axis.first_requested,
-            crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-        );
-        assert!(axis.high_water >= axis.first_requested);
+            .expect("publication succeeds");
+        assert!(graph.census_usage().unwrap().1 > sealed);
         assert!(root.exists());
         drop(pending);
         fs::remove_dir_all(fixture).unwrap();
@@ -2663,26 +2652,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let root = std::env::temp_dir().join(format!("rawr-freeze-floor-{}", std::process::id()));
         fs::write(&root, b"inert").unwrap();
-        for available in [1, 2] {
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o644)).unwrap();
-            let graph = crate::node::GraphBudget::new();
-            graph
-                .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - available)
-                .unwrap();
-            // The metadata probe and the permission mutation are each
-            // charged one path check before they run. Two remaining fit
-            // exactly; one remaining still freezes and records the exact total.
-            freeze_with_budget(&root, Some(&graph)).expect("an accounting axis never refuses");
-            assert!(!writable(&fs::metadata(&root).unwrap()));
-            let paths = graph
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water);
-            assert_eq!(
-                paths,
-                (available == 1).then_some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-            );
-        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o644)).unwrap();
+        let graph = crate::node::GraphBudget::new();
+        // The metadata probe and the permission mutation are each charged
+        // one path check.
+        freeze_with_budget(&root, Some(&graph)).expect("the file freezes");
+        assert!(!writable(&fs::metadata(&root).unwrap()));
+        assert_eq!(graph.census_usage().unwrap().1, 2);
         fs::remove_file(root).unwrap();
     }
 
@@ -2690,12 +2666,8 @@ mod tests {
     fn shared_names_and_path_construction_precharge_before_owned_work() {
         let missing = Path::new("/definitely-missing-rawr-budget-fixture");
         let decode = crate::node::GraphBudget::new();
-        decode
-            .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        // The owned caller path bytes are still charged before the native
-        // open; the exhausted target records that exact charge instead of
-        // refusing, and the operation reports its own filesystem error.
+        // The owned caller path bytes are charged before the native open,
+        // and the operation reports its own filesystem error.
         let missing_len = missing.as_os_str().as_encoded_bytes().len() as u64;
         let caller_bytes = std::mem::size_of::<PathBuf>() as u64 + 2 * missing_len + 1;
         assert!(matches!(
@@ -2703,45 +2675,23 @@ mod tests {
             Err(Error::Io { path, source, .. })
                 if path == missing && source.kind() == std::io::ErrorKind::NotFound
         ));
-        let decoded = decode
-            .exceedances()
-            .axis(crate::node::DECODED_RESOURCE)
-            .copied()
-            .expect("the caller path ownership was charged");
-        assert_eq!(
-            decoded.first_requested,
-            crate::node::MAX_DECODED_BYTES_PER_GRAPH + caller_bytes
-        );
-        assert_eq!(decoded.high_water, decoded.first_requested);
+        assert_eq!(decode.census_usage().unwrap().0, caller_bytes);
         let joined_bytes = std::mem::size_of::<PathBuf>() as u64 + missing_len + 4 + 1;
         assert_eq!(
-            path(missing, Path::new("name"), &decode).expect("an accounting axis never refuses"),
+            path(missing, Path::new("name"), &decode).expect("the path joins"),
             missing.join("name")
         );
         assert_eq!(
-            decode
-                .exceedances()
-                .axis(crate::node::DECODED_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + caller_bytes + joined_bytes)
+            decode.census_usage().unwrap().0,
+            caller_bytes + joined_bytes
         );
         let paths = crate::node::GraphBudget::new();
-        paths.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         assert!(matches!(
             names(missing, 4, &paths),
             Err(Error::Io { path, source, .. })
                 if path == missing && source.kind() == std::io::ErrorKind::NotFound
         ));
-        assert_eq!(
-            paths
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
-        );
+        assert_eq!(paths.census_usage().unwrap().1, 1);
     }
 
     #[test]
@@ -2873,28 +2823,16 @@ mod tests {
                 "typed store allocation is sealed but absent from its installation ledger"
             ))
         ));
-        // An exhausted decoded-bytes target never refuses the commitment
-        // read. The read still charges its exact ownership (measured on a fresh
-        // account) to the original account and records the exact total.
+        // Each commitment read charges its exact ownership to the account
+        // it is given.
         let probe = crate::node::GraphBudget::new();
         read_commitment(store.root(), &commitment, &probe).unwrap();
         let (probe_decoded, _, _) = probe.census_usage().unwrap();
         assert!(probe_decoded > 0);
-        assert!(!probe.exceedances().is_exceeded());
-        let spent = crate::node::GraphBudget::new();
-        spent
-            .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        let (_, _, reread) = read_commitment(store.root(), &commitment, &spent)
-            .expect("an accounting axis never refuses");
+        let again = crate::node::GraphBudget::new();
+        let (_, _, reread) = read_commitment(store.root(), &commitment, &again).unwrap();
         assert_eq!(reread, bytes);
-        assert_eq!(
-            spent
-                .exceedances()
-                .axis(crate::node::DECODED_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_DECODED_BYTES_PER_GRAPH + probe_decoded)
-        );
+        assert_eq!(again.census_usage().unwrap().0, probe_decoded);
         drop(pending);
         fs::remove_dir_all(fixture).unwrap();
     }
@@ -3334,36 +3272,12 @@ mod tests {
         fs::write(root.join("payload"), b"bundle").expect("the frozen payload writes");
         freeze(&root).expect("the fixture freezes");
 
-        let exact = crate::node::GraphBudget::new();
-        exact
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .expect("metadata, open/mount, raw reads, dot/member/exhaustion probes precharge");
-        let expected = measure_with_budget(&root, false, Some(&exact), true)
-            .expect("one charged frozen walk admits the exact path cap");
-        assert!(!exact.exceedances().is_exceeded());
-
-        // One operation less remaining still completes the same single
-        // walk; the exceedance records exactly one path check past the target,
-        // proving the walk is charged exactly ten operations.
-        let floor = crate::node::GraphBudget::new();
-        floor
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 9)
-            .expect("the one-operation floor precharges");
-        assert_eq!(
-            measure_with_budget(&root, false, Some(&floor), true)
-                .expect("an accounting axis never refuses"),
-            expected
-        );
-        assert_eq!(
-            floor
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
-        );
+        // Metadata, open/mount, raw reads and the dot/member/exhaustion
+        // probes are charged as exactly ten path checks in one walk.
+        let graph = crate::node::GraphBudget::new();
+        measure_with_budget(&root, false, Some(&graph), true)
+            .expect("one charged frozen walk completes");
+        assert_eq!(graph.census_usage().unwrap().1, 10);
         remove_bundle(&root).expect("the frozen budget fixture retires");
     }
 
@@ -3376,9 +3290,6 @@ mod tests {
         freeze(&root).unwrap();
         let expected = measure_with_budget(&root, false, None, true).unwrap();
         let graph = crate::node::GraphBudget::new();
-        graph
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .unwrap();
         let mut observed = Vec::new();
         let actual = measure_observed_members(
             &root,
@@ -3397,19 +3308,7 @@ mod tests {
             observed,
             vec![(root.clone(), true), (root.join("payload"), false)]
         );
-        // The callbacks share the exact ten-operation walk. The account
-        // sits exactly at its target: nothing is recorded, and one more path
-        // check is still charged while recording the exact cumulative total.
-        assert!(!graph.exceedances().is_exceeded());
-        graph.paths(1).expect("an accounting axis never refuses");
-        assert_eq!(
-            graph
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1),
-            "callbacks share the exact ten-operation walk"
-        );
+        assert_eq!(graph.census_usage().unwrap().1, 10);
         remove_bundle(&root).unwrap();
     }
 
@@ -3518,41 +3417,9 @@ mod tests {
         for index in 0..4 {
             fs::write(root.join(index.to_string()), b"entry").unwrap();
         }
-        let exact = crate::node::GraphBudget::new();
-        exact
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 11)
-            .unwrap();
-        assert_eq!(names(&root, 4, &exact).unwrap().len(), 4);
-        // The collection is charged exactly eleven path checks. The exact
-        // account records nothing and still charges one more, recording the
-        // exact cumulative total.
-        assert!(!exact.exceedances().is_exceeded());
-        exact.paths(1).expect("an accounting axis never refuses");
-        assert_eq!(
-            exact
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-        );
-
-        let floor = crate::node::GraphBudget::new();
-        floor
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH - 10)
-            .unwrap();
-        assert_eq!(
-            names(&root, 4, &floor)
-                .expect("an accounting axis never refuses")
-                .len(),
-            4
-        );
-        assert_eq!(
-            floor
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| axis.high_water),
-            Some(crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
-        );
+        let graph = crate::node::GraphBudget::new();
+        assert_eq!(names(&root, 4, &graph).unwrap().len(), 4);
+        assert_eq!(graph.census_usage().unwrap().1, 11);
         assert!(matches!(
             names(&root, 3, &crate::node::GraphBudget::new()),
             Err(Error::Limit {
@@ -3564,30 +3431,17 @@ mod tests {
 
         fs::remove_dir_all(&root).unwrap();
         let blocked = crate::node::GraphBudget::new();
-        blocked
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-            .unwrap();
-        // An exhausted target still charges the failed open of a missing
-        // directory (exactly one path check, recorded) and reports the
-        // filesystem error rather than refusing.
+        // The failed open of a missing directory is charged exactly one path
+        // check and reports the filesystem error.
         assert!(
             matches!(
                 names(&root, 4, &blocked),
                 Err(Error::Io { path, source, .. })
                     if path == root && source.kind() == std::io::ErrorKind::NotFound
             ),
-            "an exhausted budget still opens a missing directory and reports it"
+            "a missing directory is opened and reported"
         );
-        assert_eq!(
-            blocked
-                .exceedances()
-                .axis(crate::node::PATHS_RESOURCE)
-                .map(|axis| (axis.first_requested, axis.high_water)),
-            Some((
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            ))
-        );
+        assert_eq!(blocked.census_usage().unwrap().1, 1);
     }
 
     #[test]

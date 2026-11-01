@@ -14,15 +14,8 @@ impl Identity {
     /// Transform one bounded canonical profile name into its stable identity.
     /// rawr names its profiles itself, so an empty name panics (D664).
     #[must_use]
-    pub fn new(name: &str, limits: &crate::cargo::Limits) -> Self {
+    pub fn new(name: &str) -> Self {
         assert!(!name.is_empty(), "rawr names each profile");
-        // The name length is an accounting target recorded on a profile
-        // account, never a refusal.
-        crate::surface::account::Account::profile().exceeded(
-            "profile identity bytes",
-            limits.string_bytes,
-            name.len(),
-        );
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.profile.identity/v1");
         digest.update(u64::try_from(name.len()).unwrap_or(u64::MAX).to_le_bytes());

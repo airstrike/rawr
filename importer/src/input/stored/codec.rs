@@ -33,11 +33,7 @@ pub(super) fn encode(
     };
     write(&mut measure).map_err(|error| budget.failure(error))?;
     let length = measure.length;
-    budget.limited(
-        "encoded stored baseline bytes",
-        budget.limits.input_proof_bytes,
-        length,
-    )?;
+    budget.check()?;
     let mut bytes = budget.buffer(length)?;
     let mut writer = Writer {
         output: Some(&mut bytes),
@@ -181,8 +177,7 @@ impl<'bytes, 'budget, 'account> Reader<'bytes, 'budget, 'account> {
     }
     pub(super) fn count(&mut self) -> Result<usize> {
         let count = self.length()?;
-        self.budget
-            .limited("stored baseline items", self.budget.limits.items, count)?;
+        self.budget.check()?;
         Ok(count)
     }
     pub(super) fn bytes(&mut self) -> Result<&'bytes [u8]> {
@@ -225,17 +220,7 @@ impl<'bytes, 'budget, 'account> Reader<'bytes, 'budget, 'account> {
             items: self.length()?,
             bytes: self.length()?,
         };
-        // The producer's retained usage is measured against accounting
-        // targets that never refused it; a stored figure above a target is
-        // recorded on this account, never rejected as an encoding error.
-        let (items, bytes) = (
-            self.budget.limits.items,
-            self.budget.limits.input_proof_bytes,
-        );
-        self.budget
-            .limited("stored baseline retained items", items, usage.items)?;
-        self.budget
-            .limited("stored baseline retained bytes", bytes, usage.bytes)?;
+        self.budget.check()?;
         Ok(usage)
     }
     pub(super) fn header(&mut self) -> Result<(u32, Usage)> {

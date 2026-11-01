@@ -8,7 +8,7 @@ use crate::cargo::{self, toolchain};
 use crate::input::build;
 use crate::input::declaration::Declarations;
 use crate::input::stored::{self, observe, Budget};
-use crate::input::{Allocation, Usage, INPUT_BYTES_RESOURCE, INPUT_ITEMS_RESOURCE};
+use crate::input::{Allocation, Usage};
 use crate::node;
 
 const PACKAGE: &str = "path+file:///fixture#package@0.1.0";
@@ -127,7 +127,6 @@ fn actual_observation_matches_legacy_empty_ordered_duplicate_and_opaque_data() {
             toolchain::supported_cargo_commit(),
             PACKAGE,
             &fixture.out,
-            &cargo::Limits::standard(),
             &mut account(),
         ).expect("legacy parser data");
         same(&actual, &expected);
@@ -285,11 +284,6 @@ fn shorter_opened_saved_output_is_allowed_and_growth_above_initial_length_refuse
             actual: 10,
         }))
     ));
-    assert!(!allocation.exceedances().is_exceeded());
-    assert!(matches!(
-        allocation.bytes(0),
-        Err(crate::Error::InputAccountRefused)
-    ));
 }
 
 #[test]
@@ -317,93 +311,32 @@ fn actual_builder_preserves_completion_utf8_and_late_grammar_order() {
     fixture.write(b"cargo:rerun-if-changed=\n");
     let mut full = account();
     let _ = fixture.observe(&mut full, &node::GraphBudget::new());
-    assert!(!full.exceedances().is_exceeded());
-    // The late grammar failure is still preceded by the full ownership
-    // charge. One byte under the measured total records the byte axis with a
-    // high water equal to the full charge, the grammar error is unchanged and
-    // the account is not latched.
-    let mut floor = account();
-    floor.byte_limit = full.usage().bytes - 1;
-    assert!(matches!(
-        fixture.observe(&mut floor, &node::GraphBudget::new()),
-        Err(stored::Error::Observation(observe::Error::Policy(
-            "malformed-saved-output"
-        )))
-    ));
-    assert_eq!(floor.usage(), full.usage());
-    let axis = *floor
-        .exceedances()
-        .axis(INPUT_BYTES_RESOURCE)
-        .expect("the byte axis records the charge made before the grammar failure");
-    assert_eq!(
-        (axis.target, axis.high_water),
-        ((full.usage().bytes - 1) as u64, full.usage().bytes as u64)
-    );
-    floor
-        .items(0)
-        .expect("an accounting exceedance never latches the account");
 }
 
 #[test]
-fn complete_growth_and_boxing_obey_prior_original_account_and_terminal_floors() {
+fn complete_growth_and_boxing_obey_prior_original_account_and_refusal() {
     let fixture = Fixture::new();
     fixture.write(
         b"cargo:rerun-if-changed=a\ncargo:rerun-if-changed=b\ncargo:rerun-if-env-changed=KEY\n",
     );
-    let mut measured = account();
+    let mut allocation = account();
     fixture
-        .observe(&mut measured, &node::GraphBudget::new())
+        .observe(&mut allocation, &node::GraphBudget::new())
         .expect("measure actual ownership");
-    let usage = measured.usage();
+    let usage = allocation.usage();
     assert!(usage.items > PRIOR.items && usage.bytes > PRIOR.bytes);
-    for floor in 0..3 {
-        let mut allocation = account();
-        allocation.item_limit = usage.items - usize::from(floor == 1);
-        allocation.byte_limit = usage.bytes - usize::from(floor == 2);
-        let result = fixture.observe(&mut allocation, &node::GraphBudget::new());
-        if floor == 0 {
-            assert!(result.is_ok());
-            assert_eq!(allocation.usage(), usage);
-            assert!(!allocation.exceedances().is_exceeded());
-        } else {
-            // One under the measured total is an accounting exceedance
-            // whose high water is the exact total; the observation completes.
-            assert!(
-                result.is_ok(),
-                "one-under floor {floor} is recorded, not refused"
-            );
-            assert_eq!(allocation.usage(), usage);
-            let (exceeded, total) = if floor == 1 {
-                (INPUT_ITEMS_RESOURCE, usage.items)
-            } else {
-                (INPUT_BYTES_RESOURCE, usage.bytes)
-            };
-            let axis = *allocation
-                .exceedances()
-                .axis(exceeded)
-                .expect("the one-under axis records the exact total");
-            assert_eq!(
-                (axis.target, axis.high_water),
-                ((total - 1) as u64, total as u64)
-            );
-            allocation
-                .bytes(0)
-                .expect("an accounting exceedance never latches the account");
-            // A genuine failure after the exceedance latches the original
-            // account, and a latched account does no further work.
-            allocation.refuse();
-            let spent = allocation.usage();
-            assert!(matches!(
-                fixture.observe(&mut allocation, &node::GraphBudget::new()),
-                Err(stored::Error::Refused)
-            ));
-            assert_eq!(allocation.usage(), spent);
-            assert!(matches!(
-                allocation.bytes(0),
-                Err(crate::Error::InputAccountRefused)
-            ));
-        }
-    }
+    // A genuine failure latches the original account, and a latched account
+    // does no further work.
+    allocation.refuse();
+    assert!(matches!(
+        fixture.observe(&mut allocation, &node::GraphBudget::new()),
+        Err(stored::Error::Refused)
+    ));
+    assert_eq!(allocation.usage(), usage);
+    assert!(matches!(
+        allocation.bytes(0),
+        Err(crate::Error::InputAccountRefused)
+    ));
 }
 
 #[test]
@@ -439,50 +372,6 @@ fn graph_charges_only_actual_observations_not_retained_metadata() {
             // Hashing and comparisons sit exactly at their targets: any such
             // charge by the observation would now record an exceedance.
             assert!(result.is_ok(), "graph targets are recorded, never refused");
-            let record = graph.exceedances();
-            assert!(record.axis(node::HASHED_RESOURCE).is_none());
-            assert!(record.axis(node::COMPARISONS_RESOURCE).is_none());
-            if floor == 0 {
-                if account_kind == 0 {
-                    // Exactly ten path checks: the target is met, not crossed.
-                    assert_eq!(
-                        graph.census_usage().expect("graph census").1,
-                        node::MAX_PATH_CHECKS_PER_GRAPH
-                    );
-                    assert!(!record.is_exceeded());
-                    graph.paths(1).expect("a path target never refuses");
-                    let axis = *graph
-                        .exceedances()
-                        .axis(node::PATHS_RESOURCE)
-                        .expect("one more path check records the axis");
-                    assert_eq!(axis.high_water, node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
-                } else {
-                    assert_eq!(
-                        graph.census_usage().expect("graph census").0,
-                        node::MAX_DECODED_BYTES_PER_GRAPH,
-                        "retained metadata adds no decode"
-                    );
-                    assert!(!record.is_exceeded(), "retained metadata adds no decode");
-                }
-            } else {
-                // One path check less than needed: the observation still runs
-                // its ten checks and the path axis records exactly one over.
-                let axis = *record
-                    .axis(node::PATHS_RESOURCE)
-                    .expect("the path axis records the exact observation count");
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (
-                        node::MAX_PATH_CHECKS_PER_GRAPH as u64,
-                        node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1,
-                        node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                    )
-                );
-                assert!(record.axis(node::DECODED_RESOURCE).is_none());
-                allocation
-                    .items(0)
-                    .expect("a graph exceedance never latches the input account");
-            }
         }
     }
 }

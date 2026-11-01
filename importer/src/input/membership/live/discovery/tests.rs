@@ -405,23 +405,7 @@ fn every_graph_cut_preserves_first_refusal_and_prepaid_cleanup() {
             .unwrap_or_else(|error| panic!("scenario {index}, work {available}: {error:?}"));
             assert!(script.live.is_empty());
             assert_eq!(script.events, baseline.events);
-            let exceeded = graph.exceedances();
-            if available == required {
-                assert!(!exceeded.is_exceeded(), "scenario {index}");
-            } else {
-                let axis = exceeded.axis(node::PATHS_RESOURCE).unwrap();
-                assert_eq!(axis.target, node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-                assert_eq!(
-                    axis.first_requested,
-                    node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                );
-                assert_eq!(
-                    axis.high_water,
-                    (node::MAX_PATH_CHECKS_PER_GRAPH + required - available) as u64,
-                    "scenario {index}, work {available}"
-                );
-            }
-            assert!(allocation.items(0).is_ok(), "nothing latched");
+            assert!(allocation.items(0).is_ok());
         }
         // Checked-arithmetic overflow of the graph account is a genuine
         // refusal: saturating the account leaves exactly `available` charges
@@ -517,62 +501,12 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
                 + 1
                 + if conversions == 2 { TOML.len() + 1 } else { 0 }
         );
-        // Cumulative byte charges in ownership order: directory path, legacy
-        // join, TOML join, terminated legacy path, then (when reached) the
-        // terminated TOML path.
-        let mut charges = vec![
-            19 + DIRECTORY.len(),
-            19 + DIRECTORY.len() + LEGACY.len(),
-            19 + DIRECTORY.len() + LEGACY.len() + TOML.len(),
-            19 + DIRECTORY.len() + LEGACY.len() + TOML.len() + LEGACY.len() + 1,
-        ];
-        if conversions == 2 {
-            charges.push(charges[3] + TOML.len() + 1);
-        }
-        assert_eq!(*charges.last().unwrap(), total.bytes);
-        // A byte target below the total is recorded, never refused. The
-        // first crossing request identifies which ownership charge crossed it,
-        // which fixes the charge amounts and their order.
-        for bytes in 19..=total.bytes {
-            let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
-            let mut allocation =
-                input::Allocation::with_limits(total.items, bytes, limits.string_bytes);
-            allocation.items(7).expect("prior items");
-            allocation.bytes(19).expect("prior bytes");
-            acquire(
-                DIRECTORY,
-                Filename::Config,
-                warn,
-                &mut Budget {
-                    graph: &graph,
-                    allocation: &mut allocation,
-                },
-                &mut script,
-            )
-            .expect("bytes past the target are owned");
-            assert!(script.live.is_empty());
-            assert_eq!(script.events, baseline.events);
-            assert_eq!(allocation.usage(), total);
-            let exceeded = allocation.exceedances();
-            if bytes == total.bytes {
-                assert!(!exceeded.is_exceeded());
-            } else {
-                let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                let crossing = charges
-                    .iter()
-                    .copied()
-                    .find(|charge| *charge > bytes)
-                    .unwrap();
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (bytes as u64, crossing as u64, total.bytes as u64)
-                );
-                assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-            }
-        }
+        // The fourth byte charge, in ownership order (directory path, legacy
+        // join, TOML join, terminated legacy path), precedes every native
+        // operation.
+        let legacy_terminated = 19 + DIRECTORY.len() + LEGACY.len() + TOML.len() + LEGACY.len() + 1;
         // Checked-arithmetic overflow is a genuine refusal. Saturating the
-        // account so that it overflows exactly where the old floor sat keeps
+        // account so that it overflows at each byte charge keeps
         // every cut: both early path allocations and the first native
         // conversion must finish before any native operation. Late cuts may
         // only keep the completed legacy operations and their mandatory cleanup.
@@ -580,7 +514,7 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
             let (mut script, _, _) = scenario(index);
             let graph = node::GraphBudget::new();
             let mut allocation =
-                input::Allocation::with_limits(total.items, usize::MAX, limits.string_bytes);
+                input::Allocation::with_limits(usize::MAX, usize::MAX, limits.string_bytes);
             allocation.items(7).expect("prior items");
             allocation
                 .bytes(usize::MAX - (bytes - 19))
@@ -605,7 +539,7 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
                 ));
             }
             assert!(script.live.is_empty());
-            if bytes < charges[3] {
+            if bytes < legacy_terminated {
                 assert!(script.events.is_empty());
             }
             assert!(allocation.usage().bytes - saturated <= bytes - 19);
@@ -614,40 +548,7 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
             let (mut script, _, _) = scenario(index);
             let graph = node::GraphBudget::new();
             let mut allocation =
-                input::Allocation::with_limits(items, total.bytes, limits.string_bytes);
-            allocation.items(7).expect("prior items");
-            allocation.bytes(19).expect("prior bytes");
-            acquire(
-                DIRECTORY,
-                Filename::Config,
-                warn,
-                &mut Budget {
-                    graph: &graph,
-                    allocation: &mut allocation,
-                },
-                &mut script,
-            )
-            .expect("items past the target are owned");
-            assert!(script.live.is_empty());
-            assert_eq!(script.events, baseline.events);
-            assert_eq!(allocation.usage(), total);
-            let exceeded = allocation.exceedances();
-            if items == total.items {
-                assert!(!exceeded.is_exceeded());
-            } else {
-                // Items are charged one at a time.
-                let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-                assert_eq!(
-                    (axis.target, axis.first_requested, axis.high_water),
-                    (items as u64, items as u64 + 1, total.items as u64)
-                );
-            }
-        }
-        for items in 7..=total.items {
-            let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
-            let mut allocation =
-                input::Allocation::with_limits(usize::MAX, total.bytes, limits.string_bytes);
+                input::Allocation::with_limits(usize::MAX, usize::MAX, limits.string_bytes);
             allocation
                 .items(usize::MAX - (items - 7))
                 .expect("saturating prior items");

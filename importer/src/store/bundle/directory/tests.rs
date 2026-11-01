@@ -5,10 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rawr_directory::{Admission as _, Storage, Work};
 
 use super::{caller, names, observe, output, Host};
-use crate::node::{
-    Error, GraphBudget, DECODED_RESOURCE, MAX_DECODED_BYTES_PER_GRAPH, MAX_PATH_CHECKS_PER_GRAPH,
-    PATHS_RESOURCE,
-};
+use crate::node::{Error, GraphBudget, MAX_DECODED_BYTES_PER_GRAPH, MAX_PATH_CHECKS_PER_GRAPH};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -16,28 +13,22 @@ fn decode_cap() -> usize {
     usize::try_from(MAX_DECODED_BYTES_PER_GRAPH).expect("the graph cap is addressable")
 }
 
-/// The decoded-bytes axis high water once the graph crossed its target.
+/// The decoded bytes charged, once past the standard decoded-byte target.
 fn decoded_high_water(budget: &GraphBudget) -> Option<u64> {
-    budget
-        .exceedances()
-        .axis(DECODED_RESOURCE)
-        .map(|axis| axis.high_water)
+    let decoded = budget.census_usage().unwrap().0;
+    (decoded > MAX_DECODED_BYTES_PER_GRAPH).then_some(decoded)
 }
 
-/// The path-check axis high water once the graph crossed its target.
+/// The path checks charged, once past the standard path-check target.
 fn paths_high_water(budget: &GraphBudget) -> Option<u64> {
-    budget
-        .exceedances()
-        .axis(PATHS_RESOURCE)
-        .map(|axis| axis.high_water)
+    let paths = budget.census_usage().unwrap().1;
+    (paths > MAX_PATH_CHECKS_PER_GRAPH).then_some(paths as u64)
 }
 
-/// Prove `budget` sits exactly at its decoded target. Nothing has been
-/// recorded yet, and one more byte is still charged (never refused) while the
-/// exceedance records the exact cumulative total.
+/// Prove `budget` sits exactly at its decoded target: one more byte is
+/// charged (never refused) and lands one past it.
 fn assert_exact_decoded(budget: &GraphBudget) {
-    assert!(!budget.exceedances().is_exceeded());
-    budget.decode(1).expect("an accounting axis never refuses");
+    budget.decode(1).expect("graph work never refuses");
     assert_eq!(
         decoded_high_water(budget),
         Some(MAX_DECODED_BYTES_PER_GRAPH + 1)
@@ -56,26 +47,18 @@ fn filesystem_observation_floor_uses_original_nonzero_epoch() {
     };
     host.admit(Work::Open { path_bytes: 2 })
         .expect("the exact last observation is admitted");
-    assert!(!budget.exceedances().is_exceeded());
+    assert_eq!(paths_high_water(&budget), None);
     // Each further probe is still charged to the original account at
-    // exactly one path check and recorded as an exceedance, never refused.
+    // exactly one path check, never refused.
     for (excess, event) in [Work::Mount, Work::Read { buffer_bytes: 8192 }, Work::Record]
         .into_iter()
         .enumerate()
     {
-        host.admit(event).expect("an accounting axis never refuses");
-        let axis = budget
-            .exceedances()
-            .axis(PATHS_RESOURCE)
-            .copied()
-            .expect("the path-check axis crossed its target");
-        assert_eq!(axis.target, MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(axis.first_requested, MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
+        host.admit(event).expect("graph work never refuses");
         assert_eq!(
-            axis.high_water,
-            MAX_PATH_CHECKS_PER_GRAPH as u64 + 1 + excess as u64
+            paths_high_water(&budget),
+            Some(MAX_PATH_CHECKS_PER_GRAPH as u64 + 1 + excess as u64)
         );
-        assert!(axis.site.is_some());
     }
 }
 
@@ -101,15 +84,14 @@ fn allocation_floor_charges_the_complete_new_layout_with_prior_ownership() {
         alignment: 1,
     })
     .expect("the exact remaining name layout is charged");
-    assert!(!budget.exceedances().is_exceeded());
-    // One more byte is still charged to the original account and recorded
-    // as an exceedance at the exact cumulative total, never refused.
+    assert_eq!(decoded_high_water(&budget), None);
+    // One more byte is still charged to the original account, never refused.
     host.admit(Work::Allocate {
         storage: Storage::Name,
         bytes: 1,
         alignment: 1,
     })
-    .expect("an accounting axis never refuses");
+    .expect("graph work never refuses");
     assert_eq!(
         decoded_high_water(&budget),
         Some(MAX_DECODED_BYTES_PER_GRAPH + 1)
@@ -122,10 +104,7 @@ fn pure_sort_and_temporary_union_retention_have_no_fictitious_probe_cost() {
     budget
         .decode(17)
         .expect("nonzero prior ownership is admitted");
-    budget
-        .paths(MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("the original path account is exhausted");
-    budget.exhaust_comparisons();
+    let before = budget.census_vector().unwrap();
     let mut host = Host {
         budget: &budget,
         visible_limit: 1,
@@ -146,6 +125,8 @@ fn pure_sort_and_temporary_union_retention_have_no_fictitious_probe_cost() {
         host.admit(event)
             .expect("bounded pure work spends no filesystem or candidate comparison count");
     }
+    let after = budget.census_vector().unwrap();
+    assert_eq!((after[1], after[4]), (before[1], before[4]));
     host.admit(Work::Visible { entries: 1 })
         .expect("61 raw entries can collapse to one visible member");
     assert!(matches!(
@@ -169,7 +150,7 @@ fn caller_byte_and_error_path_ownership_is_admitted_before_the_operation() {
         .decode(decode_cap() - cost + 1)
         .expect("nonzero prior ownership is admitted");
     // The caller ownership is still charged before the operation runs;
-    // the operation then proceeds and the exact total is recorded, not refused.
+    // the operation then proceeds and the exact total is charged, never refused.
     let observed = Cell::new(None);
     let result = observe(path, 1, &budget, |_, _, host| {
         observed.set(decoded_high_water(host.budget));
@@ -209,22 +190,19 @@ fn exhausted_original_observation_account_records_the_native_open() {
     budget
         .paths(MAX_PATH_CHECKS_PER_GRAPH)
         .expect("prior observations exhaust the original epoch");
-    assert!(!budget.exceedances().is_exceeded());
+    assert_eq!(paths_high_water(&budget), None);
     let missing = std::path::Path::new("/rawr-directory-nonexistent-open-fixture");
     // The exhausted target never refuses the open. The failed native open
-    // is charged exactly one path check, which the exceedance records, and the
-    // operation reports its own filesystem error.
+    // is charged exactly one path check, and the operation reports its own
+    // filesystem error.
     let result = names(missing, 1, &budget);
     assert!(
         matches!(result, Err(Error::Io { path, source, .. }) if path == missing && source.kind() == std::io::ErrorKind::NotFound)
     );
-    let axis = budget
-        .exceedances()
-        .axis(PATHS_RESOURCE)
-        .copied()
-        .expect("the path-check axis crossed its target");
-    assert_eq!(axis.first_requested, MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
-    assert_eq!(axis.high_water, MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
+    assert_eq!(
+        paths_high_water(&budget),
+        Some(MAX_PATH_CHECKS_PER_GRAPH as u64 + 1)
+    );
 }
 
 #[test]
@@ -236,7 +214,7 @@ fn output_container_and_joined_paths_are_precharged_at_their_exact_floor() {
         .expect("prior ownership is admitted");
     assert!(
         output(2, &budget)
-            .expect("an accounting axis never refuses")
+            .expect("graph work never refuses")
             .capacity()
             >= 2
     );
@@ -267,7 +245,7 @@ fn output_container_and_joined_paths_are_precharged_at_their_exact_floor() {
         .decode(decode_cap() - cost + 1)
         .expect("prior joined-path ownership is admitted");
     assert_eq!(
-        super::super::path(parent, child, &budget).expect("an accounting axis never refuses"),
+        super::super::path(parent, child, &budget).expect("graph work never refuses"),
         parent.join(child)
     );
     assert_eq!(
@@ -372,7 +350,7 @@ fn production_bundle_paths_precharge_output_and_path_bytes_after_names() {
     // actual names ownership rather than copying the foundation's growth rule.
     let (decoded, _, _) = observed.census_usage().unwrap();
     let names_bytes = usize::try_from(decoded).unwrap() - 17;
-    assert!(!observed.exceedances().is_exceeded());
+    assert_eq!(decoded_high_water(&observed), None);
     let output_and_path = std::mem::size_of::<std::path::PathBuf>()
         + fixture.as_os_str().as_encoded_bytes().len()
         + 2;
@@ -387,8 +365,8 @@ fn production_bundle_paths_precharge_output_and_path_bytes_after_names() {
         if excess == 0 {
             assert_exact_decoded(&budget);
         } else {
-            // One byte less remaining still completes the operation; the
-            // exceedance records the exact charged total, one past the target.
+            // One byte less remaining still completes the operation and the
+            // charged total lands one past the target.
             assert_eq!(
                 decoded_high_water(&budget),
                 Some(MAX_DECODED_BYTES_PER_GRAPH + 1)

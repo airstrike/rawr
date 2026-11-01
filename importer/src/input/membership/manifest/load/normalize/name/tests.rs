@@ -112,46 +112,24 @@ fn every_admission_refusal_is_terminal_before_output_allocation() {
 
 #[test]
 fn original_account_retains_prior_usage_and_exact_output_layout() {
-    use crate::input::membership::manifest::tests::admits_one_short;
     use crate::input::membership::Budget;
     use crate::{input, node};
 
-    let run = |items, bytes, string| {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, string);
-        allocation.items(7).unwrap();
-        allocation.bytes(31).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = Session::new(&mut budget);
-        let result = embedded(Path::new("/scripts/123.rs"), &mut session);
-        let ok = session.finish(result).is_ok();
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (ok, allocation.usage(), allocation.exceedances())
+    let graph = node::GraphBudget::new();
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(7).unwrap();
+    allocation.bytes(31).unwrap();
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
     };
-    let (ok, usage, exceeded) = run(8, 38, 7);
-    assert!(ok);
+    let mut session = Session::new(&mut budget);
+    let result = embedded(Path::new("/scripts/123.rs"), &mut session);
+    assert!(session.finish(result).is_ok());
+    assert!(allocation.check().is_ok());
+    let usage = allocation.usage();
     assert_eq!(usage.items, 8);
     assert_eq!(usage.bytes, 38);
-    assert!(!exceeded.is_exceeded());
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(run(7, 38, 7), usage, input::INPUT_ITEMS_RESOURCE, 8);
-    admits_one_short(run(8, 37, 7), usage, input::INPUT_BYTES_RESOURCE, 38);
-    // One short of the 7-byte output string records the decoded-string
-    // axis; the same output is still produced and owned.
-    let (ok, spent, exceeded) = run(8, 38, 6);
-    admits_one_short(
-        (ok, spent, exceeded),
-        usage,
-        "membership decoded TOML string bytes",
-        7,
-    );
-    let axis = exceeded
-        .axis("membership decoded TOML string bytes")
-        .unwrap();
-    assert_eq!((axis.target, axis.first_requested), (6, 7));
 }
 
 #[test]

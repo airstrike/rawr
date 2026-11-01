@@ -25,7 +25,7 @@ impl Account for Budget<'_> {
     }
 
     fn declared_path(&mut self, root: &Path, value: &str) -> Result<PathBuf> {
-        self.limited("input path bytes", crate::input::LINE_BYTES, value.len())?;
+        self.check()?;
         super::observe::path::normalized(Path::new(value), root, self)
     }
 
@@ -33,17 +33,13 @@ impl Account for Budget<'_> {
         let value = path
             .to_str()
             .ok_or(Error::Encoding("owner scalar path is not Unicode"))?;
-        self.limited("input path bytes", crate::input::LINE_BYTES, value.len())?;
+        self.check()?;
         Ok(value)
     }
 
     fn executable_path<'path>(&mut self, path: &'path Path) -> Result<&'path str> {
         path.to_str()
             .ok_or(Error::Encoding("owner executable path is not Unicode"))
-    }
-
-    fn bounded(&mut self, resource: &'static str, limit: usize, actual: usize) -> Result<()> {
-        self.limited(resource, limit, actual)
     }
 
     fn failure(&mut self, failure: account::Failure) -> Error {

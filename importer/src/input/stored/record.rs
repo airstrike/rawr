@@ -67,16 +67,6 @@ impl<'bytes> Record<'bytes> {
         budget: &mut Budget<'_>,
     ) -> Result<Vec<u8>> {
         budget.check()?;
-        budget.limited(
-            "retained Cargo metadata bytes",
-            budget.limits.json_bytes,
-            metadata.len(),
-        )?;
-        budget.limited(
-            "retained Cargo unit bytes",
-            budget.limits.json_bytes,
-            units.len(),
-        )?;
         let encoded = codec::encode(budget, |writer| {
             writer.raw(MAGIC)?;
             writer.text(toolchain::supported_cargo_commit())?;
@@ -105,17 +95,9 @@ impl<'bytes> Record<'bytes> {
             ));
         }
         let metadata = reader.bytes()?;
-        reader.budget.limited(
-            "retained Cargo metadata bytes",
-            reader.budget.limits.json_bytes,
-            metadata.len(),
-        )?;
+        reader.budget.check()?;
         let units = reader.bytes()?;
-        reader.budget.limited(
-            "retained Cargo unit bytes",
-            reader.budget.limits.json_bytes,
-            units.len(),
-        )?;
+        reader.budget.check()?;
         let build = reader.bytes()?;
         let input = reader.bytes()?;
         let namespace = reader.bytes()?;

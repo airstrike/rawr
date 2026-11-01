@@ -186,7 +186,7 @@ impl<'a, 'image: 'a> Files<'a, 'image> {
         if path.as_os_str().as_bytes().contains(&0) {
             return session.fail(Error::ConfigPathNul);
         }
-        let text = session.text(path.as_os_str().as_bytes(), limits)?;
+        let text = session.text(path.as_os_str().as_bytes())?;
         let document = session.parse_text(text, limits)?;
         let document = self.documents.push(document, session)?;
         let definition = match why {

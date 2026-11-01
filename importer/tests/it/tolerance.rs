@@ -104,7 +104,7 @@ fn request(project: &Project, limits: &Limits) -> Request {
     )
     .expect("the limits-bound request builder seals")
     .environment(environment)
-    .policy(Policy::manifest(limits).seal())
+    .policy(Policy::manifest().seal())
     .expect("the manifest policy fits the request")
     .dependency(
         Dependency::path("tolerant", &fixture("tolerant-api"), limits)

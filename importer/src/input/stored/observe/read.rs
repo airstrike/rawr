@@ -26,7 +26,7 @@ fn raw<T>(result: rustix::io::Result<T>) -> std::io::Result<T> {
 /// recorded.
 pub(super) fn length(length: u64, budget: &mut Budget<'_>) -> Result<usize> {
     let length = usize::try_from(length).map_err(|_| budget.overflow())?;
-    budget.limited("input proof bytes", budget.limits.input_proof_bytes, length)?;
+    budget.check()?;
     Ok(length)
 }
 
@@ -107,9 +107,8 @@ pub(in crate::input) fn bounded(
     content(path, Extent::Initial(maximum), budget)
 }
 
-/// Dep-info's opened extent is measured against the Cargo JSON accounting
-/// target, independently of its earlier pathname metadata. Admit that exact
-/// buffer before allocation.
+/// Dep-info's opened extent is read independently of its earlier pathname
+/// metadata. Admit that exact buffer before allocation.
 pub(in crate::input) fn dep_info(path: &Path, budget: &mut Budget<'_>) -> Result<Vec<u8>> {
     content(path, Extent::Opened, budget)
 }
@@ -129,15 +128,13 @@ fn content(path: &Path, extent: Extent, budget: &mut Budget<'_>) -> Result<Vec<u
         Extent::Initial(maximum) => {
             let actual = usize::try_from(opened.st_size as u64).map_err(|_| budget.overflow())?;
             // The buffer was admitted at the metadata length; a read that grew
-            // past it is a physical bound, not an accounting target.
+            // past it is a physical bound.
             budget.physical("freshness file", maximum, actual)?;
             length(opened.st_size as u64, budget)?
         }
         Extent::Opened => {
             let actual = usize::try_from(opened.st_size as u64).map_err(|_| budget.overflow())?;
-            // The Cargo JSON accounting target is measured and recorded on the
-            // input account, never refused.
-            budget.limited("rustc dep-info", budget.limits.json_bytes, actual)?;
+            budget.check()?;
             actual
         }
     };

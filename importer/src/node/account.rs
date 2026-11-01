@@ -218,49 +218,4 @@ mod tests {
         assert_eq!(count.load(Ordering::Relaxed), 1);
         assert_eq!(count.load(Ordering::Relaxed), 1);
     }
-
-    // The decoded-byte target is an accounting target. A cell seeded past
-    // it is still charged to the original account and retained; the account
-    // records the exceedance truthfully instead of refusing the cell.
-    #[test]
-    fn graph_account_storage_records_exceedance_and_retains_the_cell() {
-        let graph = GraphBudget::new();
-        let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-        graph.decode(target as usize).unwrap();
-        assert!(
-            !graph.exceedances().is_exceeded(),
-            "the exact decoded-byte target is not an exceedance"
-        );
-        let key = Key::<usize>::new().unwrap();
-        key.seed(&graph, 0)
-            .expect("a cell past the accounting target is still retained");
-        assert_eq!(graph.accounts.cells.lock().unwrap().len(), 1);
-        let cell = Registry::cell_bytes::<usize>().unwrap() as u64;
-        let decoded = graph
-            .exceedances()
-            .axis(super::super::DECODED_RESOURCE)
-            .copied()
-            .expect("the cell charge records the decoded-byte exceedance");
-        assert_eq!(decoded.target, target);
-        assert_eq!(decoded.first_requested, target + cell);
-        assert_eq!(decoded.high_water, target + cell);
-        assert!(
-            decoded.site.is_some(),
-            "cell charges attribute their call site"
-        );
-        assert_eq!(graph.usage.lock().unwrap().decoded, target + cell);
-        assert_eq!(
-            key.with(&graph, || panic!("seed retained"), |value| Ok(*value))
-                .unwrap(),
-            0
-        );
-        assert!(
-            matches!(
-                key.seed(&graph, 1),
-                Err(Error::State("graph account is already seeded"))
-            ),
-            "identity refusal is unchanged by the accounting exceedance"
-        );
-        assert_eq!(graph.accounts.cells.lock().unwrap().len(), 1);
-    }
 }

@@ -896,11 +896,6 @@ impl Graph<Captured> {
                 limits.node_canonical_bytes(),
                 stored.canonical.len().saturating_add(stored.selected.len()),
             )?;
-            // The record's retained-ownership audit is untrusted until recount.
-            // Independently admit the decoder's peak, then debit conservative
-            // decoder work before serde can allocate (also on malformed input).
-            // This replaces, rather than adds to, the old header-based debit.
-            allocation.exceeded("sidecar bytes", limits.json_bytes, stored.selected.len());
             // The scan folds the targets it crossed into this canonical
             // transaction on every exit, including a scan that then fails.
             let decode = crate::extract::protocol::selected_preflight_accounted(
@@ -908,7 +903,7 @@ impl Graph<Captured> {
                 limits,
                 allocation,
             )?;
-            allocation.admit_decode(decode.items, decode.admission_bytes)?;
+            allocation.admit_decode()?;
             allocation.items(decode.items)?;
             allocation.bytes(decode.bytes)?;
             let selected: StoredSelected =
@@ -1194,7 +1189,7 @@ impl Graph<Captured> {
                 })
             })?
             .usage();
-        allocation.validate_retained(graph.retained.items, graph.retained.bytes)?;
+        allocation.validate_retained()?;
         Ok(graph)
     }
 
@@ -1837,22 +1832,19 @@ impl Context {
 }
 
 #[cfg(all(test, feature = "rustc-driver"))]
-mod selected_preflight_crossings {
+mod selected_preflight {
     use super::{Captured, Context, Graph, StoredGraph, Usage};
     use crate::extract::Allocation;
     use crate::Error;
 
-    /// A stored selected ledger that crosses a scanner target and then fails
-    /// to scan keeps the crossing on the original canonical account.
+    /// A stored selected ledger that fails to scan charges nothing.
     #[test]
-    fn scan_failure_keeps_the_crossing_already_recorded() {
-        let mut limits = crate::cargo::Limits::standard();
-        limits.containers = 1;
-        limits.string_bytes = 1;
-        for (selected, axis) in [
-            (&br#"[[],["ab","\"#[..], "sidecar containers"),
-            (&br#"["abc","\"#[..], "sidecar string"),
-            (&br#"[[],[]"#[..], "sidecar containers"),
+    fn scan_failure_charges_nothing() {
+        let limits = crate::cargo::Limits::standard();
+        for selected in [
+            &br#"[[],["ab","\"#[..],
+            &br#"["abc","\"#[..],
+            &br#"[[],[]"#[..],
         ] {
             let stored = StoredGraph {
                 canonical: Vec::new().into(),
@@ -1868,7 +1860,7 @@ mod selected_preflight_crossings {
                 &mut allocation,
             )
             .err()
-            .expect("malformed input fails after the crossing");
+            .expect("malformed input fails");
             assert!(
                 matches!(
                     error,
@@ -1878,10 +1870,6 @@ mod selected_preflight_crossings {
                     }
                 ),
                 "{error:?}"
-            );
-            assert!(
-                allocation.exceedances().axis(axis).is_some(),
-                "`{axis}` survives the failed scan"
             );
             assert_eq!(allocation.usage(), (0, 0));
             assert!(!allocation.is_refused());
@@ -2026,44 +2014,6 @@ mod tests {
     }
 
     #[test]
-    fn seal_and_cardinality_temporaries_record_exact_cumulative_exceedances() {
-        let mut measured = Allocation::with_limits(usize::MAX, usize::MAX);
-        seal(&mut measured).expect("the measured graph seals");
-        let (items, bytes) = measured.usage();
-
-        let mut exact = Allocation::with_limits(items, bytes);
-        seal(&mut exact).expect("the exact graph allocation boundary succeeds");
-        assert!(!exact.exceedances().is_exceeded());
-
-        // One over each cumulative target records a truthful high water
-        // on the owning account and the seal continues.
-        for (mut short, resource, target, actual) in [
-            (
-                Allocation::with_limits(items - 1, usize::MAX),
-                "canonical allocation items",
-                items - 1,
-                items,
-            ),
-            (
-                Allocation::with_limits(usize::MAX, bytes - 1),
-                "canonical allocation bytes",
-                bytes - 1,
-                bytes,
-            ),
-        ] {
-            seal(&mut short).expect("an accounting target never refuses the seal");
-            assert_eq!(short.usage(), (items, bytes));
-            assert!(!short.is_refused());
-            let record = short.exceedances();
-            let axis = record
-                .axis(resource)
-                .expect("the crossed target is recorded");
-            assert_eq!(axis.target, target as u64);
-            assert_eq!(axis.high_water, actual as u64);
-        }
-    }
-
-    #[test]
     fn retained_graph_usage_is_history_independent_and_recounted() {
         let mut first = Allocation::with_limits(usize::MAX, usize::MAX);
         let first = seal(&mut first).expect("the first graph seals");
@@ -2103,50 +2053,6 @@ mod tests {
         assert!(evidence.invocation.items > 0);
         assert!(evidence.canonical.items > 0);
         assert!(!std::mem::needs_drop::<super::RetainedEvidence>());
-    }
-
-    #[test]
-    fn retained_graph_usage_records_exact_independent_exceedances() {
-        let mut measured = Allocation::with_limits(usize::MAX, usize::MAX);
-        let measured = seal(&mut measured).expect("the retained graph is measured");
-        let retained = measured.retained;
-
-        let mut exact = Allocation::with_limits(usize::MAX, usize::MAX)
-            .with_retained_limits(retained.items, retained.bytes);
-        seal(&mut exact).expect("the exact retained boundary succeeds");
-        assert!(!exact.exceedances().is_exceeded());
-
-        // Each retained target is independent; one over records only
-        // its own axis and the measured graph is retained either way.
-        for (mut short, resource, other, target, actual) in [
-            (
-                Allocation::with_limits(usize::MAX, usize::MAX)
-                    .with_retained_limits(retained.items - 1, usize::MAX),
-                "retained graph items",
-                "retained graph bytes",
-                retained.items - 1,
-                retained.items,
-            ),
-            (
-                Allocation::with_limits(usize::MAX, usize::MAX)
-                    .with_retained_limits(usize::MAX, retained.bytes - 1),
-                "retained graph bytes",
-                "retained graph items",
-                retained.bytes - 1,
-                retained.bytes,
-            ),
-        ] {
-            let graph = seal(&mut short).expect("a retained target never refuses the seal");
-            assert_eq!(graph.retained, retained);
-            let record = short.exceedances();
-            let axis = record
-                .axis(resource)
-                .expect("the crossed target is recorded");
-            assert_eq!(axis.target, target as u64);
-            assert_eq!(axis.first_requested, actual as u64);
-            assert_eq!(axis.high_water, actual as u64);
-            assert!(record.axis(other).is_none());
-        }
     }
 
     #[test]

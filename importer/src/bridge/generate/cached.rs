@@ -14,7 +14,6 @@ mod retained_tests;
 
 pub(crate) fn materialize<B: crate::surface::Runner>(
     key: super::super::GenerationRequestKey<B>,
-    limits: &crate::cargo::Limits,
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
     let chain = key.profile.node_chain().cloned().ok_or_else(|| {
         super::request::Error::Node(Box::new(node::Error::State(
@@ -41,7 +40,7 @@ pub(crate) fn materialize<B: crate::surface::Runner>(
             .map_err(|error| super::request::Error::Node(Box::new(error)))?;
         (node::staging::Owned::Current(product), overlay)
     };
-    let mut manifest = product.value().assemble(key, chain, limits)?;
+    let mut manifest = product.value().assemble(key, chain)?;
     manifest.overlay = Some(overlay);
     Ok(manifest)
 }
@@ -53,7 +52,7 @@ pub(crate) fn materialize_historical<B: crate::surface::Runner>(
 ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
     use node::staging::{Outcome, Owned, Recipe};
     let super::super::profile::Profile::Historical(pair) = &key.profile else {
-        return materialize(key, limits);
+        return materialize(key);
     };
     let context = pair.context.clone();
     let initial = pair.retention.try_clone().map_err(node_error)?;
@@ -101,7 +100,7 @@ pub(crate) fn materialize_historical<B: crate::surface::Runner>(
             Ok((product, overlay, key, chain))
         })
         .map_err(node_error)?;
-    let mut manifest = product.value().assemble(key, chain, limits)?;
+    let mut manifest = product.value().assemble(key, chain)?;
     manifest.overlay = Some(overlay);
     Ok(manifest)
 }
@@ -207,7 +206,6 @@ impl Product {
         &self,
         key: super::super::GenerationRequestKey<B>,
         chain: node::Chain,
-        limits: &crate::cargo::Limits,
     ) -> Result<crate::runner::Manifest<crate::runner::Generated, B>, super::request::Error> {
         let expected = super::expected_parts(
             &key.request,
@@ -226,7 +224,7 @@ impl Product {
             source_map: clone_bytes(&self.source_map)?,
             spans: Vec::new(),
         };
-        super::assemble(key, rendered, expected, Some(chain), limits)
+        super::assemble(key, rendered, expected, Some(chain))
     }
 
     fn encoded_len(&self) -> usize {
@@ -467,7 +465,6 @@ mod tests {
         chain: &crate::node::Chain,
         key: crate::bridge::GenerationRequestKey<()>,
         executions: &AtomicUsize,
-        limits: &crate::cargo::Limits,
     ) -> crate::runner::Manifest<crate::runner::Generated, ()> {
         let authority = super::authority(&key).expect("the overlay authority seals");
         let product = super::evaluate(chain, &authority, || {
@@ -478,7 +475,7 @@ mod tests {
         let child = chain.child(&product);
         let mut manifest = product
             .value()
-            .assemble(key, chain.clone(), limits)
+            .assemble(key, chain.clone())
             .expect("the cached overlay materializes");
         manifest.overlay = Some(crate::runner::overlay::Overlay::from_current(child).unwrap());
         manifest
@@ -577,7 +574,7 @@ mod tests {
             &limits,
         );
         let key = cold_request.build_request_key();
-        let cold = materialize_fixture(&chain, cold_request, &executions, &limits);
+        let cold = materialize_fixture(&chain, cold_request, &executions);
         let cargo = crate::cargo::Owner::acquire().expect("the cold Cargo lane acquires");
         let cold = cold
             .build(&cargo, &cache)
@@ -609,7 +606,7 @@ mod tests {
             &limits,
         );
         assert_eq!(warm_request.build_request_key(), key);
-        let warm = materialize_fixture(&chain, warm_request, &executions, &limits);
+        let warm = materialize_fixture(&chain, warm_request, &executions);
         let cargo = crate::cargo::Owner::acquire().expect("the warm Cargo lane acquires");
         let warm = warm
             .build(&cargo, &cache)

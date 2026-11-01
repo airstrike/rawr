@@ -106,10 +106,6 @@ fn environment(
 }
 
 fn scalar(value: &str, budget: &mut Budget<'_>) -> Result<Box<str>> {
-    budget.limited(
-        "input owned string bytes",
-        budget.limits.string_bytes,
-        value.len(),
-    )?;
+    budget.check()?;
     budget.owned_text(value)
 }

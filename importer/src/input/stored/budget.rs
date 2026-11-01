@@ -106,23 +106,8 @@ impl<'account> Budget<'account> {
         error
     }
 
-    /// An accounting target is a measured comparison, never a refusal.
-    /// Crossing it records the axis on the original input account and the
-    /// work continues; a latched account still does no further work.
-    pub(in crate::input) fn limited(
-        &mut self,
-        resource: &'static str,
-        limit: usize,
-        actual: usize,
-    ) -> Result<()> {
-        self.check()?;
-        self.allocation.exceeded(resource, limit, actual);
-        Ok(())
-    }
-
     /// A physical bound (recursion depth, a read that grew past its admitted
-    /// buffer) still refuses and latches the account; it is not an
-    /// accounting target and is never recorded as an exceedance.
+    /// buffer) refuses and latches the account.
     pub(in crate::input) fn physical(
         &mut self,
         resource: &'static str,
@@ -163,11 +148,6 @@ impl<'account> Budget<'account> {
     #[track_caller]
     pub(super) fn wire(&mut self, bytes: usize) -> Result<()> {
         self.check()?;
-        self.limited(
-            "stored baseline bytes",
-            self.limits.input_proof_bytes,
-            bytes,
-        )?;
         self.graph.decode(bytes).map_err(|error| {
             self.allocation.refused = true;
             error.into()
@@ -335,11 +315,7 @@ impl<'account> Budget<'account> {
         self.check()?;
         std::str::from_utf8(bytes).map_err(|_| Error::Encoding("text is not UTF-8"))?;
         if scalar {
-            self.limited(
-                "stored baseline string bytes",
-                self.limits.string_bytes.min(self.allocation.string_limit),
-                bytes.len(),
-            )?;
+            self.check()?;
         }
         let value = String::from_utf8(self.bytes(bytes)?)
             .map_err(|_| Error::Encoding("text encoding changed"))?;
@@ -363,12 +339,6 @@ impl<'account> Budget<'account> {
     #[cfg(test)]
     pub(super) fn usage(&self) -> crate::input::Usage {
         self.allocation.usage
-    }
-
-    /// The input account's recorded exceedances.
-    #[cfg(test)]
-    pub(crate) fn exceedances(&self) -> crate::exceedance::Record {
-        self.allocation.exceedances()
     }
 
     /// Latch the input account on a genuine failure (test-only cause injection).

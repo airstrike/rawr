@@ -184,21 +184,9 @@ fn local_nul_produces_none_after_both_joins_without_any_host_query() {
         .expect("local InvalidInput branch")
         .is_none());
     host.finish().expect("no host query");
-    assert!(allocation.check().is_ok(), "accounting targets never latch");
+    assert!(allocation.check().is_ok());
     assert_eq!(allocation.usage().items, 2);
     assert_eq!(allocation.usage().bytes, legacy_bytes + toml_bytes);
-    let record = allocation.exceedances();
-    let mut axes = record.axes();
-    let axis = axes
-        .next()
-        .copied()
-        .expect("the second join's string target crossing is recorded");
-    assert!(axes.next().is_none(), "{record:?}");
-    assert_eq!(axis.name, "membership decoded TOML string bytes");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (legacy_bytes as u64, toml_bytes as u64, toml_bytes as u64)
-    );
     // The second source join can still refuse before NUL would select None:
     // its byte charge overflows the account's checked arithmetic, a genuine
     // failure that latches the account.
@@ -223,7 +211,6 @@ fn local_nul_produces_none_after_both_joins_without_any_host_query() {
     assert!(allocation.check().is_err(), "overflow latches the account");
     assert_eq!(allocation.usage().items, 2);
     assert_eq!(allocation.usage().bytes, usize::MAX);
-    assert!(!allocation.exceedances().is_exceeded());
 }
 
 #[test]
@@ -268,18 +255,17 @@ fn missing_or_relative_domain_gap_latches_without_cargo_rejection_or_absence() {
 }
 
 #[test]
-fn selection_preserves_original_allocation_and_graph_floors() {
-    use crate::input::membership::manifest::tests::admits_one_short;
+fn selection_charges_the_original_allocation() {
     let image = image(vec![discovery(
         b"/known",
         transcript(Filename::Config, false, Selection::Legacy),
     )]);
-    let run = |items, bytes, available| {
+    let run = || {
         let graph = node::GraphBudget::new();
         graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - available)
+            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1)
             .expect("prior work");
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).expect("prior items");
         allocation.bytes(31).expect("prior bytes");
         let mut host = host::Host::from_image(
@@ -294,56 +280,20 @@ fn selection_preserves_original_allocation_and_graph_floors() {
         let result = select(Path::new("/known"), Filename::Config, false, &mut session);
         let result = session.finish(result);
         let success = result.is_ok();
-        if available == 0 {
-            // The one selection path check past the target is recorded.
-            assert!(result.is_ok());
-            let exceeded = graph.exceedances();
-            let axis = exceeded
-                .axis(node::PATHS_RESOURCE)
-                .expect("exhausted path target recorded");
-            assert_eq!(
-                axis.first_requested,
-                node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-            );
-            assert_eq!(axis.high_water, node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1);
-        } else {
-            assert!(!graph.exceedances().is_exceeded());
-        }
         if success {
             host.finish().expect("consumed");
         } else {
             assert!(matches!(host.finish(), Err(InputError::Unconsumed)));
         }
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (success, allocation.usage(), allocation.exceedances())
+        assert!(allocation.check().is_ok());
+        (success, allocation.usage())
     };
-    let (success, usage, _) = run(usize::MAX, usize::MAX, 1);
+    let (success, usage) = run();
     assert!(success);
     assert_eq!(usage.items, 7 + 1 + 2 + 1);
     assert_eq!(
         usage.bytes,
         31 + 1 + b"/known/config".len() + b"/known/config.toml".len() + b"/known".len()
-    );
-    assert_eq!(
-        run(usage.items, usage.bytes, 1),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(usage.items - 1, usage.bytes, 1),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(usage.items, usage.bytes - 1, 1),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-    assert_eq!(
-        run(usage.items, usage.bytes, 0),
-        (true, usage, crate::exceedance::Record::new())
     );
 }
 

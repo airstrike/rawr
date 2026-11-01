@@ -1470,25 +1470,12 @@ mod tests {
         stored
             .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &graph)
             .unwrap();
-        // A graph at its hashed target still authenticates the control
-        // bytes and records the axis at exactly target + the bytes hashed.
-        let spent = node::GraphBudget::new();
-        spent
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
+        // Authenticating the control bytes charges exactly the bytes hashed.
+        let fresh = node::GraphBudget::new();
         stored
-            .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &spent)
+            .require_resolution_bytes(&fixture.root, origin, &path, &bytes, &fresh)
             .unwrap();
-        let axis = spent
-            .exceedances()
-            .axis(node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.high_water,
-            node::MAX_HASHED_BYTES_PER_GRAPH + bytes.len() as u64
-        );
+        assert_eq!(fresh.census_usage().unwrap().2, bytes.len() as u64);
     }
 
     /// Give every regular file under `root` a new status-change time, so its
@@ -1513,7 +1500,6 @@ mod tests {
             .into_iter()
             .map(|bytes| bytes.len() + 1)
             .sum::<usize>();
-        let limit = usize::try_from(node::MAX_HASHED_BYTES_PER_GRAPH).unwrap();
         // The capture already computed every member digest; an
         // unchanged replay reuses them and reads nothing.
         let reused = node::GraphBudget::new();
@@ -1521,29 +1507,13 @@ mod tests {
             .replay(&fixture.root, Mode::Pending, &reused)
             .unwrap();
         assert_eq!(reused.census_usage().unwrap().2, 0);
+        // Changed identities reread every file and its EOF probe.
         touch_files(&fixture.root);
-        let exact = node::GraphBudget::new();
-        exact.hash(limit - file_work).unwrap();
-        stored.replay(&fixture.root, Mode::Pending, &exact).unwrap();
-
-        // The exact floor fills the hashed target with no exceedance;
-        // one byte less remaining still replays and records the axis at
-        // exactly target + 1, proving the replay hashes exactly `file_work`.
-        assert!(!exact.exceedances().is_exceeded());
-        assert_eq!(exact.census_usage().unwrap().2, limit as u64);
-
-        touch_files(&fixture.root);
-        let floor = node::GraphBudget::new();
-        floor.hash(limit - file_work + 1).unwrap();
-        stored.replay(&fixture.root, Mode::Pending, &floor).unwrap();
-        let axis = floor
-            .exceedances()
-            .axis("typed store hashed candidate bytes per graph")
-            .copied()
+        let changed = node::GraphBudget::new();
+        stored
+            .replay(&fixture.root, Mode::Pending, &changed)
             .unwrap();
-        assert_eq!(axis.target, limit as u64);
-        assert_eq!(axis.first_requested, limit as u64 + 1);
-        assert_eq!(axis.high_water, limit as u64 + 1);
+        assert_eq!(changed.census_usage().unwrap().2, file_work as u64);
     }
 
     #[test]
@@ -1705,9 +1675,6 @@ mod tests {
                 _ => unreachable!(),
             }
             let budget = node::GraphBudget::new();
-            budget
-                .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                .unwrap();
             assert!(matches!(
                 Stored::decode(&bytes, &fixture.root, fixture.reference, &budget),
                 Err(node::Error::Codec(_))
@@ -1741,62 +1708,22 @@ mod tests {
         let executable = fixture.root.join("target/debug/runner");
         let mut metadata = fs::metadata(&executable).unwrap();
         // The four content bytes plus the EOF probe byte are charged
-        // before the open. Five remaining fills the target exactly; four
-        // remaining still hashes and records the axis at exactly target + 1.
-        for remaining in [4, 5] {
-            // A fresh status change gives each iteration a new identity, so
-            // the memoized first digest cannot satisfy it.
-            fs::set_permissions(&executable, metadata.permissions()).unwrap();
-            metadata = fs::metadata(&executable).unwrap();
-            let budget = node::GraphBudget::new();
-            budget
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - remaining)
-                .unwrap();
-            hash(&executable, &metadata, &budget).unwrap();
-            let exceeded = budget.exceedances();
-            assert_eq!(exceeded.is_exceeded(), remaining == 4);
-            if remaining == 4 {
-                let axis = exceeded.axis(node::HASHED_RESOURCE).unwrap();
-                assert_eq!(axis.first_requested, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-                assert_eq!(axis.high_water, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
-            } else {
-                assert_eq!(
-                    budget.census_usage().unwrap().2,
-                    node::MAX_HASHED_BYTES_PER_GRAPH
-                );
-            }
-        }
-        // A spent graph still precharges the five bytes before the open; the
-        // missing file then fails for its own physical reason. A fresh
-        // identity, since a memoized digest skips the precharge.
+        // before the open. A fresh status change gives the file a new
+        // identity, so a memoized digest cannot satisfy it.
         fs::set_permissions(&executable, metadata.permissions()).unwrap();
         metadata = fs::metadata(&executable).unwrap();
         let budget = node::GraphBudget::new();
-        budget
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        assert!(matches!(
-            hash(&fixture.root.join("missing"), &metadata, &budget),
-            Err(node::Error::Io { .. })
-        ));
-        assert_eq!(
-            budget
-                .exceedances()
-                .axis(node::HASHED_RESOURCE)
-                .unwrap()
-                .high_water,
-            node::MAX_HASHED_BYTES_PER_GRAPH + 5
-        );
+        hash(&executable, &metadata, &budget).unwrap();
+        assert_eq!(budget.census_usage().unwrap().2, 5);
+        // The five bytes are precharged before the open even when the
+        // missing file then fails for its own physical reason.
+        fs::set_permissions(&executable, metadata.permissions()).unwrap();
+        metadata = fs::metadata(&executable).unwrap();
         let budget = node::GraphBudget::new();
-        budget.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         assert!(matches!(
             hash(&fixture.root.join("missing"), &metadata, &budget),
             Err(node::Error::Io { .. })
         ));
-        assert!(budget
-            .exceedances()
-            .axis(node::PATHS_RESOURCE)
-            .is_some_and(|axis| axis.high_water > node::MAX_PATH_CHECKS_PER_GRAPH as u64));
         assert!(super::super::hash(executable, Some(&node::GraphBudget::new())).is_ok());
         fixture.capture();
     }

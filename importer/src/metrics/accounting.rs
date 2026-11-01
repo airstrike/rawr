@@ -187,53 +187,6 @@ const SCALARS: [Scalar; 83] = [
     Scalar::SemanticRefusedLimit(SemanticStage::Classification),
 ];
 
-/// An axis in the original graph account, in the order used by `Graph::admitted`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Axis {
-    Lookups,
-    Comparisons,
-    Deep,
-    Decoded,
-    Paths,
-    Hashed,
-}
-
-/// The closed operation at which the original account was observed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Stage {
-    Charge(Axis),
-    Node(NodeKind),
-    Admission,
-    Watch,
-    Resident,
-    Completion,
-}
-
-/// A cumulative charge that crossed its accounting target. The charge
-/// was still admitted to the original account; this is reporting, not refusal.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Exceedance {
-    pub axis: Axis,
-    /// Attempted cumulative total; absent only when checked arithmetic overflowed.
-    pub requested: Option<u64>,
-    /// The accounting target the request crossed.
-    pub limit: u64,
-}
-
-/// One allocation-free observation of the original shared graph account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Graph {
-    /// Observation identity only. Clones of an account retain the same nonzero ID.
-    pub account: u64,
-    pub stage: Stage,
-    /// Lookups, comparisons, deep validations, decoded bytes, paths, hashed bytes.
-    pub admitted: [u64; 6],
-    pub exceedance: Option<Exceedance>,
-}
-
 /// Repeated observations retain their population, range, and checked total.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -252,40 +205,11 @@ pub struct ScalarRow {
     pub observed: Option<Range>,
 }
 
-/// The first observed exceedance, including its original admitted usage and stage.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Exceeded {
-    pub stage: Stage,
-    pub admitted: [u64; 6],
-    #[serde(alias = "refusal")]
-    pub exceedance: Exceedance,
-}
-
-/// Bounded cumulative evidence for one original account, never a replacement budget.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphRow {
-    pub account: u64,
-    pub observations: u64,
-    /// First and last in observation arrival order, which can differ from charge order.
-    pub first_stage: Stage,
-    pub last_stage: Stage,
-    pub high_water: [u64; 6],
-    #[serde(alias = "refusals")]
-    pub exceedances: u64,
-    #[serde(alias = "first_refusal")]
-    pub first_exceedance: Option<Exceeded>,
-}
-
 /// A sticky recording failure. It cannot replace the product's original error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Fault {
     ScalarOverflow(Scalar),
-    GraphOverflow(u64),
-    GraphCapacity,
-    InvalidGraph(u64),
     Native {
         runner_pid: u32,
         epoch: u64,
@@ -326,9 +250,6 @@ pub struct NativeRow {
 /// Fixed original-account slots, including explicit unreached runner lifetimes.
 pub const NATIVE_ACCOUNTS: usize = 32;
 
-/// Fixed evidence capacity, independent of all production resource limits.
-pub const GRAPH_ACCOUNTS: usize = 32;
-
 /// Closed scalar evidence carried in the existing recorder snapshot and capsule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -338,7 +259,6 @@ pub struct Evidence {
         deserialize_with = "deserialize_scalars"
     )]
     pub scalars: [ScalarRow; SCALARS.len()],
-    pub graphs: [Option<GraphRow>; GRAPH_ACCOUNTS],
     pub native: [Option<NativeRow>; NATIVE_ACCOUNTS],
     /// A fault freezes this evidence at the last representable observation.
     pub fault: Option<Fault>,
@@ -351,7 +271,6 @@ impl Default for Evidence {
                 scalar,
                 observed: None,
             }),
-            graphs: [None; GRAPH_ACCOUNTS],
             native: [None; NATIVE_ACCOUNTS],
             fault: None,
         }
@@ -376,22 +295,6 @@ impl Evidence {
             .any(|(row, scalar)| row.scalar != scalar || row.observed.is_some_and(|r| !r.valid()))
         {
             return false;
-        }
-        let mut empty = false;
-        for (index, row) in self.graphs.iter().enumerate() {
-            let Some(row) = row else {
-                empty = true;
-                continue;
-            };
-            if empty
-                || !row.valid()
-                || self.graphs[..index]
-                    .iter()
-                    .flatten()
-                    .any(|previous| previous.account == row.account)
-            {
-                return false;
-            }
         }
         let mut empty = false;
         for (index, row) in self.native.iter().enumerate() {
@@ -597,59 +500,6 @@ impl Evidence {
     pub(super) fn scalar_overflow(&mut self, scalar: Scalar) {
         self.fault.get_or_insert(Fault::ScalarOverflow(scalar));
     }
-
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn record_graph(&mut self, graph: Graph, limit: u64) {
-        if self.fault.is_some() {
-            return;
-        }
-        if graph.account == 0
-            || graph
-                .exceedance
-                .is_some_and(|exceedance| !exceedance.valid())
-        {
-            self.fault = Some(Fault::InvalidGraph(graph.account));
-            return;
-        }
-        let existing = self
-            .graphs
-            .iter()
-            .position(|row| row.as_ref().is_some_and(|row| row.account == graph.account));
-        let index = existing.or_else(|| self.graphs.iter().position(Option::is_none));
-        let Some(index) = index else {
-            self.fault = Some(Fault::GraphCapacity);
-            return;
-        };
-        let previous = self.graphs[index];
-        let mut row = previous.unwrap_or(GraphRow {
-            account: graph.account,
-            observations: 0,
-            first_stage: graph.stage,
-            last_stage: graph.stage,
-            high_water: [0; 6],
-            exceedances: 0,
-            first_exceedance: None,
-        });
-        let Some(observations) = row.observations.checked_add(1).filter(|n| *n <= limit) else {
-            self.fault = Some(Fault::GraphOverflow(graph.account));
-            return;
-        };
-        row.observations = observations;
-        row.last_stage = graph.stage;
-        for (high_water, admitted) in row.high_water.iter_mut().zip(graph.admitted) {
-            *high_water = (*high_water).max(admitted);
-        }
-        if let Some(exceedance) = graph.exceedance {
-            // Exceedances are a subset of the checked observation count.
-            row.exceedances += 1;
-            row.first_exceedance.get_or_insert(Exceeded {
-                stage: graph.stage,
-                admitted: graph.admitted,
-                exceedance,
-            });
-        }
-        self.graphs[index] = Some(row);
-    }
 }
 
 impl Range {
@@ -671,31 +521,6 @@ impl Range {
             && u128::from(self.max) * u128::from(self.count - 1) + u128::from(self.min)
                 >= u128::from(self.total)
             && (self.count != 1 || self.min == self.max && self.total == self.min)
-    }
-}
-
-impl GraphRow {
-    fn valid(&self) -> bool {
-        self.account != 0
-            && self.observations > 0
-            && self.exceedances <= self.observations
-            && (self.exceedances > 0) == self.first_exceedance.is_some()
-            && self.first_exceedance.is_none_or(|exceeded| {
-                exceeded.exceedance.valid()
-                    && exceeded
-                        .admitted
-                        .iter()
-                        .zip(self.high_water)
-                        .all(|(a, h)| *a <= h)
-            })
-    }
-}
-
-impl Exceedance {
-    /// A recorded exceedance must name a request above its target, or an
-    /// arithmetic overflow whose requested total could not be represented.
-    fn valid(self) -> bool {
-        self.requested.is_none_or(|amount| amount > self.limit)
     }
 }
 

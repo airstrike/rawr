@@ -833,20 +833,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot.retained.members.len(), 4);
-        // The exact 20-byte charge fills the hashed target with no
-        // exceedance; one more byte records the axis at target + 1.
-        assert!(!graph.exceedances().is_exceeded());
         assert_eq!(
             graph.census_usage().unwrap().2,
             crate::node::MAX_HASHED_BYTES_PER_GRAPH
         );
         graph.hash(1).unwrap();
-        let axis = graph
-            .exceedances()
-            .axis(crate::node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.high_water, crate::node::MAX_HASHED_BYTES_PER_GRAPH + 1);
     }
 
     #[test]
@@ -915,11 +906,9 @@ mod tests {
     fn metadata_error_ownership_uses_the_original_allocation() {
         let graph = GraphBudget::new();
         let absent = Path::new("/rawr-absent-namespace-diagnostic");
-        // Owning the diagnostic path charges the original account, whose
-        // targets record. A zero-target account still owns the path and
-        // reports the I/O failure, recording items and bytes at exactly the
-        // owned path.
-        let mut recorded = Allocation::with_limits(0, 0);
+        // Owning the diagnostic path charges the original account, which
+        // reports the I/O failure.
+        let mut recorded = Allocation::with_limits(usize::MAX, usize::MAX);
         assert!(matches!(
             metadata(absent, &mut recorded, &graph).unwrap_err(),
             Error::Io {
@@ -928,23 +917,6 @@ mod tests {
             }
         ));
         assert!(!recorded.is_refused());
-        let length = absent.as_os_str().len() as u64;
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, 1, 1)
-        );
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, length, length)
-        );
         // Only a genuinely latched original account replaces the diagnostic
         // with its own refusal.
         let error = metadata(absent, &mut Allocation::refused(), &graph).unwrap_err();
@@ -992,13 +964,11 @@ mod tests {
         fs::hard_link(fixture.0.join("opaque"), fixture.0.join("link")).unwrap();
         assert!(Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).is_err());
         fs::remove_file(fixture.0.join("link")).unwrap();
-        // A graph whose hashed target is already spent still captures;
-        // the hashed axis records exactly the capture's own hashed bytes.
+        // A graph whose hashed bytes are already spent still captures.
         let measured = GraphBudget::new();
         Snapshot::capture(&fixture.roots(), &[], &mut allocation, &measured).unwrap();
         let capture_hashed = measured.census_usage().unwrap().2;
         assert!(capture_hashed > 0);
-        assert!(!measured.exceedances().is_exceeded());
         // A fresh identity, so this capture hashes again rather than
         // reusing the digests just computed.
         touch_files(&fixture.0);
@@ -1007,37 +977,6 @@ mod tests {
             .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
             .unwrap();
         Snapshot::capture(&fixture.roots(), &[], &mut allocation, &spent).unwrap();
-        let axis = spent
-            .exceedances()
-            .axis(crate::node::HASHED_RESOURCE)
-            .copied()
-            .unwrap();
-        assert_eq!(axis.target, crate::node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.high_water,
-            crate::node::MAX_HASHED_BYTES_PER_GRAPH + capture_hashed
-        );
-        // The original extraction allocation is the canonical account.
-        // Its targets record: a zero-target account still captures and records
-        // the item axis from its first owned path to its truthful high water.
-        let mut recorded = Allocation::with_limits(0, 0);
-        Snapshot::capture(&fixture.roots(), &[], &mut recorded, &GraphBudget::new())
-            .expect("a zero-target account records and still captures");
-        assert!(!recorded.is_refused());
-        let (items, bytes) = recorded.usage();
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation items")
-            .unwrap();
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (0, 1, items as u64)
-        );
-        let axis = *recorded
-            .exceedances()
-            .axis("canonical allocation bytes")
-            .unwrap();
-        assert_eq!((axis.target, axis.high_water), (0, bytes as u64));
         // Only a genuinely latched account rejects the capture before it owns
         // any path.
         assert!(matches!(

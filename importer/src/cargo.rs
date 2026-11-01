@@ -42,10 +42,8 @@ const HARNESS_EDITION: &str = "2024";
 /// runner moves to its `[dependencies]`.
 pub(crate) const BUILD_DEPENDENCIES: &str = "build-dependencies";
 const PROFILE_DEFAULT: &str = "dev";
-/// The Cargo JSON accounting target: the figure a Cargo document is
-/// measured against and warned past. It is distinct from the physical child
-/// capture bound `process::CAPTURE_BYTES`, which refuses; a target above that
-/// bound is unreachable and is refused at load.
+/// The standard Cargo JSON figure. It is distinct from the physical child
+/// capture bound `process::CAPTURE_BYTES`, which refuses.
 const JSON_BYTES: usize = 32 * 1024 * 1024;
 const _: () = assert!(JSON_BYTES <= process::CAPTURE_BYTES);
 const MANIFEST_BYTES: usize = 1024 * 1024;
@@ -54,16 +52,14 @@ const PACKAGES: usize = 4_096;
 /// temporaries from a Rawr-owned resolution harness. Fixed at the 4,096 figure
 /// (the standard package envelope) this sweep has always refused at; it is a
 /// finite-work ceiling over a directory Rawr owns, not an input measure, so it
-/// never follows the configurable `packages` accounting target (a configured
-/// count must not move a terminal bound).
+/// never follows the `packages` figure.
 const HARNESS_ENTRIES: usize = 4_096;
 const UNITS: usize = 500_000;
 const EDGES: usize = 1_000_000;
 const ITEMS: usize = 2_500_000;
 const CANONICAL_ITEMS: usize = 19_000_000;
-/// The canonical bytes accounting target starts at the node content figure;
-/// it is an alias of the physical `node::MAX_CONTENT_BYTES` value, not a second
-/// spelling of it, and `node_canonical_bytes()` stays decoupled from the target.
+/// The canonical bytes figure is an alias of the physical
+/// `node::MAX_CONTENT_BYTES` value, not a second spelling of it.
 const CANONICAL_BYTES: usize = crate::node::MAX_CONTENT_BYTES;
 const INPUT_PROOF_BYTES: usize = 512 * 1024 * 1024;
 /// Physical bound on one typed-store node's recipe authority, discovered
@@ -71,8 +67,8 @@ const INPUT_PROOF_BYTES: usize = 512 * 1024 * 1024;
 /// build node authorities, the resolution evidence capture and the cached
 /// toolchain inputs). Fixed at 512 MiB, its effective value before the
 /// accounting-target series (at c1fedce0^ it was read through the then-default
-/// `input_proof_bytes`). It is not configurable and never follows the
-/// `input_proof_bytes` accounting target, which only shares the figure.
+/// `input_proof_bytes`). It never follows `input_proof_bytes`, which only
+/// shares the figure.
 const NODE_INPUT_BYTES: usize = 512 * 1024 * 1024;
 const RETAINED_GRAPH_ITEMS: usize = 6_500_000;
 const RETAINED_GRAPH_BYTES: usize = 512 * 1024 * 1024;
@@ -126,67 +122,8 @@ pub struct Limits {
     pub(crate) containers: usize,
     pub(crate) string_bytes: usize,
     pub(crate) depth: usize,
-    pub(crate) graph_lookups: usize,
-    pub(crate) graph_comparisons: usize,
-    pub(crate) graph_deep_validations: usize,
-    pub(crate) graph_decode_bytes: u64,
-    pub(crate) graph_path_checks: usize,
-    pub(crate) graph_hashed_bytes: u64,
     process: process::Limits,
 }
-
-/// Why a configured accounting target was refused at load.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ConfigureError {
-    /// The key names no configurable accounting target; physical limits are
-    /// never configurable.
-    UnknownTarget(Box<str>),
-    /// A target must be a positive integer.
-    Zero(&'static str),
-    /// The value does not fit the account's counter.
-    Unrepresentable(&'static str, u64),
-    /// A configured target may never raise a physical limit it is compared against.
-    AbovePhysicalCeiling {
-        field: &'static str,
-        value: u64,
-        ceiling: u64,
-        physical: &'static str,
-    },
-}
-
-impl fmt::Display for ConfigureError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownTarget(key) => write!(
-                formatter,
-                "`rust.limits.{key}` is not a configurable accounting target; physical limits \
-                 are not configurable"
-            ),
-            Self::Zero(field) => {
-                write!(
-                    formatter,
-                    "`rust.limits.{field}` must be a positive integer"
-                )
-            }
-            Self::Unrepresentable(field, value) => write!(
-                formatter,
-                "`rust.limits.{field}` = {value} does not fit this account's counter"
-            ),
-            Self::AbovePhysicalCeiling {
-                field,
-                value,
-                ceiling,
-                physical,
-            } => write!(
-                formatter,
-                "`rust.limits.{field}` = {value} exceeds the physical {physical} ceiling \
-                 {ceiling}; a configured accounting target may never raise a physical limit"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ConfigureError {}
 
 impl Limits {
     /// Return the aggregate retained-item ceiling for generated consumers.
@@ -354,14 +291,10 @@ pub(crate) struct RequestAllocation {
     item_limit: usize,
     byte_limit: usize,
     string_limit: usize,
-    /// Process-unique account identity for exceedance reporting.
-    id: u64,
-    exceeded: crate::exceedance::Record,
 }
 
 pub(crate) const REQUEST_ITEMS_RESOURCE: &str = "request retained items";
 pub(crate) const REQUEST_BYTES_RESOURCE: &str = "request retained bytes";
-pub(crate) const REQUEST_STRING_RESOURCE: &str = "request retained string bytes";
 
 /// A currently validated semantic resolution owner ready for API publication.
 #[cfg(feature = "rustc-driver")]
@@ -819,183 +752,8 @@ impl Limits {
             containers: CONTAINERS,
             string_bytes: STRING_BYTES,
             depth: DEPTH,
-            graph_lookups: crate::node::GraphTargets::STANDARD.lookups,
-            graph_comparisons: crate::node::GraphTargets::STANDARD.comparisons,
-            graph_deep_validations: crate::node::GraphTargets::STANDARD.deep,
-            graph_decode_bytes: crate::node::GraphTargets::STANDARD.decoded,
-            graph_path_checks: crate::node::GraphTargets::STANDARD.paths,
-            graph_hashed_bytes: crate::node::GraphTargets::STANDARD.hashed,
             process: process::Limits::capture(),
         }
-    }
-
-    /// The configurable accounting-target keys of a `[rust.limits]` table, in
-    /// kebab-case spelling. Physical limits (child capture, store payload
-    /// ceilings, recursion depth, RSS, disk, process and IPC bounds) are absent.
-    pub const TARGET_FIELDS: &'static [&'static str] = &[
-        "json-bytes",
-        "manifest-bytes",
-        "request-bytes",
-        "packages",
-        "units",
-        "edges",
-        "items",
-        "canonical-items",
-        "canonical-bytes",
-        "input-proof-bytes",
-        "retained-graph-items",
-        "retained-graph-bytes",
-        "classified-contract-items",
-        "classified-contract-bytes",
-        "containers",
-        "string-bytes",
-        "graph-lookups",
-        "graph-comparisons",
-        "graph-deep-validations",
-        "graph-decode-bytes",
-        "graph-path-checks",
-        "graph-hashed-bytes",
-    ];
-
-    /// Override one accounting target by its `[rust.limits]` key.
-    ///
-    /// Fails closed: unknown keys, zero, unrepresentable values and any target
-    /// above the physical ceiling it is measured under are refused at load.
-    /// `depth` and every physical limit are not configurable. Ceilings:
-    /// `json-bytes` ≤ `process::CAPTURE_BYTES` (child stdout capture);
-    /// `manifest-bytes`/`request-bytes` ≤ `process::TAIL_BYTES` (every
-    /// manifest-class read — manifests, harness sources, authority inputs,
-    /// Cargo config — binds there); the byte targets measured under node
-    /// store content (`canonical-bytes`, `input-proof-bytes`,
-    /// `retained-graph-bytes`, `classified-contract-bytes`, `string-bytes`)
-    /// ≤ `node::MAX_CONTENT_BYTES`; counts and the cumulative graph byte
-    /// targets have no single physical ceiling and take any non-zero value.
-    pub fn configure(&mut self, key: &str, value: u64) -> std::result::Result<(), ConfigureError> {
-        fn count(field: &'static str, value: u64) -> std::result::Result<usize, ConfigureError> {
-            if value == 0 {
-                return Err(ConfigureError::Zero(field));
-            }
-            usize::try_from(value).map_err(|_| ConfigureError::Unrepresentable(field, value))
-        }
-        fn bytes(
-            field: &'static str,
-            value: u64,
-            ceiling: usize,
-            physical: &'static str,
-        ) -> std::result::Result<usize, ConfigureError> {
-            let value = count(field, value)?;
-            if value > ceiling {
-                return Err(ConfigureError::AbovePhysicalCeiling {
-                    field,
-                    value: value as u64,
-                    ceiling: ceiling as u64,
-                    physical,
-                });
-            }
-            Ok(value)
-        }
-        const CONTENT: &str = "node store payload";
-        const CAPTURE: &str = "child stdout capture";
-        const TAIL: &str = "manifest-class read";
-        let content = crate::node::MAX_CONTENT_BYTES;
-        match key {
-            "json-bytes" => {
-                self.json_bytes = bytes("json-bytes", value, process::CAPTURE_BYTES, CAPTURE)?;
-            }
-            "manifest-bytes" | "request-bytes" => {
-                self.manifest_bytes = bytes("manifest-bytes", value, process::TAIL_BYTES, TAIL)?;
-            }
-            "packages" => self.packages = count("packages", value)?,
-            "units" => self.units = count("units", value)?,
-            "edges" => self.edges = count("edges", value)?,
-            "items" => self.items = count("items", value)?,
-            "canonical-items" => self.canonical_items = count("canonical-items", value)?,
-            "canonical-bytes" => {
-                self.canonical_bytes = bytes("canonical-bytes", value, content, CONTENT)?;
-            }
-            "input-proof-bytes" => {
-                self.input_proof_bytes = bytes("input-proof-bytes", value, content, CONTENT)?;
-            }
-            "retained-graph-items" => {
-                self.retained_graph_items = count("retained-graph-items", value)?;
-            }
-            "retained-graph-bytes" => {
-                self.retained_graph_bytes = bytes("retained-graph-bytes", value, content, CONTENT)?;
-            }
-            "classified-contract-items" => {
-                self.classified_contract_items = count("classified-contract-items", value)?;
-            }
-            "classified-contract-bytes" => {
-                self.classified_contract_bytes =
-                    bytes("classified-contract-bytes", value, content, CONTENT)?;
-            }
-            "containers" => self.containers = count("containers", value)?,
-            "string-bytes" => {
-                self.string_bytes = bytes("string-bytes", value, content, CONTENT)?;
-            }
-            "graph-lookups" => self.graph_lookups = count("graph-lookups", value)?,
-            "graph-comparisons" => self.graph_comparisons = count("graph-comparisons", value)?,
-            "graph-deep-validations" => {
-                self.graph_deep_validations = count("graph-deep-validations", value)?;
-            }
-            "graph-decode-bytes" => {
-                count("graph-decode-bytes", value.min(usize::MAX as u64))?;
-                self.graph_decode_bytes = value;
-            }
-            "graph-path-checks" => self.graph_path_checks = count("graph-path-checks", value)?,
-            "graph-hashed-bytes" => {
-                count("graph-hashed-bytes", value.min(usize::MAX as u64))?;
-                self.graph_hashed_bytes = value;
-            }
-            other => return Err(ConfigureError::UnknownTarget(other.into())),
-        }
-        Ok(())
-    }
-
-    /// Whether any accounting target differs from `Limits::standard()`.
-    #[must_use]
-    pub fn is_configured(&self) -> bool {
-        *self != Self::standard()
-    }
-
-    pub(crate) const fn graph_targets(&self) -> crate::node::GraphTargets {
-        crate::node::GraphTargets {
-            lookups: self.graph_lookups,
-            comparisons: self.graph_comparisons,
-            deep: self.graph_deep_validations,
-            decoded: self.graph_decode_bytes,
-            paths: self.graph_path_checks,
-            hashed: self.graph_hashed_bytes,
-        }
-    }
-
-    /// Derive explicit Phase 2 cumulative bounds for driver integration audits.
-    ///
-    /// This read-only driver boundary does not relax any Cargo, process,
-    /// package, graph-depth, or manifest limit. Like `configure`, a JSON target
-    /// above the physical child capture bound is refused.
-    #[cfg(feature = "rustc-driver")]
-    #[doc(hidden)]
-    pub const fn with_p2_bounds(
-        mut self,
-        json_bytes: usize,
-        items: usize,
-        string_bytes: usize,
-    ) -> std::result::Result<Self, ConfigureError> {
-        if json_bytes > process::CAPTURE_BYTES {
-            return Err(ConfigureError::AbovePhysicalCeiling {
-                field: "json-bytes",
-                value: json_bytes as u64,
-                ceiling: process::CAPTURE_BYTES as u64,
-                physical: "child stdout capture",
-            });
-        }
-        self.json_bytes = json_bytes;
-        self.items = items;
-        self.classified_contract_items = items;
-        self.classified_contract_bytes = json_bytes;
-        self.string_bytes = string_bytes;
-        Ok(self)
     }
 
     pub(crate) const fn process_limits(self) -> process::Limits {
@@ -1004,8 +762,7 @@ impl Limits {
 
     /// The node content bound for every typed-store product recipe. This is
     /// the physical `MAX_CONTENT_BYTES` ceiling, deliberately decoupled
-    /// from the configurable `json_bytes` accounting target so a configured
-    /// target can never size or move the store payload bound.
+    /// from `json_bytes`.
     pub(crate) const fn node_output_bytes(self) -> usize {
         crate::node::MAX_CONTENT_BYTES
     }
@@ -1013,34 +770,22 @@ impl Limits {
     /// The node content bound for recipe authorities, discovered inputs and
     /// retained input evidence of typed-store nodes. This is the physical
     /// `NODE_INPUT_BYTES` ceiling (512 MiB, its pre-series value), deliberately
-    /// decoupled from the configurable `input_proof_bytes` accounting target so
-    /// a configured target can never size or move a node content bound.
+    /// decoupled from `input_proof_bytes`.
     /// Every file read feeding these nodes binds separately to
     /// `process::TAIL_BYTES` or `process::CAPTURE_BYTES`.
     pub(crate) const fn node_input_bytes(self) -> usize {
         NODE_INPUT_BYTES
     }
 
-    pub(crate) const fn node_items(self) -> usize {
-        self.items
-    }
-
-    pub(crate) const fn node_string_bytes(self) -> usize {
-        self.string_bytes
-    }
-
     /// The node store payload ceiling for stored API graphs. This is the
     /// physical `MAX_CONTENT_BYTES` bound, deliberately decoupled from
-    /// the configurable `canonical_bytes` accounting target so a configured
-    /// target can never raise the store ceiling.
+    /// `canonical_bytes`.
     pub(crate) const fn node_canonical_bytes(self) -> usize {
         crate::node::MAX_CONTENT_BYTES
     }
 
     pub(crate) fn bind_node_context(&self, digest: &mut Sha256) {
-        // Configured accounting targets are explicit proof inputs; v2
-        // binds the per-graph targets beside every other limit.
-        digest.update(b"rawr.import.cargo.limits/v2");
+        digest.update(b"rawr.import.cargo.limits/v3");
         for value in [
             self.json_bytes as u64,
             self.manifest_bytes as u64,
@@ -1058,12 +803,6 @@ impl Limits {
             self.containers as u64,
             self.string_bytes as u64,
             self.depth as u64,
-            self.graph_lookups as u64,
-            self.graph_comparisons as u64,
-            self.graph_deep_validations as u64,
-            self.graph_decode_bytes,
-            self.graph_path_checks as u64,
-            self.graph_hashed_bytes,
             self.process.stdout() as u64,
             self.process.stderr() as u64,
         ] {
@@ -1101,11 +840,6 @@ impl RequestAllocation {
         REQUEST_HIGH_WATER.with(|high| high.set(high.get().max(self.bytes)));
     }
 
-    /// Publish this account's exceedance record.
-    fn publish(&self) {
-        crate::exceedance::publish(crate::exceedance::Account::Request, self.id, &self.exceeded);
-    }
-
     fn new(limits: &Limits) -> Self {
         Self {
             items: 0,
@@ -1113,41 +847,14 @@ impl RequestAllocation {
             item_limit: limits.items,
             byte_limit: limits.manifest_bytes,
             string_limit: limits.string_bytes,
-            id: crate::exceedance::next_id(),
-            exceeded: crate::exceedance::Record::new(),
         }
     }
 
-    /// The axes of this request account that crossed their targets so far.
-    #[cfg(test)]
-    pub(crate) const fn exceedances(&self) -> crate::exceedance::Record {
-        self.exceeded
-    }
-
-    /// Process-unique identity of this request account.
-    #[cfg(test)]
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// Checked-add overflow is an arithmetic failure, never an accounting
-    /// exceedance: it stays terminal.
+    /// Checked-add overflow is an arithmetic failure: it stays terminal.
     fn overflow(operation: &'static str) -> Error {
         Error::Node {
             operation,
             source: Box::new(crate::node::Error::Allocation),
-        }
-    }
-
-    /// Crossing an accounting target is recorded and published, never
-    /// refused. The charge has already been added to the original account.
-    pub(crate) fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        if actual > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, actual as u64, None)
-        {
-            self.publish();
         }
     }
 
@@ -1157,7 +864,6 @@ impl RequestAllocation {
             .checked_add(amount)
             .ok_or_else(|| Self::overflow(REQUEST_ITEMS_RESOURCE))?;
         self.items = actual;
-        self.exceeded(REQUEST_ITEMS_RESOURCE, self.item_limit, actual);
         Ok(())
     }
 
@@ -1168,7 +874,6 @@ impl RequestAllocation {
             .ok_or_else(|| Self::overflow(REQUEST_BYTES_RESOURCE))?;
         self.bytes = actual;
         self.high_water();
-        self.exceeded(REQUEST_BYTES_RESOURCE, self.byte_limit, actual);
         Ok(())
     }
 
@@ -1184,13 +889,10 @@ impl RequestAllocation {
         self.items = retained_items;
         self.bytes = retained_bytes;
         self.high_water();
-        self.exceeded(REQUEST_ITEMS_RESOURCE, self.item_limit, retained_items);
-        self.exceeded(REQUEST_BYTES_RESOURCE, self.byte_limit, retained_bytes);
         Ok(())
     }
 
     pub(crate) fn string(&mut self, value: &str) -> Result<()> {
-        self.exceeded(REQUEST_STRING_RESOURCE, self.string_limit, value.len());
         self.retained(1, value.len())
     }
 
@@ -1243,13 +945,6 @@ impl RequestAllocation {
         self.items = items;
         self.bytes = bytes;
         self.high_water();
-        // The transferred account's own exceedances travel with its charges.
-        if retained.exceeded.is_exceeded() {
-            self.exceeded.absorb(&retained.exceeded);
-            self.publish();
-        }
-        self.exceeded(REQUEST_ITEMS_RESOURCE, self.item_limit, items);
-        self.exceeded(REQUEST_BYTES_RESOURCE, self.byte_limit, bytes);
         Ok(())
     }
 
@@ -1472,7 +1167,7 @@ impl Request {
         if self.universe.is_some() {
             let provisional_manifest = self.charge_provisional_manifest(limits)?;
             if let Some(catalog) = self.universe.as_ref() {
-                let _placement = select_placement(&self, catalog, &provisional_manifest, limits)?;
+                let _placement = select_placement(&self, catalog, &provisional_manifest)?;
             }
         }
         let context = crate::context::Context::capture_config(
@@ -1607,7 +1302,7 @@ impl Request {
             .map(|catalog| {
                 let provisional_manifest =
                     render_manifest_accounted(self, None, limits, &mut request_allocation)?;
-                let placement = select_placement(self, &catalog, &provisional_manifest, limits)?;
+                let placement = select_placement(self, &catalog, &provisional_manifest)?;
                 Ok::<_, Error>((catalog, placement))
             })
             .transpose()?;
@@ -1735,7 +1430,7 @@ impl Request {
             internal.revalidate(&metadata, &selected)?;
             let lock = digest(&lock_bytes);
             // File reads are I/O retention bounded by a physical
-            // constant, never by an accounting target. Manifest-class reads
+            // constant. Manifest-class reads
             // (Cargo.toml, Rawr manifests, Cargo config, harness sources) bind
             // to the diagnostic tail figure `TAIL_BYTES`, which preserves the
             // retention the 1 MiB manifest target used to impose; lock- and
@@ -2031,7 +1726,6 @@ impl Request {
                                 process::CAPTURE_BYTES,
                             )?
                             .into_boxed_slice(),
-                            limits,
                         )?,
                     ),
                 };
@@ -2213,7 +1907,7 @@ impl Request {
             lock_path,
             process::CAPTURE_BYTES,
         )?;
-        let lock = definition.candidate(lock_bytes.into_boxed_slice(), limits)?;
+        let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
         Ok(Materialized {
             bytes,
             internal,
@@ -2860,7 +2554,7 @@ impl Request {
         #[cfg(feature = "rustc-driver")]
         let probe_artifacts = capture
             .as_mut()
-            .map(|capture| capture.artifact_inputs(limits))
+            .map(|capture| capture.artifact_inputs())
             .transpose()?
             .unwrap_or_default();
         #[cfg(not(feature = "rustc-driver"))]
@@ -3109,8 +2803,6 @@ impl Builder {
             .expect("each request is built with its exclusion policy");
         let internal = internal::Seed::transform(&crate::host::root()?, &mut self.allocation)?;
         let count = self.dependencies.len().saturating_add(1);
-        self.allocation
-            .exceeded("Rust dependencies", limits.packages, count);
         self.allocation.items(count)?;
         let mut dependencies = Vec::with_capacity(count);
         for dependency in self.dependencies {
@@ -3414,7 +3106,7 @@ impl Resolution {
             }
         }
         // File reads are I/O retention bounded by the physical capture
-        // constant, never by an accounting target.
+        // constant.
         for (field, path, expected, limit) in [
             (
                 "final-form harness manifest",
@@ -3763,13 +3455,11 @@ fn select_placement(
     request: &Request,
     catalog: &universe::Catalog,
     provisional_manifest: &str,
-    limits: &Limits,
 ) -> Result<Placement> {
     select_placement_inner(
         request,
         catalog,
         provisional_manifest,
-        limits,
         &mut ControlAccount::legacy(),
     )
 }
@@ -3778,7 +3468,6 @@ fn select_placement_accounted(
     request: &Request,
     catalog: &universe::Catalog,
     provisional_manifest: &str,
-    limits: &Limits,
     allocation: &mut RequestAllocation,
     graph: &crate::node::GraphBudget,
 ) -> Result<Placement> {
@@ -3786,59 +3475,25 @@ fn select_placement_accounted(
         request,
         catalog,
         provisional_manifest,
-        limits,
         &mut ControlAccount::current(allocation, graph),
     )
 }
 
 struct ControlAccount<'a> {
     current: Option<(&'a mut RequestAllocation, &'a crate::node::GraphBudget)>,
-    /// A lock parsed under no request account (a persisted or reused
-    /// lock read from disk, a compiled-in seed) still records the targets it
-    /// crosses on its own universe account and publishes them, so the
-    /// disk-read lock routes never lose an exceedance.
-    legacy: Option<LegacyAccount>,
-}
-
-struct LegacyAccount {
-    id: u64,
-    record: crate::exceedance::Record,
 }
 
 impl<'a> ControlAccount<'a> {
+    /// A lock parsed under no request account: a persisted or reused lock
+    /// read from disk, or a compiled-in seed.
     fn legacy() -> Self {
-        Self {
-            current: None,
-            legacy: Some(LegacyAccount {
-                id: crate::exceedance::next_id(),
-                record: crate::exceedance::Record::new(),
-            }),
-        }
+        Self { current: None }
     }
 
     fn current(allocation: &'a mut RequestAllocation, graph: &'a crate::node::GraphBudget) -> Self {
         Self {
             current: Some((allocation, graph)),
-            legacy: None,
         }
-    }
-
-    /// The exceedances this control account recorded so far: the request
-    /// account's record on the current route, the universe account's record
-    /// on the legacy route.
-    #[cfg(test)]
-    fn exceedances(&self) -> crate::exceedance::Record {
-        match (&self.current, &self.legacy) {
-            (Some((allocation, _)), _) => allocation.exceedances(),
-            (None, Some(legacy)) => legacy.record,
-            (None, None) => crate::exceedance::Record::new(),
-        }
-    }
-
-    /// The process-unique identity the legacy route publishes under.
-    #[cfg(test)]
-    fn legacy_id(&self) -> Option<u64> {
-        self.legacy.as_ref().map(|legacy| legacy.id)
     }
 
     fn read(&mut self, resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {
@@ -3854,29 +3509,6 @@ impl<'a> ControlAccount<'a> {
             graph.decode(bytes).map_err(Self::error)?;
         }
         Ok(())
-    }
-
-    /// A lock document crossing an accounting target is recorded and
-    /// never refused: on the current request account, or on this control's
-    /// own universe account when it parses under no request account.
-    fn exceeded(&mut self, resource: &'static str, target: usize, actual: usize) {
-        match (self.current.as_mut(), self.legacy.as_mut()) {
-            (Some((allocation, _)), _) => allocation.exceeded(resource, target, actual),
-            (None, Some(legacy)) => {
-                if actual > target
-                    && legacy
-                        .record
-                        .exceeded(resource, target as u64, actual as u64, None)
-                {
-                    crate::exceedance::publish(
-                        crate::exceedance::Account::Universe,
-                        legacy.id,
-                        &legacy.record,
-                    );
-                }
-            }
-            (None, None) => {}
-        }
     }
 
     /// One fixed shared-holder allocation retained with its parsed owner.
@@ -3919,7 +3551,6 @@ fn fixed_placement(
     fixed: &Path,
     request_identity: Digest,
     definition: &universe::Definition,
-    limits: &Limits,
     account: &mut ControlAccount<'_>,
 ) -> Result<Option<Placement>> {
     let fixed_lock_path = fixed.join("Cargo.lock");
@@ -3955,7 +3586,7 @@ fn fixed_placement(
     account.path(&receipt_path)?;
     if receipt_path.exists() {
         // Receipt and lock reads are I/O retention bounded by the
-        // physical capture constant, never by the JSON accounting target.
+        // physical capture constant.
         let bytes = account.read(
             "resolution universe receipt",
             &receipt_path,
@@ -3969,8 +3600,7 @@ fn fixed_placement(
                 field: "current runnable receipt universe",
             });
         }
-        let fixed_lock =
-            definition.candidate_in(fixed_lock_bytes.into_boxed_slice(), limits, account)?;
+        let fixed_lock = definition.candidate_in(fixed_lock_bytes.into_boxed_slice(), account)?;
         account.parser(bytes.len())?;
         let receipt = universe::Receipt::parse(&bytes, definition)?;
         account.hash(fixed_manifest.len() + fixed_source.len())?;
@@ -3998,7 +3628,6 @@ fn select_placement_inner(
     request: &Request,
     catalog: &universe::Catalog,
     provisional_manifest: &str,
-    limits: &Limits,
     account: &mut ControlAccount<'_>,
 ) -> Result<Placement> {
     let definition = catalog.current();
@@ -4044,7 +3673,7 @@ fn select_placement_inner(
 
     // A namespace another version wrote, or one whose receipt is absent or
     // for another request, is a clean miss: a side-by-side candidate is built.
-    match fixed_placement(&fixed, request_identity, definition, limits, account) {
+    match fixed_placement(&fixed, request_identity, definition, account) {
         Ok(Some(placement)) => return Ok(placement),
         Err(error @ Error::Io { .. }) => return Err(error),
         Ok(None) | Err(_) => {}
@@ -4078,7 +3707,7 @@ fn select_placement_inner(
                 &candidate.join("Cargo.lock"),
                 process::CAPTURE_BYTES,
             )?;
-            let lock = definition.candidate_in(lock_bytes.into_boxed_slice(), limits, account)?;
+            let lock = definition.candidate_in(lock_bytes.into_boxed_slice(), account)?;
             let manifest = account.read(
                 "candidate final-form harness manifest",
                 &candidate.join(HARNESS_MANIFEST),
@@ -4311,8 +3940,7 @@ fn prepare_harness(
     })?;
     let harness_root = canonical_directory("resolution harness", &harness_root)?;
     retire_stale_temporaries(&harness_root)?;
-    // The rendered manifest size is an accounting target charged to the
-    // caller's working request account, which records any exceedance.
+    // The rendered manifest is charged to the caller's working request account.
     let manifest = render_manifest_accounted(request, None, limits, allocation)?;
     let manifest_path = harness_root.join(HARNESS_MANIFEST);
     let changed = fs::read(&manifest_path).map_or(true, |current| current != manifest.as_bytes());
@@ -4338,7 +3966,7 @@ fn prepare_harness(
 
 /// Sweep stale generated temporaries from a Rawr-owned harness directory. The
 /// entry count is bounded by the physical `HARNESS_ENTRIES` sweep ceiling,
-/// never by a configurable accounting target.
+/// not by an input figure.
 fn retire_stale_temporaries(root: &Path) -> Result<()> {
     let entries = fs::read_dir(root).map_err(|source| Error::Io {
         operation: "inspect resolution harness",
@@ -4385,9 +4013,7 @@ fn retire_stale_temporaries(root: &Path) -> Result<()> {
 
 /// Test-only render on a throwaway copy of the sealed request account. Every
 /// production render charges a caller's working account through
-/// `render_manifest_accounted`, so the manifest's exceedance record is
-/// published with that account and never on a temporary that a later publish
-/// overwrites.
+/// `render_manifest_accounted`.
 #[cfg(test)]
 fn render_manifest(
     request: &Request,
@@ -4570,9 +4196,7 @@ fn finalize_harness(
     limits: &Limits,
     allocation: &mut RequestAllocation,
 ) -> Result<()> {
-    // The caller's working request account charges the rendered
-    // manifest and records any exceedance of the request byte target; nothing
-    // is refused here.
+    // The caller's working request account charges the rendered manifest.
     let manifest = render_manifest_accounted(request, Some(internal), limits, allocation)?;
     write_atomic(&harness_root.join(HARNESS_MANIFEST), manifest.as_bytes())?;
     let lock = harness_root.join("Cargo.lock");
@@ -4827,11 +4451,8 @@ fn cargo_authoritative_environment(
 /// Run one Cargo command within the physical capture bounds.
 ///
 /// The only refusal here is physical: `limits.process` truncates and refuses a
-/// stream past `process::CAPTURE_BYTES`. The Cargo JSON accounting
-/// target `json_bytes` is not a gate on the captured bytes; it is charged and,
-/// when crossed, recorded as the `Cargo JSON bytes` exceedance of the Cargo
-/// JSON epoch that parses them (`unit::preflight_from`), which the CLI reports
-/// as one warning per account.
+/// stream past `process::CAPTURE_BYTES`. The Cargo JSON epoch that parses the
+/// captured bytes (`unit::preflight_from`) charges them.
 fn run_cargo(
     native: &impl ToolPaths,
     command: &process::Command,
@@ -5233,8 +4854,8 @@ fn replay_cargo(
             .retained_config
             .command_environment(target_dir, native)?,
     )?;
-    // Physical capture refuses; the JSON accounting target is charged by
-    // the epoch that parses these bytes, exactly as in `run_cargo`.
+    // Physical capture refuses; the epoch that parses these bytes charges
+    // them, exactly as in `run_cargo`.
     native
         .run(&command, limits.process)?
         .checked(Program::Cargo)
@@ -5866,42 +5487,6 @@ fn append_framed(output: &mut Vec<u8>, bytes: &[u8]) {
 mod universe_placement_tests {
     use super::*;
 
-    #[test]
-    fn current_control_read_records_exceedance_before_touching_path_when_graph_is_exhausted() {
-        let graph = crate::node::GraphBudget::new();
-        graph.paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        assert!(!graph.exceedances().is_exceeded());
-        let mut allocation = RequestAllocation::new(&Limits::standard());
-        // The exhausted graph still admits the read's probes before any
-        // I/O and records the path-check axis; only the missing path refuses.
-        let error = read_bounded_in(
-            "exhausted control read",
-            Path::new("/nonexistent-rawr-control-budget-test"),
-            1024,
-            &mut allocation,
-            &graph,
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::Io { .. }));
-        let paths = graph
-            .exceedances()
-            .axis(crate::node::PATHS_RESOURCE)
-            .copied()
-            .expect("the exhausted graph records the path-check axis");
-        assert_eq!(paths.target, crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64);
-        assert_eq!(
-            paths.first_requested,
-            crate::node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 7,
-            "the seven-probe admission is the first exceeding charge"
-        );
-        assert_eq!(
-            paths.high_water,
-            graph.census_usage().unwrap().1 as u64,
-            "the high water is the cumulative path-check account"
-        );
-        assert!(paths.site.is_some());
-    }
-
     const SEED: &str = "version = 4\n\n[[package]]\nname = \"rawr-iced\"\nversion = \"1.0.0\"\ndependencies = [\"shared\"]\n\n[[package]]\nname = \"shared\"\nversion = \"1.2.3\"\nsource = \"registry+exact\"\nchecksum = \"aa\"\n";
     const UNKNOWN_SEED: &str =
         "version = 4\n\n[[package]]\nname = \"other\"\nversion = \"1.0.0\"\n";
@@ -5935,7 +5520,7 @@ mod universe_placement_tests {
             Request::builder(&link, &cache, &limits)
                 .expect("request builder seals")
                 .environment(config::Environment::capture().expect("environment captures"))
-                .policy(crate::extract::Policy::manifest(&limits).seal())
+                .policy(crate::extract::Policy::manifest().seal())
                 .expect("policy fits")
                 .dependency(
                     config::Dependency::path("catalog", &dependency, &limits)
@@ -5992,7 +5577,7 @@ mod universe_placement_tests {
         }
     }
 
-    fn definition(limits: &Limits) -> universe::Definition {
+    fn definition() -> universe::Definition {
         universe::Definition::new(
             "rawr-iced",
             Some("iced"),
@@ -6005,7 +5590,6 @@ mod universe_placement_tests {
             "dev",
             "rustc",
             "cargo",
-            limits,
         )
         .expect("fixture universe seals")
     }
@@ -6027,7 +5611,7 @@ mod universe_placement_tests {
         Request::builder(&project.0, &project.cache(), limits)
             .expect("request builder seals")
             .environment(config::Environment::capture().expect("environment captures"))
-            .policy(crate::extract::Policy::manifest(limits).seal())
+            .policy(crate::extract::Policy::manifest().seal())
             .expect("policy fits")
             .dependency(dependency)
             .expect("dependency fits")
@@ -6050,10 +5634,9 @@ mod universe_placement_tests {
         request: &Request,
         definition: &universe::Definition,
         provisional: &str,
-        limits: &Limits,
     ) {
         let lock = definition
-            .candidate(SEED.as_bytes().into(), limits)
+            .candidate(SEED.as_bytes().into())
             .expect("fixture current lock authenticates");
         write_fixture_receipt(
             root,
@@ -6118,17 +5701,16 @@ mod universe_placement_tests {
         request: &Request,
         catalog: &universe::Catalog,
         manifest: &str,
-        limits: &Limits,
     ) -> (Result<Placement>, usize) {
         let commands = std::cell::Cell::new(0_usize);
-        let selected = select_placement(request, catalog, manifest, limits).inspect(|_| {
+        let selected = select_placement(request, catalog, manifest).inspect(|_| {
             commands.set(commands.get().saturating_add(1));
         });
         (selected, commands.get())
     }
 
     #[test]
-    fn borrowed_manifest_renderer_keeps_prior_usage_and_exact_byte_floor() {
+    fn borrowed_manifest_renderer_keeps_prior_usage() {
         let limits = Limits::standard();
         let project = Project::new("accounted-render");
         let current = request(&project, false, &limits);
@@ -6140,30 +5722,13 @@ mod universe_placement_tests {
         assert_eq!(rendered, expected);
         let required = account.bytes - before;
         assert!(required > 0);
-        for remaining in [required, required - 1] {
-            let mut account = current.allocation;
-            account.bytes = account.byte_limit - remaining;
-            let result = render_manifest_accounted(&current, None, &limits, &mut account);
-            if remaining == required {
-                assert_eq!(result.expect("exact remaining bytes"), expected);
-                assert_eq!(account.bytes, account.byte_limit);
-                assert!(!account.exceedances().is_exceeded());
-            } else {
-                // One byte short still renders and charges in full; the
-                // request account records the byte axis one past its target.
-                assert_eq!(result.expect("one byte short still renders"), expected);
-                assert_eq!(account.bytes, account.byte_limit + 1);
-                let bytes = account
-                    .exceedances()
-                    .axis(REQUEST_BYTES_RESOURCE)
-                    .copied()
-                    .expect("the short account records the byte axis");
-                assert_eq!(
-                    (bytes.target, bytes.high_water),
-                    (account.byte_limit as u64, account.byte_limit as u64 + 1)
-                );
-            }
-        }
+        // Prior usage is kept and the render charges the same bytes on top.
+        let mut account = current.allocation;
+        account.bytes = before + 1;
+        let rendered = render_manifest_accounted(&current, None, &limits, &mut account)
+            .expect("rendering after prior usage");
+        assert_eq!(rendered, expected);
+        assert_eq!(account.bytes, before + 1 + required);
     }
 
     #[test]
@@ -6180,7 +5745,7 @@ mod universe_placement_tests {
             let request = Request::builder(&project.0, &project.cache(), &limits)
                 .expect("request builder seals")
                 .environment(config::Environment::capture().expect("environment captures"))
-                .policy(crate::extract::Policy::manifest(&limits).seal())
+                .policy(crate::extract::Policy::manifest().seal())
                 .and_then(|builder| {
                     let catalog = fs::canonicalize(
                         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -6196,7 +5761,7 @@ mod universe_placement_tests {
                 .and_then(|builder| builder.build())
                 .expect("request seals");
             let provisional = render_manifest(&request, None, &limits).expect("provisional");
-            let key = versioned_request_identity(&request, &definition(&limits), &provisional);
+            let key = versioned_request_identity(&request, &definition(), &provisional);
             let manifest = render_manifest(&request, Some(&internal::Recipe::fixture()), &limits)
                 .expect("manifest renders");
             (
@@ -6234,23 +5799,17 @@ mod universe_placement_tests {
         let limits = Limits::standard();
         let project = Project::new("placement");
         let current = request(&project, false, &limits);
-        let universe = universe::Catalog::new(definition(&limits));
+        let universe = universe::Catalog::new(definition());
         let manifest = render_manifest(&current, None, &limits).expect("manifest renders");
-        let fresh = select_placement(&current, &universe, &manifest, &limits)
-            .expect("fresh placement selects");
+        let fresh =
+            select_placement(&current, &universe, &manifest).expect("fresh placement selects");
         assert!(matches!(fresh.state, PlacementState::Fresh));
         assert!(fresh.exclusive);
         assert_eq!(fresh.root, project.cache().join(HARNESS_DIRECTORY));
 
         install_legacy(&fresh.root, &manifest, SEED);
-        install_current_receipt(
-            &fresh.root,
-            &current,
-            universe.current(),
-            &manifest,
-            &limits,
-        );
-        let persisted = select_placement(&current, &universe, &manifest, &limits)
+        install_current_receipt(&fresh.root, &current, universe.current(), &manifest);
+        let persisted = select_placement(&current, &universe, &manifest)
             .expect("authenticated persisted placement selects");
         assert!(matches!(persisted.state, PlacementState::Persisted { .. }));
         assert!(!persisted.exclusive);
@@ -6259,8 +5818,7 @@ mod universe_placement_tests {
         let changed_manifest =
             render_manifest(&changed, None, &limits).expect("changed manifest renders");
         let before = filesystem_entries(&project.0);
-        let (migration, commands) =
-            select_before_command(&changed, &universe, &changed_manifest, &limits);
+        let (migration, commands) = select_before_command(&changed, &universe, &changed_manifest);
         let migration = migration.expect("changed request selects side-by-side candidate");
         assert_eq!(
             commands, 1,
@@ -6278,56 +5836,6 @@ mod universe_placement_tests {
             SEED.as_bytes()
         );
         assert!(!migration.root.exists());
-    }
-
-    /// The dependency count and the rendered harness manifest size are
-    /// accounting targets on the request account; the request seals and the
-    /// harness is prepared, each lowered axis recording its truthful figure.
-    #[test]
-    fn dependency_count_and_harness_manifest_record_their_targets_without_refusal() {
-        // Every manifest, source and authority file read binds to the
-        // physical tail constant and every lock read to the capture constant,
-        // so a one-byte manifest target gates nothing below.
-        assert_eq!(process::TAIL_BYTES, 1_048_576);
-        assert_eq!(process::CAPTURE_BYTES, 256 * 1024 * 1024);
-        let mut limits = Limits::standard();
-        limits.packages = 1;
-        limits.manifest_bytes = 1;
-        let project = Project::new("request-targets");
-        let request = request(&project, false, &limits);
-        let record = request.allocation.exceedances();
-        let axis = *record
-            .axis("Rust dependencies")
-            .expect("the dependency count records its axis");
-        assert_eq!((axis.target, axis.high_water), (1, 2));
-        let rendered = render_manifest(&request, None, &limits).expect("manifest renders");
-        assert!(rendered.len() > 1);
-        // The configured package count no longer reaches the temporaries sweep:
-        // that bound is the fixed `HARNESS_ENTRIES`, so `packages = 1` gates
-        // nothing here either.
-        let mut allocation = request.allocation;
-        let before = allocation
-            .exceedances()
-            .axis(REQUEST_BYTES_RESOURCE)
-            .map_or(0, |axis| axis.high_water);
-        let harness = prepare_harness(&request, &limits, &mut allocation)
-            .expect("a manifest above the accounting target still prepares the harness");
-        assert_eq!(
-            fs::read(harness.join(HARNESS_MANIFEST)).expect("the harness manifest is written"),
-            rendered.as_bytes()
-        );
-        // The manifest render charged the caller's working account, so its
-        // exceedance is on that account (never on a discarded temporary).
-        let bytes = allocation
-            .exceedances()
-            .axis(REQUEST_BYTES_RESOURCE)
-            .copied()
-            .expect("the rendered manifest's byte crossing is recorded on the threaded account");
-        assert_eq!(bytes.target, 1);
-        assert!(
-            bytes.high_water >= before + rendered.len() as u64,
-            "the threaded account's high water advanced by the rendered manifest"
-        );
     }
 
     /// The temporaries sweep over a Rawr-owned harness directory is bounded by
@@ -6356,89 +5864,13 @@ mod universe_placement_tests {
         ));
     }
 
-    /// A lock parsed under no request account (the legacy control
-    /// route used by disk-read lock routes) records the targets it crosses
-    /// on its own universe account instead of dropping them; the current
-    /// route records on the request account as before.
-    #[test]
-    fn legacy_control_account_records_exceedances_instead_of_dropping_them() {
-        let mut legacy = ControlAccount::legacy();
-        assert!(legacy.legacy_id().is_some());
-        legacy.exceeded("resolution universe lock bytes", 8, 8);
-        assert!(
-            !legacy.exceedances().is_exceeded(),
-            "exactly the target records nothing"
-        );
-        legacy.exceeded("resolution universe lock bytes", 8, 9);
-        legacy.exceeded("resolution universe lock precharge", 4, 6);
-        legacy.exceeded("resolution universe lock bytes", 8, 12);
-        let record = legacy.exceedances();
-        let bytes = record
-            .axis("resolution universe lock bytes")
-            .copied()
-            .expect("the legacy route records the crossing");
-        assert_eq!(
-            (bytes.target, bytes.first_requested, bytes.high_water),
-            (8, 9, 12)
-        );
-        assert_eq!(
-            record.first().unwrap().name,
-            "resolution universe lock bytes"
-        );
-        assert!(record.axis("resolution universe lock precharge").is_some());
-        assert_eq!(
-            crate::exceedance::warnings(
-                &[crate::exceedance::Exceedance {
-                    account: crate::exceedance::Account::Universe,
-                    id: legacy.legacy_id().unwrap(),
-                    record,
-                }],
-                0
-            )
-            .len(),
-            1,
-            "one warning per account"
-        );
-
-        let limits = Limits::standard();
-        let mut allocation = RequestAllocation::new(&limits);
-        let graph = crate::node::GraphBudget::new();
-        let mut current = ControlAccount::current(&mut allocation, &graph);
-        assert!(current.legacy_id().is_none());
-        current.exceeded("resolution universe lock bytes", 8, 9);
-        assert_eq!(
-            current
-                .exceedances()
-                .axis("resolution universe lock bytes")
-                .map(|axis| axis.high_water),
-            Some(9)
-        );
-        assert_eq!(
-            allocation
-                .exceedances()
-                .axis("resolution universe lock bytes")
-                .map(|axis| axis.high_water),
-            Some(9),
-            "the current route records on the request account"
-        );
-
-        // A persisted lock read from disk parses through the legacy route under
-        // a one-byte JSON target: recorded, never refused.
-        let mut lowered = Limits::standard();
-        lowered.json_bytes = 1;
-        definition(&lowered)
-            .candidate(SEED.as_bytes().into(), &lowered)
-            .expect("a lock above the JSON target still parses on the legacy route");
-    }
-
     /// The provisional render `resolve_cached` charges (P) is carried
     /// forward on the sealed account, totals included, and every render
     /// preparation actually performs is charged on top of it. Preparation
     /// re-renders the provisional form (P again: the provisional string was
     /// dropped, so the allocation is real work) and renders a distinct form
     /// (Q), here twice: the account measures exactly P + P + Q + Q, the sum of
-    /// every render performed, and the byte target is crossed once with that
-    /// truthful cumulative high water.
+    /// every render performed.
     #[test]
     fn provisional_and_preparation_manifest_charges_are_conserved_once() {
         fn measure(
@@ -6484,10 +5916,6 @@ mod universe_placement_tests {
         let (sealed, carried, working) = measure(&project, &limits);
         let provisional = (carried.items - sealed.items, carried.bytes - sealed.bytes);
         assert!(provisional.1 > 0, "P is measured on the sealed account");
-        assert_eq!(
-            carried.id, sealed.id,
-            "the carried account is the same account"
-        );
         // P matches a stand-alone render of the same manifest exactly.
         let alone = request(&project, false, &limits);
         let mut fresh = alone.allocation;
@@ -6515,26 +5943,6 @@ mod universe_placement_tests {
                 sealed.bytes + 2 * provisional.1 + 2 * distinct.1
             ),
             "every render performed (P, P, Q, Q) is charged, none lost or doubled"
-        );
-
-        // With the byte target one below that sum, the account crosses once and
-        // records exactly the conserved cumulative total.
-        let mut lowered = Limits::standard();
-        lowered.manifest_bytes = working.bytes - 1;
-        let (_, carried, working) = measure(&project, &lowered);
-        assert!(!carried.exceedances().is_exceeded());
-        let axis = working
-            .exceedances()
-            .axis(REQUEST_BYTES_RESOURCE)
-            .copied()
-            .expect("P + P + Q + Q crosses the byte target");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                lowered.manifest_bytes as u64,
-                lowered.manifest_bytes as u64 + 1,
-                lowered.manifest_bytes as u64 + 1
-            )
         );
     }
 
@@ -6566,7 +5974,7 @@ mod universe_placement_tests {
         ] {
             let project = Project::new(label);
             let request = request(&project, false, &limits);
-            let catalog = universe::Catalog::new(definition(&limits));
+            let catalog = universe::Catalog::new(definition());
             let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
             let fixed = project.cache().join(HARNESS_DIRECTORY);
             install_legacy(&fixed, &manifest, lock);
@@ -6574,8 +5982,7 @@ mod universe_placement_tests {
                 fs::write(fixed.join("src/lib.rs"), b"skew").expect("source skews");
             }
             let before = filesystem_entries(&project.0);
-            let (selected, commands) =
-                select_before_command(&request, &catalog, &manifest, &limits);
+            let (selected, commands) = select_before_command(&request, &catalog, &manifest);
             assert_eq!(commands, 1, "{label}");
             assert_eq!(filesystem_entries(&project.0), before, "{label}");
             assert_clean_miss(selected, &fixed, lock);
@@ -6600,7 +6007,7 @@ mod universe_placement_tests {
         let request = Request::builder(&project.0, &project.cache(), &limits)
             .expect("request builder seals")
             .environment(config::Environment::capture().expect("environment captures"))
-            .policy(crate::extract::Policy::manifest(&limits).seal())
+            .policy(crate::extract::Policy::manifest().seal())
             .expect("policy fits")
             .dependency(dependency)
             .expect("dependency fits")
@@ -6632,7 +6039,7 @@ mod universe_placement_tests {
         let limits = Limits::standard();
         let project = Project::new("receipt-skew");
         let request = request(&project, false, &limits);
-        let catalog = universe::Catalog::new(definition(&limits));
+        let catalog = universe::Catalog::new(definition());
         let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
         let fixed = project.cache().join(HARNESS_DIRECTORY);
         install_legacy(&fixed, &manifest, SEED);
@@ -6645,7 +6052,7 @@ mod universe_placement_tests {
                 universe,
                 [0x92; 32],
             );
-            let (selected, _) = select_before_command(&request, &catalog, &manifest, &limits);
+            let (selected, _) = select_before_command(&request, &catalog, &manifest);
             assert_clean_miss(selected, &fixed, SEED);
         }
     }
@@ -6698,330 +6105,6 @@ mod authority_boundary_tests {
 
     use crate::extract::{ManifestSpan, Policy};
 
-    /// A target one unit under an exact total refuses nothing; the
-    /// account records the axis with that target and a high water equal to
-    /// the exact total the exercise charged.
-    fn assert_exceeded(
-        record: crate::exceedance::Record,
-        name: &str,
-        target: usize,
-        high_water: usize,
-    ) {
-        let axis = record
-            .axis(name)
-            .unwrap_or_else(|| panic!("{name} records the lowered target"));
-        assert_eq!(axis.target, target as u64);
-        assert_eq!(axis.high_water, high_water as u64);
-        assert!(axis.first_requested > axis.target);
-        assert!(axis.first_requested <= axis.high_water);
-    }
-
-    /// Accounting targets are configurable by name, validated at load,
-    /// and may never raise a physical limit; `depth` and every physical limit
-    /// are not configurable.
-    #[test]
-    fn configured_accounting_targets_are_validated_and_never_raise_physical_limits() {
-        use super::ConfigureError;
-        let standard = super::Limits::standard();
-        let mut configured = standard;
-        configured.configure("graph-path-checks", 70_000).unwrap();
-        configured.configure("request-bytes", 512 * 1024).unwrap();
-        configured
-            .configure("graph-decode-bytes", 64 * 1024 * 1024)
-            .unwrap();
-        configured.configure("items", 3_000_000).unwrap();
-        assert_eq!(configured.graph_path_checks, 70_000);
-        assert_eq!(configured.manifest_bytes, 512 * 1024);
-        assert_eq!(configured.graph_decode_bytes, 64 * 1024 * 1024);
-        assert_eq!(configured.items, 3_000_000);
-        assert_eq!(configured.graph_targets().paths, 70_000);
-        assert_eq!(configured.graph_targets().decoded, 64 * 1024 * 1024);
-        assert!(configured.is_configured());
-        assert!(!standard.is_configured());
-        assert_eq!(
-            standard.graph_targets(),
-            crate::node::GraphTargets::STANDARD
-        );
-        for key in super::Limits::TARGET_FIELDS {
-            super::Limits::standard().configure(key, 1).unwrap();
-        }
-
-        let mut refused = standard;
-        assert!(matches!(
-            refused.configure("depth", 512),
-            Err(ConfigureError::UnknownTarget(key)) if &*key == "depth"
-        ));
-        assert!(matches!(
-            refused.configure("stdout-bytes", 1),
-            Err(ConfigureError::UnknownTarget(_))
-        ));
-        assert!(matches!(
-            refused.configure("graph-path-checks", 0),
-            Err(ConfigureError::Zero("graph-path-checks"))
-        ));
-        // The JSON target is compared against the physical capture bound,
-        // never against its own default. Exactly the bound loads; one byte more
-        // is refused at load, and neither moves the physical slot.
-        let mut capped = standard;
-        capped
-            .configure("json-bytes", crate::process::CAPTURE_BYTES as u64)
-            .expect("a JSON target equal to the physical capture bound loads");
-        assert_eq!(capped.json_bytes, crate::process::CAPTURE_BYTES);
-        assert_eq!(capped.process_limits(), standard.process_limits());
-        assert!(matches!(
-            refused.configure("json-bytes", crate::process::CAPTURE_BYTES as u64 + 1),
-            Err(ConfigureError::AbovePhysicalCeiling {
-                field: "json-bytes",
-                value,
-                ceiling,
-                physical: "child stdout capture",
-            }) if ceiling == crate::process::CAPTURE_BYTES as u64
-                && value == crate::process::CAPTURE_BYTES as u64 + 1
-        ));
-        // Every manifest-class read binds physically to the 1 MiB
-        // tail constant, so a manifest/request byte target above it would be
-        // inert and is refused at load under either key. Exactly the bound
-        // loads; one byte more is refused; the physical slot never moves.
-        for key in ["manifest-bytes", "request-bytes"] {
-            let mut capped = standard;
-            capped
-                .configure(key, crate::process::TAIL_BYTES as u64)
-                .unwrap_or_else(|_| panic!("{key} equal to the manifest-class read bound loads"));
-            assert_eq!(capped.manifest_bytes, crate::process::TAIL_BYTES);
-            assert_eq!(capped.process_limits(), standard.process_limits());
-            assert!(
-                matches!(
-                    refused.configure(key, crate::process::TAIL_BYTES as u64 + 1),
-                    Err(ConfigureError::AbovePhysicalCeiling {
-                        field: "manifest-bytes",
-                        value,
-                        ceiling,
-                        physical: "manifest-class read",
-                    }) if ceiling == crate::process::TAIL_BYTES as u64
-                        && value == crate::process::TAIL_BYTES as u64 + 1
-                ),
-                "{key} one byte above the manifest-class read bound is refused"
-            );
-        }
-        assert!(matches!(
-            refused.configure("canonical-bytes", crate::node::MAX_CONTENT_BYTES as u64 + 1),
-            Err(ConfigureError::AbovePhysicalCeiling {
-                field: "canonical-bytes",
-                ceiling,
-                ..
-            }) if ceiling == crate::node::MAX_CONTENT_BYTES as u64
-        ));
-        assert!(matches!(
-            refused.configure(
-                "input-proof-bytes",
-                crate::node::MAX_CONTENT_BYTES as u64 + 1
-            ),
-            Err(ConfigureError::AbovePhysicalCeiling { .. })
-        ));
-        assert_eq!(refused, standard, "a refused key changes nothing");
-        assert!(ConfigureError::AbovePhysicalCeiling {
-            field: "json-bytes",
-            value: 1,
-            ceiling: 0,
-            physical: "child stdout capture",
-        }
-        .to_string()
-        .contains("may never raise a physical limit"));
-        // The store payload ceiling is decoupled from the configurable target.
-        let mut canonical = standard;
-        canonical.configure("canonical-bytes", 4096).unwrap();
-        assert_eq!(
-            canonical.node_canonical_bytes(),
-            crate::node::MAX_CONTENT_BYTES
-        );
-        assert_eq!(
-            standard.node_canonical_bytes(),
-            crate::node::MAX_CONTENT_BYTES
-        );
-        assert_eq!(standard.node_output_bytes(), crate::node::MAX_CONTENT_BYTES);
-        assert_eq!(
-            canonical.node_output_bytes(),
-            crate::node::MAX_CONTENT_BYTES
-        );
-        assert_eq!(canonical.process_limits(), standard.process_limits());
-        // The node input bound is decoupled from the configurable input-proof
-        // target the same way: a configured target never moves it.
-        let mut proof = standard;
-        proof.configure("input-proof-bytes", 4096).unwrap();
-        assert_eq!(proof.input_proof_bytes, 4096);
-        assert_eq!(proof.node_input_bytes(), super::NODE_INPUT_BYTES);
-        assert_eq!(standard.node_input_bytes(), super::NODE_INPUT_BYTES);
-        // The physical node input bound keeps its pre-series 512 MiB value; a
-        // target configured up to the store payload ceiling never raises it.
-        assert_eq!(super::NODE_INPUT_BYTES, 536_870_912);
-        let mut raised = standard;
-        raised
-            .configure("input-proof-bytes", crate::node::MAX_CONTENT_BYTES as u64)
-            .unwrap();
-        assert_eq!(raised.node_input_bytes(), 536_870_912);
-        assert_eq!(super::CANONICAL_BYTES, crate::node::MAX_CONTENT_BYTES);
-    }
-
-    /// `with_p2_bounds` applies the same load rule as `configure`: a
-    /// JSON target at the physical capture bound loads, one byte above is
-    /// refused, and the physical slot never moves.
-    #[test]
-    fn p2_bounds_apply_the_capture_load_rule() {
-        let standard = super::Limits::standard();
-        let exact = standard
-            .with_p2_bounds(crate::process::CAPTURE_BYTES, 7, 8)
-            .expect("a JSON target equal to the physical capture bound loads");
-        assert_eq!(exact.json_bytes, crate::process::CAPTURE_BYTES);
-        assert_eq!(
-            exact.classified_contract_bytes,
-            crate::process::CAPTURE_BYTES
-        );
-        assert_eq!(
-            (
-                exact.items,
-                exact.classified_contract_items,
-                exact.string_bytes
-            ),
-            (7, 7, 8)
-        );
-        assert_eq!(exact.process_limits(), standard.process_limits());
-        assert!(matches!(
-            standard.with_p2_bounds(crate::process::CAPTURE_BYTES + 1, 7, 8),
-            Err(super::ConfigureError::AbovePhysicalCeiling {
-                field: "json-bytes",
-                value,
-                ceiling,
-                physical: "child stdout capture",
-            }) if value == crate::process::CAPTURE_BYTES as u64 + 1
-                && ceiling == crate::process::CAPTURE_BYTES as u64
-        ));
-    }
-
-    /// Configured targets are explicit proof inputs. The limits context
-    /// is versioned `/v2`, and a configured profile digests differently from
-    /// the standard one, so cache identity separates by target.
-    #[test]
-    fn limits_context_digest_is_v2_and_separates_configured_targets() {
-        fn digest(limits: &super::Limits) -> [u8; 32] {
-            let mut digest = <sha2::Sha256 as sha2::Digest>::new();
-            limits.bind_node_context(&mut digest);
-            sha2::Digest::finalize(digest).into()
-        }
-        let standard = super::Limits::standard();
-        assert_eq!(digest(&standard), digest(&super::Limits::standard()));
-        let mut configured = standard;
-        configured.configure("graph-path-checks", 70_000).unwrap();
-        assert_ne!(digest(&standard), digest(&configured));
-        let mut other = standard;
-        other.configure("graph-path-checks", 70_001).unwrap();
-        assert_ne!(digest(&configured), digest(&other));
-        // The JSON accounting target and the physical capture constants
-        // are both digest inputs, under the unchanged /v2 input shape.
-        let mut target = standard;
-        target.configure("json-bytes", 16 * 1024 * 1024).unwrap();
-        assert_ne!(digest(&standard), digest(&target));
-        let physical = super::Limits {
-            process: crate::process::Limits::fixed(
-                crate::process::CAPTURE_BYTES,
-                crate::process::TAIL_BYTES + 1,
-            ),
-            ..standard
-        };
-        assert_ne!(digest(&standard), digest(&physical));
-        let mut v1 = <sha2::Sha256 as sha2::Digest>::new();
-        sha2::Digest::update(&mut v1, b"rawr.import.cargo.limits/v1");
-        let mut v2 = <sha2::Sha256 as sha2::Digest>::new();
-        sha2::Digest::update(&mut v2, b"rawr.import.cargo.limits/v2");
-        assert_ne!(
-            sha2::Digest::finalize(v1).as_slice(),
-            sha2::Digest::finalize(v2).as_slice()
-        );
-    }
-
-    /// The request account is an optimization target. Crossing it keeps
-    /// charging cumulatively, records the first exceeding axis, target and
-    /// requested amount with a truthful high water, returns `Ok`, and is
-    /// published for exactly one warning; checked-add overflow stays terminal
-    /// as an arithmetic failure, never `Error::Limit`.
-    #[test]
-    fn request_account_exceedance_records_and_continues_while_overflow_stays_terminal() {
-        let mut limits = super::Limits::standard();
-        limits.configure("request-bytes", 16).unwrap();
-        limits.configure("items", 3).unwrap();
-        limits.configure("string-bytes", 4).unwrap();
-        let mut allocation = super::RequestAllocation::new(&limits);
-        assert!(!allocation.exceedances().is_exceeded());
-        allocation.retained(1, 16).unwrap();
-        assert!(
-            !allocation.exceedances().is_exceeded(),
-            "exact fit is not an exceedance"
-        );
-        allocation.bytes(1).unwrap();
-        let first = allocation.exceedances().first().copied().unwrap();
-        assert_eq!(first.name, super::REQUEST_BYTES_RESOURCE);
-        assert_eq!(
-            (first.target, first.first_requested, first.high_water),
-            (16, 17, 17)
-        );
-        allocation.retained(3, 100).unwrap();
-        allocation.string("abcdefgh").unwrap();
-        assert_eq!((allocation.items, allocation.bytes), (5, 125));
-        let record = allocation.exceedances();
-        assert_eq!(record.first().unwrap().name, super::REQUEST_BYTES_RESOURCE);
-        assert_eq!(record.first().unwrap().high_water, 125);
-        assert_eq!(
-            record
-                .axis(super::REQUEST_ITEMS_RESOURCE)
-                .unwrap()
-                .high_water,
-            5
-        );
-        assert_eq!(
-            record
-                .axis(super::REQUEST_STRING_RESOURCE)
-                .unwrap()
-                .high_water,
-            8
-        );
-        // The account's own record is the proof; the shared fixed-capacity
-        // process registry is reporting state and is not asserted here.
-        assert_eq!(
-            crate::exceedance::warnings(
-                &[crate::exceedance::Exceedance {
-                    account: crate::exceedance::Account::Request,
-                    id: allocation.id(),
-                    record,
-                }],
-                0
-            )
-            .len(),
-            1,
-            "one warning per account"
-        );
-        // Checked-add overflow is an arithmetic failure, not Error::Limit.
-        let error = allocation.bytes(usize::MAX).unwrap_err();
-        assert!(matches!(
-            &error,
-            crate::Error::Node { operation, source }
-                if *operation == super::REQUEST_BYTES_RESOURCE
-                    && matches!(source.as_ref(), crate::node::Error::Allocation)
-        ));
-        assert!(!matches!(error, crate::Error::Limit { .. }));
-        // Transfer merges the sub-account's exceedances without reset or refund.
-        let mut parent = super::RequestAllocation::new(&limits);
-        parent.transfer(allocation).unwrap();
-        assert_eq!((parent.items, parent.bytes), (5, 125));
-        assert!(parent
-            .exceedances()
-            .axis(super::REQUEST_STRING_RESOURCE)
-            .is_some());
-        // Mixing limits profiles is a rawr bug.
-        assert!(std::panic::catch_unwind(move || {
-            let _ = parent.transfer(super::RequestAllocation::new(&super::Limits::standard()));
-        })
-        .is_err());
-    }
-
     #[test]
     fn standard_request_authority_is_exact() {
         let standard = super::Limits::standard();
@@ -7047,8 +6130,8 @@ mod authority_boundary_tests {
             super::CLASSIFIED_CONTRACT_BYTES
         );
         assert_eq!(standard.classified_contract_bytes, 671_088_640);
-        // The JSON accounting target and the physical capture bounds are
-        // separate numbers from separate modules.
+        // The JSON figure and the physical capture bounds are separate
+        // numbers from separate modules.
         assert_eq!(standard.json_bytes, super::JSON_BYTES);
         assert_eq!(standard.json_bytes, 33_554_432);
         assert_eq!(standard.process, crate::process::Limits::capture());
@@ -7062,16 +6145,9 @@ mod authority_boundary_tests {
         normal
             .items(super::ITEMS)
             .expect("the exact normal request boundary remains accepted");
-        assert!(!normal.exceedances().is_exceeded());
         normal
             .items(1)
             .expect("one item past the normal target still charges");
-        assert_exceeded(
-            normal.exceedances(),
-            super::REQUEST_ITEMS_RESOURCE,
-            super::ITEMS,
-            super::ITEMS + 1,
-        );
     }
 
     #[test]
@@ -7084,7 +6160,6 @@ mod authority_boundary_tests {
         allocation
             .string("abc")
             .expect("exact item and byte caps seal");
-        assert!(!allocation.exceedances().is_exceeded());
         let retained = (allocation.items, allocation.bytes);
         // One past the item and byte targets still charges in full; the
         // string itself stays under its own target and records nothing.
@@ -7095,75 +6170,31 @@ mod authority_boundary_tests {
             (allocation.items, allocation.bytes),
             (retained.0 + 1, retained.1 + 1)
         );
-        let record = allocation.exceedances();
-        assert_eq!(record.first().unwrap().name, super::REQUEST_ITEMS_RESOURCE);
-        assert_exceeded(record, super::REQUEST_ITEMS_RESOURCE, 1, 2);
-        assert_exceeded(record, super::REQUEST_BYTES_RESOURCE, 3, 4);
-        assert!(record.axis(super::REQUEST_STRING_RESOURCE).is_none());
 
-        // The exceeding account transfers with its charges and its record.
+        // The account transfers with its charges.
         let mut destination = super::RequestAllocation::new(&limits);
         destination
             .transfer_with_items(allocation, 1)
-            .expect("the exceeding account still transfers");
+            .expect("the account transfers");
         assert_eq!((destination.items, destination.bytes), (3, 4));
-        assert_exceeded(
-            destination.exceedances(),
-            super::REQUEST_ITEMS_RESOURCE,
-            1,
-            3,
-        );
-        assert_exceeded(
-            destination.exceedances(),
-            super::REQUEST_BYTES_RESOURCE,
-            3,
-            4,
-        );
     }
 
     #[test]
-    fn authority_render_and_internal_profile_facts_charge_before_ownership() {
+    fn authority_render_and_internal_profile_facts_are_charged() {
         let authority = "[profile.dev]\nopt-level = 1\n";
-        let exercise = |items, bytes| {
-            let mut limits = super::Limits::standard();
-            limits.items = items;
-            limits.manifest_bytes = bytes;
-            let mut allocation = super::RequestAllocation::new(&limits);
-            allocation.string("profile")?;
-            let rendered = allocation.formatted(format_args!(
+        let limits = super::Limits::standard();
+        let mut allocation = super::RequestAllocation::new(&limits);
+        let before = (allocation.items, allocation.bytes);
+        allocation
+            .string("profile")
+            .expect("the profile name is charged");
+        let rendered = allocation
+            .formatted(format_args!(
                 "{authority}[profile.dev.package.\"path+file:///rawr#rawr@1.0.0\"]\ndebug = 0\n"
-            ))?;
-            Ok::<_, crate::Error>((allocation, rendered))
-        };
-        let (usage, rendered) = exercise(usize::MAX, usize::MAX)
-            .expect("unbounded authority render reveals exact counters");
-        let (exact, exact_rendered) = exercise(usage.items, usage.bytes)
-            .expect("exact authority/internal render boundary seals");
-        assert_eq!(rendered, exact_rendered);
-        assert_eq!((usage.items, usage.bytes), (exact.items, exact.bytes));
-        assert!(!exact.exceedances().is_exceeded());
-        // One unit under the exact total still renders the same text and
-        // records the lowered axis with the exact total as its high water.
-        let (item_floor, item_floor_rendered) =
-            exercise(usage.items.saturating_sub(1), usage.bytes)
-                .expect("one item under the exact total still renders");
-        assert_eq!(item_floor_rendered, rendered);
-        assert_exceeded(
-            item_floor.exceedances(),
-            super::REQUEST_ITEMS_RESOURCE,
-            usage.items - 1,
-            usage.items,
-        );
-        let (byte_floor, byte_floor_rendered) =
-            exercise(usage.items, usage.bytes.saturating_sub(1))
-                .expect("one byte under the exact total still renders");
-        assert_eq!(byte_floor_rendered, rendered);
-        assert_exceeded(
-            byte_floor.exceedances(),
-            super::REQUEST_BYTES_RESOURCE,
-            usage.bytes - 1,
-            usage.bytes,
-        );
+            ))
+            .expect("the authority render is charged");
+        assert!(rendered.starts_with(authority));
+        assert!(allocation.items > before.0 && allocation.bytes > before.1);
     }
 
     /// Rawr's own patch for a package its facade closure reaches is
@@ -7213,7 +6244,7 @@ mod authority_boundary_tests {
     }
 
     #[test]
-    fn maximal_authority_evidence_uses_exact_caps_before_final_ownership() {
+    fn maximal_authority_evidence_is_charged_and_owned_once() {
         let root = std::env::temp_dir().join(format!(
             "rawr-authority-ledger-{}-{:?}",
             std::process::id(),
@@ -7236,38 +6267,9 @@ mod authority_boundary_tests {
             let authority = super::Authority::load(Some(&manifest), &mut allocation)?;
             Ok::<_, crate::Error>((allocation, authority))
         };
-        let standard = super::Limits::standard();
-        let (usage, _) = exercise(&standard).expect("standard authority ledger measures");
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, _) = exercise(&exact).expect("exact authority ledger succeeds");
+        let (usage, _) = exercise(&super::Limits::standard()).expect("the authority ledger loads");
+        assert!(usage.items > 0 && usage.bytes > 0);
         assert_eq!(super::OWNED_AUTHORITIES.with(std::cell::Cell::get), 1);
-        assert!(!exact_usage.exceedances().is_exceeded());
-        // One unit under the exact ledger refuses nothing and still owns
-        // the authority; the account records the lowered axis at the exact total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, _) =
-            exercise(&item_floor).expect("one item under the exact ledger still loads");
-        assert_eq!(super::OWNED_AUTHORITIES.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            item_usage.exceedances(),
-            super::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, _) =
-            exercise(&byte_floor).expect("one byte under the exact ledger still loads");
-        assert_eq!(super::OWNED_AUTHORITIES.with(std::cell::Cell::get), 1);
-        assert_exceeded(
-            byte_usage.exceedances(),
-            super::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
         fs::remove_dir_all(root).expect("authority fixture is removed");
     }
 
@@ -7290,8 +6292,8 @@ mod authority_boundary_tests {
         let manifest = fs::canonicalize(manifest).expect("combined authority canonicalizes");
 
         let exercise = |limits: &super::Limits| {
-            let span = ManifestSpan::new("Cargo.toml", 1, 2, 1, 1, 1, 2, limits)?;
-            let policy = Policy::manifest(limits)
+            let span = ManifestSpan::new("Cargo.toml", 1, 2, 1, 1, 1, 2)?;
+            let policy = Policy::manifest()
                 .exclusion("catalog", ["api", "Thing"], "not public", span)?
                 .seal();
             let mut allocation = super::RequestAllocation::new(limits);
@@ -7312,35 +6314,7 @@ mod authority_boundary_tests {
             Ok::<_, crate::Error>((allocation, policy, authority, internal))
         };
 
-        let standard = super::Limits::standard();
-        let (usage, ..) = exercise(&standard).expect("the combined request lineage measures");
-        let mut exact = standard;
-        exact.items = usage.items;
-        exact.manifest_bytes = usage.bytes;
-        let (exact_usage, ..) = exercise(&exact).expect("the exact combined request lineage seals");
-        assert!(!exact_usage.exceedances().is_exceeded());
-        // One unit under the combined lineage refuses nothing; the one
-        // request account records the lowered axis at the exact total.
-        let mut item_floor = exact;
-        item_floor.items = item_floor.items.saturating_sub(1);
-        let (item_usage, ..) =
-            exercise(&item_floor).expect("one item under the lineage still seals");
-        assert_exceeded(
-            item_usage.exceedances(),
-            super::REQUEST_ITEMS_RESOURCE,
-            item_floor.items,
-            usage.items,
-        );
-        let mut byte_floor = exact;
-        byte_floor.manifest_bytes = byte_floor.manifest_bytes.saturating_sub(1);
-        let (byte_usage, ..) =
-            exercise(&byte_floor).expect("one byte under the lineage still seals");
-        assert_exceeded(
-            byte_usage.exceedances(),
-            super::REQUEST_BYTES_RESOURCE,
-            byte_floor.manifest_bytes,
-            usage.bytes,
-        );
+        exercise(&super::Limits::standard()).expect("the combined request lineage seals");
         fs::remove_dir_all(root).expect("combined request fixture is retired");
     }
 }
@@ -7409,8 +6383,7 @@ mod epoch_tests {
     }
 }
 
-/// The Cargo JSON accounting target and the physical child capture bound
-/// are separate numbers with separate consequences at the `run_cargo` boundary.
+/// The physical child capture bound refuses at the `run_cargo` boundary.
 #[cfg(test)]
 mod capture_tests {
     use std::fs;
@@ -7469,24 +6442,6 @@ mod capture_tests {
         .unwrap()
     }
 
-    /// A document one byte past the configured JSON target: a JSON array whose
-    /// elements stay far inside every other accounting target.
-    fn document(bytes: usize) -> Vec<u8> {
-        assert!(bytes >= 3);
-        let mut document = Vec::with_capacity(bytes);
-        document.extend_from_slice(b"[1");
-        while document.len() + 2 < bytes {
-            document.extend_from_slice(b",1");
-        }
-        if document.len() + 1 < bytes {
-            // One byte short: the last element becomes the two-digit `10`.
-            document.push(b'0');
-        }
-        document.push(b']');
-        assert_eq!(document.len(), bytes);
-        document
-    }
-
     #[test]
     fn standard_limits_separate_the_json_target_from_the_physical_capture() {
         let standard = super::Limits::standard();
@@ -7502,74 +6457,15 @@ mod capture_tests {
         );
     }
 
-    /// A child emitting one byte past the JSON target is captured whole and
-    /// returned byte-identical with `Ok`; parsing it records the `Cargo JSON
-    /// bytes` exceedance on the Cargo JSON epoch, published for exactly one
-    /// warning. Nothing constructs `Error::Limit`.
-    #[test]
-    fn target_plus_one_is_captured_whole_and_recorded_as_an_exceedance() {
-        let root = Root::new();
-        let mut limits = super::Limits::standard();
-        limits.configure("json-bytes", 65).unwrap();
-        let emitted = document(66);
-        assert_eq!(emitted.len(), limits.json_bytes + 1);
-        let native = process::Native::fixture();
-        let bytes = root
-            .script(&limits, Reply::stdout(emitted.clone()))
-            .run(|| super::run_cargo(&native.production(), &command(), &limits))
-            .unwrap()
-            .expect("an accounting target never refuses a captured document");
-        assert_eq!(bytes.as_ref(), emitted.as_slice(), "byte-identical capture");
-
-        let allocation = super::unit::preflight("Cargo metadata", &bytes, &limits)
-            .expect("an accounting target never refuses the parse");
-        let record = allocation.exceedances();
-        let axis = record
-            .axis("Cargo JSON bytes")
-            .expect("the JSON target crossing is recorded on the Cargo JSON epoch");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (65, 66, 66)
-        );
-        // The account's own record is the proof; the shared fixed-capacity
-        // process registry is reporting state and is not asserted here.
-        assert_eq!(
-            crate::exceedance::warnings(
-                &[crate::exceedance::Exceedance {
-                    account: crate::exceedance::Account::CargoJson,
-                    id: allocation.id(),
-                    record,
-                }],
-                0
-            )
-            .len(),
-            1,
-            "one warning per account"
-        );
-
-        // Exactly the target is not an exceedance, and the capture is unchanged.
-        let exact = document(65);
-        let bytes = root
-            .script(&limits, Reply::stdout(exact.clone()))
-            .run(|| super::run_cargo(&native.production(), &command(), &limits))
-            .unwrap()
-            .unwrap();
-        assert_eq!(bytes.as_ref(), exact.as_slice());
-        assert!(!super::unit::preflight("Cargo metadata", &bytes, &limits)
-            .unwrap()
-            .exceedances()
-            .is_exceeded());
-    }
-
     /// A child emitting one byte past the physical capture bound is refused as
     /// `Error::Limit` at the capture itself, whatever the JSON target says.
     #[test]
     fn capture_plus_one_is_physically_refused() {
         let root = Root::new();
-        let mut limits = super::Limits::standard();
-        limits
-            .configure("json-bytes", process::CAPTURE_BYTES as u64)
-            .unwrap();
+        let limits = super::Limits {
+            json_bytes: process::CAPTURE_BYTES,
+            ..super::Limits::standard()
+        };
         let native = process::Native::fixture();
         let error = root
             .script(

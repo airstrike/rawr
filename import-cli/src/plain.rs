@@ -57,10 +57,7 @@ const VERSION: u32 = 1;
 /// intrinsic facts (D650) is checked under those facts too: the union's
 /// identity joins the profile's, so a check cached under other facts is
 /// never replayed for it.
-fn adapter(
-    limits: &rawr_import::cargo::Limits,
-    facts: Option<&[u8; 32]>,
-) -> trusted::Adapter<Operations> {
+fn adapter(facts: Option<&[u8; 32]>) -> trusted::Adapter<Operations> {
     let identity = match facts {
         Some(facts) => {
             let hex = facts
@@ -73,7 +70,7 @@ fn adapter(
     };
     trusted::Adapter::trusted(
         Operations,
-        profile::Identity::new(&identity, limits),
+        profile::Identity::new(&identity),
         profile::Version::new(VERSION),
         false,
     )
@@ -367,8 +364,7 @@ fn prepare(
         request_demand.sort_unstable();
         request_demand.dedup();
         let environment = Environment::capture().map_err(Error::other)?;
-        let universe =
-            rawr_import::cargo::universe::Catalog::plain(&limits).map_err(Error::other)?;
+        let universe = rawr_import::cargo::universe::Catalog::plain().map_err(Error::other)?;
         let request = match graph.rust_import_plain(environment, universe, &request_demand, &limits)
         {
             Ok(Some(request)) => request,
@@ -393,7 +389,7 @@ fn prepare(
         let api = prepared.retain_api(&limits).map_err(Error::other)?;
         let input = api.input_identity();
         keyed = applied.is_file().then_some(input);
-        let adapter = &*current_adapter.insert(adapter(&limits, keyed.as_ref()));
+        let adapter = &*current_adapter.insert(adapter(keyed.as_ref()));
         let snapshot = snapshot
             .take()
             .unwrap_or_else(|| rawr::reload::source::Snapshot::from_graph(&source));

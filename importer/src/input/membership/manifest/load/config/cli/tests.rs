@@ -278,25 +278,19 @@ fn initialized_values_and_empty_argv_avoid_normal_reinitialization() {
 }
 
 #[test]
-fn original_resource_floors_and_first_failure_precede_later_loading() {
-    use crate::input::membership::manifest::tests::admits_one_short;
+fn first_failure_precedes_later_loading() {
     let image = image(vec![present("/cli/a.toml"), file("/cli/a.toml", "a=1")]);
-    // `graph_paths` 0 leaves the graph path account alone, 1 exhausts its
-    // target (recorded, never refused), 2 overflows it so the first path check
-    // is a genuine failure.
-    let run = |items, bytes, graph_paths: u8| {
+    // With `overflow`, the graph path account is full, so the first path
+    // check is a genuine failure.
+    let run = |overflow: bool| {
         let limits = cargo::Limits::standard();
         let graph = node::GraphBudget::new();
-        match graph_paths {
-            1 => graph
-                .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-                .expect("exhaust graph"),
-            2 => graph
+        if overflow {
+            graph
                 .paths(usize::MAX)
-                .expect("the next path check overflows"),
-            _ => {}
+                .expect("the next path check overflows");
         }
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).expect("prior items");
         allocation.bytes(31).expect("prior bytes");
         let mut host = match host::Host::from_image(
@@ -307,7 +301,7 @@ fn original_resource_floors_and_first_failure_precede_later_loading() {
             },
         ) {
             Ok(host) => host,
-            Err(_) => return (false, allocation.usage(), allocation.exceedances()),
+            Err(_) => return false,
         };
         let mut paths = slots::Slots::new();
         let mut documents = slots::Slots::new();
@@ -335,53 +329,18 @@ fn original_resource_floors_and_first_failure_precede_later_loading() {
             ));
         }
         let result = session.finish(result);
-        match graph_paths {
-            1 => {
-                assert!(result.is_ok());
-                let exceeded = graph.exceedances();
-                let axis = exceeded
-                    .axis(node::PATHS_RESOURCE)
-                    .expect("exhausted path target recorded");
-                assert_eq!(
-                    axis.first_requested,
-                    node::MAX_PATH_CHECKS_PER_GRAPH as u64 + 1
-                );
-                assert_eq!(axis.high_water, graph.census_usage().unwrap().1 as u64);
-            }
-            2 => assert!(matches!(result, Err(Error::Host(InputError::Budget(_))))),
-            _ => {}
+        if overflow {
+            assert!(matches!(result, Err(Error::Host(InputError::Budget(_)))));
         }
         if success {
             host.finish().expect("consumed");
         } else {
             drop(host);
         }
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (success, allocation.usage(), allocation.exceedances())
+        assert!(allocation.check().is_ok());
+        success
     };
-    let (success, usage, _) = run(usize::MAX, usize::MAX, 0);
-    assert!(success);
-    assert_eq!(
-        run(usage.items, usage.bytes, 0),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(usage.items - 1, usage.bytes, 0),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(usage.items, usage.bytes - 1, 0),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-    assert_eq!(
-        run(usage.items, usage.bytes, 1),
-        (true, usage, crate::exceedance::Record::new())
-    );
+    assert!(run(false));
     // Only a genuine graph failure refuses, and it precedes later loading.
-    assert!(!run(usage.items, usage.bytes, 2).0);
+    assert!(!run(true));
 }

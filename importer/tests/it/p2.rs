@@ -70,7 +70,7 @@ fn request(root: &Path, limits: &Limits) -> Request {
     Request::builder(root, &root.join("target/rawr/cache"), limits)
         .expect("the limits-bound request builder seals")
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("facade_a", &fixture, limits)

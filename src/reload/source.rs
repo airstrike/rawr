@@ -427,7 +427,7 @@ impl Snapshot {
                 &file.contents,
             )?;
         }
-        capture.bind(expected, limits)
+        capture.bind(expected)
     }
 
     #[cfg(feature = "rust-import")]

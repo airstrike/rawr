@@ -8,7 +8,6 @@ use super::{identity, ledger, model};
 #[derive(Default)]
 pub(crate) struct Shape {
     slots: usize,
-    vectors: usize,
     boxes: usize,
     escaped: usize,
     depth: usize,
@@ -85,30 +84,7 @@ impl Shape {
     }
 
     pub(crate) fn array(&mut self, width: usize, elements: usize) {
-        if width == 0 || elements == 0 {
-            return;
-        }
         self.slots = self.slots.saturating_add(width.saturating_mul(elements));
-        // serde_core 1.0.229 VecVisitor starts empty: serde_json 1.0.151
-        // SeqAccess has no size_hint. The pinned Rust RawVec::grow_amortized
-        // doubles from this minimum. Sum every requested capacity, including
-        // the optional into_boxed_slice shrink, to bound transient ownership.
-        // A width may bound multiple concrete types on opposite sides of
-        // RawVec's 1024-byte tier. Four covers either non-byte minimum even
-        // when the widest concrete type itself would start at one element.
-        let minimum = if width == 1 { 8 } else { 4 };
-        let capacity = elements
-            .checked_next_power_of_two()
-            .unwrap_or(usize::MAX)
-            .max(minimum);
-        // The final capacity floor does not erase the smaller tier's earlier
-        // requests: reaching four can allocate one, then two, then four.
-        let first = if width == 1 { 8 } else { 1 };
-        let growth = capacity.saturating_mul(2).saturating_sub(first);
-        let shrink = if capacity == elements { 0 } else { elements };
-        self.vectors = self
-            .vectors
-            .saturating_add(width.saturating_mul(growth.saturating_add(shrink)));
     }
 
     pub(crate) fn string(&mut self, encoded: &[u8]) {
@@ -121,7 +97,7 @@ impl Shape {
         self.depth = self.depth.max(depth);
     }
 
-    pub(crate) fn bytes(&self, strings: usize) -> (usize, usize) {
+    pub(crate) fn bytes(&self, strings: usize) -> usize {
         // SliceRead borrows unescaped strings. Escapes use one reusable u8
         // scratch Vec; decoded bytes (including unicode reserve(4)) fit the
         // encoded string length. RawVec growth gives capacity <= max(8, 2E),
@@ -135,11 +111,10 @@ impl Shape {
         } else {
             scratch_length.saturating_mul(2).max(8).saturating_mul(2)
         };
-        let common = self.boxes.saturating_add(strings).saturating_add(scratch);
-        (
-            common.saturating_add(self.slots),
-            common.saturating_add(self.vectors),
-        )
+        self.boxes
+            .saturating_add(strings)
+            .saturating_add(scratch)
+            .saturating_add(self.slots)
     }
 }
 
@@ -148,14 +123,11 @@ mod tests {
     use super::Shape;
 
     #[test]
-    fn four_elements_include_the_large_element_growth_sequence() {
+    fn four_elements_charge_four_slots() {
         for width in [2048, Shape::widest()] {
             let mut shape = Shape::default();
             shape.array(width, 4);
-            let (logical, admission) = shape.bytes(0);
-            assert_eq!(logical, 4 * width);
-            assert_eq!(admission, (1 + 2 + 4) * width);
-            assert!(admission >= (2 + 4) * width);
+            assert_eq!(shape.bytes(0), 4 * width);
         }
     }
 }

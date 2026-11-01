@@ -241,15 +241,12 @@ impl rawr_directory::Admission for Admission<'_, '_> {
                 self.0.allocation.items(items)?;
                 self.0.allocation.bytes(bytes)?;
             }
-            Work::Name { bytes } => self
-                .0
-                .allocation
-                .string_exceeded("membership native directory name", bytes),
-            Work::Visible { entries } => self
-                .0
-                .allocation
-                .items_exceeded("membership directory entries", entries),
-            Work::Retain { .. } | Work::Copy { .. } | Work::Order | Work::Compare { .. } => {}
+            Work::Name { .. }
+            | Work::Visible { .. }
+            | Work::Retain { .. }
+            | Work::Copy { .. }
+            | Work::Order
+            | Work::Compare { .. } => {}
         }
         Ok(())
     }

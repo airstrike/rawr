@@ -2,7 +2,7 @@ use std::fmt;
 use std::path::{Component, Path};
 
 use super::{index, Account, Buffer, Current};
-use crate::cargo::{universe, Limits};
+use crate::cargo::universe;
 use crate::input::build::Evidence;
 use crate::input::proof::protected::{canonical, normalize, text};
 use crate::input::proof::{ProtectedEntry, TreeDirectory, TreeFile};
@@ -23,9 +23,6 @@ impl Account for Current<'_, '_> {
     }
     fn policy(&mut self, code: &'static str, _reason: impl fmt::Display) -> Error {
         Error::Encoding(code)
-    }
-    fn limited(&mut self, resource: &'static str, limit: usize, actual: usize) -> Result<()> {
-        self.0.limited(resource, limit, actual)
     }
     fn join(&mut self) -> Result<()> {
         self.0.check()
@@ -134,12 +131,8 @@ impl Account for Current<'_, '_> {
         }
         self.0.owned_box(output)
     }
-    fn canonical(
-        &mut self,
-        entries: &[ProtectedEntry],
-        limits: &Limits,
-    ) -> Result<universe::BuildProjection> {
-        canonical::current(entries, limits, self.0)
+    fn canonical(&mut self, entries: &[ProtectedEntry]) -> Result<universe::BuildProjection> {
+        canonical::current(entries, self.0)
     }
 }
 

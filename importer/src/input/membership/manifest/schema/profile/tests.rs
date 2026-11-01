@@ -281,9 +281,8 @@ fn every_string_and_diagnostic_refusal_is_terminal_for_later_fixed_scalars() {
 }
 
 #[test]
-fn original_account_charges_the_retained_inline_slot_and_exact_string_floor() {
+fn original_account_charges_the_retained_inline_slot() {
     use crate::input;
-    use crate::input::membership::manifest::tests::one_short;
     use crate::input::membership::Budget;
     use crate::node;
 
@@ -297,54 +296,23 @@ fn original_account_charges_the_retained_inline_slot_and_exact_string_floor() {
         .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
         .unwrap();
     let bytes = 19 + 4 * std::mem::size_of::<Opt>();
-    // One short of an item, byte, or string target still admits the
-    // retained slot and records only that axis at the exact total. The string
-    // row is the 20-byte literal itself, so its first crossing is its total.
-    const STRING_RESOURCE: &str = "membership decoded TOML string bytes";
-    for (items, limit, string, exceeded) in [
-        (8, bytes, 20, None),
-        (7, bytes, 20, Some((input::INPUT_ITEMS_RESOURCE, 7, 8))),
-        (
-            8,
-            bytes - 1,
-            20,
-            Some((input::INPUT_BYTES_RESOURCE, bytes - 1, bytes)),
-        ),
-        (8, bytes, 19, Some((STRING_RESOURCE, 19, 20))),
-    ] {
-        let mut allocation = input::Allocation::with_limits(items, limit, string);
-        allocation.items(7).unwrap();
-        allocation.bytes(19).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = session::Session::new(&mut budget);
-        let mut retained = storage::Buffer::new();
-        let result = (|| {
-            let converted = Opt::interpret(input(&document), &mut session)?;
-            retained.push(converted, &mut session)?;
-            Ok(())
-        })();
-        assert!(
-            session.finish(result).is_ok(),
-            "an accounting target is not an admission gate"
-        );
-        assert_eq!(allocation.usage.items, 8);
-        assert_eq!(allocation.usage.bytes, bytes);
-        assert_eq!(retained.as_slice()[0].as_str(), "-9223372036854775808");
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        let record = allocation.exceedances();
-        match exceeded {
-            Some((resource, target, total)) => {
-                assert!(one_short(&record, resource, total), "{record:?}");
-                let axis = record.axis(resource).unwrap();
-                assert_eq!(axis.target, target as u64, "{resource}");
-                if resource == STRING_RESOURCE {
-                    assert_eq!(axis.first_requested, total as u64);
-                }
-            }
-            None => assert!(!record.is_exceeded(), "{record:?}"),
-        }
-    }
+    let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
+    allocation.items(7).unwrap();
+    allocation.bytes(19).unwrap();
+    let mut budget = Budget {
+        graph: &graph,
+        allocation: &mut allocation,
+    };
+    let mut session = session::Session::new(&mut budget);
+    let mut retained = storage::Buffer::new();
+    let result = (|| {
+        let converted = Opt::interpret(input(&document), &mut session)?;
+        retained.push(converted, &mut session)?;
+        Ok(())
+    })();
+    assert!(session.finish(result).is_ok());
+    assert_eq!(allocation.usage.items, 8);
+    assert_eq!(allocation.usage.bytes, bytes);
+    assert_eq!(retained.as_slice()[0].as_str(), "-9223372036854775808");
+    assert!(allocation.check().is_ok());
 }

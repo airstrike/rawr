@@ -163,7 +163,7 @@ pub(super) fn text(path: &Path, budget: &mut Budget<'_>) -> Result<Box<str>> {
     let text = path
         .to_str()
         .ok_or(Error::Policy("input path is not valid Unicode"))?;
-    budget.limited("input path bytes", crate::input::LINE_BYTES, text.len())?;
+    budget.check()?;
     budget.owned_text(text)
 }
 

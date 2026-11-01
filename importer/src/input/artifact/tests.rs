@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use super::{derived, Value};
 use crate::cargo;
 use crate::input::stored::{self, Budget};
-use crate::input::{
-    dependency, proof, Allocation, Usage, INPUT_BYTES_RESOURCE, INPUT_ITEMS_RESOURCE,
-};
+use crate::input::{dependency, proof, Allocation, Usage};
 use crate::{node, Error};
 
 const PACKAGE: &str = "pkg";
@@ -224,45 +222,16 @@ fn execution_text_is_checked_after_sources_even_without_environment() {
 }
 
 #[test]
-fn cold_retention_preserves_exact_remaining_limits_and_permanent_refusal() {
+fn cold_retention_charges_the_original_account_and_refusal_is_permanent() {
     let dependency = dependency();
     let exact = Usage {
         items: PRIOR.items + RETAINED.items,
         bytes: PRIOR.bytes + RETAINED.bytes,
     };
-    for floor in 0..3 {
-        let mut allocation = account();
-        allocation.item_limit = exact.items - usize::from(floor == 1);
-        allocation.byte_limit = exact.bytes - usize::from(floor == 2);
-        // The exact remainder records nothing; one less on either axis is
-        // an exceedance whose high water is the exact retained total, and the
-        // retention still completes on the original account.
-        retain(&dependency, &mut allocation).expect("accounting targets never refuse");
-        assert_eq!(allocation.usage(), exact);
-        let record = allocation.exceedances();
-        match floor {
-            0 => assert!(!record.is_exceeded()),
-            1 => {
-                let axis = record
-                    .axis(INPUT_ITEMS_RESOURCE)
-                    .expect("one less item records the item axis");
-                assert_eq!(axis.target, (exact.items - 1) as u64);
-                assert_eq!(axis.high_water, exact.items as u64);
-                assert!(record.axis(INPUT_BYTES_RESOURCE).is_none());
-            }
-            _ => {
-                let axis = record
-                    .axis(INPUT_BYTES_RESOURCE)
-                    .expect("one less byte records the byte axis");
-                assert_eq!(axis.target, (exact.bytes - 1) as u64);
-                assert_eq!(axis.high_water, exact.bytes as u64);
-                assert!(record.axis(INPUT_ITEMS_RESOURCE).is_none());
-            }
-        }
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-    }
+    let mut allocation = account();
+    // The retention completes on the original account.
+    retain(&dependency, &mut allocation).expect("retention");
+    assert_eq!(allocation.usage(), exact);
     // Only a genuine failure latches, and the latch is permanent: the current
     // comparison does no further work and emits nothing.
     let mut allocation = account();

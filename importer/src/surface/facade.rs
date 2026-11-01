@@ -806,23 +806,20 @@ impl Plan {
     /// Encode one classified contract into the runner's bounded facade plan.
     pub fn encode(
         contract: &crate::Contract<crate::Classified>,
-        limits: &crate::cargo::Limits,
     ) -> Result<Box<[u8]>, super::Error> {
-        Self::encode_outcomes(contract.raw_graph(), contract.outcomes(), limits)
+        Self::encode_outcomes(contract.raw_graph(), contract.outcomes())
     }
 
     pub(crate) fn encode_parts(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         parts: &crate::classify::ClassifiedParts,
-        limits: &crate::cargo::Limits,
     ) -> Result<Box<[u8]>, super::Error> {
-        Self::encode_outcomes(graph, parts.outcomes(), limits)
+        Self::encode_outcomes(graph, parts.outcomes())
     }
 
     fn encode_outcomes<'a>(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         outcomes: impl ExactSizeIterator<Item = crate::classify::Outcome<'a>>,
-        limits: &crate::cargo::Limits,
     ) -> Result<Box<[u8]>, super::Error> {
         let mut facades = Vec::<Facade>::new();
         // Each re-exported variant: its root, its path, its enum and its
@@ -1361,13 +1358,6 @@ impl Plan {
             facades: facades.into_boxed_slice(),
         })
         .map_err(|_| super::Error::Encoding)?;
-        // The encoded plan size is an accounting target recorded on a
-        // surface account; the physical bound is the node content ceiling.
-        super::account::Account::surface().exceeded(
-            "runner bindings plan bytes",
-            limits.json_bytes,
-            bytes.len(),
-        );
         Ok(bytes.into_boxed_slice())
     }
 
@@ -1397,16 +1387,7 @@ impl Plan {
     }
 
     /// Decode one generated plan under the active importer bounds.
-    pub fn decode(bytes: &[u8], limits: &crate::cargo::Limits) -> Result<Self, super::Error> {
-        Self::decode_accounted(bytes, limits, &mut super::account::Account::surface())
-    }
-
-    pub(crate) fn decode_accounted(
-        bytes: &[u8],
-        limits: &crate::cargo::Limits,
-        account: &mut super::account::Account,
-    ) -> Result<Self, super::Error> {
-        account.exceeded("runner bindings plan bytes", limits.json_bytes, bytes.len());
+    pub fn decode(bytes: &[u8]) -> Result<Self, super::Error> {
         let plan: Self = serde_json::from_slice(bytes).map_err(|_| super::Error::Encoding)?;
         plan.validate()?;
         Ok(plan)
@@ -1418,13 +1399,12 @@ impl Plan {
     #[doc(hidden)]
     pub fn verify_exact_surface(
         bytes: &[u8],
-        limits: &crate::cargo::Limits,
         root: &str,
         expected_types: &[&str],
         expected_items: &[&str],
         rejected_paths: &[&str],
     ) -> Result<(), super::Error> {
-        let plan = Self::decode(bytes, limits)?;
+        let plan = Self::decode(bytes)?;
         let mut facades = plan.facades().filter(|facade| facade.root() == root);
         let facade = facades.next().ok_or(super::Error::InstanceMismatch)?;
         if facades.next().is_some()
@@ -1669,8 +1649,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
-    let limits = crate::cargo::Limits::standard();
-    let mut plan = Plan::decode(bytes, &limits).expect("the iced facade fixture decodes");
+    let mut plan = Plan::decode(bytes).expect("the iced facade fixture decodes");
     let facade = plan
         .facades
         .iter_mut()
@@ -1756,8 +1735,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         },
     };
     let iced = iced_semantic_fixture();
-    let limits = crate::cargo::Limits::standard();
-    let iced = Plan::decode(&iced, &limits).expect("the static iced facade fixture decodes");
+    let iced = Plan::decode(&iced).expect("the static iced facade fixture decodes");
     let Plan {
         aliases,
         sources: _,
@@ -3513,41 +3491,12 @@ mod alias_schema_tests {
 
     #[test]
     fn facade_schema_one_and_missing_alias_ledger_reject() {
-        let limits = crate::cargo::Limits::standard();
         let bytes = super::iced_semantic_fixture();
         let mut stale: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         stale["schema"] = serde_json::json!(1);
-        assert!(Plan::decode(&serde_json::to_vec(&stale).unwrap(), &limits).is_err());
+        assert!(Plan::decode(&serde_json::to_vec(&stale).unwrap()).is_err());
         let mut missing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         missing.as_object_mut().unwrap().remove("aliases");
-        assert!(Plan::decode(&serde_json::to_vec(&missing).unwrap(), &limits).is_err());
-    }
-
-    /// The facade plan size is an accounting target. Exactly at the
-    /// target decodes silently; one over decodes whole and records the axis.
-    #[test]
-    fn facade_plan_past_the_json_target_decodes_and_records() {
-        let bytes = super::iced_semantic_fixture();
-        let decode = |json_bytes: usize| {
-            let mut limits = crate::cargo::Limits::standard();
-            limits.json_bytes = json_bytes;
-            let mut account = crate::surface::account::Account::surface();
-            let plan = Plan::decode_accounted(&bytes, &limits, &mut account)
-                .expect("the facade plan decodes under every JSON target");
-            assert!(plan.facades().next().is_some());
-            account.exceedances()
-        };
-        assert!(!decode(bytes.len()).is_exceeded());
-        let axis = *decode(bytes.len() - 1)
-            .axis("runner bindings plan bytes")
-            .expect("the plan byte target records its axis");
-        assert_eq!(
-            (axis.target, axis.first_requested, axis.high_water),
-            (
-                (bytes.len() - 1) as u64,
-                bytes.len() as u64,
-                bytes.len() as u64
-            )
-        );
+        assert!(Plan::decode(&serde_json::to_vec(&missing).unwrap()).is_err());
     }
 }

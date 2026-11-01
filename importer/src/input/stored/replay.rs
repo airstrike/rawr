@@ -119,13 +119,11 @@ impl<'budget, 'account> Compared<'_, 'budget, 'account> {
     ) -> Result<Replayed<'budget, 'account>> {
         let budget = self.budget;
         budget.check()?;
-        let limits = budget.limits;
         let projection = input::proof::protected::project::current(
             &self.entries,
             &self.build.build().evidence,
             protected,
             self.target,
-            &limits,
             budget,
         )?;
         let retained = self
@@ -307,19 +305,13 @@ mod tests {
         let result = replayed.finish(|_, _, admit| {
             entered = true;
             // One byte over the hashed target is admitted and recorded.
-            admit(1).expect("an exceeding digest charge is recorded, not refused");
+            admit(1).expect("admitted");
             // A genuine failure (checked-arithmetic overflow) is terminal.
             admit(usize::MAX)?;
             panic!("exhausted completion must return before minting authority")
         });
         assert!(entered);
         assert!(matches!(result, Err(Error::Graph(node::Error::Allocation))));
-        let record = graph.exceedances();
-        let axis = record
-            .axis(node::HASHED_RESOURCE)
-            .expect("hashed axis recorded");
-        assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-        assert_eq!(axis.high_water, node::MAX_HASHED_BYTES_PER_GRAPH + 1);
         assert!(matches!(budget.check(), Err(Error::Refused)));
         let replayed = Replayed {
             budget: &mut budget,

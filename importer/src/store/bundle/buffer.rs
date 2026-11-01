@@ -71,34 +71,20 @@ mod tests {
     #[test]
     fn geometric_replacement_layout_is_precharged_with_nonzero_prior_ownership() {
         let budget = GraphBudget::new();
-        let cap = usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap();
-        budget.decode(cap - 7 * std::mem::size_of::<u64>()).unwrap();
+        let slot = std::mem::size_of::<u64>() as u64;
         let mut values = Buffer::new();
         values.push(1u64, &budget).unwrap();
         values.push(2, &budget).unwrap();
         values.push(3, &budget).unwrap();
         values.push(4, &budget).unwrap();
         assert_eq!(values.admitted, Some(4));
-        assert!(!budget.exceedances().is_exceeded());
-        // The next geometric layout (8 slots) is still charged in full to
-        // the original account before growth; crossing the target records the
-        // exact cumulative total instead of refusing the push.
-        values
-            .push(5, &budget)
-            .expect("an accounting axis never refuses");
+        assert_eq!(budget.census_usage().unwrap().0, 7 * slot);
+        // The next geometric layout (8 slots) is charged in full to the
+        // original account before growth.
+        values.push(5, &budget).unwrap();
         assert_eq!(values.admitted, Some(8));
         assert!(values.values.capacity() >= 8);
-        let axis = budget
-            .exceedances()
-            .axis(crate::node::DECODED_RESOURCE)
-            .copied()
-            .expect("the decoded-bytes axis crossed its target");
-        assert_eq!(axis.target, crate::node::MAX_DECODED_BYTES_PER_GRAPH);
-        assert_eq!(
-            axis.first_requested,
-            crate::node::MAX_DECODED_BYTES_PER_GRAPH + 8 * std::mem::size_of::<u64>() as u64
-        );
-        assert_eq!(axis.high_water, axis.first_requested);
+        assert_eq!(budget.census_usage().unwrap().0, 15 * slot);
         assert_eq!(values.into_vec(), [1, 2, 3, 4, 5]);
     }
 
@@ -108,13 +94,9 @@ mod tests {
         let mut values = Buffer::new();
         values.push(1u64, &budget).unwrap();
         assert_eq!(values.pop(), Some(1));
-        let cap = usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap();
-        budget.decode(cap - std::mem::size_of::<u64>()).unwrap();
-        budget
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-            .unwrap();
-        budget.exhaust_comparisons();
+        let before = budget.census_vector().unwrap();
         values.push(2, &budget).unwrap();
+        assert_eq!(budget.census_vector().unwrap(), before);
         assert_eq!(values.into_vec(), [2]);
     }
 

@@ -66,8 +66,9 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
                 .expect("the const selector duplicates"),
             Arguments::new(
                 Box::default(),
-                Box::from([Constant::checked("usize", "3", &limits)
-                    .expect("the finite const argument seals")]),
+                Box::from([
+                    Constant::checked("usize", "3").expect("the finite const argument seals")
+                ]),
                 Box::default(),
                 None,
                 &limits,

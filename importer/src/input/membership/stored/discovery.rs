@@ -294,7 +294,7 @@ fn discovery_wire_rejects_bad_tags_flags_branches_errno_and_query_mismatch() {
 }
 
 #[test]
-fn discovery_retention_and_decode_preserve_original_ownership_floors() {
+fn discovery_retention_and_decode_preserve_original_ownership() {
     let record = record(transcript(
         Filename::Config,
         false,
@@ -305,58 +305,30 @@ fn discovery_retention_and_decode_preserve_original_ownership_floors() {
     let items = 7 + 2; // prior, record vector and directory bytes; inert transcript
     let owned = 19 + std::mem::size_of::<observed::Record>() + 4;
     for decode in [false, true] {
-        for floor in 0..3 {
-            let graph = node::GraphBudget::new();
-            let mut allocation = input::Allocation::with_limits(
-                items - usize::from(floor == 1),
-                owned - usize::from(floor == 2),
-                4,
-            );
-            allocation.items(7).expect("prior items");
-            allocation.bytes(19).expect("prior bytes");
-            let mut budget = Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            };
-            let result = if decode {
-                Stored::decode(&bytes, &mut budget)
-            } else {
-                Stored::from_records(std::slice::from_ref(&record), &mut budget)
-            };
-            // Every floor retains the record in full; one less on an
-            // axis records that axis with the exact total as high water.
-            assert_eq!(
-                result.expect("ownership targets never refuse").records(),
-                std::slice::from_ref(&record)
-            );
-            assert_eq!(allocation.usage().items, items);
-            assert_eq!(allocation.usage().bytes, owned);
-            let exceeded = allocation.exceedances();
-            match floor {
-                0 => assert!(!exceeded.is_exceeded()),
-                1 => {
-                    let axis = exceeded.axis(input::INPUT_ITEMS_RESOURCE).unwrap();
-                    assert_eq!(
-                        (axis.target, axis.high_water),
-                        (items as u64 - 1, items as u64)
-                    );
-                    assert!(exceeded.axis(input::INPUT_BYTES_RESOURCE).is_none());
-                }
-                _ => {
-                    let axis = exceeded.axis(input::INPUT_BYTES_RESOURCE).unwrap();
-                    assert_eq!(
-                        (axis.target, axis.high_water),
-                        (owned as u64 - 1, owned as u64)
-                    );
-                    assert!(exceeded.axis(input::INPUT_ITEMS_RESOURCE).is_none());
-                }
-            }
-            assert!(allocation.items(0).is_ok(), "nothing latched");
-        }
+        let graph = node::GraphBudget::new();
+        let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
+        allocation.items(7).expect("prior items");
+        allocation.bytes(19).expect("prior bytes");
+        let mut budget = Budget {
+            graph: &graph,
+            allocation: &mut allocation,
+        };
+        let result = if decode {
+            Stored::decode(&bytes, &mut budget)
+        } else {
+            Stored::from_records(std::slice::from_ref(&record), &mut budget)
+        };
+        // The record is retained in full.
+        assert_eq!(
+            result.expect("the record is retained").records(),
+            std::slice::from_ref(&record)
+        );
+        assert_eq!(allocation.usage().items, items);
+        assert_eq!(allocation.usage().bytes, owned);
+        assert!(allocation.items(0).is_ok());
     }
-    // Decoding one byte past the graph's decode target still decodes and
-    // records the axis; only checked-arithmetic overflow refuses, before any
-    // ownership.
+    // Decoding past the graph's decode constant still decodes; only
+    // checked-arithmetic overflow refuses, before any ownership.
     let graph = node::GraphBudget::new();
     graph
         .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + 1)
@@ -372,15 +344,7 @@ fn discovery_retention_and_decode_preserve_original_ownership_floors() {
             allocation: &mut allocation,
         },
     )
-    .expect("decode past the graph target");
-    let axis = graph
-        .exceedances()
-        .axis(node::DECODED_RESOURCE)
-        .copied()
-        .unwrap();
-    assert_eq!(axis.target, node::MAX_DECODED_BYTES_PER_GRAPH);
-    assert_eq!(axis.first_requested, node::MAX_DECODED_BYTES_PER_GRAPH + 1);
-    assert_eq!(axis.high_water, node::MAX_DECODED_BYTES_PER_GRAPH + 1);
+    .expect("decode past the graph constant");
     assert_eq!(allocation.usage().items, items);
     assert_eq!(allocation.usage().bytes, owned);
     let graph = node::GraphBudget::new();

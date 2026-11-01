@@ -19,7 +19,6 @@ pub(in crate::input) fn legacy(
     evidence: &build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
 ) -> crate::Result<cargo::universe::BuildProjection> {
     legacy_accounted(
@@ -27,7 +26,6 @@ pub(in crate::input) fn legacy(
         evidence,
         protected,
         target,
-        limits,
         allocation,
         &crate::node::GraphBudget::new(),
     )
@@ -38,7 +36,6 @@ pub(in crate::input) fn legacy_accounted(
     evidence: &build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut Allocation,
     graph: &crate::node::GraphBudget,
 ) -> crate::Result<cargo::universe::BuildProjection> {
@@ -47,7 +44,6 @@ pub(in crate::input) fn legacy_accounted(
         evidence,
         protected,
         target,
-        limits,
         &mut Legacy(allocation, graph),
     )
 }
@@ -57,25 +53,10 @@ pub(in crate::input) fn current(
     evidence: &build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     budget: &mut stored::Budget<'_>,
 ) -> stored::Result<cargo::universe::BuildProjection> {
     budget.check()?;
-    let mut limits = *limits;
-    limits.items = limits.items.min(budget.limits.items);
-    limits.units = limits.units.min(budget.limits.units);
-    limits.packages = limits.packages.min(budget.limits.packages);
-    limits.input_proof_bytes = limits
-        .input_proof_bytes
-        .min(budget.limits.input_proof_bytes);
-    project(
-        entries,
-        evidence,
-        protected,
-        target,
-        &limits,
-        &mut Current(budget),
-    )
+    project(entries, evidence, protected, target, &mut Current(budget))
 }
 
 fn project<'evidence, A: Account>(
@@ -83,7 +64,6 @@ fn project<'evidence, A: Account>(
     evidence: &'evidence build::Evidence,
     protected: &cargo::universe::MetadataProof,
     target: &str,
-    limits: &cargo::Limits,
     allocation: &mut A,
 ) -> Result<cargo::universe::BuildProjection, A::Error> {
     allocation.check()?;
@@ -95,14 +75,9 @@ fn project<'evidence, A: Account>(
     impl<'evidence> OwnerIndex<'evidence> {
         fn new<A: Account>(
             evidence: &'evidence build::Evidence,
-            limits: &cargo::Limits,
             allocation: &mut A,
         ) -> Result<Self, A::Error> {
-            allocation.limited(
-                "protected build package owner index",
-                limits.packages,
-                evidence.packages.len(),
-            )?;
+            allocation.check()?;
             let mut roots = allocation.roots(evidence.packages.len())?;
             for (package_id, package) in &evidence.packages {
                 roots.push((package_id.as_ref(), package.root.as_path()));
@@ -320,14 +295,10 @@ fn project<'evidence, A: Account>(
         })
     }
 
-    let owners = OwnerIndex::new(evidence, limits, allocation)?;
+    let owners = OwnerIndex::new(evidence, allocation)?;
     let mut scripts = A::Index::new();
     for script in &evidence.scripts {
-        allocation.limited(
-            "protected build-script execution joins",
-            limits.units,
-            scripts.len().saturating_add(1),
-        )?;
+        allocation.check()?;
         allocation.join()?;
         let key = (script.package_id.as_ref(), script.out_dir.as_path());
         scripts.insert(key, script, allocation)?;
@@ -335,11 +306,7 @@ fn project<'evidence, A: Account>(
     let mut artifacts = A::Index::new();
     let build_scripts = evidence.artifacts.as_ref();
     for artifact in &evidence.artifacts {
-        allocation.limited(
-            "protected build artifact execution joins",
-            limits.units,
-            artifacts.len().saturating_add(1),
-        )?;
+        allocation.check()?;
         allocation.join()?;
         let key = (artifact.package_id.as_ref(), artifact.dep_info.as_path());
         artifacts.insert(key, artifact, allocation)?;
@@ -449,11 +416,7 @@ fn project<'evidence, A: Account>(
                             bytes: *bytes,
                             digest: *digest,
                         };
-                        allocation.limited(
-                            "protected source/build projection entries",
-                            limits.items,
-                            entries.values.len().saturating_add(1),
-                        )?;
+                        allocation.check()?;
                         allocation.push(&mut entries, projected)?;
                         continue;
                     }
@@ -755,7 +718,6 @@ fn project<'evidence, A: Account>(
                                 value,
                                 evidence,
                                 protected,
-                                limits,
                                 allocation,
                             )?
                         } else {
@@ -803,17 +765,13 @@ fn project<'evidence, A: Account>(
             | Entry::Fact { .. } => None,
         };
         if let Some(projected) = projected {
-            allocation.limited(
-                "protected source/build projection entries",
-                limits.items,
-                entries.values.len().saturating_add(1),
-            )?;
+            allocation.check()?;
             allocation.push(&mut entries, projected)?;
         }
     }
     entries.values.sort_unstable();
     entries.values.dedup();
-    allocation.canonical(&entries.values, limits)
+    allocation.canonical(&entries.values)
 }
 
 #[cfg(test)]

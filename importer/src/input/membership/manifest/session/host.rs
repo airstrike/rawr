@@ -64,26 +64,14 @@ impl<'image> Session<'_, host::Host<'image, '_>> {
         }
     }
     /// Complete successful read and UTF-8 conversion precede embedded gating.
-    pub(in super::super) fn text(
-        &mut self,
-        path: &[u8],
-        limits: &cargo::Limits,
-    ) -> Step<&'image str> {
+    pub(in super::super) fn text(&mut self, path: &[u8]) -> Step<&'image str> {
         self.check()?;
         let file = match self.admission.file(path) {
             Ok(Some(file)) => file,
             Ok(None) => return self.fail(Error::Host(InputError::Io(libc::ENOENT))),
             Err(error) => return self.fail(Error::Host(error)),
         };
-        // The manifest size is an accounting target recorded on the
-        // original account; the file bytes were retained under the host's
-        // physical read bound and are not refused here.
-        let length = file.bytes().len();
-        self.admission.budget().allocation.exceeded(
-            "membership manifest bytes",
-            limits.manifest_bytes,
-            length,
-        );
+        // The file bytes were retained under the host's physical read bound.
         match std::str::from_utf8(file.bytes()) {
             Ok(text) => Ok(text),
             Err(error) => self.fail(Error::Host(InputError::ManifestEncoding(error))),

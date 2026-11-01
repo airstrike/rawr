@@ -749,12 +749,7 @@ pub(in crate::input) fn capture_error(error: Error) -> crate::Error {
 }
 
 fn hash(value: &impl Serialize, budget: &mut Budget<'_>) -> Result<[u8; 32]> {
-    canonical::digest(
-        value,
-        "native input canonical bytes",
-        budget.limits.input_proof_bytes,
-        budget,
-    )
+    canonical::digest(value, budget)
 }
 
 fn hex_matches(digest: &[u8; 32], value: &str) -> bool {

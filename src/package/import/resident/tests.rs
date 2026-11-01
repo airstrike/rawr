@@ -1,5 +1,4 @@
 use super::{account, Error, Outcome};
-use crate::host::ImportAllocation as _;
 use crate::package::compile::captured::tests::{
     compiler, native_snapshot, preview_runtime, snapshot, source,
 };
@@ -135,7 +134,6 @@ mod top_level {
     use super::{
         account, compiler, has_own_support, preview_runtime, retained, snapshot, usage, Outcome,
     };
-    use crate::host::ImportAllocation as _;
     use crate::{Dynamic, Engine, Shared, AST};
 
     // The generated helper only needs these two Program fields and `locate`. Include its
@@ -214,7 +212,6 @@ mod top_level {
         drop(engine);
         assert!(first_support.upgrade().is_some());
         let reconstructed = replacement.imported_native_snapshot().unwrap();
-        assert_eq!(reconstructed.account, original.account);
         assert_eq!(reconstructed.limits, original.limits);
         assert!(reconstructed.current[1] > first_live.current[1]);
 
@@ -232,34 +229,6 @@ mod top_level {
         assert!(first_support.upgrade().is_some());
         assert!(second_support.upgrade().is_some());
         assert_eq!(observation.snapshot(), Some(retained));
-
-        let native = replacement.imported_native.as_ref().unwrap();
-        let mut pressure = native.attempt().unwrap();
-        let available = retained.limits[1] - native.usage().1;
-        pressure.retain_checked(Some(0), Some(available)).unwrap();
-        // The byte target is accounting. Reconstruction past it is
-        // accepted and recorded on the original runner account with a
-        // truthful high water; nothing is refused or latched.
-        let (accepted, exceeded_observation) =
-            replacement.reconstruct_imported_native(&account::tests::carrier_bytes(&[]));
-        let accepted = accepted.unwrap();
-        let exceeded = native.snapshot();
-        assert_eq!(exceeded.account, original.account);
-        assert!(exceeded.first_refusal.is_none());
-        assert!(exceeded.exceeded.axes().any(|axis| {
-            axis.target as usize == retained.limits[1]
-                && axis.high_water as usize > retained.limits[1]
-        }));
-        assert_eq!(exceeded_observation.snapshot(), Some(exceeded));
-        // The accepted observation retains its own scope until it retires.
-        drop(exceeded_observation);
-        drop(accepted);
-        drop(pressure);
-        assert_eq!(native.snapshot().current, retained.current);
-        assert!(native.snapshot().first_refusal.is_none());
-        assert_eq!(native.snapshot().exceeded, exceeded.exceeded);
-        assert!(first_support.upgrade().is_some());
-        assert!(second_support.upgrade().is_some());
         drop(first_copy);
         drop(second_copy);
         assert!(first_support.upgrade().is_none());
@@ -491,36 +460,6 @@ mod top_level {
     }
 }
 
-/// The runner byte target is accounting. A resident compile past it is
-/// accepted and recorded on the existing account, and every owner releases
-/// exactly its own contribution.
-#[test]
-fn resident_target_exceedance_keeps_existing_owners_and_their_account() {
-    let engine = retained();
-    let native = engine.imported_native.as_ref().unwrap();
-    let before = native.usage();
-    let identity = native.snapshot().account;
-    let mut pressure = native.attempt().unwrap();
-    let remaining = rawr_import::cargo::Limits::standard().byte_limit() - native.usage().1;
-    pressure.retain_checked(Some(0), Some(remaining)).unwrap();
-    let full = native.usage();
-    let outcome = engine
-        .compile_package_snapshot_resident_plain(&snapshot(
-            "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
-        ))
-        .unwrap();
-    let snapshot = native.snapshot();
-    assert_eq!(snapshot.account, identity);
-    assert!(snapshot.first_refusal.is_none());
-    assert!(snapshot.exceeded.axes().any(|axis| {
-        axis.target as usize == snapshot.limits[1] && axis.high_water as usize > full.1
-    }));
-    drop(outcome);
-    assert_eq!(native.usage(), full);
-    drop(pressure);
-    assert_eq!(native.usage(), before);
-}
-
 struct GenerationRoot(std::path::PathBuf);
 
 impl GenerationRoot {
@@ -613,7 +552,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     )
     .unwrap();
     let mut native = account::Native::transform(carrier).unwrap();
-    let plan = facade::Plan::encode(&contract, &limits).unwrap();
+    let plan = facade::Plan::encode(&contract).unwrap();
     let mut engine = compiler();
     let _definitions = runner::install_retained(&mut engine, &plan, &mut native).unwrap();
     let engine = engine.retain_imported_native(native).unwrap();

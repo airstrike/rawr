@@ -9,7 +9,6 @@ pub(in crate::input::proof::protected) trait Index<K: Ord, V: Copy, A: Account>:
     Sized
 {
     fn new() -> Self;
-    fn len(&self) -> usize;
     fn get(&self, key: &K) -> Option<ExecutionJoin<V>>;
     fn insert(&mut self, key: K, value: V, account: &mut A) -> Result<(), A::Error>;
 }
@@ -19,9 +18,6 @@ pub(in crate::input::proof::protected) struct LegacyIndex<K, V>(BTreeMap<K, Exec
 impl<K: Ord, V: Copy> Index<K, V, Legacy<'_>> for LegacyIndex<K, V> {
     fn new() -> Self {
         Self(BTreeMap::new())
-    }
-    fn len(&self) -> usize {
-        self.0.len()
     }
     fn get(&self, key: &K) -> Option<ExecutionJoin<V>> {
         self.0.get(key).copied()
@@ -50,9 +46,6 @@ impl<K: Ord, V: Copy> Index<K, V, Current<'_, '_>> for CurrentIndex<K, V> {
             values: Slots::new(),
             index: index::Index::new(),
         }
-    }
-    fn len(&self) -> usize {
-        self.values.as_slice().len()
     }
     fn get(&self, key: &K) -> Option<ExecutionJoin<V>> {
         match self

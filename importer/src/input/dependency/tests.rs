@@ -25,19 +25,13 @@ impl Fixture {
         Self(path)
     }
 
-    fn read(
-        &self,
-        text: &str,
-        limits: &Limits,
-        allocation: &mut Allocation,
-    ) -> crate::Result<Dependency> {
+    fn read(&self, text: &str, allocation: &mut Allocation) -> crate::Result<Dependency> {
         let path = self.0.join("target.d");
         fs::write(&path, text).expect("fixture dep-info");
         Dependency::read(
             toolchain::supported_cargo_commit(),
             &path,
             &self.0,
-            limits,
             allocation,
         )
     }
@@ -55,7 +49,7 @@ fn legacy_reader_retains_canonical_sorted_sources_and_raw_environment() {
     let limits = Limits::standard();
     let dependency = fixture.read(
         "target: b\\ file.rs a.rs a.rs\n# env-dep:SET=a\\\nb\n# env-dep:EMPTY=\n# env-dep:UNSET\n",
-        &limits, &mut Allocation::new(&limits),
+        &mut Allocation::new(&limits),
     ).expect("the shared grammar feeds the existing source resolver");
     assert_eq!(
         dependency.sources.as_ref(),
@@ -104,7 +98,7 @@ fn reader_preserves_environment_and_path_failure_order() {
         ),
     ] {
         let error = fixture
-            .read(text, &limits, &mut Allocation::new(&limits))
+            .read(text, &mut Allocation::new(&limits))
             .err()
             .expect("the fixture rejects");
         assert!(
@@ -113,11 +107,7 @@ fn reader_preserves_environment_and_path_failure_order() {
         );
     }
     let error = fixture
-        .read(
-            "target: missing.rs a\\",
-            &limits,
-            &mut Allocation::new(&limits),
-        )
+        .read("target: missing.rs a\\", &mut Allocation::new(&limits))
         .err()
         .expect("source resolution fails at the preceding boundary");
     assert!(matches!(
@@ -127,21 +117,6 @@ fn reader_preserves_environment_and_path_failure_order() {
             ..
         }
     ));
-    // The token length is an accounting target. Crossing it records a
-    // truthful high water and the reader continues to the trailing syntax.
-    let mut tiny = limits;
-    tiny.string_bytes = 1;
-    let mut allocation = Allocation::new(&tiny);
-    let error = fixture
-        .read("target: aa\\", &tiny, &mut allocation)
-        .err()
-        .expect("the trailing syntax still fails");
-    assert!(!matches!(error, Error::Limit { .. }), "{error:?}");
-    let axis = *allocation
-        .exceedances()
-        .axis("dep-info token bytes")
-        .expect("the token crossing is recorded");
-    assert_eq!((axis.target, axis.high_water), (1, 2));
 }
 
 #[test]
@@ -154,7 +129,7 @@ fn duplicate_environment_storage_spends_the_original_account_before_rejecting() 
     for record in ["# env-dep:K\n# env-dep:K\n", "# env-dep:K=\n# env-dep:K=\n"] {
         let mut allocation = Allocation::for_proof(prior, &limits);
         assert!(matches!(
-            environment(record, &limits, &mut allocation),
+            environment(record, &mut allocation),
             Err(Error::Input {
                 code: "duplicate-env-dep",
                 ..
@@ -169,40 +144,19 @@ fn duplicate_environment_storage_spends_the_original_account_before_rejecting() 
         );
     }
     let record = "# env-dep:K=V\n";
-    for floor in 0..=1 {
-        let mut limits = limits;
-        limits.input_proof_bytes = prior.bytes + 2 - floor;
-        let mut allocation = Allocation::for_proof(prior, &limits);
-        // The exact remainder records nothing; one less byte records the
-        // exact total as an exceedance and the environment is still admitted.
-        environment(record, &limits, &mut allocation)
-            .expect("accounting targets never refuse the environment");
-        assert_eq!(
-            allocation.usage(),
-            Usage {
-                items: prior.items + 4,
-                bytes: prior.bytes + 2
-            }
-        );
-        let exceedances = allocation.exceedances();
-        if floor == 0 {
-            assert!(!exceedances.is_exceeded());
-        } else {
-            let bytes = exceedances
-                .axis(crate::input::INPUT_BYTES_RESOURCE)
-                .expect("one less byte records the byte axis");
-            assert_eq!(bytes.target, (prior.bytes + 1) as u64);
-            assert_eq!(bytes.high_water, (prior.bytes + 2) as u64);
-            assert_eq!(exceedances.axes().count(), 1);
+    let mut allocation = Allocation::for_proof(prior, &limits);
+    environment(record, &mut allocation).expect("the environment is admitted");
+    assert_eq!(
+        allocation.usage(),
+        Usage {
+            items: prior.items + 4,
+            bytes: prior.bytes + 2
         }
-        allocation
-            .items(0)
-            .expect("an exceedance never latches the account");
-        // Only a genuine failure latches, and the latch is terminal.
-        allocation.refuse();
-        assert!(matches!(
-            environment(record, &limits, &mut allocation),
-            Err(Error::InputAccountRefused)
-        ));
-    }
+    );
+    // Only a genuine failure latches, and the latch is terminal.
+    allocation.refuse();
+    assert!(matches!(
+        environment(record, &mut allocation),
+        Err(Error::InputAccountRefused)
+    ));
 }

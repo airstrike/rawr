@@ -335,7 +335,7 @@ pub(super) fn capture(
         .unwrap()
         .inventory()
         .environment(environment)
-        .policy(Policy::manifest(limits).seal())
+        .policy(Policy::manifest().seal())
         .unwrap();
     for name in selected {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -37,13 +37,10 @@ fn artifact(kind: &str, dep: &str) -> Artifact {
             crate_name: "package".into(),
             features: Box::from([Box::from("first"), Box::from("second")]),
         },
-        profile: unit::ArtifactProfile::from_build(
-            &serde_json::json!({
-                "opt_level":"0", "debuginfo":2, "debug_assertions":true,
-                "overflow_checks":true, "test":false,
-            }),
-            &Limits::standard(),
-        )
+        profile: unit::ArtifactProfile::from_build(&serde_json::json!({
+            "opt_level":"0", "debuginfo":2, "debug_assertions":true,
+            "overflow_checks":true, "test":false,
+        }))
         .expect("actual artifact profile"),
     }
 }
@@ -259,7 +256,6 @@ fn observed(
         evidence,
         protected,
         TARGET,
-        &Limits::standard(),
         &mut Budget::borrow(&Limits::standard(), allocation, &node::GraphBudget::new()),
     )
 }
@@ -283,7 +279,6 @@ fn generated_sources_bind_execution_and_content_without_physical_output_roots() 
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::for_proof(PRIOR, &limits),
         )
         .expect("generated cold input");
@@ -366,7 +361,6 @@ fn target_generated_output_uses_host_compiled_script_without_erasing_execution_p
         &evidence,
         &protected,
         TARGET,
-        &limits,
         &mut Allocation::for_proof(PRIOR, &limits),
     )
     .expect("same cold execution join");
@@ -401,26 +395,10 @@ fn generated_source_comparison_overflow_latches_the_original_account() {
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     let mut current = Current(&mut budget);
-    // Comparison work past the decode target is recorded on the graph
-    // with the exact requested amount; it is not refused and does not latch.
+    // Comparison work past the decode constant is not refused.
     current
         .comparison(1)
-        .expect("the comparison target is recorded, not refused");
-    let axis = *graph
-        .exceedances()
-        .axis(node::DECODED_RESOURCE)
-        .expect("comparison work records the decode axis");
-    assert_eq!(
-        (axis.target, axis.first_requested, axis.high_water),
-        (
-            node::MAX_DECODED_BYTES_PER_GRAPH,
-            node::MAX_DECODED_BYTES_PER_GRAPH + 1,
-            node::MAX_DECODED_BYTES_PER_GRAPH + 1
-        )
-    );
-    current
-        .check()
-        .expect("an accounting exceedance never latches the account");
+        .expect("comparison work past the decode constant");
     // Checked-arithmetic overflow of the decode account is a genuine failure
     // that stays terminal and latches the original input account.
     let decoded = graph.census_usage().expect("graph census").0;
@@ -517,28 +495,17 @@ fn cold_comparisons_use_original_work_budget_without_claiming_owned_bytes() {
         bytes: 1,
         digest: [1; 32],
     }];
-    // The full projector spends the same supplied work account: its
-    // comparisons cross the exhausted decode target and are recorded on that
-    // graph, while the projection still completes and nothing latches.
+    // The full projector spends the same supplied work account, and the
+    // projection completes past the decode constant.
     super::legacy_accounted(
         &entries,
         &evidence,
         &protected,
         TARGET,
-        &limits,
         &mut allocation,
         &graph,
     )
-    .expect("the comparison target is recorded, not refused");
-    let axis = *graph
-        .exceedances()
-        .axis(node::DECODED_RESOURCE)
-        .expect("full projector must spend the supplied account");
-    assert_eq!(axis.target, node::MAX_DECODED_BYTES_PER_GRAPH);
-    assert!(axis.first_requested > node::MAX_DECODED_BYTES_PER_GRAPH);
-    allocation
-        .check()
-        .expect("an accounting exceedance never latches the account");
+    .expect("comparison work past the decode constant");
     // Checked-arithmetic overflow of the work account is a genuine failure:
     // the projector refuses before claiming any owned bytes and latches the
     // supplied input account.
@@ -547,10 +514,9 @@ fn cold_comparisons_use_original_work_budget_without_claiming_owned_bytes() {
         .decode(usize::try_from(u64::MAX - decoded).expect("addressable remainder"))
         .expect("saturate the work account");
     let mut fresh = Allocation::for_proof(PRIOR, &limits);
-    let error = super::legacy_accounted(
-        &entries, &evidence, &protected, TARGET, &limits, &mut fresh, &graph,
-    )
-    .expect_err("an overflowed work account refuses the full projector");
+    let error =
+        super::legacy_accounted(&entries, &evidence, &protected, TARGET, &mut fresh, &graph)
+            .expect_err("an overflowed work account refuses the full projector");
     assert!(matches!(
         error,
         crate::Error::Input {
@@ -571,15 +537,8 @@ fn all_entry_variants_and_deep_execution_payloads_match_the_cold_projector() {
     assert_eq!(entries.len(), 17);
     let limits = Limits::standard();
     let mut cold_account = Allocation::for_proof(PRIOR, &limits);
-    let cold = legacy(
-        &entries,
-        &evidence,
-        &protected,
-        TARGET,
-        &limits,
-        &mut cold_account,
-    )
-    .expect("complete legacy projection");
+    let cold = legacy(&entries, &evidence, &protected, TARGET, &mut cold_account)
+        .expect("complete legacy projection");
     let mut account = Allocation::for_proof(PRIOR, &limits);
     let actual = observed(&entries, &evidence, &protected, &mut account)
         .expect("complete current projection");
@@ -687,7 +646,6 @@ fn ambiguous_or_missing_execution_joins_match_cold_rejections() {
             &evidence,
             &protected,
             TARGET,
-            &limits,
             &mut Allocation::for_proof(PRIOR, &limits),
         );
         assert!(
@@ -708,117 +666,41 @@ fn ambiguous_or_missing_execution_joins_match_cold_rejections() {
 }
 
 #[test]
-fn deep_projection_uses_original_exact_floors_and_terminal_refusal() {
+fn deep_projection_uses_original_ownership_and_terminal_refusal() {
     let (evidence, protected, entries) = fixture();
     let limits = Limits::standard();
     let mut account = Allocation::for_proof(PRIOR, &limits);
     observed(&entries, &evidence, &protected, &mut account).expect("actual complete ownership");
-    let spent = account.usage();
-    for mode in 0..3 {
-        let mut bounded = limits;
-        bounded.items = spent.items - usize::from(mode == 1);
-        bounded.input_proof_bytes = spent.bytes - usize::from(mode == 2);
-        let mut account = Allocation::for_proof(PRIOR, &bounded);
-        let result = observed(&entries, &evidence, &protected, &mut account);
-        // Every floor still projects the exact measured ownership.
-        result.expect("accounting targets are recorded, never refused");
-        assert_eq!(account.usage(), spent);
-        if mode == 0 {
-            assert!(!account.exceedances().is_exceeded());
-        } else {
-            // One under records that axis alone with a high water equal to
-            // the exact deep total, and nothing latches.
-            let (exceeded, untouched, total) = if mode == 1 {
-                (
-                    crate::input::INPUT_ITEMS_RESOURCE,
-                    crate::input::INPUT_BYTES_RESOURCE,
-                    spent.items,
-                )
-            } else {
-                (
-                    crate::input::INPUT_BYTES_RESOURCE,
-                    crate::input::INPUT_ITEMS_RESOURCE,
-                    spent.bytes,
-                )
-            };
-            let axis = *account
-                .exceedances()
-                .axis(exceeded)
-                .expect("one-under deep account records the exact total");
-            assert_eq!(
-                (axis.target, axis.high_water),
-                ((total - 1) as u64, total as u64),
-                "one-under deep account {mode}"
-            );
-            assert!(account.exceedances().axis(untouched).is_none());
-            account
-                .check()
-                .expect("an accounting exceedance never latches the account");
-            // A genuine failure latches the account; a latched account does
-            // no further projection work and keeps its spent usage.
-            account.refuse();
-            let stopped = account.usage();
-            assert!(matches!(
-                observed(&entries, &evidence, &protected, &mut account),
-                Err(Error::Refused)
-            ));
-            assert_eq!(account.usage(), stopped);
-        }
-    }
+    assert!(account.usage().items > PRIOR.items);
+    // A genuine failure latches the account; a latched account does no
+    // further projection work and keeps its spent usage.
+    account.refuse();
+    let stopped = account.usage();
+    assert!(matches!(
+        observed(&entries, &evidence, &protected, &mut account),
+        Err(Error::Refused)
+    ));
+    assert_eq!(account.usage(), stopped);
 }
 
 #[test]
-fn current_limits_do_not_widen_borrowed_units_and_hash_overflow_latches() {
+fn hash_overflow_latches_the_original_account() {
     let (evidence, protected, entries) = fixture();
     let limits = Limits::standard();
-    let mut borrowed = limits;
-    borrowed.units = 0;
-    let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    let graph = node::GraphBudget::new();
-    // The wider call limits do not widen the borrowed unit target: the
-    // first execution join is recorded against the borrowed 0 on the original
-    // account, the projection still completes and nothing latches.
-    current(
-        &entries,
-        &evidence,
-        &protected,
-        TARGET,
-        &limits,
-        &mut Budget::borrow(&borrowed, &mut allocation, &graph),
-    )
-    .expect("the borrowed unit target is recorded, not refused");
-    let axis = *allocation
-        .exceedances()
-        .axis("protected build-script execution joins")
-        .expect("the borrowed unit target records its axis");
-    assert_eq!((axis.target, axis.first_requested), (0, 1));
-    observed(&entries, &evidence, &protected, &mut allocation)
-        .expect("an accounting exceedance never latches the account");
-
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
     graph
         .hash(usize::try_from(node::MAX_HASHED_BYTES_PER_GRAPH).expect("test target hash range"))
         .expect("consume original hash allowance");
-    // Hash work past the target is recorded on the graph and never refused.
+    // Hash work past the hash constant is not refused.
     current(
         &entries,
         &evidence,
         &protected,
         TARGET,
-        &limits,
         &mut Budget::borrow(&limits, &mut allocation, &graph),
     )
-    .expect("the hash target is recorded, not refused");
-    let axis = *graph
-        .exceedances()
-        .axis(node::HASHED_RESOURCE)
-        .expect("projection hash work records the hash axis");
-    assert_eq!(axis.target, node::MAX_HASHED_BYTES_PER_GRAPH);
-    assert!(axis.first_requested > node::MAX_HASHED_BYTES_PER_GRAPH);
-    allocation
-        .check()
-        .expect("a graph exceedance never latches the input account");
+    .expect("hash work past the hash constant");
     // Checked-arithmetic overflow of the hash account is a genuine failure
     // that stays terminal and latches the original input account.
     let hashed = graph.census_usage().expect("graph census").2;
@@ -831,8 +713,7 @@ fn current_limits_do_not_widen_borrowed_units_and_hash_overflow_latches() {
             &evidence,
             &protected,
             TARGET,
-            &limits,
-            &mut Budget::borrow(&limits, &mut allocation, &graph)
+            &mut Budget::borrow(&limits, &mut allocation, &graph),
         ),
         Err(Error::Graph(node::Error::Allocation))
     ));

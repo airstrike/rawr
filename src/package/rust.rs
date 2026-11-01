@@ -825,7 +825,7 @@ fn request_inventory(
     }
     builder
         .inventory()
-        .policy(Policy::manifest(limits).seal())?
+        .policy(Policy::manifest().seal())?
         .build()
 }
 
@@ -902,5 +902,5 @@ fn request(
     for path in demand {
         builder = builder.demand(path.split("::"))?;
     }
-    builder.policy(Policy::manifest(limits).seal())?.build()
+    builder.policy(Policy::manifest().seal())?.build()
 }

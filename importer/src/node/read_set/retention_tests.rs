@@ -189,24 +189,11 @@ fn retention_copies_spend_the_original_graph_account() {
     let current = current(&store, b"one");
     let graph = store.graph_budget();
     let spent = graph.usage.lock().unwrap().decoded;
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
-    graph.decode((target - spent) as usize).unwrap();
-    assert!(!graph.exceedances().is_exceeded());
-    // The copy still spends the original account past its target and the
-    // account records exactly the copied entry array as the exceedance.
-    let retained = Retention::from_validated(&current, None)
-        .expect("a retention copy past the accounting target is still owned");
+    // The copy spends the original account by the copied entry array.
+    let retained = Retention::from_validated(&current, None).expect("the retention copy is owned");
     assert!(retained.graph.shares_with(graph));
     let bytes = (current.receipt().read_set().len() * std::mem::size_of::<Entry>()) as u64;
-    let decoded = graph
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the copy charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.first_requested, target + bytes);
-    assert_eq!(decoded.high_water, target + bytes);
-    assert_eq!(graph.usage.lock().unwrap().decoded, decoded.high_water);
+    assert_eq!(graph.usage.lock().unwrap().decoded - spent, bytes);
 }
 
 fn find_payload(root: &std::path::Path) -> PathBuf {
@@ -389,31 +376,15 @@ fn retention_successor_preserves_exact_ancestors_and_charges_original_account() 
         retention.extend_current(&parent).is_err(),
         "an existing root is not a successor"
     );
-    // One byte short of the successor's exact charge, the copy still
-    // succeeds and the original account records a high water of exactly one
-    // byte past the target, proving the successor charged exactly `expected`.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
+    // The successor charges exactly `expected` to the original account.
     let used = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - used) as usize - expected + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
     let again = retention
         .extend_current(&child)
-        .expect("a successor past the accounting target is still owned");
+        .expect("the successor is owned");
     assert!(again.entries() == successor.entries());
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the successor charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.high_water, target + 1);
     assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
+        store.graph_budget().usage.lock().unwrap().decoded - used,
+        expected as u64
     );
     store.retire_fixture().unwrap();
 }
@@ -637,31 +608,13 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
     );
 
     // Entries alone are not the copy's charge: both exact bindings are charged
-    // to the original account as well. One byte short of that exact
-    // charge the copy still succeeds, and the account records a high water of
-    // exactly one byte past the target.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
+    // to the original account as well.
     let spent = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - spent) as usize - bytes + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
-    let copied = extended
-        .try_clone()
-        .expect("a copy past the accounting target is still owned");
+    let copied = extended.try_clone().expect("the copy is owned");
     assert!(copied.bundles == extended.bundles);
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the copy charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.high_water, target + 1);
     assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
+        store.graph_budget().usage.lock().unwrap().decoded - spent,
+        bytes as u64
     );
 }
 
@@ -903,33 +856,14 @@ fn retention_union_requires_budget_for_entries_and_commitments_before_allocating
     let retained = Retention::from_validated(&value, Some(commitment())).unwrap();
     let bytes =
         2 * (std::mem::size_of::<Entry>() + std::mem::size_of::<(Entry, BundleCommitment)>());
-    // One byte short of the union's exact entry-and-commitment charge,
-    // the union still allocates and the original account records a high water
-    // of exactly one byte past the target: both arrays were charged in full.
-    let target = super::super::MAX_DECODED_BYTES_PER_GRAPH;
+    // The union charges both arrays in full to the original account.
     let spent = store.graph_budget().usage.lock().unwrap().decoded;
-    store
-        .graph_budget()
-        .decode((target - spent) as usize - bytes + 1)
-        .unwrap();
-    assert!(!store.graph_budget().exceedances().is_exceeded());
-    let union = retained
-        .union(&retained)
-        .expect("a union past the accounting target is still owned");
+    let union = retained.union(&retained).expect("the union is owned");
     assert!(union.entries() == retained.entries());
     assert!(union.bundles == retained.bundles);
-    let decoded = store
-        .graph_budget()
-        .exceedances()
-        .axis(super::super::DECODED_RESOURCE)
-        .copied()
-        .expect("the union charges the decoded-byte account");
-    assert_eq!(decoded.target, target);
-    assert_eq!(decoded.first_requested, target + 1);
-    assert_eq!(decoded.high_water, target + 1);
     assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded,
-        target + 1
+        store.graph_budget().usage.lock().unwrap().decoded - spent,
+        bytes as u64
     );
 }
 

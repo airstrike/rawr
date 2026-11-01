@@ -117,8 +117,7 @@ impl build::Retained {
             ));
         }
         let usage = reader.usage()?;
-        let package_limit = reader.budget.limits.packages;
-        let packages = list(&mut reader, package_limit, |reader| {
+        let packages = list(&mut reader, |reader| {
             let id = reader.text()?;
             let manifest = reader.path()?;
             let root = reader.path()?;
@@ -137,14 +136,11 @@ impl build::Retained {
             ))
         })?;
         let packages = build::packages::Table::from_decoded(packages)?;
-        let unit_limit = reader.budget.limits.units;
-        let mut scripts = list(&mut reader, unit_limit, |reader| {
+        let mut scripts = list(&mut reader, |reader| {
             let package_id = reader.text()?;
             let out_dir = reader.path()?;
             let cfg = texts(reader)?;
-            let environment = list(reader, reader.budget.limits.items, |reader| {
-                Ok((reader.text()?, reader.text()?))
-            })?;
+            let environment = list(reader, |reader| Ok((reader.text()?, reader.text()?)))?;
             if !packages.contains_key(&package_id) {
                 return Err(Error::Encoding("script Build package is absent"));
             }
@@ -156,9 +152,9 @@ impl build::Retained {
                 environment,
             })
         })?;
-        let artifacts = list(&mut reader, unit_limit, |reader| {
+        let artifacts = list(&mut reader, |reader| {
             let package_id = reader.text()?;
-            let outputs = list(reader, reader.budget.limits.items, |reader| reader.path())?;
+            let outputs = list(reader, |reader| reader.path())?;
             let dep_info = reader.path()?;
             let key = build::Key {
                 package_id: reader.text()?,
@@ -189,15 +185,13 @@ impl build::Retained {
                 fresh,
             })
         })?;
-        let environment_limit = reader.budget.limits.items;
-        let environment = list(&mut reader, environment_limit, |reader| {
+        let environment = list(&mut reader, |reader| {
             // Path decoding preserves native bytes; these values are not filesystem paths.
             let name: PathBuf = reader.path()?;
             let value: PathBuf = reader.path()?;
             Ok((OsString::from(name), OsString::from(value)))
         })?;
         reader.finish()?;
-        let limits = budget.limits;
         correlate::require(graph.artifacts(), &artifacts, budget)?;
         // The existing script join owns two exact arrays of borrowed string slices.
         let count = graph
@@ -212,7 +206,6 @@ impl build::Retained {
         crate::input::correlate_scripts_with(
             graph.scripts(),
             &scripts,
-            &limits,
             |code, _| Error::Encoding(code),
             Error::Allocation,
         )
@@ -242,13 +235,10 @@ impl build::Retained {
 
 fn list<T>(
     reader: &mut Reader<'_, '_, '_>,
-    limit: usize,
     mut decode: impl FnMut(&mut Reader<'_, '_, '_>) -> Result<T>,
 ) -> Result<Box<[T]>> {
     let count = reader.count()?;
-    reader
-        .budget
-        .limited("retained Build section items", limit, count)?;
+    reader.budget.check()?;
     if count > reader.remaining() {
         return Err(Error::Encoding("impossible retained Build count"));
     }
@@ -260,7 +250,7 @@ fn list<T>(
 }
 
 fn texts(reader: &mut Reader<'_, '_, '_>) -> Result<Box<[Box<str>]>> {
-    list(reader, reader.budget.limits.items, |reader| reader.text())
+    list(reader, |reader| reader.text())
 }
 
 #[cfg(test)]

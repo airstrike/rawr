@@ -191,8 +191,6 @@ impl Inventory {
         request: &mut crate::surface::Request<B>,
         entries: &[super::Entry],
         profile: &crate::profile::Proof,
-        retained_target: usize,
-        account: &mut crate::surface::account::Account,
     ) -> Result<Self, crate::surface::Error> {
         let projection = Projection {
             demand: &request.entries,
@@ -215,15 +213,6 @@ impl Inventory {
             });
         }
         let rows = result?;
-        let retained = measured
-            .bytes
-            .checked_add(std::mem::size_of::<Self>())
-            .ok_or(crate::surface::Error::Allocation)?;
-        account.exceeded(
-            "resident inventory retained bytes",
-            retained_target,
-            retained,
-        );
         let items = rows.checked_add(1).ok_or(crate::surface::Error::Limit {
             resource: "resident inventory items",
             limit: item_limit,
@@ -253,24 +242,6 @@ impl Inventory {
             return Err(super::Error::Carrier);
         }
         let rows = scan(bytes, entries)?;
-        let items = rows
-            .checked_add(entries.len())
-            .and_then(|n| n.checked_add(1))
-            .ok_or(super::Error::Carrier)?;
-        let carried = entries
-            .len()
-            .checked_mul(std::mem::size_of::<super::Entry>())
-            .and_then(|size| size.checked_add(std::mem::size_of::<super::Carrier>()))
-            .and_then(|size| size.checked_add(bytes.len()))
-            .ok_or(super::Error::Carrier)?;
-        let limits = crate::cargo::Limits::standard();
-        let mut account = crate::surface::account::Account::new(crate::exceedance::Account::Runner);
-        account.exceeded("resident inventory carrier items", limits.items, items);
-        account.exceeded(
-            "resident inventory carrier bytes",
-            limits.json_bytes,
-            carried,
-        );
         let mut retained = Vec::new();
         retained
             .try_reserve_exact(bytes.len())
@@ -860,14 +831,8 @@ mod tests {
         use sha2::Digest as _;
 
         let entries = entries(&request);
-        let inventory = Inventory::project(
-            &mut request,
-            &entries,
-            &crate::profile::Proof::neutral(),
-            crate::cargo::Limits::standard().json_bytes,
-            &mut crate::surface::account::Account::bridge(),
-        )
-        .unwrap();
+        let inventory =
+            Inventory::project(&mut request, &entries, &crate::profile::Proof::neutral()).unwrap();
         let generated = manifest::GeneratedManifest::with_coverage(
             crate::bridge::BuildRequestKey::fixture([3; 32]),
             Box::default(),
@@ -956,7 +921,7 @@ mod tests {
                 &limits,
             )
             .unwrap()
-            .with_function_items(Box::from([function]), &limits)
+            .with_function_items(Box::from([function]))
             .unwrap();
             let mut compiler = contract.compiler((), snapshot(), &limits).unwrap();
             compiler
@@ -1065,64 +1030,14 @@ mod tests {
         let rows = entries(&original);
         let moved_rows = entries(&moved);
         let before = original.allocation.retained_usage();
-        let coverage = Inventory::project(
-            &mut original,
-            &rows,
-            &crate::profile::Proof::neutral(),
-            limits.json_bytes,
-            &mut crate::surface::account::Account::bridge(),
-        )
-        .unwrap();
+        let coverage =
+            Inventory::project(&mut original, &rows, &crate::profile::Proof::neutral()).unwrap();
         let after = original.allocation.retained_usage();
         assert_eq!(after.0 - before.0, coverage.retained_usage().0);
         assert_eq!(after.1 - before.1, coverage.retained_usage().1);
-        // The retained target is accounting. Exactly the retained size
-        // admits silently; one byte less records a truthful high water on the
-        // bridge account and the projection still completes identically.
-        let mut exact = compile(0);
-        let mut exact_account = crate::surface::account::Account::bridge();
-        let exact_coverage = Inventory::project(
-            &mut exact,
-            &rows,
-            &crate::profile::Proof::neutral(),
-            coverage.retained_usage().1,
-            &mut exact_account,
-        )
-        .unwrap();
-        assert_eq!(exact_coverage.bytes(), coverage.bytes());
-        assert!(!exact_account.exceedances().is_exceeded());
-        let mut short = compile(0);
-        let before_short = short.allocation.retained_usage();
-        let mut short_account = crate::surface::account::Account::bridge();
-        let short_coverage = Inventory::project(
-            &mut short,
-            &rows,
-            &crate::profile::Proof::neutral(),
-            coverage.retained_usage().1 - 1,
-            &mut short_account,
-        )
-        .unwrap();
-        assert_eq!(short_coverage.bytes(), coverage.bytes());
-        let axis = *short_account
-            .exceedances()
-            .axis("resident inventory retained bytes")
-            .unwrap();
-        assert_eq!(axis.target as usize, coverage.retained_usage().1 - 1);
-        assert_eq!(axis.high_water as usize, coverage.retained_usage().1);
-        assert_eq!(
-            short.allocation.retained_usage().1 - before_short.1,
-            coverage.retained_usage().1
-        );
-        let relocated = Inventory::project(
-            &mut moved,
-            &moved_rows,
-            &crate::profile::Proof::neutral(),
-            limits.json_bytes,
-            &mut crate::surface::account::Account::bridge(),
-        )
-        .unwrap();
+        let relocated =
+            Inventory::project(&mut moved, &moved_rows, &crate::profile::Proof::neutral()).unwrap();
         assert_eq!(coverage.bytes(), relocated.bytes());
-        let coverage = Inventory::decode(coverage.bytes(), &rows).unwrap();
         let carrier = manifest::Carrier {
             identity: [4; 32],
             entries: rows,

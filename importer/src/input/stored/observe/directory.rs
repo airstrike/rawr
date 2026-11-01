@@ -30,11 +30,7 @@ impl rawr_directory::Admission for Host<'_, '_> {
                 };
                 self.budget.storage(items, bytes)
             }
-            Work::Visible { entries } => self.budget.limited(
-                "input proof filesystem items",
-                self.budget.limits.items,
-                entries,
-            ),
+            Work::Visible { .. } => self.budget.check(),
             Work::Retain { .. }
             | Work::Name { .. }
             | Work::Copy { .. }

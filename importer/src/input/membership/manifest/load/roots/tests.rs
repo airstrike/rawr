@@ -272,48 +272,6 @@ fn exclusion_and_members_each_short_circuit_in_source_order() {
 }
 
 #[test]
-fn cache_and_selected_path_use_the_original_budget() {
-    use crate::input::membership::manifest::tests::admits_one_short;
-    use crate::input::membership::Budget;
-    use crate::{input, node};
-
-    fn run(items: usize, bytes: usize) -> (bool, input::Usage, crate::exceedance::Record) {
-        let graph = node::GraphBudget::new();
-        let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
-        allocation.items(9).unwrap();
-        allocation.bytes(27).unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        };
-        let mut session = Session::new(&mut budget);
-        let result = exercise(&mut session);
-        let ok = session.finish(result).is_ok();
-        assert!(allocation.check().is_ok(), "accounting targets never latch");
-        (ok, allocation.usage, allocation.exceedances())
-    }
-    let (ok, usage, _) = run(usize::MAX, usize::MAX);
-    assert!(ok);
-    assert_eq!(
-        run(usage.items, usage.bytes),
-        (true, usage, crate::exceedance::Record::new())
-    );
-    // One short of an aggregate target admits and records that axis.
-    admits_one_short(
-        run(usage.items - 1, usage.bytes),
-        usage,
-        input::INPUT_ITEMS_RESOURCE,
-        usage.items,
-    );
-    admits_one_short(
-        run(usage.items, usage.bytes - 1),
-        usage,
-        input::INPUT_BYTES_RESOURCE,
-        usage.bytes,
-    );
-}
-
-#[test]
 fn candidate_configuration_selects_original_path_or_normalized_pointer() {
     for (text, expected) in [
         ("[workspace]", Some("/root/./Cargo.toml")),

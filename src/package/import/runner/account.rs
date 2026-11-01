@@ -11,14 +11,14 @@ pub(crate) mod support;
 use std::{
     fmt,
     num::NonZeroU64,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
 };
 
 use crate::host::ImportAllocation;
-use rawr_import::{cargo::Limits, exceedance, runner::manifest::Carrier, surface::Error};
-
-const ITEMS_RESOURCE: &str = "runner retained items";
-const BYTES_RESOURCE: &str = "runner retained bytes";
+use rawr_import::{cargo::Limits, runner::manifest::Carrier, surface::Error};
 
 /// The shared bounded codec used by generated runner observations.
 #[doc(hidden)]
@@ -66,20 +66,17 @@ pub struct Receipt {
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Snapshot {
-    /// Process-unique account identity, drawn from the one exceedance id space
-    /// every published account shares; absent only after identity exhaustion.
+    /// Process-unique account identity; absent only after identity exhaustion.
     pub account: Option<NonZeroU64>,
     /// Currently retained items and bytes, in that order.
     pub current: [usize; 2],
     /// Largest accepted aggregate on each axis, including overlapping owners.
     pub peak: [usize; 2],
-    /// Unchanged original item and byte accounting targets.
+    /// The account's original item and byte figures, reported unchanged.
     pub limits: [usize; 2],
     /// Earliest rejected charge, retained after an unsuccessful scope retires.
     /// Only checked-arithmetic failures refuse.
     pub first_refusal: Option<Refusal>,
-    /// Accounting targets crossed so far, with truthful high waters.
-    pub exceeded: exceedance::Record,
 }
 
 /// A resource axis in the original retained metadata account.
@@ -94,8 +91,7 @@ pub enum Axis {
 
 /// The original check which rejected a charge, in its original check order.
 ///
-/// Only genuine arithmetic failures refuse; a representable total
-/// above the item or byte target is recorded as an exceedance and accepted.
+/// Only genuine arithmetic failures refuse; a representable total is accepted.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cause {
@@ -152,7 +148,6 @@ struct State {
     byte_limit: usize,
     peak: [usize; 2],
     first_refusal: Option<Refusal>,
-    exceeded: exceedance::Record,
 }
 
 impl Native {
@@ -311,26 +306,22 @@ impl crate::Engine {
 }
 
 impl Attempt {
-    /// Open the shared account with its storage charged. An item or byte
-    /// target below that storage is recorded as an exceedance, never refused.
+    /// Open the shared account with its storage charged.
     fn empty(item_limit: usize, byte_limit: usize) -> Self {
         let mut state = State {
-            identity: NonZeroU64::new(exceedance::next_id()),
+            identity: next_identity(),
             items: 0,
             bytes: 0,
             item_limit,
             byte_limit,
             peak: [0; 2],
             first_refusal: None,
-            exceeded: exceedance::Record::new(),
         };
         // Shared storage remains live even if Native retires before a
         // candidate. Its charge belongs to the account, not one scope.
         state.items = 1;
         state.bytes = shared_bytes();
         state.peak = [state.items, state.bytes];
-        state.exceeded(Axis::Items, state.items);
-        state.exceeded(Axis::Bytes, state.bytes);
         Self {
             account: Arc::new(Mutex::new(state)),
             baseline: None,
@@ -408,28 +399,6 @@ impl State {
             peak: self.peak,
             limits: [self.item_limit, self.byte_limit],
             first_refusal: self.first_refusal,
-            exceeded: self.exceeded,
-        }
-    }
-
-    /// A representable aggregate above its target is recorded on this
-    /// account with its truthful high water and published; the charge is
-    /// accepted and no latch is set.
-    fn exceeded(&mut self, axis: Axis, requested: usize) {
-        let (resource, target) = match axis {
-            Axis::Items => (ITEMS_RESOURCE, self.item_limit),
-            Axis::Bytes => (BYTES_RESOURCE, self.byte_limit),
-        };
-        if requested > target
-            && self
-                .exceeded
-                .exceeded(resource, target as u64, requested as u64, None)
-        {
-            exceedance::publish(
-                exceedance::Account::Runner,
-                self.identity.map_or(0, NonZeroU64::get),
-                &self.exceeded,
-            );
         }
     }
 
@@ -487,10 +456,6 @@ impl ImportAllocation for Attempt {
             .bytes
             .checked_add(bytes)
             .ok_or_else(|| state.refuse(Axis::Bytes, Cause::AggregateOverflow, None))?;
-        // The item and byte targets are accounting; crossing one is
-        // recorded with the truthful aggregate and the charge is accepted.
-        state.exceeded(Axis::Items, total_items);
-        state.exceeded(Axis::Bytes, total_bytes);
         state.items = total_items;
         state.bytes = total_bytes;
         state.peak[0] = state.peak[0].max(total_items);
@@ -531,6 +496,12 @@ const fn baseline_bytes() -> usize {
 const fn shared_bytes() -> usize {
     // The same two-counter Arc allocation convention used by facade proofs.
     std::mem::size_of::<Mutex<State>>() + 2 * std::mem::size_of::<usize>()
+}
+
+/// The next process-unique account identity, counted from one.
+fn next_identity() -> Option<NonZeroU64> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NonZeroU64::new(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 fn lock<T>(account: &Mutex<T>) -> MutexGuard<'_, T> {
