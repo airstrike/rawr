@@ -24,23 +24,11 @@ thread_local! {
 /// in 85,521 bytes; this many synthetic registry packages renders about that.
 const GALLERY_REGISTRY: usize = 340;
 
-/// Request-account high water per owner graph, in bytes, with per-graph
-/// account figures.
+/// What one owner cohort's cold → repair → warm run observed.
 struct Measured {
     lock: usize,
-    cold: usize,
-    repair: usize,
-    warm: usize,
     /// Owner replays the warm graph validated.
     warm_replays: usize,
-}
-
-fn high_water() -> usize {
-    cargo::REQUEST_HIGH_WATER.with(Cell::get)
-}
-
-fn reset_high_water() {
-    cargo::REQUEST_HIGH_WATER.with(|high| high.set(0));
 }
 
 fn script(
@@ -325,10 +313,9 @@ fn owner_route_context_shares_the_attempt_scope_account() {
     fixture.retire();
 }
 
-/// A Gallery-shaped closure completes cold → repair → warm. The request
-/// account, decode and path-check high waters are measured per graph. The
-/// warm graph replays its owner once and every later consumer reuses that
-/// replay while its stamps hold.
+/// A Gallery-shaped closure completes cold → repair → warm. The warm graph
+/// replays its owner once and every later consumer reuses that replay while
+/// its stamps hold.
 #[cfg(unix)]
 #[test]
 fn gallery_scale_owner_graphs_complete_and_warm_reuses_one_replay() {
@@ -343,12 +330,10 @@ fn gallery_scale_owner_graphs_complete_and_warm_reuses_one_replay() {
     );
 }
 
-/// Reduced cohorts, profiling per-replay decode and request growth so the
-/// Gallery-scale figures can be extrapolated. Every cohort completes
-/// and reports its high waters.
+/// Reduced cohorts complete cold → repair → warm.
 #[cfg(unix)]
 #[test]
-fn scaled_owner_graphs_profile_per_replay_accounts() {
+fn scaled_owner_graphs_complete_cold_repair_and_warm() {
     let limits = Limits::standard();
     let mut failed = None;
     for registry in [40, 120] {
@@ -364,26 +349,15 @@ fn scaled_owner_graphs_profile_per_replay_accounts() {
     }
 }
 
-/// Run one cohort and report its request high water, per-graph account
-/// figures and graph decode charges, whether or not it completes.
+/// Run one cohort, whether or not it completes.
 #[cfg(unix)]
 fn profile(registry: usize, limits: &Limits) -> std::thread::Result<Measured> {
-    let limit = limits.manifest_bytes;
     let result = std::panic::catch_unwind(|| protected_owner_rebuild(registry, limits));
-    match &result {
-        Ok(measured) => {
-            eprintln!(
-                "cohort({registry}) request account: lock {} bytes; high water cold {} / repair {} / \
-                 warm {} of {limit} bytes",
-                measured.lock, measured.cold, measured.repair, measured.warm
-            );
-        }
-        Err(_) => eprintln!(
-            "cohort({registry}) request account: failed after high water {} of {limit} bytes \
-             (lock {} bytes)",
-            high_water(),
+    if result.is_err() {
+        eprintln!(
+            "cohort({registry}) failed (lock {} bytes)",
             LOCK_BYTES.get()
-        ),
+        );
     }
     REGISTRY.set(0);
     result
@@ -406,7 +380,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    reset_high_water();
     let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
         .unwrap();
     let action = cold.node().receipt().action();
@@ -438,7 +411,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     )
     .unwrap();
     let cold_suffix = derived_suffix(completed, &adapter, source, &limits, Expect::Cold, action);
-    let cold_high = high_water();
     // Shutdown releases the OS guards, but leaves the durable prior roots.
     drop(prepared);
     let old_bundle = ATTEMPT.with(|slot| slot.borrow_mut().take().unwrap());
@@ -468,7 +440,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         };
         (fresh, request, cached)
     };
-    reset_high_water();
     let (repair_context, request, cached) = reopen();
     let repaired =
         owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
@@ -536,7 +507,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         Expect::Repair,
         repair_action,
     );
-    let repair_high = high_water();
     assert_ne!(cold_suffix.exact_input, repaired_suffix.exact_input);
     assert_eq!(cold_suffix.semantic, repaired_suffix.semantic);
     assert_eq!(cold_suffix.contents, repaired_suffix.contents);
@@ -555,7 +525,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     );
     store.fixture_physical_inventory().unwrap();
 
-    reset_high_water();
     owner::REPLAYS.with(|replays| replays.set(0));
     let (warm_context, request, cached) = reopen();
     let warm =
@@ -594,7 +563,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         Expect::Warm,
         repair_action,
     );
-    let warm_high = high_water();
     let warm_replays = validates();
     assert_eq!(warm_suffix.exact_input, repaired_suffix.exact_input);
     assert_eq!(warm_suffix.semantic, repaired_suffix.semantic);
@@ -614,9 +582,6 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     REGISTRY.set(0);
     Measured {
         lock: LOCK_BYTES.get(),
-        cold: cold_high,
-        repair: repair_high,
-        warm: warm_high,
         warm_replays,
     }
 }

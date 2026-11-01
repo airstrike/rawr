@@ -30,8 +30,7 @@ impl Fixture {
         Self::open_with(&Limits::standard())
     }
 
-    /// Open a fixture whose store context captures a configured limits profile;
-    /// the sealed request itself keeps the standard request account.
+    /// Open a fixture whose store context captures a configured limits profile.
     fn open_with(limits: &Limits) -> Self {
         Self::open_at(limits, None)
     }
@@ -139,7 +138,7 @@ impl Fixture {
             .policy(crate::extract::Policy::manifest().seal())
             .expect("policy fits")
             .dependency(
-                config::Dependency::path("catalog", &dependency, &limits)
+                config::Dependency::path("catalog", &dependency)
                     .and_then(|dependency| dependency.package("catalog-api"))
                     .expect("dependency seals"),
             )
@@ -370,7 +369,6 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
     fixture.reserve(|layout, native| {
         let request = &fixture.request;
         let limits = Limits::standard();
-        let mut allocation = request.allocation;
         let production = native.production();
         let steps = vec![
             expected(
@@ -411,16 +409,9 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
         script(layout, steps)
             .run(|| -> Result<()> {
                 for bytes in [
-                    provisional_metadata(&production, request, layout, &mut allocation, &limits)?,
-                    metadata(
-                        &production,
-                        request,
-                        layout,
-                        false,
-                        &mut allocation,
-                        &limits,
-                    )?,
-                    metadata(&production, request, layout, true, &mut allocation, &limits)?,
+                    provisional_metadata(&production, request, layout, &limits)?,
+                    metadata(&production, request, layout, false, &limits)?,
+                    metadata(&production, request, layout, true, &limits)?,
                     cargo::cargo_metadata(
                         &production,
                         request,
@@ -429,7 +420,7 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
                         true,
                         &limits,
                     )?,
-                    units(&production, request, layout, &mut allocation, &limits)?,
+                    units(&production, request, layout, &limits)?,
                     cargo::cargo_units(
                         &production,
                         request,
@@ -447,7 +438,6 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
                     request
                         .config
                         .command_environment(layout.final_form().target(), &production)?,
-                    &mut allocation,
                     &limits,
                 )?;
                 assert_eq!(bytes.as_ref(), b"exact Cargo bytes");
@@ -470,29 +460,6 @@ fn fixed_commands_share_legacy_construction_and_preserve_exact_build_environment
             fs::read(sentinel).expect("target is not cleared"),
             b"existing output"
         );
-        assert!(allocation.bytes > request.allocation.bytes);
-        Ok(())
-    });
-    fixture.retire();
-}
-
-#[test]
-fn new_prefix_growth_and_strings_charge_the_original_account() {
-    let fixture = Fixture::open();
-    fixture.reserve(|layout, _| {
-        let request = &fixture.request;
-        let original = request.allocation;
-        let mut measured = original;
-        let measured_prefix = prefix(request, layout.final_form().config(), &mut measured)?;
-        let replacement = std::alloc::Layout::array::<OsString>(measured_prefix.len())
-            .unwrap()
-            .size();
-        let added_strings = measured_prefix[measured_prefix.len() - 2..]
-            .iter()
-            .map(|value| value.len())
-            .sum::<usize>();
-        assert_eq!(measured.bytes - original.bytes, added_strings + replacement);
-        assert_eq!(measured.items - original.items, 2);
         Ok(())
     });
     fixture.retire();
@@ -530,7 +497,6 @@ fn relative_configs_keep_braced_ancestors_and_reject_overwritten_controls() {
         let changed = layout.final_form().config();
         fs::write(changed, b"[build]\nbuild-dir = \"build/wrong\"\n")
             .expect("mutable control corrupts");
-        let mut allocation = fixture.request.allocation;
         let error = script(layout, Vec::new())
             .run(|| {
                 metadata(
@@ -538,7 +504,6 @@ fn relative_configs_keep_braced_ancestors_and_reject_overwritten_controls() {
                     &fixture.request,
                     layout,
                     true,
-                    &mut allocation,
                     &Limits::standard(),
                 )
             })
@@ -566,17 +531,7 @@ fn config_arguments_preserve_non_utf8_native_path_bytes() {
     use std::os::unix::ffi::OsStringExt as _;
     let fixture = Fixture::open();
     let path = PathBuf::from(OsString::from_vec(b"/fixture/config-\xff.toml".to_vec()));
-    let mut allocation = fixture.request.allocation;
-    let arguments = prefix(&fixture.request, &path, &mut allocation)
-        .expect("native config path copies exactly");
-    assert_eq!(arguments.last().unwrap().as_os_str(), path.as_os_str());
-    // The request string target is accounting. One byte over it is
-    // recorded on the request account with the true length; the prefix is
-    // still built exactly.
-    let mut floor = fixture.request.allocation;
-    floor.string_limit = path.as_os_str().len() - 1;
-    let arguments =
-        prefix(&fixture.request, &path, &mut floor).expect("the string target records and admits");
+    let arguments = prefix(&fixture.request, &path).expect("native config path copies exactly");
     assert_eq!(arguments.last().unwrap().as_os_str(), path.as_os_str());
     fixture.retire();
 }

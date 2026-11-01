@@ -6,7 +6,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use super::config;
 use super::unit;
-use super::{canonical_directory, read_bounded_budgeted, RequestAllocation, Selection};
+use super::{canonical_directory, formatted, read_bounded, Selection};
 use crate::{Error, Result};
 
 /// The `opt-level` of the `rawr` crate in a project's runner. `Some(3)`
@@ -41,28 +41,18 @@ pub(crate) struct Recipe {
     source: Box<str>,
     root: PathBuf,
     version: Box<str>,
-    _allocation: RequestAllocation,
 }
 
 impl Seed {
-    pub(crate) fn transform(root: &Path, allocation: &mut RequestAllocation) -> Result<Self> {
-        allocation.path(root)?;
+    pub(crate) fn transform(root: &Path) -> Result<Self> {
         let root = canonical_directory("internal Rawr root", root)?;
-        allocation.retained(
-            1,
-            root.as_os_str().len().saturating_add("/Cargo.toml".len()),
-        )?;
         let manifest = root.join("Cargo.toml");
-        // The file read is I/O retention bounded by the physical tail
-        // constant (manifest class); the manifest target is charged below on
-        // the request account.
-        let bytes = read_bounded_budgeted(
+        // The file read is bounded by the physical tail constant.
+        let bytes = read_bounded(
             "internal Rawr manifest",
             &manifest,
             crate::process::TAIL_BYTES,
-            allocation,
         )?;
-        allocation.retained(bytes.len(), bytes.len())?;
         let text = std::str::from_utf8(&bytes).map_err(|error| Error::Schema {
             document: "internal Rawr manifest",
             reason: error.to_string().into_boxed_str(),
@@ -102,11 +92,10 @@ impl Seed {
                 reason: "required `std` feature is absent".into(),
             });
         }
-        allocation.string(version)?;
         let patch = match document.get("patch") {
             Some(item) => {
                 let mut item = item.clone();
-                super::absolutize_policy_paths(&mut item, &root, allocation)?;
+                super::absolutize_policy_paths(&mut item, &root)?;
                 Some(item)
             }
             None => None,
@@ -125,16 +114,11 @@ impl Seed {
         self.patch.as_ref()
     }
 
-    pub(crate) fn dependency(&self, limits: &super::Limits) -> Result<config::Dependency> {
-        config::Dependency::rawr(&self.root, limits)
+    pub(crate) fn dependency(&self) -> Result<config::Dependency> {
+        config::Dependency::rawr(&self.root)
     }
 
-    pub(crate) fn seal_accounted(
-        &self,
-        metadata: &unit::Metadata,
-        selected: &[Selection],
-        allocation: &mut RequestAllocation,
-    ) -> Result<Recipe> {
+    pub(crate) fn seal(&self, metadata: &unit::Metadata, selected: &[Selection]) -> Result<Recipe> {
         let internal = selected
             .iter()
             .find(|selection| selection.alias() == config::INTERNAL_ALIAS)
@@ -176,20 +160,12 @@ impl Seed {
                 field: "internal Rawr exact package identity",
             });
         }
-        Recipe::transform_accounted(package, cargo_id, allocation)
+        Recipe::transform(package, cargo_id)
     }
 }
 
 impl Recipe {
-    fn transform_accounted(
-        package: &unit::Package,
-        cargo_id: &str,
-        allocation: &mut RequestAllocation,
-    ) -> Result<Self> {
-        allocation.string(package.id())?;
-        allocation.string(cargo_id)?;
-        allocation.path(package.root())?;
-        allocation.string(package.version())?;
+    fn transform(package: &unit::Package, cargo_id: &str) -> Result<Self> {
         #[cfg(test)]
         OWNED_RECIPES.with(|owned| owned.set(owned.get().saturating_add(1)));
         Ok(Self {
@@ -197,7 +173,6 @@ impl Recipe {
             source: cargo_id.into(),
             root: package.root().to_path_buf(),
             version: package.version().into(),
-            _allocation: *allocation,
         })
     }
 
@@ -271,34 +246,10 @@ impl Recipe {
             source: "path+file:///exact/rawr".into(),
             root: PathBuf::from("/exact/rawr"),
             version: "1.23.6".into(),
-            _allocation: super::RequestAllocation::new(&super::Limits::standard()),
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn apply_profile(&self, document: &mut DocumentMut, profile: &str) -> Result<()> {
-        let mut allocation = super::RequestAllocation::new(&super::Limits::standard());
-        self.apply_profile_budgeted(document, profile, &mut allocation)
-    }
-
-    pub(crate) fn apply_profile_budgeted(
-        &self,
-        document: &mut DocumentMut,
-        profile: &str,
-        allocation: &mut super::RequestAllocation,
-    ) -> Result<()> {
-        allocation.items(7)?;
-        for value in [
-            "profile",
-            profile,
-            "package",
-            self.package_id.as_ref(),
-            "debug",
-            "opt-level",
-            "strip",
-        ] {
-            allocation.string(value)?;
-        }
         let profiles = table(
             document.as_table_mut(),
             "profile",
@@ -306,7 +257,7 @@ impl Recipe {
         )?;
         let selected = table(profiles, profile, "selected Cargo profile")?;
         let packages = table(selected, "package", "Cargo package profile authority")?;
-        let short = allocation.formatted(format_args!("{PACKAGE}@{}", self.version))?;
+        let short = formatted(format_args!("{PACKAGE}@{}", self.version))?;
         let collides = packages.iter().find(|(selector, _)| {
             *selector == PACKAGE || *selector == short || *selector == self.package_id.as_ref()
         });
@@ -366,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_and_recipe_identity_are_charged_and_owned_once() {
+    fn seed_and_recipe_identity_are_owned_once() {
         let root = std::env::temp_dir().join(format!(
             "rawr-internal-ledger-{}-{:?}",
             std::process::id(),
@@ -379,11 +330,8 @@ mod tests {
         )
         .expect("internal fixture manifest is written");
         let root = fs::canonicalize(root).expect("internal fixture root canonicalizes");
-        let standard = crate::cargo::Limits::standard();
-        let mut allocation = crate::cargo::RequestAllocation::new(&standard);
         OWNED_SEEDS.with(|owned| owned.set(0));
-        Seed::transform(&root, &mut allocation).expect("the Seed transforms");
-        assert!(allocation.items > 0 && allocation.bytes > 0);
+        Seed::transform(&root).expect("the Seed transforms");
         assert_eq!(OWNED_SEEDS.with(std::cell::Cell::get), 1);
 
         let source = format!("path+file://{}", root.display());
@@ -398,13 +346,8 @@ mod tests {
             },
         );
         OWNED_RECIPES.with(|owned| owned.set(0));
-        let recipe = Recipe::transform_accounted(
-            &package,
-            &source,
-            &mut crate::cargo::RequestAllocation::new(&standard),
-        )
-        .expect("the Recipe transforms");
-        assert!(recipe._allocation.items > 0 && recipe._allocation.bytes > 0);
+        let recipe = Recipe::transform(&package, &source).expect("the Recipe transforms");
+        assert_eq!(recipe.version(), "1.23.6");
         assert_eq!(OWNED_RECIPES.with(std::cell::Cell::get), 1);
         fs::remove_dir_all(root).expect("internal fixture is removed");
     }

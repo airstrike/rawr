@@ -102,7 +102,6 @@ impl Ready {
             replay,
             evaluation,
         } = self;
-        evaluation.request.require_limits(limits);
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
             .map_err(|source| crate::Error::Node {
@@ -139,7 +138,6 @@ impl Ready {
             replay,
             evaluation,
         } = self;
-        evaluation.request.require_limits(limits);
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
             .map_err(|source| crate::Error::Node {
@@ -312,7 +310,6 @@ fn stage_hit() {
 // graph-owned cells must not retain their owning graph.
 struct Accounts {
     input: input::Allocation,
-    request: cargo::RequestAllocation,
     cargo: cargo::unit::Allocation,
     refused: bool,
 }
@@ -385,7 +382,6 @@ struct Preflight {
     request: Request,
     context: crate::context::Context,
     identity: cargo::Digest,
-    allocation: cargo::RequestAllocation,
 }
 
 #[cfg(test)]
@@ -421,7 +417,6 @@ fn capture_context_in(
     limits: &Limits,
     graph_budget: &node::GraphBudget,
 ) -> Result<crate::context::Context, node::Error> {
-    request.require_limits(limits);
     crate::context::Context::capture_config_in(
         &request.project_root,
         &request.config,
@@ -432,26 +427,19 @@ fn capture_context_in(
     .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))
 }
 
-fn preflight(
-    request: Request,
-    context: crate::context::Context,
-    limits: &Limits,
-) -> Result<Preflight, node::Error> {
-    let mut allocation = request.allocation;
+fn preflight(request: Request, context: crate::context::Context) -> Result<Preflight, node::Error> {
     let result = (|| {
         let catalog = request.universe.as_ref().ok_or(node::Error::Codec(
             "resolution owner requires versioned universe",
         ))?;
-        let manifest = cargo::render_manifest_accounted(&request, None, limits, &mut allocation)?;
-        cargo::select_placement_accounted(&request, catalog, &manifest, &mut allocation)
-            .map_err(node::Error::from)
+        let manifest = cargo::render_manifest(&request, None)?;
+        cargo::select_placement(&request, catalog, &manifest).map_err(node::Error::from)
     })();
     let placement = result?;
     Ok(Preflight {
         request,
         context,
         identity: placement.request,
-        allocation,
     })
 }
 
@@ -462,7 +450,7 @@ pub(in crate::cargo) fn prepare_cached_in(
     sink: &dyn metrics::Sink,
 ) -> Result<Resolved, node::Error> {
     let context = scoped_context(&request, limits, scope)?;
-    let preflight = preflight(request, context, limits)?;
+    let preflight = preflight(request, context)?;
     let attestation = cargo::toolchain::cached(&preflight.context, sink)?;
     evaluate(
         preflight,
@@ -498,7 +486,7 @@ pub(in crate::cargo) fn evaluate_scripted(
             "resolution owner context differs from sealed request",
         ));
     }
-    let preflight = preflight(request, cached.context, limits)?;
+    let preflight = preflight(request, cached.context)?;
     match evaluate(preflight, cached.attestation, limits, sink, Some(script))? {
         Resolved::Owner(ready) => Ok(*ready),
         Resolved::Shared(_) => Err(node::Error::State(SHARED)),
@@ -516,7 +504,6 @@ fn evaluate(
         request,
         context,
         identity,
-        allocation: original_request,
     } = preflight;
     let cached = cargo::CachedToolchain {
         context,
@@ -533,7 +520,6 @@ fn evaluate(
         store.graph_budget(),
         Accounts {
             input: input::Allocation::for_replay(limits),
-            request: original_request,
             cargo: cargo::unit::Allocation::begin(limits),
             refused: false,
         },
@@ -644,7 +630,6 @@ impl Evaluation {
     fn initial_accounts(&self) -> Accounts {
         Accounts {
             input: input::Allocation::for_replay(&self.limits),
-            request: self.request.allocation,
             cargo: cargo::unit::Allocation::begin(&self.limits),
             refused: false,
         }
@@ -726,8 +711,7 @@ impl Evaluation {
                             node::read_set::Scope::Complete,
                         )
                         .map_err(error)?;
-                    let replay =
-                        self.replay(observed, graph, &mut accounts.request, &mut accounts.cargo)?;
+                    let replay = self.replay(observed, graph, &mut accounts.cargo)?;
                     if replay.completion.proof().complete().as_bytes() != &value.complete {
                         return Err(node::Error::Codec(
                             "resolution owner completion identity differs",
@@ -763,7 +747,6 @@ impl Evaluation {
         &self,
         observed: bundle::PendingReplay<'_, '_, '_>,
         graph: &node::GraphBudget,
-        request_account: &mut cargo::RequestAllocation,
         cargo_account: &mut cargo::unit::Allocation,
     ) -> Result<replay::Replay, node::Error> {
         let definition = self
@@ -792,14 +775,10 @@ impl Evaluation {
                     None => {
                         // Lock reads are I/O retention bounded by the
                         // physical capture constant, never by the JSON target.
-                        let lock_bytes = read(
-                            paths.final_form().lock(),
-                            crate::process::CAPTURE_BYTES,
-                            request_account,
-                        )?;
+                        let lock_bytes =
+                            read(paths.final_form().lock(), crate::process::CAPTURE_BYTES)?;
                         observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
-                        let lock = definition
-                            .candidate_accounted(lock_bytes.into_boxed_slice(), request_account)?;
+                        let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
                         stage.lock = Some((self.limits, lock.clone()));
                         lock
                     }
@@ -814,14 +793,8 @@ impl Evaluation {
                         staged.receipt.clone()
                     }
                     _ => {
-                        let receipt_bytes = read(
-                            paths.receipt(),
-                            crate::process::CAPTURE_BYTES,
-                            request_account,
-                        )?;
+                        let receipt_bytes = read(paths.receipt(), crate::process::CAPTURE_BYTES)?;
                         observed.require_bytes(paths.receipt(), &receipt_bytes)?;
-                        cargo::ControlAccount::current(request_account)
-                            .parser(receipt_bytes.len())?;
                         let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
                         stage.receipt = Some(StagedReceipt {
                             limits: self.limits,
@@ -849,7 +822,7 @@ impl Evaluation {
             self.request.config.projection_schema(),
             self.request.toolchain.schemas().graph(),
             self.request.toolchain.schemas().unit(),
-            cold::cohort(&self.request, paths, request_account)?,
+            cold::cohort(&self.request, paths)?,
             self.request.config.universe_context(),
             self.request.config.digest(),
         )?;
@@ -877,9 +850,6 @@ impl Evaluation {
                 )
             }) {
                 Some(staged) => {
-                    // A hit allocates nothing but the holder this replay retains.
-                    cargo::ControlAccount::current(request_account)
-                        .holder(std::mem::size_of::<Arc<replay::Decoded>>())?;
                     stage_hit();
                     Ok(Some(Arc::clone(&staged.decoded)))
                 }
@@ -888,16 +858,11 @@ impl Evaluation {
         )?;
         let fresh = match &staged {
             Some(_) => None,
-            None => {
-                request_account.path(paths.root())?;
-                request_account.string(&self.request.target)?;
-                request_account.string(&self.request.profile)?;
-                Some((
-                    Box::<Path>::from(paths.root()),
-                    Box::<str>::from(&*self.request.target),
-                    Box::<str>::from(&*self.request.profile),
-                ))
-            }
+            None => Some((
+                Box::<Path>::from(paths.root()),
+                Box::<str>::from(&*self.request.target),
+                Box::<str>::from(&*self.request.profile),
+            )),
         };
         let replay = self
             .request
@@ -913,7 +878,6 @@ impl Evaluation {
                 staged,
                 &self.limits,
                 &self.limits,
-                request_account,
                 cargo_account,
             )
             .map_err(error)?;
@@ -987,7 +951,6 @@ impl Evaluation {
             &self.cached,
             &self.limits,
             &self.limits,
-            &mut accounts.request,
             cargo_account,
         )?;
         // Every selected crate's table in the home: no nightly build and no
@@ -1002,7 +965,6 @@ impl Evaluation {
             &self.cached,
             &layout,
             harness,
-            &mut accounts.request,
             &self.limits,
             &self.limits,
         )?;
@@ -1090,12 +1052,8 @@ impl Evaluation {
     }
 }
 
-fn read(
-    path: &Path,
-    limit: usize,
-    allocation: &mut cargo::RequestAllocation,
-) -> Result<Vec<u8>, node::Error> {
-    cargo::read_bounded_in("resolution replay control", path, limit, allocation).map_err(Into::into)
+fn read(path: &Path, limit: usize) -> Result<Vec<u8>, node::Error> {
+    cargo::read_bounded("resolution replay control", path, limit).map_err(Into::into)
 }
 
 fn error(error: stored::Error) -> node::Error {
@@ -1287,7 +1245,6 @@ impl SharedReady {
     pub(crate) fn retain_api(self, limits: &Limits) -> crate::Result<crate::api::Continuation> {
         use sha2::{Digest as _, Sha256};
         let Self { evaluation, parts } = self;
-        evaluation.request.require_limits(limits);
         let stale = || crate::Error::Request {
             reason: "a cached build of the program's dependencies could not be read".into(),
         };
@@ -1471,13 +1428,7 @@ mod tests {
     #[test]
     fn wrapped_control_graph_refusal_remains_terminal() {
         // The control read fails only for its own reason.
-        let mut request = cargo::RequestAllocation::new(&Limits::standard());
-        let error = read(
-            Path::new("/nonexistent-rawr-owner-control"),
-            1024,
-            &mut request,
-        )
-        .unwrap_err();
+        let error = read(Path::new("/nonexistent-rawr-owner-control"), 1024).unwrap_err();
         assert!(
             !refusal(&error),
             "a missing control is not a refusal: {error:?}"
@@ -1493,11 +1444,8 @@ mod tests {
         let root = std::fs::canonicalize(&root).unwrap();
         let control = root.join("control");
         std::fs::write(&control, b"sixteen bytes!!!").unwrap();
-        assert_eq!(
-            read(&control, 1024, &mut request).unwrap(),
-            b"sixteen bytes!!!"
-        );
-        let physical = read(&control, 8, &mut request).unwrap_err();
+        assert_eq!(read(&control, 1024).unwrap(), b"sixteen bytes!!!");
+        let physical = read(&control, 8).unwrap_err();
         assert!(matches!(&physical, node::Error::Importer(inner)
             if matches!(inner.as_ref(), crate::Error::Limit { limit: 8, actual: 16, .. })));
         assert!(refusal(&physical));

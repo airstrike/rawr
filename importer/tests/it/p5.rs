@@ -333,7 +333,7 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
         .policy(extract::Policy::manifest().seal())
         .expect("the manifest policy fits")
         .dependency(
-            Dependency::path("clock", &fixture, limits)
+            Dependency::path("clock", &fixture)
                 .and_then(|dependency| dependency.package("profile-clock"))
                 .expect("the profile anchor alias is exact"),
         )

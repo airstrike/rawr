@@ -415,28 +415,8 @@ impl Definition {
     }
 
     pub(crate) fn candidate(&self, bytes: Box<[u8]>) -> Result<Candidate> {
-        self.candidate_in(bytes, &mut super::ControlAccount::legacy())
-    }
-
-    pub(crate) fn candidate_accounted(
-        &self,
-        bytes: Box<[u8]>,
-        allocation: &mut super::RequestAllocation,
-    ) -> Result<Candidate> {
-        self.candidate_in(bytes, &mut super::ControlAccount::current(allocation))
-    }
-
-    pub(super) fn candidate_in(
-        &self,
-        bytes: Box<[u8]>,
-        account: &mut super::ControlAccount<'_>,
-    ) -> Result<Candidate> {
-        // Match the existing authority TOML ownership precharge, retaining it
-        // in this evaluation's account across repeated current validations.
-        account.parser(bytes.len())?;
-        let closure = Closure::parse_in_rooted(&bytes, self.root)?;
+        let closure = Closure::parse_rooted(&bytes, self.root)?;
         let digest = Digest(Sha256::digest(&bytes).into());
-        account.holder(Candidate::HOLDER_BYTES)?;
         Ok(Candidate(Arc::new(Locked {
             definition: self.clone(),
             bytes,
@@ -661,10 +641,6 @@ impl Catalog {
 }
 
 impl Candidate {
-    /// Fixed shared-holder storage charged before the parse is retained.
-    pub(crate) const HOLDER_BYTES: usize =
-        std::mem::size_of::<Locked>() + 2 * std::mem::size_of::<usize>();
-
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.0.bytes
     }
@@ -2833,11 +2809,6 @@ impl Closure {
     }
 
     fn parse_rooted(bytes: &[u8], root: &str) -> Result<Self> {
-        Self::parse_in_rooted(bytes, root)
-    }
-
-    /// Parse one lock under the request account that admitted its bytes.
-    fn parse_in_rooted(bytes: &[u8], root: &str) -> Result<Self> {
         let text = std::str::from_utf8(bytes).map_err(|error| Error::Schema {
             document: "resolution universe lock",
             reason: error.to_string().into_boxed_str(),
@@ -3081,27 +3052,8 @@ mod tests {
     }
 
     #[test]
-    fn current_candidate_parser_retains_spending_across_replays() {
-        let limits = Limits::standard();
-        let definition = definition();
-        let mut allocation = super::super::RequestAllocation::new(&limits);
-        let owned = SEED.len() + super::Candidate::HOLDER_BYTES;
-        let (items, bytes) = (allocation.items, allocation.bytes);
-        definition
-            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
-            .expect("parser and holder ownership is charged");
-        assert_eq!(allocation.bytes, bytes + owned);
-        assert_eq!(allocation.items, items + SEED.len() + 1);
-        // The replay retains its parser and holder ownership in the same account.
-        definition
-            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
-            .expect("the replay charges and parses");
-        assert_eq!(allocation.bytes, bytes + 2 * owned);
-        assert_eq!(allocation.items, items + 2 * (SEED.len() + 1));
-
-        let mut malformed = super::super::RequestAllocation::new(&limits);
-        let Err(error) = definition.candidate_accounted(b"[".as_slice().into(), &mut malformed)
-        else {
+    fn malformed_candidate_lock_refuses_as_a_parse_error() {
+        let Err(error) = definition().candidate(b"[".as_slice().into()) else {
             panic!("malformed TOML refuses");
         };
         assert!(!matches!(error, crate::Error::Limit { .. }));

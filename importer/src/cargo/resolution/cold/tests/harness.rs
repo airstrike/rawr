@@ -370,8 +370,6 @@ fn fresh_request_uses_one_reserved_sequence_without_clearing_targets() {
         ];
         let sentinel = layout.final_form().target().join("retained-sentinel");
         fs::write(&sentinel, b"unchanged").expect("preexisting output writes");
-        let mut allocation = request.allocation;
-        let before = allocation.bytes;
         let mut harness = super::script(layout, steps)
             .run(|| {
                 request.prepare_fresh_harness_in(
@@ -379,7 +377,6 @@ fn fresh_request_uses_one_reserved_sequence_without_clearing_targets() {
                     &cached,
                     &Limits::standard(),
                     &Limits::standard(),
-                    &mut allocation,
                     unit::Allocation::begin(&Limits::standard()),
                 )
             })
@@ -388,7 +385,6 @@ fn fresh_request_uses_one_reserved_sequence_without_clearing_targets() {
         assert_eq!(harness.command_target, layout.final_form().target());
         assert!(harness.dag.is_none());
         assert!(harness.universe.is_some());
-        assert!(allocation.bytes > before);
         assert_eq!(fs::read(sentinel).expect("sentinel survives"), b"unchanged");
         assert_eq!(
             fs::read(layout.extraction().source()).expect("probe source publishes"),
@@ -428,21 +424,14 @@ fn reserved_cohort_preserves_legacy_identity_and_binds_config_contents() {
             request.parallelism,
             request.config.explicit_configs(),
         )?;
-        let current =
-            super::super::cohort(request, layout.paths(), &mut request.allocation.clone())?;
+        let current = super::super::cohort(request, layout.paths())?;
         assert_ne!(legacy, current);
         let changed = cargo::command_cohort(
             request.toolchain.schemas().graph(),
             &request.target,
             &request.profile,
             request.parallelism,
-            || {
-                super::super::prefix(
-                    request,
-                    Path::new("$RAWR_FINAL_BUILD_CONFIG"),
-                    &mut request.allocation.clone(),
-                )
-            },
+            || super::super::prefix(request, Path::new("$RAWR_FINAL_BUILD_CONFIG")),
             Some(b"[build]\nbuild-dir = \"build/changed\"\n"),
         )?;
         assert_ne!(current, changed);
@@ -452,7 +441,7 @@ fn reserved_cohort_preserves_legacy_identity_and_binds_config_contents() {
 }
 
 #[test]
-fn recipe_fields_share_prior_cohort_and_command_admission() {
+fn fresh_preparation_materializes_the_internal_profile_recipe() {
     let mut fixture = Fixture::open();
     let request = &mut fixture.request;
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
@@ -465,51 +454,6 @@ fn recipe_fields_share_prior_cohort_and_command_admission() {
         };
         let (metadata, units) = documents(request, layout.final_form());
         bind_universe(request, &cached);
-        let (provisional, _) = documents(request, layout.provisional());
-        let value: Value = serde_json::from_slice(&provisional).expect("fixture metadata parses");
-        let package = value["packages"]
-            .as_array()
-            .expect("packages exist")
-            .iter()
-            .find(|package| package["name"] == "rawr")
-            .expect("internal package exists");
-        let id = package["id"].as_str().expect("internal ID exists");
-        let source = id
-            .rsplit_once('#')
-            .expect("internal source has exact suffix")
-            .0;
-        let manifest = Path::new(package["manifest_path"].as_str().expect("manifest exists"));
-        let root = manifest.parent().expect("manifest has a root");
-        let version = package["version"].as_str().expect("version exists");
-        let fields = [
-            id.len(),
-            source.len(),
-            root.as_os_str().len(),
-            version.len(),
-        ];
-        let recipe_bytes: usize = fields.iter().sum();
-
-        // Measure the actual bounded constructors that precede the recipe.
-        // The exercised account below retains both these charges and prior use.
-        // Preparation first renders the provisional harness manifest on
-        // the working account, then charges the cohort and the prefix.
-        let mut prior = request.allocation;
-        drop(cargo::render_manifest_accounted(
-            request,
-            None,
-            &Limits::standard(),
-            &mut prior,
-        )?);
-        super::super::cohort(request, layout.paths(), &mut prior)?;
-        drop(super::super::prefix(
-            request,
-            layout.provisional().config(),
-            &mut prior,
-        )?);
-        let command_bytes = prior.bytes - request.allocation.bytes;
-        let command_items = prior.items - request.allocation.items;
-        let mut allocation = request.allocation;
-        let before = allocation;
         let steps = built::fresh_steps(request, native, layout, &metadata, &units);
         let harness = super::script(layout, steps)
             .run(|| {
@@ -518,7 +462,6 @@ fn recipe_fields_share_prior_cohort_and_command_admission() {
                     &cached,
                     &Limits::standard(),
                     &Limits::standard(),
-                    &mut allocation,
                     unit::Allocation::begin(&Limits::standard()),
                 )
             })
@@ -528,11 +471,6 @@ fn recipe_fields_share_prior_cohort_and_command_admission() {
         let manifest = fs::read_to_string(layout.final_form().manifest())
             .expect("the admitted recipe materializes the final manifest");
         assert!(manifest.contains("[profile.dev.package."));
-        // Preparation continues past the recipe through the candidate
-        // prefix, every direct command and the universe binding, so usage
-        // exceeds the prior cohort, command and recipe charges.
-        assert!(allocation.items > before.items + command_items + fields.len());
-        assert!(allocation.bytes > before.bytes + command_bytes + recipe_bytes);
         Ok(())
     });
     fixture.retire();
@@ -548,7 +486,6 @@ fn provisional_decode_failure_releases_the_shared_checkpoint() {
         let production = native.production();
         let paths = layout.final_form();
         let mut epoch = unit::Allocation::begin(&limits);
-        let mut allocation = request.allocation;
         let steps = vec![expected_reply(
             request,
             native,
@@ -562,15 +499,13 @@ fn provisional_decode_failure_releases_the_shared_checkpoint() {
                 request.materialize_fresh(
                     &limits,
                     &mut epoch,
-                    &mut allocation,
                     &definition,
                     (paths.manifest(), paths.source(), paths.lock()),
-                    |phase, allocation| match phase {
+                    |phase| match phase {
                         cargo::MetadataPhase::Provisional => super::super::provisional_metadata(
                             &production,
                             request,
                             layout,
-                            allocation,
                             &limits,
                         ),
                         cargo::MetadataPhase::Candidate => {

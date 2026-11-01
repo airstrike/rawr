@@ -28,7 +28,7 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment, limits)?;
+        let app = app_crate(self, &environment)?;
         request(entry, config, environment, None, app, &[], limits).map(Some)
     }
 
@@ -49,7 +49,7 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment, limits)?;
+        let app = app_crate(self, &environment)?;
         request(
             entry,
             config,
@@ -78,7 +78,7 @@ impl Graph {
             return Ok(None);
         };
         script_project(entry)?;
-        let app = app_crate(self, &environment, limits)?;
+        let app = app_crate(self, &environment)?;
         request_inventory(entry, config, environment, app, closure, limits).map(Some)
     }
 
@@ -238,11 +238,7 @@ fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
 /// with the island's runtime support at its end, and in place of each
 /// marked file its generated trampolines (`island::shadow`). A save that
 /// changes no trampoline rewrites nothing, so nothing is built again.
-fn app_crate(
-    graph: &Graph,
-    environment: &Environment,
-    limits: &Limits,
-) -> rawr_import::Result<Option<Dependency>> {
+fn app_crate(graph: &Graph, environment: &Environment) -> rawr_import::Result<Option<Dependency>> {
     let entry = graph.entry_package();
     let (Some(alias), Some(cargo)) = (entry.rust_crate(), entry.cargo()) else {
         if let Some(module) = entry.native_root().or_else(|| entry.rust_modules().first()) {
@@ -337,7 +333,7 @@ fn app_crate(
             std::fs::write(&path, text).map_err(io("write", &path))?;
         }
     }
-    Dependency::path(alias, &directory, limits)?
+    Dependency::path(alias, &directory)?
         .package(&cargo.package)
         .map(Some)
 }
@@ -812,7 +808,7 @@ fn request_inventory(
     // The probe declares what the program does; the inventory declares
     // its whole library closure, each crate by its own name.
     if closure.is_empty() {
-        for dependency in dependencies(config, limits)? {
+        for dependency in dependencies(config)? {
             builder = builder.dependency(dependency)?;
         }
         if let Some(app) = app {
@@ -829,14 +825,12 @@ fn request_inventory(
         .build()
 }
 
-fn dependencies(config: &Config, limits: &Limits) -> rawr_import::Result<Vec<Dependency>> {
+fn dependencies(config: &Config) -> rawr_import::Result<Vec<Dependency>> {
     let mut dependencies = Vec::new();
     for configured in &config.dependencies {
         let mut dependency = match &configured.source {
-            Source::Path(path) => Dependency::path(&configured.alias, path, limits)?,
-            Source::Registry { version } => {
-                Dependency::registry(&configured.alias, version, limits)?
-            }
+            Source::Path(path) => Dependency::path(&configured.alias, path)?,
+            Source::Registry { version } => Dependency::registry(&configured.alias, version)?,
             Source::Git {
                 url,
                 reference,
@@ -848,7 +842,7 @@ fn dependencies(config: &Config, limits: &Limits) -> rawr_import::Result<Vec<Dep
                     GitReference::Rev(name) => Reference::Rev(name.as_str().into()),
                     GitReference::DefaultBranch => Reference::DefaultBranch,
                 };
-                let dependency = Dependency::git(&configured.alias, url, reference, limits)?;
+                let dependency = Dependency::git(&configured.alias, url, reference)?;
                 match version {
                     Some(version) => dependency.git_version(version)?,
                     None => dependency,
@@ -890,7 +884,7 @@ fn request(
     .environment(environment)
     .profile(&config.profile)?;
     builder = builder.cargo_authority(&config.cargo_authority)?;
-    for dependency in dependencies(config, limits)? {
+    for dependency in dependencies(config)? {
         builder = builder.dependency(dependency)?;
     }
     if let Some(app) = app {

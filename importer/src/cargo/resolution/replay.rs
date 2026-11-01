@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::layout;
-use crate::cargo::{self, internal, unit, universe, Limits, Request, RequestAllocation, Selection};
+use crate::cargo::{self, internal, unit, universe, Limits, Request, Selection};
 use crate::extract::plan::{namespace, Capture, Plan};
 use crate::input::{build, stored};
 
@@ -24,12 +24,6 @@ pub(in crate::cargo) struct Decoded {
 }
 
 impl Decoded {
-    /// Fixed shared-holder storage charged when the interpretation is retained.
-    pub(in crate::cargo) const HOLDER_BYTES: usize =
-        std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>();
-    const NAMESPACE_HOLDER_BYTES: usize =
-        std::mem::size_of::<namespace::Retained>() + 2 * std::mem::size_of::<usize>();
-
     /// The recorded input entries this interpretation's replay compares.
     pub(in crate::cargo) fn entries(&self) -> &[crate::input::proof::Entry] {
         self.stored.entries()
@@ -69,7 +63,6 @@ impl Request {
         staged: Option<Arc<Decoded>>,
         limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         cargo_allocation: &mut unit::Allocation,
     ) -> stored::Result<Replay> {
         let (paths, bytes, inventory, budget) = observed.into_parts();
@@ -86,16 +79,14 @@ impl Request {
                         request,
                         context,
                         receipt,
-                        limits,
                         cargo_limits,
-                        allocation,
                         cargo_allocation,
                         budget,
                     )?
                 }
             };
             self.replay_decoded_in(
-                cached, &paths, cargo_home, decoded, inventory, limits, allocation, budget,
+                cached, &paths, cargo_home, decoded, inventory, limits, budget,
             )
         })();
         result.map_err(|error| budget.failure(error))
@@ -118,9 +109,7 @@ impl Request {
         request: cargo::Digest,
         context: universe::ContextProof,
         receipt: Option<universe::Receipt>,
-        limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         cargo_allocation: &mut unit::Allocation,
         budget: &mut stored::Budget<'_>,
     ) -> stored::Result<Arc<Decoded>> {
@@ -133,9 +122,7 @@ impl Request {
             request,
             context,
             receipt,
-            limits,
             cargo_limits,
-            allocation,
             cargo_allocation,
         )?;
         let retained = build::Retained::decode(
@@ -145,16 +132,8 @@ impl Request {
             &self.target,
             budget,
         )?;
-        let namespace = match record.decode_namespace(budget)? {
-            Some(namespace) => {
-                cargo::ControlAccount::current(allocation)
-                    .holder(Decoded::NAMESPACE_HOLDER_BYTES)?;
-                Some(Arc::new(namespace))
-            }
-            None => None,
-        };
+        let namespace = record.decode_namespace(budget)?.map(Arc::new);
         let stored = stored::Stored::decode(record.input(), budget)?;
-        cargo::ControlAccount::current(allocation).holder(Decoded::HOLDER_BYTES)?;
         Ok(Arc::new(Decoded {
             metadata,
             graph,
@@ -183,7 +162,6 @@ impl Request {
         decoded: Arc<Decoded>,
         inventory: super::bundle::Inventory<'_>,
         limits: &Limits,
-        allocation: &mut RequestAllocation,
         budget: &mut stored::Budget<'_>,
     ) -> stored::Result<Replay> {
         budget.check()?;
@@ -210,13 +188,11 @@ impl Request {
             crate::Error::Node { source, .. } => stored::Error::Bundle(*source),
             error => stored::Error::Input(error),
         })?;
-        let config = self.config.input_config_accounted(allocation)?;
+        let config = self.config.input_config()?;
         let cargo_env_overrides = config.cargo_env_overrides;
         drop(config);
-        let manifest = budget.digest(
-            cargo::render_manifest_accounted(self, Some(&decoded.internal), limits, allocation)?
-                .as_bytes(),
-        )?;
+        let manifest =
+            budget.digest(cargo::render_manifest(self, Some(&decoded.internal))?.as_bytes())?;
         let source = budget.digest(cargo::HARNESS_SOURCE.as_bytes())?;
         let final_form = paths.final_form();
         let compared = decoded.stored.require_inputs(

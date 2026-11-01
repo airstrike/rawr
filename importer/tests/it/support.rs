@@ -457,13 +457,13 @@ fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("duplicates", &fixture("duplicate-facade"), &limits)
+            Dependency::path("duplicates", &fixture("duplicate-facade"))
                 .and_then(|dependency| dependency.package("duplicate-facade"))
                 .expect("the duplicate facade selection is exact"),
         )
         .expect("the first duplicate dependency fits the request")
         .dependency(
-            Dependency::path("duplicates_profile", &fixture("duplicate-facade"), &limits)
+            Dependency::path("duplicates_profile", &fixture("duplicate-facade"))
                 .and_then(|dependency| dependency.package("duplicate-facade"))
                 .expect("the duplicate facade profile selection is exact"),
         )
@@ -1559,7 +1559,7 @@ fn constant_request(root: &Path, limits: &Limits) -> rawr_import::cargo::Request
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the constant environment is sealable");
     let fixture = fixture("constant-api");
-    let dependency = Dependency::path("constant_api", &fixture, limits)
+    let dependency = Dependency::path("constant_api", &fixture)
         .and_then(|dependency| dependency.package("constant-api"))
         .expect("the constant fixture dependency is exact");
     Request::builder(root, &root.join("target/rawr/cache"), limits)
@@ -1585,13 +1585,13 @@ fn request(root: &Path, limits: &Limits) -> rawr_import::cargo::Request {
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits the request")
         .dependency(
-            Dependency::path("facade_a", &fixture, limits)
+            Dependency::path("facade_a", &fixture)
                 .and_then(|dependency| dependency.package("facade-api"))
                 .expect("the first facade alias is exact"),
         )
         .expect("the first facade dependency fits the request")
         .dependency(
-            Dependency::path("facade_b", &fixture, limits)
+            Dependency::path("facade_b", &fixture)
                 .and_then(|dependency| dependency.package("facade-api"))
                 .expect("the second facade alias is exact"),
         )

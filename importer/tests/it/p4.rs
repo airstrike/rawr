@@ -70,7 +70,7 @@ fn request(root: &Path, limits: &Limits) -> Request {
         .policy(Policy::manifest().seal())
         .expect("the manifest policy fits")
         .dependency(
-            Dependency::path("generic", &fixture, limits)
+            Dependency::path("generic", &fixture)
                 .and_then(|dependency| dependency.package("generic-api"))
                 .expect("the generic facade alias is exact"),
         )

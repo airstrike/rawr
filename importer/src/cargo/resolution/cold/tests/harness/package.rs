@@ -80,7 +80,6 @@ fn direct_package_uses_reserved_config_and_charges_only_the_prefix() {
             panic!("the fixture selects an actual Path source");
         };
         steps.push(launch(request, native, layout, &root.join("Cargo.toml")));
-        let mut allocation = request.allocation;
         super::super::script(layout, steps)
             .run(|| -> crate::Result<()> {
                 let harness = request.prepare_fresh_harness_in(
@@ -88,7 +87,6 @@ fn direct_package_uses_reserved_config_and_charges_only_the_prefix() {
                     &cached,
                     &limits,
                     &limits,
-                    &mut allocation,
                     unit::Allocation::begin(&limits),
                 )?;
                 let selected = harness
@@ -107,14 +105,6 @@ fn direct_package_uses_reserved_config_and_charges_only_the_prefix() {
                     &limits,
                 )?;
                 let usage = build.usage();
-                let mut measured = allocation;
-                drop(super::super::super::prefix(
-                    request,
-                    layout.final_form().config(),
-                    &mut measured,
-                )?);
-                let cost = measured.bytes - allocation.bytes;
-                let before = allocation.bytes;
                 let files = cargo::cargo_package_files(
                     &native.production(),
                     None,
@@ -125,14 +115,11 @@ fn direct_package_uses_reserved_config_and_charges_only_the_prefix() {
                     harness.toolchain.cargo_commit(),
                     usage,
                     &limits,
-                    &mut allocation,
                     Some(layout),
                 )?;
                 assert!(matches!(files, Set::Path(_)));
                 assert_eq!(files.base_usage(), usage);
                 assert_ne!(files.usage(), usage);
-                // The reserved prefix is the only charge Package adds.
-                assert_eq!(allocation.bytes, before + cost);
                 Ok(())
             })
             .expect("Package runs directly under the already-held owner")?;

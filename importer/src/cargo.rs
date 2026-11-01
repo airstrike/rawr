@@ -244,7 +244,6 @@ mod closure_alias_tests {
 pub struct Builder {
     inventory: bool,
     limits: Limits,
-    allocation: RequestAllocation,
     project_root: PathBuf,
     cache_root: PathBuf,
     environment: Option<config::Environment>,
@@ -281,20 +280,7 @@ pub struct Request {
     /// The Rust paths Rawr names; a dependency they name is
     /// extracted from them instead of from every public path.
     demand: Box<[DemandPath]>,
-    allocation: RequestAllocation,
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestAllocation {
-    items: usize,
-    bytes: usize,
-    item_limit: usize,
-    byte_limit: usize,
-    string_limit: usize,
-}
-
-pub(crate) const REQUEST_ITEMS_RESOURCE: &str = "request retained items";
-pub(crate) const REQUEST_BYTES_RESOURCE: &str = "request retained bytes";
 
 /// A currently validated semantic resolution owner ready for API publication.
 #[cfg(feature = "rustc-driver")]
@@ -494,9 +480,6 @@ struct Harness {
     lock: Digest,
     metadata: unit::Metadata,
     workspace: crate::input::workspace::Image,
-    // Legacy callers carry their live request account through preparation and
-    // completion. Reserved callers already borrow that account from the owner.
-    request_allocation: Option<RequestAllocation>,
     cargo_allocation: unit::Allocation,
     selected: Box<[Selection]>,
     toolchain: toolchain::Proof,
@@ -516,10 +499,9 @@ struct Harness {
 
 /// A prepared harness whose ordinary Build and both postchecks succeeded.
 #[cfg(feature = "rustc-driver")]
-struct Built<'allocation> {
+struct Built {
     harness: Harness,
     build: crate::input::build::Build,
-    allocation: &'allocation mut RequestAllocation,
 }
 
 struct Documents {
@@ -818,143 +800,30 @@ impl Default for Limits {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Highest cumulative request retained bytes admitted on this test thread.
-    pub(crate) static REQUEST_HIGH_WATER: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-impl RequestAllocation {
-    fn high_water(&self) {
-        #[cfg(test)]
-        REQUEST_HIGH_WATER.with(|high| high.set(high.get().max(self.bytes)));
-    }
-
-    fn new(limits: &Limits) -> Self {
-        Self {
-            items: 0,
-            bytes: 0,
-            item_limit: limits.items,
-            byte_limit: limits.manifest_bytes,
-            string_limit: limits.string_bytes,
+/// Format into a string reserved at its exact length; a failed reservation
+/// is an allocation failure.
+pub(crate) fn formatted(arguments: fmt::Arguments<'_>) -> Result<String> {
+    struct Counter(usize);
+    impl fmt::Write for Counter {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            self.0 = self.0.checked_add(value.len()).ok_or(fmt::Error)?;
+            Ok(())
         }
     }
-
-    /// Checked-add overflow is an arithmetic failure: it stays terminal.
-    fn overflow(operation: &'static str) -> Error {
-        Error::Node {
-            operation,
-            source: Box::new(crate::node::Error::Allocation),
-        }
-    }
-
-    pub(crate) fn items(&mut self, amount: usize) -> Result<()> {
-        let actual = self
-            .items
-            .checked_add(amount)
-            .ok_or_else(|| Self::overflow(REQUEST_ITEMS_RESOURCE))?;
-        self.items = actual;
-        Ok(())
-    }
-
-    pub(crate) fn bytes(&mut self, amount: usize) -> Result<()> {
-        let actual = self
-            .bytes
-            .checked_add(amount)
-            .ok_or_else(|| Self::overflow(REQUEST_BYTES_RESOURCE))?;
-        self.bytes = actual;
-        self.high_water();
-        Ok(())
-    }
-
-    pub(crate) fn retained(&mut self, items: usize, bytes: usize) -> Result<()> {
-        let retained_items = self
-            .items
-            .checked_add(items)
-            .ok_or_else(|| Self::overflow(REQUEST_ITEMS_RESOURCE))?;
-        let retained_bytes = self
-            .bytes
-            .checked_add(bytes)
-            .ok_or_else(|| Self::overflow(REQUEST_BYTES_RESOURCE))?;
-        self.items = retained_items;
-        self.bytes = retained_bytes;
-        self.high_water();
-        Ok(())
-    }
-
-    pub(crate) fn string(&mut self, value: &str) -> Result<()> {
-        self.retained(1, value.len())
-    }
-
-    pub(crate) fn path(&mut self, value: &Path) -> Result<()> {
-        self.retained(1, value.as_os_str().len())
-    }
-
-    pub(crate) fn formatted(&mut self, arguments: fmt::Arguments<'_>) -> Result<String> {
-        struct Counter(usize);
-        impl fmt::Write for Counter {
-            fn write_str(&mut self, value: &str) -> fmt::Result {
-                self.0 = self.0.checked_add(value.len()).ok_or(fmt::Error)?;
-                Ok(())
-            }
-        }
-        let retained = arguments;
-        let mut counter = Counter(0);
-        fmt::write(&mut counter, arguments).map_err(|_| Error::Node {
-            operation: "request formatted length",
-            source: Box::new(crate::node::Error::Allocation),
+    let mut counter = Counter(0);
+    fmt::write(&mut counter, arguments).map_err(|_| Error::Node {
+        operation: "request formatted length",
+        source: Box::new(crate::node::Error::Allocation),
+    })?;
+    let mut value = String::new();
+    value
+        .try_reserve_exact(counter.0)
+        .map_err(|source| Error::Allocation {
+            operation: "request formatted string",
+            source,
         })?;
-        self.items(1)?;
-        self.bytes(counter.0)?;
-        let mut value = String::new();
-        value
-            .try_reserve_exact(counter.0)
-            .map_err(|source| Error::Allocation {
-                operation: "request formatted string",
-                source,
-            })?;
-        fmt::write(&mut value, retained).expect("formatting into a `String` never fails");
-        Ok(value)
-    }
-
-    pub(crate) fn transfer(&mut self, retained: Self) -> Result<()> {
-        assert!(
-            self.item_limit == retained.item_limit
-                && self.byte_limit == retained.byte_limit
-                && self.string_limit == retained.string_limit,
-            "a retained allocation transfers only between accounts of one limits profile"
-        );
-        let items = self
-            .items
-            .checked_add(retained.items)
-            .ok_or_else(|| Self::overflow(REQUEST_ITEMS_RESOURCE))?;
-        let bytes = self
-            .bytes
-            .checked_add(retained.bytes)
-            .ok_or_else(|| Self::overflow(REQUEST_BYTES_RESOURCE))?;
-        self.items = items;
-        self.bytes = bytes;
-        self.high_water();
-        Ok(())
-    }
-
-    fn transfer_policy(&mut self, policy: &crate::extract::Policy) -> Result<()> {
-        let (items, bytes) = policy.retained_usage();
-        self.retained(items, bytes)
-    }
-
-    fn transfer_with_items(&mut self, retained: Self, amount: usize) -> Result<()> {
-        let mut retained = retained;
-        retained.items(amount)?;
-        self.transfer(retained)
-    }
-
-    fn matches(self, limits: &Limits) -> bool {
-        self.item_limit == limits.items
-            && self.byte_limit == limits.manifest_bytes
-            && self.string_limit == limits.string_bytes
-    }
+    fmt::write(&mut value, arguments).expect("formatting into a `String` never fails");
+    Ok(value)
 }
 
 impl Request {
@@ -964,15 +833,9 @@ impl Request {
         project_cache_root: &Path,
         limits: &Limits,
     ) -> Result<Builder> {
-        let mut allocation = RequestAllocation::new(limits);
-        allocation.items(1)?;
-        allocation.path(project_root)?;
-        allocation.path(project_cache_root)?;
-        allocation.string(PROFILE_DEFAULT)?;
         Ok(Builder {
             inventory: false,
             limits: *limits,
-            allocation,
             project_root: project_root.to_path_buf(),
             cache_root: project_cache_root.to_path_buf(),
             environment: None,
@@ -1054,21 +917,21 @@ impl Request {
             let alias = aliases[package_id].as_str();
             let dependency = match package.source() {
                 unit::PackageSource::Path { .. } => {
-                    config::Dependency::path(alias, package.root(), limits)?
+                    config::Dependency::path(alias, package.root())?
                 }
                 unit::PackageSource::Registry { cargo_id, .. }
                     if cargo_id
                         .starts_with("registry+https://github.com/rust-lang/crates.io-index")
                         || cargo_id.starts_with("sparse+https://index.crates.io/") =>
                 {
-                    config::Dependency::registry(alias, &format!("={}", package.version()), limits)?
+                    config::Dependency::registry(alias, &format!("={}", package.version()))?
                 }
                 unit::PackageSource::Git { cargo_id, .. } => {
                     // The same source id as the project's, so the project's
                     // `Cargo.lock` pins the same commit.
                     let (url, reference) = config::GitReference::parse_source(cargo_id)
                         .expect("Cargo names each git source `git+<url>`");
-                    config::Dependency::git(alias, url, reference, limits)?
+                    config::Dependency::git(alias, url, reference)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. } => {
                     return Err(Error::Request {
@@ -1149,14 +1012,13 @@ impl Request {
 
     /// Resolve through the shared toolchain node before any tool discovery or
     /// version child is launched. Evidence-only callers retain [`Self::resolve`].
-    pub fn resolve_cached(mut self, limits: &Limits) -> Result<Resolution> {
+    pub fn resolve_cached(self, limits: &Limits) -> Result<Resolution> {
         assert!(
             !self.inventory,
             "an intrinsic acquisition resolves uncached; demand replay is not complete"
         );
-        self.require_limits(limits);
         if self.universe.is_some() {
-            let provisional_manifest = self.charge_provisional_manifest(limits)?;
+            let provisional_manifest = render_manifest(&self, None)?;
             if let Some(catalog) = self.universe.as_ref() {
                 let _placement = select_placement(&self, catalog, &provisional_manifest)?;
             }
@@ -1208,25 +1070,12 @@ impl Request {
         Ok(Native::from_attestation(attestation.as_ref()))
     }
 
-    /// Render the provisional manifest on the sealed request account
-    /// and carry the charged account forward, totals included, so preparation
-    /// resumes from them. The provisional string is dropped after placement,
-    /// so preparation's later renders (even of identical bytes) are real work
-    /// charged on top: nothing is lost, and each render is charged once.
-    fn charge_provisional_manifest(&mut self, limits: &Limits) -> Result<String> {
-        let mut allocation = self.allocation;
-        let manifest = render_manifest_accounted(self, None, limits, &mut allocation);
-        self.allocation = allocation;
-        manifest
-    }
-
     fn resolve_with(
         self,
         native: &Native,
         limits: &Limits,
         cached: Option<&CachedToolchain>,
     ) -> Result<Resolution> {
-        self.require_limits(limits);
         let native = native.production();
         let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
@@ -1247,7 +1096,6 @@ impl Request {
         limits: &Limits,
         evidence: &process::EvidenceSession,
     ) -> Result<Resolution> {
-        self.require_limits(limits);
         let native = native.evidence(evidence);
         let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
@@ -1268,13 +1116,6 @@ impl Request {
         cached: Option<&CachedToolchain>,
     ) -> Result<Harness> {
         let mut cargo_allocation = unit::Allocation::begin(cargo_limits);
-        // One working copy of the sealed request account serves every
-        // render and charge of this preparation. It resumes from the sealed
-        // totals, including any provisional render `resolve_cached` already
-        // charged, and every render here (a re-render of the provisional
-        // bytes included: that string was dropped, so this is new work) is
-        // charged on top exactly once.
-        let mut request_allocation = self.allocation;
         let node_context = Arc::new(match cached {
             Some(cached) => cached.context.clone(),
             None => crate::context::Context::capture_config(
@@ -1291,8 +1132,7 @@ impl Request {
             .universe
             .clone()
             .map(|catalog| {
-                let provisional_manifest =
-                    render_manifest_accounted(self, None, limits, &mut request_allocation)?;
+                let provisional_manifest = render_manifest(self, None)?;
                 let placement = select_placement(self, &catalog, &provisional_manifest)?;
                 Ok::<_, Error>((catalog, placement))
             })
@@ -1347,7 +1187,6 @@ impl Request {
                 limits,
                 cargo_limits,
                 cargo_allocation,
-                &mut request_allocation,
                 toolchain,
                 catalog,
                 context,
@@ -1360,13 +1199,10 @@ impl Request {
         execution::Scope::bind(
             &node_context,
             execution::Operation::Harness,
-            digest(
-                render_manifest_accounted(self, None, limits, &mut request_allocation)?.as_bytes(),
-            )
-            .0,
+            digest(render_manifest(self, None)?.as_bytes()).0,
         )
         .run(|| {
-            let harness_root = prepare_harness(self, limits, &mut request_allocation)?;
+            let harness_root = prepare_harness(self)?;
             let target_dir = harness_root.join("target");
 
             let manifest_path = harness_root.join(HARNESS_MANIFEST);
@@ -1383,18 +1219,10 @@ impl Request {
             )?;
             let provisional_selected =
                 provisional_metadata.selections(&self.dependencies, &mut cargo_allocation)?;
-            let internal = self.internal.seal_accounted(
-                &provisional_metadata,
-                &provisional_selected,
-                &mut request_allocation,
-            )?;
-            finalize_harness(
-                self,
-                &harness_root,
-                &internal,
-                limits,
-                &mut request_allocation,
-            )?;
+            let internal = self
+                .internal
+                .seal(&provisional_metadata, &provisional_selected)?;
+            finalize_harness(self, &harness_root, &internal)?;
             drop(provisional_selected);
             drop(provisional_metadata);
             // The post-build check observes metadata under the Build's target
@@ -1437,7 +1265,7 @@ impl Request {
                 process::TAIL_BYTES,
             )?);
 
-            let workspace = self.capture_workspace(&metadata, &mut request_allocation, limits)?;
+            let workspace = self.capture_workspace(&metadata, limits)?;
 
             let initial_bytes = cargo_units(native, self, &manifest_path, &initial_target, limits)?;
             let initial = unit::BuildGraph::parse(
@@ -1473,7 +1301,6 @@ impl Request {
                 selected,
                 metadata,
                 workspace,
-                request_allocation: Some(request_allocation),
                 cargo_allocation,
                 toolchain,
                 internal,
@@ -1503,7 +1330,6 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
         mut cargo_allocation: unit::Allocation,
-        request_allocation: &mut RequestAllocation,
         toolchain: toolchain::Proof,
         catalog: universe::Catalog,
         context: universe::ContextProof,
@@ -1578,15 +1404,8 @@ impl Request {
                 let metadata =
                     metadata.bind_lock(lock.bytes(), cargo_limits, &mut cargo_allocation)?;
                 let selected = metadata.selections(&self.dependencies, &mut cargo_allocation)?;
-                let internal =
-                    self.internal
-                        .seal_accounted(&metadata, &selected, &mut *request_allocation)?;
-                let manifest = render_manifest_accounted(
-                    self,
-                    Some(&internal),
-                    limits,
-                    &mut *request_allocation,
-                )?;
+                let internal = self.internal.seal(&metadata, &selected)?;
+                let manifest = render_manifest(self, Some(&internal))?;
                 require_exact_file(
                     "persisted final-form harness manifest",
                     &manifest_path,
@@ -1620,22 +1439,15 @@ impl Request {
                 )?;
                 let mut materialized = None;
                 let execute = || {
-                    let provisional_root = prepare_versioned_roots(
-                        self,
-                        &harness_root,
-                        exclusive,
-                        limits,
-                        &mut *request_allocation,
-                    )?;
+                    let provisional_root = prepare_versioned_roots(self, &harness_root, exclusive)?;
                     let provisional_path = provisional_root.join(HARNESS_MANIFEST);
                     let provisional_target = provisional_root.join("target");
                     let fresh = self.materialize_fresh(
                         limits,
                         &mut cargo_allocation,
-                        &mut *request_allocation,
                         &definition,
                         (&manifest_path, &source_path, &lock_path),
-                        |phase, _| match phase {
+                        |phase| match phase {
                             MetadataPhase::Provisional => cargo_metadata(
                                 native,
                                 self,
@@ -1720,10 +1532,8 @@ impl Request {
                     internal,
                     &lock,
                     (&manifest_path, &source_path),
-                    limits,
                     cargo_limits,
                     &mut cargo_allocation,
-                    &mut *request_allocation,
                 )?;
                 (
                     metadata,
@@ -1750,7 +1560,7 @@ impl Request {
         )?);
         let lock = candidate_lock.digest();
 
-        let workspace = self.capture_workspace(&metadata, &mut *request_allocation, limits)?;
+        let workspace = self.capture_workspace(&metadata, limits)?;
 
         #[cfg(feature = "rustc-driver")]
         let initial_target = harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
@@ -1805,7 +1615,6 @@ impl Request {
             lock,
             metadata,
             workspace,
-            request_allocation: Some(*request_allocation),
             cargo_allocation,
             selected,
             toolchain,
@@ -1835,29 +1644,22 @@ impl Request {
         self.authority.lock.as_deref().unwrap_or(definition.seed())
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one shared Fresh phase preserves the legacy and reserved command sequences"
-    )]
     fn materialize_fresh(
         &self,
         limits: &Limits,
         cargo_allocation: &mut unit::Allocation,
-        allocation: &mut RequestAllocation,
         definition: &universe::Definition,
         paths: (&Path, &Path, &Path),
-        mut observe: impl FnMut(MetadataPhase, &mut RequestAllocation) -> Result<Box<[u8]>>,
+        mut observe: impl FnMut(MetadataPhase) -> Result<Box<[u8]>>,
         parse: impl FnOnce(&[u8], &mut unit::Allocation) -> Result<unit::Metadata>,
     ) -> Result<Materialized> {
         let mut provisional_scope = cargo_allocation.begin_provisional()?;
         let provisional = (|| {
-            let bytes = observe(MetadataPhase::Provisional, allocation)?;
+            let bytes = observe(MetadataPhase::Provisional)?;
             self.revalidate(limits, "provisional metadata")?;
             let metadata = parse(&bytes, cargo_allocation)?;
             let selected = metadata.selections(&self.dependencies, cargo_allocation)?;
-            let internal = self
-                .internal
-                .seal_accounted(&metadata, &selected, allocation)?;
+            let internal = self.internal.seal(&metadata, &selected)?;
             Ok::<_, Error>((internal, selected, metadata))
         })();
         let internal = match provisional {
@@ -1873,7 +1675,7 @@ impl Request {
             }
         };
         let (manifest_path, source_path, lock_path) = paths;
-        let manifest = render_manifest_accounted(self, Some(&internal), limits, allocation)?;
+        let manifest = render_manifest(self, Some(&internal))?;
         write_atomic(manifest_path, manifest.as_bytes())?;
         write_atomic(source_path, HARNESS_SOURCE.as_bytes())?;
         write_atomic(lock_path, self.starting_lock(definition))?;
@@ -1881,7 +1683,7 @@ impl Request {
         // it resolved, and the `--locked` unit graph that follows refuses a
         // lock it would change. Running `--locked` metadata again only
         // reproduced these bytes.
-        let bytes = observe(MetadataPhase::Candidate, allocation)?;
+        let bytes = observe(MetadataPhase::Candidate)?;
         self.revalidate(limits, "resolution candidate materialization")?;
         let lock_bytes = read_bounded(
             "candidate resolution lock",
@@ -1897,7 +1699,6 @@ impl Request {
     }
 
     #[allow(
-        clippy::too_many_arguments,
         clippy::type_complexity,
         reason = "the shared transformation binds final metadata, selections and the internal recipe"
     )]
@@ -1907,24 +1708,19 @@ impl Request {
         internal: Option<internal::Recipe>,
         lock: &universe::Candidate,
         paths: (&Path, &Path),
-        limits: &Limits,
         cargo_limits: &Limits,
         allocation: &mut unit::Allocation,
-        request_allocation: &mut RequestAllocation,
     ) -> Result<(unit::Metadata, Box<[Selection]>, internal::Recipe)> {
         let metadata = metadata.bind_lock(lock.bytes(), cargo_limits, allocation)?;
         let selected = metadata.selections(&self.dependencies, allocation)?;
         let internal = match internal {
             Some(internal) => internal,
             None => {
-                let internal =
-                    self.internal
-                        .seal_accounted(&metadata, &selected, request_allocation)?;
+                let internal = self.internal.seal(&metadata, &selected)?;
                 require_exact_file(
                     "reused final-form harness manifest",
                     paths.0,
-                    render_manifest_accounted(self, Some(&internal), limits, request_allocation)?
-                        .as_bytes(),
+                    render_manifest(self, Some(&internal))?.as_bytes(),
                     process::TAIL_BYTES,
                 )?;
                 require_exact_file(
@@ -1996,23 +1792,15 @@ impl Request {
         }
         Ok(())
     }
-
-    fn require_limits(&self, limits: &Limits) {
-        assert!(
-            self.allocation.matches(limits),
-            "a request runs under the limits that sealed it"
-        );
-    }
 }
 
 impl Request {
     fn capture_workspace(
         &self,
         metadata: &unit::Metadata,
-        allocation: &mut RequestAllocation,
         limits: &Limits,
     ) -> Result<crate::input::workspace::Image> {
-        let mut account = crate::input::workspace::Account::borrow(allocation, limits);
+        let mut account = crate::input::workspace::Account::bounded(limits);
         let roots = crate::input::workspace::roots(&self.inputs, metadata, &mut account)?;
         crate::input::workspace::capture(roots, &mut account)
     }
@@ -2033,8 +1821,7 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
         workspace: &crate::input::workspace::Image,
-        allocation: &mut RequestAllocation,
-        postcheck: Option<impl FnMut(Postcheck, &mut RequestAllocation) -> Result<Box<[u8]>>>,
+        postcheck: Option<impl FnMut(Postcheck) -> Result<Box<[u8]>>>,
     ) -> Result<(crate::input::build::Build, unit::BuildGraph)> {
         let build = crate::input::build::Build::parse(
             bytes,
@@ -2042,24 +1829,22 @@ impl Request {
             toolchain.cargo_commit(),
             limits,
         )?;
-        let revalidate = |allocation: &mut RequestAllocation| {
+        let revalidate = || {
             revalidate_harness(
                 self, files[0].0, files[0].1, files[1].0, files[1].1, files[2].0, files[2].1,
                 limits, "build",
             )?;
-            workspace.require(&mut crate::input::workspace::Account::borrow(
-                allocation, limits,
-            ))
+            workspace.require(&mut crate::input::workspace::Account::bounded(limits))
         };
-        revalidate(allocation)?;
+        revalidate()?;
         if let Some(mut observe) = postcheck {
-            let units = observe(Postcheck::Units, allocation)?;
+            let units = observe(Postcheck::Units)?;
             initial.require_exact_raw(&units, "build")?;
-            let post_metadata = observe(Postcheck::Metadata, allocation)?;
+            let post_metadata = observe(Postcheck::Metadata)?;
             metadata.require_exact_raw(&post_metadata, "build")?;
         }
         initial.bind_reachability(cargo_allocation, cargo_limits)?;
-        revalidate(allocation)?;
+        revalidate()?;
         Ok((build, initial))
     }
 
@@ -2077,7 +1862,6 @@ impl Request {
             lock,
             metadata,
             workspace,
-            request_allocation,
             cargo_allocation,
             selected,
             toolchain,
@@ -2093,12 +1877,7 @@ impl Request {
             #[cfg(feature = "rustc-driver")]
             closure_units,
         } = harness;
-        let mut allocation =
-            request_allocation.expect("a harness completes with its request's account");
-        workspace.require(&mut crate::input::workspace::Account::borrow(
-            &mut allocation,
-            limits,
-        ))?;
+        workspace.require(&mut crate::input::workspace::Account::bounded(limits))?;
         let manifest_path = harness_root.join(HARNESS_MANIFEST);
         let source_path = harness_root.join("src/lib.rs");
         let lock_path = harness_root.join("Cargo.lock");
@@ -2133,7 +1912,7 @@ impl Request {
                 &manifest_path,
                 limits,
             )?;
-            let authority = workspace_node_authority(&authority, &workspace, &mut allocation)?;
+            let authority = workspace_node_authority(&authority, &workspace)?;
             let execution_environment = environment.clone();
             let build = crate::cargo::resolution::cached_build(
                 &context,
@@ -2143,10 +1922,7 @@ impl Request {
                 extraction_plan.protocol_directory(),
                 &crate::metrics::Current,
                 || {
-                    workspace.require(&mut crate::input::workspace::Account::borrow(
-                        &mut allocation,
-                        limits,
-                    ))?;
+                    workspace.require(&mut crate::input::workspace::Account::bounded(limits))?;
                     let bytes = cargo_execute_authoritative_build(
                         native,
                         &self,
@@ -2154,10 +1930,7 @@ impl Request {
                         execution_environment,
                         limits,
                     )?;
-                    workspace.require(&mut crate::input::workspace::Account::borrow(
-                        &mut allocation,
-                        limits,
-                    ))?;
+                    workspace.require(&mut crate::input::workspace::Account::bounded(limits))?;
                     Ok(bytes)
                 },
             )
@@ -2188,145 +1961,121 @@ impl Request {
         let mut post_unit_parent = None;
         #[cfg(feature = "rustc-driver")]
         let mut post_metadata_parent = None;
-        let (build, build_unit) =
-            self.check_build(
-                &bytes,
-                environment,
-                &metadata,
-                initial,
-                &cargo_allocation,
-                &toolchain,
-                [
-                    (&manifest_path, manifest),
-                    (&source_path, source),
-                    (&lock_path, lock),
-                ],
-                limits,
-                limits,
-                &workspace,
-                &mut allocation,
-                Some(
-                    |phase,
-                     #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))]
-                     allocation: &mut RequestAllocation| match phase {
-                        Postcheck::Units => {
-                            #[cfg(feature = "rustc-driver")]
-                            if let Some((context, request, build)) = dag_build.as_ref() {
-                                let authority = post_build_unit_graph_node_authority(
-                                    *request,
-                                    &toolchain,
+        let (build, build_unit) = self.check_build(
+            &bytes,
+            environment,
+            &metadata,
+            initial,
+            &cargo_allocation,
+            &toolchain,
+            [
+                (&manifest_path, manifest),
+                (&source_path, source),
+                (&lock_path, lock),
+            ],
+            limits,
+            limits,
+            &workspace,
+            Some(|phase| match phase {
+                Postcheck::Units => {
+                    #[cfg(feature = "rustc-driver")]
+                    if let Some((context, request, build)) = dag_build.as_ref() {
+                        let authority = post_build_unit_graph_node_authority(
+                            *request,
+                            &toolchain,
+                            &self,
+                            &manifest_path,
+                            limits,
+                        )?;
+                        let authority = workspace_node_authority(&authority, &workspace)?;
+                        let post_unit = crate::cargo::resolution::cached_post_unit_graph(
+                            context,
+                            build,
+                            &authority,
+                            &crate::metrics::Current,
+                            || {
+                                workspace.require(
+                                    &mut crate::input::workspace::Account::bounded(limits),
+                                )?;
+                                let bytes = cargo_units(
+                                    native,
                                     &self,
                                     &manifest_path,
-                                    limits,
-                                )?;
-                                let authority =
-                                    workspace_node_authority(&authority, &workspace, allocation)?;
-                                let post_unit = crate::cargo::resolution::cached_post_unit_graph(
-                                    context,
-                                    build,
-                                    &authority,
-                                    &crate::metrics::Current,
-                                    || {
-                                        workspace.require(
-                                            &mut crate::input::workspace::Account::borrow(
-                                                allocation, limits,
-                                            ),
-                                        )?;
-                                        let bytes = cargo_units(
-                                            native,
-                                            &self,
-                                            &manifest_path,
-                                            &command_target,
-                                            limits,
-                                        )?;
-                                        workspace.require(
-                                            &mut crate::input::workspace::Account::borrow(
-                                                allocation, limits,
-                                            ),
-                                        )?;
-                                        Ok(bytes)
-                                    },
-                                )
-                                .map_err(|source| Error::Node {
-                                    operation: "post-build Cargo unit graph",
-                                    source: Box::new(source),
-                                })?;
-                                let bytes = post_unit.value().raw().to_vec().into_boxed_slice();
-                                post_unit_parent = Some(post_unit);
-                                return Ok(bytes);
-                            }
-                            uncached(execution::Operation::UnitGraph).run(|| {
-                                cargo_units(native, &self, &manifest_path, &command_target, limits)
-                            })
-                        }
-                        Postcheck::Metadata => {
-                            #[cfg(feature = "rustc-driver")]
-                            if let Some((context, request, build)) = dag_build.as_ref() {
-                                let authority = post_build_metadata_node_authority(
-                                    *request,
-                                    &toolchain,
-                                    &self,
-                                    &manifest_path,
-                                    limits,
-                                )?;
-                                let authority =
-                                    workspace_node_authority(&authority, &workspace, allocation)?;
-                                let post_metadata = crate::cargo::resolution::cached_post_metadata(
-                                    context,
-                                    build,
-                                    &authority,
-                                    &manifest_path,
-                                    &lock_path,
                                     &command_target,
-                                    &crate::metrics::Current,
-                                    || {
-                                        workspace.require(
-                                            &mut crate::input::workspace::Account::borrow(
-                                                allocation, limits,
-                                            ),
-                                        )?;
-                                        let bytes = cargo_metadata(
-                                            native,
-                                            &self,
-                                            &manifest_path,
-                                            &command_target,
-                                            true,
-                                            limits,
-                                        )?;
-                                        metadata.require_exact_raw(
-                                            &bytes,
-                                            "workspace-bound post-build metadata",
-                                        )?;
-                                        workspace.require(
-                                            &mut crate::input::workspace::Account::borrow(
-                                                allocation, limits,
-                                            ),
-                                        )?;
-                                        Ok(bytes)
-                                    },
-                                )
-                                .map_err(|source| Error::Node {
-                                    operation: "post-build Cargo metadata",
-                                    source: Box::new(source),
-                                })?;
-                                let bytes = post_metadata.value().raw().to_vec().into_boxed_slice();
-                                post_metadata_parent = Some(post_metadata);
-                                return Ok(bytes);
-                            }
-                            uncached(execution::Operation::Metadata).run(|| {
-                                cargo_metadata(
+                                    limits,
+                                )?;
+                                workspace.require(
+                                    &mut crate::input::workspace::Account::bounded(limits),
+                                )?;
+                                Ok(bytes)
+                            },
+                        )
+                        .map_err(|source| Error::Node {
+                            operation: "post-build Cargo unit graph",
+                            source: Box::new(source),
+                        })?;
+                        let bytes = post_unit.value().raw().to_vec().into_boxed_slice();
+                        post_unit_parent = Some(post_unit);
+                        return Ok(bytes);
+                    }
+                    uncached(execution::Operation::UnitGraph)
+                        .run(|| cargo_units(native, &self, &manifest_path, &command_target, limits))
+                }
+                Postcheck::Metadata => {
+                    #[cfg(feature = "rustc-driver")]
+                    if let Some((context, request, build)) = dag_build.as_ref() {
+                        let authority = post_build_metadata_node_authority(
+                            *request,
+                            &toolchain,
+                            &self,
+                            &manifest_path,
+                            limits,
+                        )?;
+                        let authority = workspace_node_authority(&authority, &workspace)?;
+                        let post_metadata = crate::cargo::resolution::cached_post_metadata(
+                            context,
+                            build,
+                            &authority,
+                            &manifest_path,
+                            &lock_path,
+                            &command_target,
+                            &crate::metrics::Current,
+                            || {
+                                workspace.require(
+                                    &mut crate::input::workspace::Account::bounded(limits),
+                                )?;
+                                let bytes = cargo_metadata(
                                     native,
                                     &self,
                                     &manifest_path,
                                     &command_target,
                                     true,
                                     limits,
-                                )
-                            })
-                        }
-                    },
-                ),
-            )?;
+                                )?;
+                                metadata.require_exact_raw(
+                                    &bytes,
+                                    "workspace-bound post-build metadata",
+                                )?;
+                                workspace.require(
+                                    &mut crate::input::workspace::Account::bounded(limits),
+                                )?;
+                                Ok(bytes)
+                            },
+                        )
+                        .map_err(|source| Error::Node {
+                            operation: "post-build Cargo metadata",
+                            source: Box::new(source),
+                        })?;
+                        let bytes = post_metadata.value().raw().to_vec().into_boxed_slice();
+                        post_metadata_parent = Some(post_metadata);
+                        return Ok(bytes);
+                    }
+                    uncached(execution::Operation::Metadata).run(|| {
+                        cargo_metadata(native, &self, &manifest_path, &command_target, true, limits)
+                    })
+                }
+            }),
+        )?;
         let package_scope = uncached(execution::Operation::Package);
         #[cfg(feature = "rustc-driver")]
         let probe_scope = uncached(execution::Operation::Probe);
@@ -2339,7 +2088,6 @@ impl Request {
             lock,
             metadata,
             workspace,
-            request_allocation: None,
             cargo_allocation,
             selected,
             toolchain,
@@ -2360,7 +2108,6 @@ impl Request {
             native,
             harness,
             build,
-            &mut allocation,
             limits,
             [manifest_path, source_path, lock_path],
             &receipt_path,
@@ -2403,7 +2150,6 @@ impl Request {
         native: &impl ProductionReplay,
         harness: Harness,
         build: crate::input::build::Build,
-        allocation: &mut RequestAllocation,
         limits: &Limits,
         files: [PathBuf; 3],
         receipt_path: &Path,
@@ -2415,7 +2161,6 @@ impl Request {
             native,
             harness,
             build,
-            allocation,
             limits,
             files,
             receipt_path,
@@ -2437,7 +2182,6 @@ impl Request {
         native: &impl ProductionReplay,
         harness: Harness,
         mut build: crate::input::build::Build,
-        allocation: &mut RequestAllocation,
         limits: &Limits,
         files: [PathBuf; 3],
         receipt_path: &Path,
@@ -2453,7 +2197,6 @@ impl Request {
             lock,
             metadata,
             workspace,
-            request_allocation: _,
             cargo_allocation,
             selected,
             toolchain,
@@ -2485,7 +2228,6 @@ impl Request {
                 toolchain.cargo_commit(),
                 build.usage(),
                 limits,
-                allocation,
                 #[cfg(feature = "rustc-driver")]
                 reserved_layout,
             )?;
@@ -2533,7 +2275,7 @@ impl Request {
             &self.inputs,
             workspace,
             &probe_artifacts,
-            self.config.input_config_accounted(allocation)?,
+            self.config.input_config()?,
             files,
             &toolchain,
             &internal,
@@ -2645,14 +2387,12 @@ impl Builder {
 
     /// Select the one explicit Cargo manifest authority.
     pub fn cargo_authority(mut self, manifest: &Path) -> Result<Self> {
-        self.allocation.path(manifest)?;
         self.cargo_authority = Some(manifest.to_path_buf());
         Ok(self)
     }
 
     /// Select a supported target triple instead of the pinned host.
     pub fn target(mut self, target: &str) -> Result<Self> {
-        self.allocation.string(target)?;
         self.target = Some(target.into());
         Ok(self)
     }
@@ -2666,15 +2406,12 @@ impl Builder {
             !profile.is_empty() && valid,
             "rawr selects only Cargo profile names, never `{profile}`"
         );
-        self.allocation.string(profile)?;
         self.profile = profile.into();
         Ok(self)
     }
 
     /// Add one dependency with a final graph role.
     pub fn dependency(mut self, dependency: config::Dependency) -> Result<Self> {
-        self.allocation
-            .transfer_with_items(dependency.allocation(), 1)?;
         self.dependencies.push(dependency);
         Ok(self)
     }
@@ -2704,27 +2441,24 @@ impl Builder {
                 !segment.is_empty(),
                 "a demanded Rust path has no empty segment"
             );
-            self.allocation.string(segment)?;
             segments.push(Box::<str>::from(segment));
         }
         assert!(
             segments.len() >= 2,
             "a demanded Rust path names an item below a crate"
         );
-        self.allocation.items(1)?;
         self.demand.insert(segments.into_boxed_slice());
         Ok(self)
     }
 
     /// Bind the exact Rawr-manifest exclusion policy to this request.
     pub fn policy(mut self, policy: crate::extract::Policy) -> Result<Self> {
-        self.allocation.transfer_policy(&policy)?;
         self.policy = Some(policy);
         Ok(self)
     }
 
     /// Promote loose request fields into canonical path/config/authority proof.
-    pub fn build(mut self) -> Result<Request> {
+    pub fn build(self) -> Result<Request> {
         assert!(
             !self.inventory || self.demand.is_empty(),
             "an intrinsic acquisition carries no program demand"
@@ -2747,20 +2481,13 @@ impl Builder {
         let environment = self
             .environment
             .expect("each request is built with its Cargo environment");
-        self.allocation.items(environment.entries().len())?;
-        for (key, value) in environment.entries() {
-            self.allocation.string(key)?;
-            self.allocation.string(value)?;
-        }
         let policy = self
             .policy
             .expect("each request is built with its exclusion policy");
-        let internal = internal::Seed::transform(&crate::host::root()?, &mut self.allocation)?;
-        let count = self.dependencies.len().saturating_add(1);
-        self.allocation.items(count)?;
-        let mut dependencies = Vec::with_capacity(count);
+        let internal = internal::Seed::transform(&crate::host::root()?)?;
+        let mut dependencies = Vec::with_capacity(self.dependencies.len().saturating_add(1));
         for dependency in self.dependencies {
-            dependencies.push(dependency.seal(&project_root, &mut self.allocation)?);
+            dependencies.push(dependency.seal(&project_root)?);
         }
         // A package imports Rust only when it has a dependency or Rust
         // modules, whose crate is then a dependency too; the internal
@@ -2769,9 +2496,8 @@ impl Builder {
             !dependencies.is_empty(),
             "a request declares at least one library"
         );
-        let internal_dependency = internal.dependency(limits)?;
-        self.allocation.transfer(internal_dependency.allocation())?;
-        dependencies.push(internal_dependency.seal(&project_root, &mut self.allocation)?);
+        let internal_dependency = internal.dependency()?;
+        dependencies.push(internal_dependency.seal(&project_root)?);
         dependencies.sort_unstable_by(|left, right| left.alias().cmp(right.alias()));
         // A dependency may share the name of the package's own library, as
         // Cargo allows; both are crates of the one program rawr builds.
@@ -2796,13 +2522,9 @@ impl Builder {
 
         let toolchain = toolchain::Requirement::pinned();
         let parallelism = process::parallelism::Proof::discover()?;
-        let target = match self.target {
-            Some(target) => target,
-            None => {
-                self.allocation.string(toolchain.default_target())?;
-                toolchain.default_target().into()
-            }
-        };
+        let target = self
+            .target
+            .unwrap_or_else(|| toolchain.default_target().into());
         if !toolchain.supports_target(&target) {
             return Err(Error::Request {
                 reason: format!("rawr does not support the target `{target}`").into_boxed_str(),
@@ -2812,17 +2534,13 @@ impl Builder {
         let selected_authority = self
             .cargo_authority
             .as_deref()
-            .map(|path| canonical_authority(path, &mut self.allocation))
+            .map(canonical_authority)
             .transpose()?;
-        let mut authority = Authority::load(selected_authority.as_deref(), &mut self.allocation)?;
+        let mut authority = Authority::load(selected_authority.as_deref())?;
         if let (Some(universe), Some(patch)) = (self.universe.as_ref(), internal.patch()) {
-            authority.inherit_patches(
-                patch,
-                |name| universe.names_package(name),
-                &mut self.allocation,
-            )?;
+            authority.inherit_patches(patch, |name| universe.names_package(name))?;
         }
-        let config = config::Provenance::discover_budgeted(
+        let config = config::Provenance::discover(
             &project_root,
             selected_authority.as_deref(),
             environment,
@@ -2830,9 +2548,8 @@ impl Builder {
             &self.profile,
             parallelism,
             limits,
-            &mut self.allocation,
         )?;
-        let inputs = authority_inputs(&authority, &dependencies, &mut self.allocation)?;
+        let inputs = authority_inputs(&authority, &dependencies)?;
         if let Some(path) = self.demand.iter().find(|path| {
             !dependencies
                 .iter()
@@ -2866,7 +2583,6 @@ impl Builder {
             parallelism,
             internal,
             demand: self.demand.into_iter().collect(),
-            allocation: self.allocation,
         })
     }
 }
@@ -3146,12 +2862,7 @@ impl Authority {
     /// closure reaches (the cosmic-text revision the supported iced needs)
     /// are added under each registry unless the project patches that package
     /// itself; the project's patch wins, as Cargo's would.
-    fn inherit_patches(
-        &mut self,
-        rawr: &Item,
-        needed: impl Fn(&str) -> bool,
-        allocation: &mut RequestAllocation,
-    ) -> Result<()> {
+    fn inherit_patches(&mut self, rawr: &Item, needed: impl Fn(&str) -> bool) -> Result<()> {
         let Some(registries) = rawr.as_table_like() else {
             return Ok(());
         };
@@ -3182,18 +2893,15 @@ impl Authority {
                 if registry_table.contains_key(name) {
                     continue;
                 }
-                allocation.items(1)?;
-                allocation.string(name)?;
                 registry_table.insert(name, specification.clone());
             }
         }
         Ok(())
     }
 
-    fn load(manifest: Option<&Path>, allocation: &mut RequestAllocation) -> Result<Self> {
+    fn load(manifest: Option<&Path>) -> Result<Self> {
         let Some(manifest) = manifest else {
             let digest = digest(b"generated Cargo authority\0resolver=3");
-            allocation.string("3")?;
             return Ok(Self {
                 resolver: "3".into(),
                 retained: BTreeMap::new(),
@@ -3202,13 +2910,7 @@ impl Authority {
                 lock: None,
             });
         };
-        let bytes = read_bounded_budgeted(
-            "Cargo authority manifest",
-            manifest,
-            process::TAIL_BYTES,
-            allocation,
-        )?;
-        allocation.retained(bytes.len(), bytes.len())?;
+        let bytes = read_bounded("Cargo authority manifest", manifest, process::TAIL_BYTES)?;
         let document = std::str::from_utf8(&bytes)
             .map_err(|error| Error::Schema {
                 document: "Cargo authority manifest",
@@ -3220,14 +2922,11 @@ impl Authority {
                 reason: error.to_string().into_boxed_str(),
             })?;
         let resolver_value = authority_resolver(&document)?;
-        allocation.string(resolver_value)?;
         let resolver = resolver_value.into();
         let mut retained = BTreeMap::new();
         for key in ["cargo-features", "patch", "replace", "profile"] {
             if let Some(item) = document.get(key) {
-                allocation.items(1)?;
-                allocation.string(key)?;
-                let rendered = allocation.formatted(format_args!("{item}"))?;
+                let rendered = formatted(format_args!("{item}"))?;
                 drop(rendered);
                 let mut item = item.clone();
                 if matches!(key, "patch" | "replace") {
@@ -3236,7 +2935,7 @@ impl Authority {
                         path: manifest.to_path_buf(),
                         reason: "has no containing directory".into(),
                     })?;
-                    absolutize_policy_paths(&mut item, root, allocation)?;
+                    absolutize_policy_paths(&mut item, root)?;
                 }
                 retained.insert(key.into(), item);
             }
@@ -3244,10 +2943,6 @@ impl Authority {
         let mut lock_evidence = None;
         let mut lock_input = None;
         if let Some(root) = manifest.parent() {
-            allocation.retained(
-                1,
-                root.as_os_str().len().saturating_add("/Cargo.lock".len()),
-            )?;
             let lock = root.join("Cargo.lock");
             let present = match fs::symlink_metadata(&lock) {
                 Ok(_) => true,
@@ -3260,7 +2955,6 @@ impl Authority {
                     })
                 }
             };
-            allocation.path(&lock)?;
             lock_input = Some(Input {
                 path: lock.clone(),
                 digest: None,
@@ -3268,12 +2962,7 @@ impl Authority {
             });
             if present {
                 let lock = canonical_file("Cargo authority lock", &lock)?;
-                let bytes = read_bounded_budgeted(
-                    "Cargo authority lock",
-                    &lock,
-                    process::TAIL_BYTES,
-                    allocation,
-                )?;
+                let bytes = read_bounded("Cargo authority lock", &lock, process::TAIL_BYTES)?;
                 if let Some(input) = lock_input.as_mut() {
                     input.digest = Some(digest(&bytes));
                 }
@@ -3290,7 +2979,6 @@ impl Authority {
                     .saturating_add(8)
                     .saturating_add(bytes.len())
             }));
-        allocation.retained(1, evidence_bytes)?;
         let mut evidence = Vec::with_capacity(evidence_bytes);
         append_framed(&mut evidence, manifest.as_os_str().as_encoded_bytes());
         append_framed(&mut evidence, &bytes);
@@ -3298,8 +2986,6 @@ impl Authority {
             append_framed(&mut evidence, lock.as_os_str().as_encoded_bytes());
             append_framed(&mut evidence, bytes);
         }
-        allocation.path(manifest)?;
-        allocation.retained(2, 2 * std::mem::size_of::<Input>())?;
         let mut inputs = Vec::new();
         inputs
             .try_reserve_exact(2)
@@ -3307,7 +2993,6 @@ impl Authority {
                 operation: "interpreted Cargo authority inputs",
                 source,
             })?;
-        allocation.path(manifest)?;
         inputs.push(Input {
             path: manifest.to_path_buf(),
             digest: Some(digest(&bytes)),
@@ -3405,80 +3090,6 @@ fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock:
     Ok(fd_lock::RwLock::new(file))
 }
 
-fn select_placement(
-    request: &Request,
-    catalog: &universe::Catalog,
-    provisional_manifest: &str,
-) -> Result<Placement> {
-    select_placement_inner(
-        request,
-        catalog,
-        provisional_manifest,
-        &mut ControlAccount::legacy(),
-    )
-}
-
-fn select_placement_accounted(
-    request: &Request,
-    catalog: &universe::Catalog,
-    provisional_manifest: &str,
-    allocation: &mut RequestAllocation,
-) -> Result<Placement> {
-    select_placement_inner(
-        request,
-        catalog,
-        provisional_manifest,
-        &mut ControlAccount::current(allocation),
-    )
-}
-
-struct ControlAccount<'a> {
-    current: Option<&'a mut RequestAllocation>,
-}
-
-impl<'a> ControlAccount<'a> {
-    /// A lock parsed under no request account: a persisted or reused lock
-    /// read from disk, or a compiled-in seed.
-    fn legacy() -> Self {
-        Self { current: None }
-    }
-
-    fn current(allocation: &'a mut RequestAllocation) -> Self {
-        Self {
-            current: Some(allocation),
-        }
-    }
-
-    fn read(&mut self, resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {
-        match self.current.as_mut() {
-            Some(allocation) => read_bounded_in(resource, path, limit, allocation),
-            None => read_bounded(resource, path, limit),
-        }
-    }
-
-    fn parser(&mut self, bytes: usize) -> Result<()> {
-        if let Some(allocation) = self.current.as_mut() {
-            allocation.retained(bytes, bytes)?;
-        }
-        Ok(())
-    }
-
-    /// One fixed shared-holder allocation retained with its parsed owner.
-    fn holder(&mut self, bytes: usize) -> Result<()> {
-        if let Some(allocation) = self.current.as_mut() {
-            allocation.retained(1, bytes)?;
-        }
-        Ok(())
-    }
-
-    fn path(&mut self, path: &Path) -> Result<()> {
-        if let Some(allocation) = self.current.as_mut() {
-            allocation.path(path)?;
-        }
-        Ok(())
-    }
-}
-
 /// The fixed namespace's placement when a completed receipt for this request
 /// is there, `None` when it is another request's, and an error when it is not
 /// this version's.
@@ -3486,22 +3097,20 @@ fn fixed_placement(
     fixed: &Path,
     request_identity: Digest,
     definition: &universe::Definition,
-    account: &mut ControlAccount<'_>,
 ) -> Result<Option<Placement>> {
     let fixed_lock_path = fixed.join("Cargo.lock");
-    account.path(&fixed_lock_path)?;
     if !fixed_lock_path.exists() {
         return Err(Error::ResolutionDrift {
             command: "persisted universe preflight",
             field: "final lock is absent from an existing namespace",
         });
     }
-    let fixed_lock_bytes = account.read(
+    let fixed_lock_bytes = read_bounded(
         "persisted final resolution lock",
         &fixed_lock_path,
         process::CAPTURE_BYTES,
     )?;
-    let fixed_source = account.read(
+    let fixed_source = read_bounded(
         "persisted generated harness source",
         &fixed.join("src/lib.rs"),
         process::TAIL_BYTES,
@@ -3512,22 +3121,20 @@ fn fixed_placement(
             field: "generated harness source",
         });
     }
-    let fixed_manifest = account.read(
+    let fixed_manifest = read_bounded(
         "persisted final-form harness manifest",
         &fixed.join(HARNESS_MANIFEST),
         process::TAIL_BYTES,
     )?;
     let receipt_path = fixed.join(UNIVERSE_RECEIPT);
-    account.path(&receipt_path)?;
     if receipt_path.exists() {
         // Receipt and lock reads are I/O retention bounded by the
         // physical capture constant.
-        let bytes = account.read(
+        let bytes = read_bounded(
             "resolution universe receipt",
             &receipt_path,
             process::CAPTURE_BYTES,
         )?;
-        account.parser(bytes.len())?;
         let selected_identity = universe::Receipt::universe(&bytes)?;
         if selected_identity != *definition.identity() {
             return Err(Error::ResolutionDrift {
@@ -3535,8 +3142,7 @@ fn fixed_placement(
                 field: "current runnable receipt universe",
             });
         }
-        let fixed_lock = definition.candidate_in(fixed_lock_bytes.into_boxed_slice(), account)?;
-        account.parser(bytes.len())?;
+        let fixed_lock = definition.candidate(fixed_lock_bytes.into_boxed_slice())?;
         let receipt = universe::Receipt::parse(&bytes, definition)?;
         receipt.preflight_files(
             digest(&fixed_manifest),
@@ -3558,16 +3164,14 @@ fn fixed_placement(
     Ok(None)
 }
 
-fn select_placement_inner(
+fn select_placement(
     request: &Request,
     catalog: &universe::Catalog,
     provisional_manifest: &str,
-    account: &mut ControlAccount<'_>,
 ) -> Result<Placement> {
     let definition = catalog.current();
     let request_identity = versioned_request_identity(request, definition, provisional_manifest);
     let fixed = request.cache_root.join(HARNESS_DIRECTORY);
-    account.path(&fixed)?;
     match fs::symlink_metadata(&fixed) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Placement {
@@ -3596,7 +3200,7 @@ fn select_placement_inner(
 
     // A namespace another version wrote, or one whose receipt is absent or
     // for another request, is a clean miss: a side-by-side candidate is built.
-    match fixed_placement(&fixed, request_identity, definition, account) {
+    match fixed_placement(&fixed, request_identity, definition) {
         Ok(Some(placement)) => return Ok(placement),
         Err(error @ Error::Io { .. }) => return Err(error),
         Ok(None) | Err(_) => {}
@@ -3604,7 +3208,6 @@ fn select_placement_inner(
     let candidate = fixed
         .join(CANDIDATE_DIRECTORY)
         .join(format!("{request_identity}"));
-    account.path(&candidate)?;
     match fs::symlink_metadata(&candidate) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Placement {
             root: candidate,
@@ -3625,28 +3228,27 @@ fn select_placement_inner(
             })
         }
         Ok(_) => {
-            let lock_bytes = account.read(
+            let lock_bytes = read_bounded(
                 "persisted final resolution lock",
                 &candidate.join("Cargo.lock"),
                 process::CAPTURE_BYTES,
             )?;
-            let lock = definition.candidate_in(lock_bytes.into_boxed_slice(), account)?;
-            let manifest = account.read(
+            let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
+            let manifest = read_bounded(
                 "candidate final-form harness manifest",
                 &candidate.join(HARNESS_MANIFEST),
                 process::TAIL_BYTES,
             )?;
-            let source = account.read(
+            let source = read_bounded(
                 "candidate generated harness source",
                 &candidate.join("src/lib.rs"),
                 process::TAIL_BYTES,
             )?;
-            let receipt_bytes = account.read(
+            let receipt_bytes = read_bounded(
                 "candidate resolution universe receipt",
                 &candidate.join(UNIVERSE_RECEIPT),
                 process::CAPTURE_BYTES,
             )?;
-            account.parser(receipt_bytes.len())?;
             let selected_identity = universe::Receipt::universe(&receipt_bytes)?;
             if selected_identity != *definition.identity() {
                 return Err(Error::ResolutionDrift {
@@ -3654,7 +3256,6 @@ fn select_placement_inner(
                     field: "current universe identity",
                 });
             }
-            account.parser(receipt_bytes.len())?;
             let receipt = universe::Receipt::parse(&receipt_bytes, definition)?;
             if !receipt.matches_request(request_identity) {
                 return Err(Error::ResolutionDrift {
@@ -3750,8 +3351,6 @@ fn prepare_versioned_roots(
     request: &Request,
     harness_root: &Path,
     exclusive: bool,
-    limits: &Limits,
-    allocation: &mut RequestAllocation,
 ) -> Result<PathBuf> {
     reject_existing_symlink(&request.project_root, &request.cache_root)?;
     let parent = harness_root.parent().ok_or_else(|| Error::Path {
@@ -3803,7 +3402,7 @@ fn prepare_versioned_roots(
         &harness_root.join(PROVISIONAL_DIRECTORY),
     )?;
     retire_stale_temporaries(&harness_root)?;
-    let manifest = render_manifest_accounted(request, None, limits, allocation)?;
+    let manifest = render_manifest(request, None)?;
     write_atomic(
         &provisional_root.join(HARNESS_MANIFEST),
         manifest.as_bytes(),
@@ -3832,11 +3431,7 @@ fn require_exact_file(
     }
 }
 
-fn prepare_harness(
-    request: &Request,
-    limits: &Limits,
-    allocation: &mut RequestAllocation,
-) -> Result<PathBuf> {
+fn prepare_harness(request: &Request) -> Result<PathBuf> {
     reject_existing_symlink(&request.project_root, &request.cache_root)?;
     fs::create_dir_all(&request.cache_root).map_err(|source| Error::Io {
         operation: "create project cache root",
@@ -3862,8 +3457,7 @@ fn prepare_harness(
     })?;
     let harness_root = canonical_directory("resolution harness", &harness_root)?;
     retire_stale_temporaries(&harness_root)?;
-    // The rendered manifest is charged to the caller's working request account.
-    let manifest = render_manifest_accounted(request, None, limits, allocation)?;
+    let manifest = render_manifest(request, None)?;
     let manifest_path = harness_root.join(HARNESS_MANIFEST);
     let changed = fs::read(&manifest_path).map_or(true, |current| current != manifest.as_bytes());
     write_atomic(&manifest_path, manifest.as_bytes())?;
@@ -3933,59 +3527,10 @@ fn retire_stale_temporaries(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Test-only render on a throwaway copy of the sealed request account. Every
-/// production render charges a caller's working account through
-/// `render_manifest_accounted`.
-#[cfg(test)]
-fn render_manifest(
-    request: &Request,
-    internal: Option<&internal::Recipe>,
-    limits: &Limits,
-) -> Result<String> {
-    let mut allocation = request.allocation;
-    render_manifest_accounted(request, internal, limits, &mut allocation)
-}
-
-/// Render one harness manifest charged to the caller's working request
-/// account. Every render allocates and is charged in full, including a
-/// re-render of bytes an earlier render produced: no rendered manifest is
-/// retained for reuse, so matching content never excuses a charge (totals
-/// are conserved, never lost and never duplicated).
-fn render_manifest_accounted(
-    request: &Request,
-    internal: Option<&internal::Recipe>,
-    limits: &Limits,
-    allocation: &mut RequestAllocation,
-) -> Result<String> {
-    assert!(
-        request.allocation.matches(limits) && allocation.matches(limits),
-        "a manifest renders under its request's limits"
-    );
-    allocation.items(12)?;
-    for value in [
-        "cargo-features",
-        "workspace",
-        "resolver",
-        request.authority.resolver.as_ref(),
-        "package",
-        "name",
-        HARNESS_PACKAGE,
-        "version",
-        HARNESS_VERSION,
-        "edition",
-        HARNESS_EDITION,
-        "publish",
-        "lib",
-        "path",
-        "src/lib.rs",
-        "dependencies",
-    ] {
-        allocation.string(value)?;
-    }
+/// Render one harness manifest.
+fn render_manifest(request: &Request, internal: Option<&internal::Recipe>) -> Result<String> {
     let mut document = DocumentMut::new();
     if let Some(item) = request.authority.retained.get("cargo-features") {
-        let rendered = allocation.formatted(format_args!("{item}"))?;
-        drop(rendered);
         document["cargo-features"] = item.clone();
     }
     let mut workspace = Table::new();
@@ -4006,10 +3551,6 @@ fn render_manifest_accounted(
     document.as_table_mut().insert("lib", Item::Table(library));
     for (key, item) in &request.authority.retained {
         if key.as_ref() != "cargo-features" {
-            allocation.items(1)?;
-            allocation.string(key)?;
-            let rendered = allocation.formatted(format_args!("{item}"))?;
-            drop(rendered);
             document[key.as_ref()] = item.clone();
         }
     }
@@ -4024,26 +3565,15 @@ fn render_manifest_accounted(
             continue;
         }
         let mut specification = InlineTable::new();
-        allocation.items(1)?;
-        allocation.string(dependency.alias())?;
         if let Some(package) = dependency.package() {
-            allocation.items(1)?;
-            allocation.string("package")?;
-            allocation.string(package)?;
             specification.insert("package", Value::from(package));
         }
         match dependency.source() {
             config::Source::Path(path) => {
                 let path = path_string("dependency", path)?;
-                allocation.items(1)?;
-                allocation.string("path")?;
-                allocation.string(path)?;
                 specification.insert("path", Value::from(path));
             }
             config::Source::Registry { manifest, .. } => {
-                allocation.items(1)?;
-                allocation.string("version")?;
-                allocation.string(manifest)?;
                 specification.insert("version", Value::from(manifest.as_ref()));
             }
             config::Source::Git {
@@ -4051,36 +3581,22 @@ fn render_manifest_accounted(
                 reference,
                 version,
             } => {
-                allocation.items(1)?;
-                allocation.string("git")?;
-                allocation.string(url)?;
                 specification.insert("git", Value::from(url.as_ref()));
                 if let Some((key, name)) = reference.key_value() {
-                    allocation.items(1)?;
-                    allocation.string(key)?;
-                    allocation.string(name)?;
                     specification.insert(key, Value::from(name));
                 }
                 if let Some(version) = version {
-                    allocation.items(1)?;
-                    allocation.string("version")?;
-                    allocation.string(version)?;
                     specification.insert("version", Value::from(version.as_ref()));
                 }
             }
         }
-        allocation.items(1)?;
-        allocation.string("default-features")?;
         specification.insert(
             "default-features",
             Value::from(dependency.default_features()),
         );
         if !dependency.features().is_empty() {
-            allocation.items(dependency.features().len().saturating_add(1))?;
-            allocation.string("features")?;
             let mut features = Array::new();
             for feature in dependency.features() {
-                allocation.string(feature)?;
                 features.push(feature.as_ref());
             }
             specification.insert("features", Value::Array(features));
@@ -4101,25 +3617,20 @@ fn render_manifest_accounted(
     }
     document["dependencies"] = Item::Table(dependencies);
     if !build_dependencies.is_empty() {
-        allocation.items(1)?;
-        allocation.string(BUILD_DEPENDENCIES)?;
         document[BUILD_DEPENDENCIES] = Item::Table(build_dependencies);
     }
     if let Some(internal) = internal {
-        internal.apply_profile_budgeted(&mut document, &request.profile, allocation)?;
+        internal.apply_profile(&mut document, &request.profile)?;
     }
-    allocation.formatted(format_args!("{document}"))
+    formatted(format_args!("{document}"))
 }
 
 fn finalize_harness(
     request: &Request,
     harness_root: &Path,
     internal: &internal::Recipe,
-    limits: &Limits,
-    allocation: &mut RequestAllocation,
 ) -> Result<()> {
-    // The caller's working request account charges the rendered manifest.
-    let manifest = render_manifest_accounted(request, Some(internal), limits, allocation)?;
+    let manifest = render_manifest(request, Some(internal))?;
     write_atomic(&harness_root.join(HARNESS_MANIFEST), manifest.as_bytes())?;
     let lock = harness_root.join("Cargo.lock");
     if lock.exists() {
@@ -4235,8 +3746,6 @@ fn cargo_package_files(
     cargo_commit: &str,
     usage: crate::input::Usage,
     limits: &Limits,
-    #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))]
-    allocation: &mut RequestAllocation,
     #[cfg(feature = "rustc-driver")] reserved_layout: Option<&resolution::layout::Layout>,
 ) -> Result<crate::input::package::Set> {
     if package.manifest() != manifest {
@@ -4272,7 +3781,7 @@ fn cargo_package_files(
     let prefix = match reserved_layout {
         Some(layout) => {
             resolution::cold::require_configs(layout)?;
-            resolution::cold::prefix(request, layout.final_form().config(), allocation)?
+            resolution::cold::prefix(request, layout.final_form().config())?
         }
         None => config_arguments(request.config.explicit_configs()),
     };
@@ -4836,15 +4345,10 @@ fn revalidate_harness(
     Ok(())
 }
 
-fn canonical_authority(path: &Path, allocation: &mut RequestAllocation) -> Result<PathBuf> {
+fn canonical_authority(path: &Path) -> Result<PathBuf> {
     let manifest = if path.is_dir() {
-        allocation.retained(
-            1,
-            path.as_os_str().len().saturating_add("/Cargo.toml".len()),
-        )?;
         path.join("Cargo.toml")
     } else {
-        allocation.path(path)?;
         path.to_path_buf()
     };
     // Cargo follows symlinks to the manifest; rawr reads the file they name.
@@ -4859,26 +4363,18 @@ fn canonical_authority(path: &Path, allocation: &mut RequestAllocation) -> Resul
 fn authority_inputs(
     authority: &Authority,
     dependencies: &[config::Selected],
-    allocation: &mut RequestAllocation,
 ) -> Result<Box<[Input]>> {
     let mut paths = BTreeSet::new();
     for input in &authority.inputs {
-        allocation.items(1)?;
-        allocation.path(&input.path)?;
         paths.insert((input.path.clone(), input.role));
     }
     for dependency in dependencies {
         if let config::Source::Path(path) = dependency.source() {
-            allocation.retained(
-                2,
-                path.as_os_str().len().saturating_add("/Cargo.toml".len()),
-            )?;
             let candidate = path.join("Cargo.toml");
             let manifest = canonical_file("dependency manifest", &candidate)?;
             paths.insert((manifest, Role::Manifest));
         }
     }
-    allocation.items(paths.len())?;
     let mut inputs = Vec::with_capacity(paths.len());
     for (path, role) in paths {
         if let Some(original) = authority
@@ -4893,12 +4389,7 @@ fn authority_inputs(
             });
             continue;
         }
-        let bytes = read_bounded_budgeted(
-            "Cargo authority input",
-            &path,
-            process::TAIL_BYTES,
-            allocation,
-        )?;
+        let bytes = read_bounded("Cargo authority input", &path, process::TAIL_BYTES)?;
         inputs.push(Input {
             path,
             digest: Some(digest(&bytes)),
@@ -4922,7 +4413,6 @@ fn authority_input_digest(path: &Path, limit: usize) -> Result<Option<Digest>> {
 fn workspace_node_authority(
     authority: &[u8],
     workspace: &crate::input::workspace::Image,
-    allocation: &mut RequestAllocation,
 ) -> Result<Box<[u8]>> {
     const DOMAIN: &[u8] = b"rawr.cargo.workspace-consumption/v1";
     let length = DOMAIN
@@ -4934,7 +4424,6 @@ fn workspace_node_authority(
             operation: "workspace command authority",
             source: Box::new(crate::node::Error::Allocation),
         })?;
-    allocation.retained(1, length)?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -4980,18 +4469,14 @@ fn authority_resolver(document: &DocumentMut) -> Result<&str> {
     Ok(resolver)
 }
 
-fn absolutize_policy_paths(
-    item: &mut Item,
-    authority_root: &Path,
-    allocation: &mut RequestAllocation,
-) -> Result<()> {
+fn absolutize_policy_paths(item: &mut Item, authority_root: &Path) -> Result<()> {
     match item {
         Item::Table(table) => {
             for (key, item) in table.iter_mut() {
                 if key == "path" {
-                    absolutize_path_item(item, authority_root, allocation)?;
+                    absolutize_path_item(item, authority_root)?;
                 } else {
-                    absolutize_policy_paths(item, authority_root, allocation)?;
+                    absolutize_policy_paths(item, authority_root)?;
                 }
             }
         }
@@ -4999,26 +4484,17 @@ fn absolutize_policy_paths(
             for table in tables.iter_mut() {
                 for (key, item) in table.iter_mut() {
                     if key == "path" {
-                        absolutize_path_item(item, authority_root, allocation)?;
+                        absolutize_path_item(item, authority_root)?;
                     } else {
-                        absolutize_policy_paths(item, authority_root, allocation)?;
+                        absolutize_policy_paths(item, authority_root)?;
                     }
                 }
             }
         }
         Item::Value(Value::InlineTable(table)) => {
             if let Some(path) = table.get("path").and_then(Value::as_str) {
-                allocation.retained(
-                    1,
-                    authority_root
-                        .as_os_str()
-                        .len()
-                        .saturating_add(1)
-                        .saturating_add(path.len()),
-                )?;
                 let candidate = authority_root.join(path);
                 let canonical = canonical_directory("Cargo authority patch path", &candidate)?;
-                allocation.string(path_string("Cargo authority patch path", &canonical)?)?;
                 table.insert(
                     "path",
                     Value::from(path_string("Cargo authority patch path", &canonical)?),
@@ -5030,27 +4506,14 @@ fn absolutize_policy_paths(
     Ok(())
 }
 
-fn absolutize_path_item(
-    item: &mut Item,
-    authority_root: &Path,
-    allocation: &mut RequestAllocation,
-) -> Result<()> {
+fn absolutize_path_item(item: &mut Item, authority_root: &Path) -> Result<()> {
     let path = item.as_str().ok_or_else(|| Error::Schema {
         document: "Cargo authority policy",
         reason: "`path` must be a string".into(),
     })?;
-    allocation.retained(
-        1,
-        authority_root
-            .as_os_str()
-            .len()
-            .saturating_add(1)
-            .saturating_add(path.len()),
-    )?;
     let candidate = authority_root.join(path);
     let canonical = canonical_directory("Cargo authority patch path", &candidate)?;
     let canonical = path_string("Cargo authority patch path", &canonical)?;
-    allocation.string(canonical)?;
     *item = value(canonical);
     Ok(())
 }
@@ -5115,34 +4578,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, None)
-}
-
-pub(crate) fn read_bounded_budgeted(
-    resource: &'static str,
-    path: &Path,
-    limit: usize,
-    allocation: &mut RequestAllocation,
-) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, Some(allocation))
-}
-
-/// Read a current replay control with both request and graph accounting.
-pub(crate) fn read_bounded_in(
-    resource: &'static str,
-    path: &Path,
-    limit: usize,
-    allocation: &mut RequestAllocation,
-) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, Some(allocation))
-}
-
-fn read_bounded_inner(
-    resource: &'static str,
-    path: &Path,
-    limit: usize,
-    allocation: Option<&mut RequestAllocation>,
-) -> Result<Vec<u8>> {
     let canonical = canonical_file(resource, path)?;
     if canonical != path {
         return Err(Error::Path {
@@ -5168,9 +4603,6 @@ fn read_bounded_inner(
             limit,
             actual: length,
         });
-    }
-    if let Some(allocation) = allocation {
-        allocation.retained(1, length)?;
     }
     let mut bytes = Vec::new();
     bytes
@@ -5416,7 +4848,7 @@ mod universe_placement_tests {
                 .policy(crate::extract::Policy::manifest().seal())
                 .expect("policy fits")
                 .dependency(
-                    config::Dependency::path("catalog", &dependency, &limits)
+                    config::Dependency::path("catalog", &dependency)
                         .and_then(|dependency| dependency.package("catalog-api"))
                         .expect("catalog dependency seals"),
                 )
@@ -5493,7 +4925,7 @@ mod universe_placement_tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/catalog-api"),
         )
         .expect("catalog fixture canonicalizes");
-        let mut dependency = config::Dependency::path("catalog", &dependency, limits)
+        let mut dependency = config::Dependency::path("catalog", &dependency)
             .and_then(|dependency| dependency.package("catalog-api"))
             .expect("catalog dependency seals");
         if changed {
@@ -5603,28 +5035,6 @@ mod universe_placement_tests {
     }
 
     #[test]
-    fn borrowed_manifest_renderer_keeps_prior_usage() {
-        let limits = Limits::standard();
-        let project = Project::new("accounted-render");
-        let current = request(&project, false, &limits);
-        let expected = render_manifest(&current, None, &limits).expect("legacy rendering");
-        let mut account = current.allocation;
-        let before = account.bytes;
-        let rendered = render_manifest_accounted(&current, None, &limits, &mut account)
-            .expect("borrowed rendering");
-        assert_eq!(rendered, expected);
-        let required = account.bytes - before;
-        assert!(required > 0);
-        // Prior usage is kept and the render charges the same bytes on top.
-        let mut account = current.allocation;
-        account.bytes = before + 1;
-        let rendered = render_manifest_accounted(&current, None, &limits, &mut account)
-            .expect("rendering after prior usage");
-        assert_eq!(rendered, expected);
-        assert_eq!(account.bytes, before + 1 + required);
-    }
-
-    #[test]
     fn user_profile_flows_into_runner_manifest_and_key() {
         let limits = Limits::standard();
         let project = Project::new("user-profile");
@@ -5646,16 +5056,15 @@ mod universe_placement_tests {
                     )
                     .expect("catalog fixture canonicalizes");
                     builder.dependency(
-                        config::Dependency::path("catalog", &catalog, &limits)?
-                            .package("catalog-api")?,
+                        config::Dependency::path("catalog", &catalog)?.package("catalog-api")?,
                     )
                 })
                 .and_then(|builder| builder.cargo_authority(&authority))
                 .and_then(|builder| builder.build())
                 .expect("request seals");
-            let provisional = render_manifest(&request, None, &limits).expect("provisional");
+            let provisional = render_manifest(&request, None).expect("provisional");
             let key = versioned_request_identity(&request, &definition(), &provisional);
-            let manifest = render_manifest(&request, Some(&internal::Recipe::fixture()), &limits)
+            let manifest = render_manifest(&request, Some(&internal::Recipe::fixture()))
                 .expect("manifest renders");
             (
                 manifest.parse::<DocumentMut>().expect("manifest parses"),
@@ -5693,7 +5102,7 @@ mod universe_placement_tests {
         let project = Project::new("placement");
         let current = request(&project, false, &limits);
         let universe = universe::Catalog::new(definition());
-        let manifest = render_manifest(&current, None, &limits).expect("manifest renders");
+        let manifest = render_manifest(&current, None).expect("manifest renders");
         let fresh =
             select_placement(&current, &universe, &manifest).expect("fresh placement selects");
         assert!(matches!(fresh.state, PlacementState::Fresh));
@@ -5708,8 +5117,7 @@ mod universe_placement_tests {
         assert!(!persisted.exclusive);
 
         let changed = request(&project, true, &limits);
-        let changed_manifest =
-            render_manifest(&changed, None, &limits).expect("changed manifest renders");
+        let changed_manifest = render_manifest(&changed, None).expect("changed manifest renders");
         let before = filesystem_entries(&project.0);
         let (migration, commands) = select_before_command(&changed, &universe, &changed_manifest);
         let migration = migration.expect("changed request selects side-by-side candidate");
@@ -5757,88 +5165,6 @@ mod universe_placement_tests {
         ));
     }
 
-    /// The provisional render `resolve_cached` charges (P) is carried
-    /// forward on the sealed account, totals included, and every render
-    /// preparation actually performs is charged on top of it. Preparation
-    /// re-renders the provisional form (P again: the provisional string was
-    /// dropped, so the allocation is real work) and renders a distinct form
-    /// (Q), here twice: the account measures exactly P + P + Q + Q, the sum of
-    /// every render performed.
-    #[test]
-    fn provisional_and_preparation_manifest_charges_are_conserved_once() {
-        fn measure(
-            project: &Project,
-            limits: &Limits,
-        ) -> (RequestAllocation, RequestAllocation, RequestAllocation) {
-            let mut current = request(project, false, limits);
-            let changed = request(project, true, limits);
-            let sealed = current.allocation;
-            let provisional = current
-                .charge_provisional_manifest(limits)
-                .expect("provisional render");
-            let carried = current.allocation;
-            // Preparation starts from the carried account, re-renders the
-            // provisional manifest (charged again), renders a distinct
-            // manifest (Q), then re-renders that one too (charged again).
-            let mut working = current.allocation;
-            let again = render_manifest_accounted(&current, None, limits, &mut working)
-                .expect("provisional re-render");
-            assert_eq!(again, provisional);
-            assert_eq!(
-                (working.items - carried.items, working.bytes - carried.bytes),
-                (carried.items - sealed.items, carried.bytes - sealed.bytes),
-                "an identical re-render is real work and charges P again"
-            );
-            let before = working;
-            let distinct = render_manifest_accounted(&changed, None, limits, &mut working)
-                .expect("distinct render");
-            assert_ne!(distinct, provisional);
-            let once = (working.items - before.items, working.bytes - before.bytes);
-            let before = working;
-            render_manifest_accounted(&changed, None, limits, &mut working)
-                .expect("distinct re-render");
-            assert_eq!(
-                (working.items - before.items, working.bytes - before.bytes),
-                once,
-                "a distinct re-render charges Q again"
-            );
-            (sealed, carried, working)
-        }
-        let project = Project::new("conserved-render");
-        let limits = Limits::standard();
-        let (sealed, carried, working) = measure(&project, &limits);
-        let provisional = (carried.items - sealed.items, carried.bytes - sealed.bytes);
-        assert!(provisional.1 > 0, "P is measured on the sealed account");
-        // P matches a stand-alone render of the same manifest exactly.
-        let alone = request(&project, false, &limits);
-        let mut fresh = alone.allocation;
-        render_manifest_accounted(&alone, None, &limits, &mut fresh).expect("render");
-        assert_eq!(
-            (
-                fresh.items - alone.allocation.items,
-                fresh.bytes - alone.allocation.bytes
-            ),
-            provisional
-        );
-        // Q matches a stand-alone render of the distinct manifest exactly.
-        let changed = request(&project, true, &limits);
-        let mut fresh = changed.allocation;
-        render_manifest_accounted(&changed, None, &limits, &mut fresh).expect("render");
-        let distinct = (
-            fresh.items - changed.allocation.items,
-            fresh.bytes - changed.allocation.bytes,
-        );
-        assert!(distinct.1 > 0);
-        assert_eq!(
-            (working.items, working.bytes),
-            (
-                sealed.items + 2 * provisional.0 + 2 * distinct.0,
-                sealed.bytes + 2 * provisional.1 + 2 * distinct.1
-            ),
-            "every render performed (P, P, Q, Q) is charged, none lost or doubled"
-        );
-    }
-
     /// The side-by-side candidate a clean miss selects: fresh, exclusive,
     /// not yet created, and the stale namespace left as it was.
     fn assert_clean_miss(selected: Result<Placement>, fixed: &Path, lock: &str) {
@@ -5868,7 +5194,7 @@ mod universe_placement_tests {
             let project = Project::new(label);
             let request = request(&project, false, &limits);
             let catalog = universe::Catalog::new(definition());
-            let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
+            let manifest = render_manifest(&request, None).expect("manifest renders");
             let fixed = project.cache().join(HARNESS_DIRECTORY);
             install_legacy(&fixed, &manifest, lock);
             if skew_source {
@@ -5892,7 +5218,6 @@ mod universe_placement_tests {
             "catalog",
             "https://example.invalid/catalog",
             config::GitReference::Tag("v1.2.0".into()),
-            &limits,
         )
         .and_then(|dependency| dependency.git_version("1.2"))
         .and_then(|dependency| dependency.package("catalog-api"))
@@ -5906,7 +5231,7 @@ mod universe_placement_tests {
             .expect("dependency fits")
             .build()
             .expect("request seals");
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
+        let manifest = render_manifest(&request, None).expect("manifest renders");
         let document = manifest
             .parse::<toml_edit::DocumentMut>()
             .expect("manifest parses");
@@ -5933,7 +5258,7 @@ mod universe_placement_tests {
         let project = Project::new("receipt-skew");
         let request = request(&project, false, &limits);
         let catalog = universe::Catalog::new(definition());
-        let manifest = render_manifest(&request, None, &limits).expect("manifest renders");
+        let manifest = render_manifest(&request, None).expect("manifest renders");
         let fixed = project.cache().join(HARNESS_DIRECTORY);
         install_legacy(&fixed, &manifest, SEED);
         for universe in [[0x91; 32], *catalog.current().identity()] {
@@ -5994,9 +5319,6 @@ mod universe_placement_tests {
 #[cfg(all(test, feature = "rustc-driver"))]
 mod authority_boundary_tests {
     use std::fs;
-    use std::path::Path;
-
-    use crate::extract::{ManifestSpan, Policy};
 
     #[test]
     fn standard_request_authority_is_exact() {
@@ -6033,61 +5355,6 @@ mod authority_boundary_tests {
         assert_eq!(standard.process.stderr(), crate::process::TAIL_BYTES);
         assert_eq!(standard.process.stderr(), 1_048_576);
         assert_eq!(standard.containers, 1_500_000);
-
-        let mut normal = super::RequestAllocation::new(&standard);
-        normal
-            .items(super::ITEMS)
-            .expect("the exact normal request boundary remains accepted");
-        normal
-            .items(1)
-            .expect("one item past the normal target still charges");
-    }
-
-    #[test]
-    fn request_allocation_accepts_exact_caps_and_records_plus_one_without_refusal() {
-        let mut limits = super::Limits::standard();
-        limits.items = 1;
-        limits.manifest_bytes = 3;
-        limits.string_bytes = 3;
-        let mut allocation = super::RequestAllocation::new(&limits);
-        allocation
-            .string("abc")
-            .expect("exact item and byte caps seal");
-        let retained = (allocation.items, allocation.bytes);
-        // One past the item and byte targets still charges in full; the
-        // string itself stays under its own target and records nothing.
-        allocation
-            .string("x")
-            .expect("one past the caps still charges");
-        assert_eq!(
-            (allocation.items, allocation.bytes),
-            (retained.0 + 1, retained.1 + 1)
-        );
-
-        // The account transfers with its charges.
-        let mut destination = super::RequestAllocation::new(&limits);
-        destination
-            .transfer_with_items(allocation, 1)
-            .expect("the account transfers");
-        assert_eq!((destination.items, destination.bytes), (3, 4));
-    }
-
-    #[test]
-    fn authority_render_and_internal_profile_facts_are_charged() {
-        let authority = "[profile.dev]\nopt-level = 1\n";
-        let limits = super::Limits::standard();
-        let mut allocation = super::RequestAllocation::new(&limits);
-        let before = (allocation.items, allocation.bytes);
-        allocation
-            .string("profile")
-            .expect("the profile name is charged");
-        let rendered = allocation
-            .formatted(format_args!(
-                "{authority}[profile.dev.package.\"path+file:///rawr#rawr@1.0.0\"]\ndebug = 0\n"
-            ))
-            .expect("the authority render is charged");
-        assert!(rendered.starts_with(authority));
-        assert!(allocation.items > before.0 && allocation.bytes > before.1);
     }
 
     /// Rawr's own patch for a package its facade closure reaches is
@@ -6100,12 +5367,9 @@ mod authority_boundary_tests {
             .expect("Rawr patch fixture parses");
         let rawr = rawr.get("patch").expect("Rawr patch table");
         let needed = |name: &str| name == "cosmic-text";
-        let limits = super::Limits::standard();
-        let mut allocation = super::RequestAllocation::new(&limits);
 
-        let mut bare = super::Authority::load(None, &mut allocation).expect("generated authority");
-        bare.inherit_patches(rawr, needed, &mut allocation)
-            .expect("patches merge");
+        let mut bare = super::Authority::load(None).expect("generated authority");
+        bare.inherit_patches(rawr, needed).expect("patches merge");
         let patch = bare.retained.get("patch").expect("patch table is added");
         let crates = patch["crates-io"].as_table_like().expect("registry table");
         assert_eq!(
@@ -6120,7 +5384,7 @@ mod authority_boundary_tests {
             Some("aa")
         );
 
-        let mut own = super::Authority::load(None, &mut allocation).expect("generated authority");
+        let mut own = super::Authority::load(None).expect("generated authority");
         own.retained.insert(
             "patch".into(),
             "[patch.crates-io]\ncosmic-text = { path = \"/own\" }\n"
@@ -6128,8 +5392,7 @@ mod authority_boundary_tests {
                 .expect("project patch parses")["patch"]
                 .clone(),
         );
-        own.inherit_patches(rawr, needed, &mut allocation)
-            .expect("patches merge");
+        own.inherit_patches(rawr, needed).expect("patches merge");
         let own = own.retained["patch"]["crates-io"]["cosmic-text"]
             .get("path")
             .and_then(|item| item.as_str());
@@ -6137,7 +5400,7 @@ mod authority_boundary_tests {
     }
 
     #[test]
-    fn maximal_authority_evidence_is_charged_and_owned_once() {
+    fn maximal_authority_evidence_is_owned_once() {
         let root = std::env::temp_dir().join(format!(
             "rawr-authority-ledger-{}-{:?}",
             std::process::id(),
@@ -6154,61 +5417,10 @@ mod authority_boundary_tests {
         .expect("authority manifest is written");
         fs::write(root.join("Cargo.lock"), b"version = 4\n").expect("authority lock is written");
         let manifest = fs::canonicalize(manifest).expect("authority manifest canonicalizes");
-        let exercise = |limits: &super::Limits| {
-            let mut allocation = super::RequestAllocation::new(limits);
-            super::OWNED_AUTHORITIES.with(|owned| owned.set(0));
-            let authority = super::Authority::load(Some(&manifest), &mut allocation)?;
-            Ok::<_, crate::Error>((allocation, authority))
-        };
-        let (usage, _) = exercise(&super::Limits::standard()).expect("the authority ledger loads");
-        assert!(usage.items > 0 && usage.bytes > 0);
+        super::OWNED_AUTHORITIES.with(|owned| owned.set(0));
+        super::Authority::load(Some(&manifest)).expect("the authority loads");
         assert_eq!(super::OWNED_AUTHORITIES.with(std::cell::Cell::get), 1);
         fs::remove_dir_all(root).expect("authority fixture is removed");
-    }
-
-    #[test]
-    fn policy_deep_config_authority_and_internal_share_one_request_lineage() {
-        let root = std::env::temp_dir().join(format!(
-            "rawr-combined-request-ledger-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        fs::create_dir(&root).expect("combined request fixture root is created");
-        let manifest = root.join("Cargo.toml");
-        fs::write(
-            &manifest,
-            "[workspace]\nresolver = \"3\"\n[profile.dev]\nopt-level = 1\n",
-        )
-        .expect("combined authority manifest is written");
-        fs::write(root.join("Cargo.lock"), b"version = 4\n")
-            .expect("combined authority lock is written");
-        let manifest = fs::canonicalize(manifest).expect("combined authority canonicalizes");
-
-        let exercise = |limits: &super::Limits| {
-            let span = ManifestSpan::new("Cargo.toml", 1, 2, 1, 1, 1, 2)?;
-            let policy = Policy::manifest()
-                .exclusion("catalog", ["api", "Thing"], "not public", span)?
-                .seal();
-            let mut allocation = super::RequestAllocation::new(limits);
-            allocation.transfer_policy(&policy)?;
-            for candidate in [
-                Path::new("/deep/.cargo/config.toml"),
-                Path::new("/deep/a/.cargo/config.toml"),
-                Path::new("/deep/a/b/.cargo/config.toml"),
-                Path::new("/deep/a/b/c/.cargo/config.toml"),
-            ] {
-                allocation.items(1)?;
-                allocation.path(candidate)?;
-                allocation.retained(8, candidate.as_os_str().len())?;
-            }
-            let authority = super::Authority::load(Some(&manifest), &mut allocation)?;
-            let internal =
-                super::internal::Seed::transform(&crate::host::root()?, &mut allocation)?;
-            Ok::<_, crate::Error>((allocation, policy, authority, internal))
-        };
-
-        exercise(&super::Limits::standard()).expect("the combined request lineage seals");
-        fs::remove_dir_all(root).expect("combined request fixture is retired");
     }
 }
 

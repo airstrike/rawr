@@ -78,7 +78,7 @@ fn capture(root: &Path, selected: &[&str], native: &Native, limits: &Limits) -> 
             .join(format!("applicability-{name}"));
         builder = builder
             .dependency(
-                Dependency::path(&format!("facts_{name}"), &path, limits)
+                Dependency::path(&format!("facts_{name}"), &path)
                     .unwrap()
                     .package(&format!("facts-{name}"))
                     .unwrap(),

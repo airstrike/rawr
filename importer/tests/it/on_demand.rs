@@ -297,7 +297,7 @@ fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
     .policy(Policy::manifest().seal())
     .expect("the manifest policy fits the request")
     .dependency(
-        Dependency::path("app", &fixture, &limits)
+        Dependency::path("app", &fixture)
             .and_then(|dependency| dependency.package("demand-api"))
             .expect("the fixture selection is exact"),
     )

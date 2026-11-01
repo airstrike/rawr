@@ -334,7 +334,7 @@ fn request(root: &Path, limits: &rawr_import::cargo::Limits) -> rawr_import::car
         .policy(extract::Policy::manifest().seal())
         .expect("the manifest policy fits")
         .dependency(
-            Dependency::path("facade_a", &fixture, limits)
+            Dependency::path("facade_a", &fixture)
                 .and_then(|dependency| dependency.package("symbolic-api"))
                 .expect("the first facade alias is exact"),
         )

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::layout;
-use crate::cargo::{self, Limits, Request, RequestAllocation};
+use crate::cargo::{self, Limits, Request};
 use crate::process::{ProductionReplay, Program};
 use crate::{Error, Result};
 
@@ -27,9 +27,7 @@ impl Request {
         request: cargo::Digest,
         context: cargo::universe::ContextProof,
         receipt: Option<cargo::universe::Receipt>,
-        limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         cargo_allocation: &mut cargo::unit::Allocation,
     ) -> Result<(
         cargo::unit::Metadata,
@@ -38,9 +36,7 @@ impl Request {
         cargo::unit::BuildGraph,
         cargo::universe::Pending,
     )> {
-        self.require_limits(limits);
         cargo_allocation.require(cargo_limits);
-        require_request_account(self, allocation, limits);
         let paths = layout.final_form();
         let (metadata, observation) = cargo::unit::Metadata::parse_versioned_in(
             documents.metadata,
@@ -56,10 +52,8 @@ impl Request {
             None,
             &lock,
             (paths.manifest(), paths.source()),
-            limits,
             cargo_limits,
             cargo_allocation,
-            allocation,
         )?;
         let (initial, pending) = self.bind_versioned_units(
             documents.units,
@@ -82,7 +76,7 @@ impl Request {
         self,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
-        built: cargo::Built<'_>,
+        built: cargo::Built,
         limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<cargo::Resolution> {
@@ -96,17 +90,12 @@ impl Request {
         &self,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
-        built: cargo::Built<'_>,
+        built: cargo::Built,
         limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<cargo::CompletedHarness> {
-        let cargo::Built {
-            harness,
-            build,
-            allocation,
-        } = built;
-        let native =
-            self.native_for_harness_in(cached, layout, &harness, allocation, limits, cargo_limits)?;
+        let cargo::Built { harness, build } = built;
+        let native = self.native_for_harness_in(cached, layout, &harness, cargo_limits)?;
         require_configs(layout)?;
         let paths = layout.final_form();
         cargo::revalidate_harness(
@@ -120,17 +109,13 @@ impl Request {
             limits,
             "reserved completion",
         )?;
-        allocation.path(paths.manifest())?;
         let manifest = paths.manifest().to_path_buf();
-        allocation.path(paths.source())?;
         let source = paths.source().to_path_buf();
-        allocation.path(paths.lock())?;
         let lock = paths.lock().to_path_buf();
         self.complete_harness_parts(
             &native.production(),
             harness,
             build,
-            allocation,
             limits,
             [manifest, source, lock],
             layout.receipt(),
@@ -142,31 +127,23 @@ impl Request {
 
     /// Consume a prepared Layout harness into ordinary Build observations with
     /// both exact postchecks and the unchanged allocation lineage.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the Build phase retains both original limit profiles"
-    )]
-    pub(in crate::cargo) fn build_harness_in<'allocation>(
+    pub(in crate::cargo) fn build_harness_in(
         &self,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
         mut harness: cargo::Harness,
-        allocation: &'allocation mut RequestAllocation,
         limits: &Limits,
         cargo_limits: &Limits,
-    ) -> Result<cargo::Built<'allocation>> {
-        let native =
-            self.native_for_harness_in(cached, layout, &harness, allocation, limits, cargo_limits)?;
+    ) -> Result<cargo::Built> {
+        let native = self.native_for_harness_in(cached, layout, &harness, cargo_limits)?;
         let native = native.production();
         let paths = layout.final_form();
         let environment =
             cargo::cargo_authoritative_environment(&native, self, &harness.extraction_plan)?;
         harness
             .workspace
-            .require(&mut crate::input::workspace::Account::borrow(
-                allocation, limits,
-            ))?;
-        let (bytes, environment) = build(&native, self, layout, environment, allocation, limits)?;
+            .require(&mut crate::input::workspace::Account::bounded(limits))?;
+        let (bytes, environment) = build(&native, self, layout, environment, limits)?;
         let (build, initial) = self.check_build(
             &bytes,
             environment,
@@ -182,35 +159,23 @@ impl Request {
             limits,
             cargo_limits,
             &harness.workspace,
-            allocation,
             // The harness files and workspace manifests were revalidated
             // around the build and the inputs are captured after it: Cargo's
             // metadata and unit graph are functions of those, so asking Cargo
             // for them again only reproduced the bytes it gave before.
-            None::<fn(cargo::Postcheck, &mut RequestAllocation) -> Result<Box<[u8]>>>,
+            None::<fn(cargo::Postcheck) -> Result<Box<[u8]>>>,
         )?;
         harness.initial = initial;
-        Ok(cargo::Built {
-            harness,
-            build,
-            allocation,
-        })
+        Ok(cargo::Built { harness, build })
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the native join retains both original limit profiles"
-    )]
     fn native_for_harness_in(
         &self,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
         harness: &cargo::Harness,
-        allocation: &RequestAllocation,
-        limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<crate::process::Native> {
-        self.require_limits(limits);
         harness.cargo_allocation.require(cargo_limits);
         if &harness.toolchain != cached.attestation.value().proof() {
             return Err(Error::ResolutionDrift {
@@ -218,7 +183,6 @@ impl Request {
                 field: "prepared harness toolchain",
             });
         }
-        require_request_account(self, allocation, limits);
         let paths = layout.final_form();
         if harness.dag.is_some()
             || harness.documents.is_none()
@@ -247,7 +211,6 @@ impl Request {
         cached: &cargo::CachedToolchain,
         limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         cargo_allocation: cargo::unit::Allocation,
     ) -> Result<cargo::Harness> {
         self.prepare_selected_harness_in(
@@ -255,7 +218,6 @@ impl Request {
             cached,
             limits,
             cargo_limits,
-            allocation,
             cargo_allocation,
             true,
         )
@@ -269,7 +231,6 @@ impl Request {
         cached: &cargo::CachedToolchain,
         limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         cargo_allocation: cargo::unit::Allocation,
     ) -> Result<cargo::Harness> {
         self.prepare_selected_harness_in(
@@ -277,35 +238,26 @@ impl Request {
             cached,
             limits,
             cargo_limits,
-            allocation,
             cargo_allocation,
             false,
         )
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "selected preparation retains both accounts and the fresh-only compatibility boundary"
-    )]
     fn prepare_selected_harness_in(
         &self,
         layout: &layout::Layout,
         cached: &cargo::CachedToolchain,
         limits: &Limits,
         cargo_limits: &Limits,
-        allocation: &mut RequestAllocation,
         mut cargo_allocation: cargo::unit::Allocation,
         fresh_only: bool,
     ) -> Result<cargo::Harness> {
-        self.require_limits(limits);
         cargo_allocation.require(cargo_limits);
-        require_request_account(self, allocation, limits);
         let catalog = self
             .universe
             .as_ref()
             .expect("a reserved harness belongs to a request with a resolution universe");
-        let provisional_manifest =
-            cargo::render_manifest_accounted(self, None, limits, allocation)?;
+        let provisional_manifest = cargo::render_manifest(self, None)?;
         let placement = cargo::select_placement(self, catalog, &provisional_manifest)?;
         assert!(
             !fresh_only || matches!(placement.state, cargo::PlacementState::Fresh),
@@ -324,7 +276,7 @@ impl Request {
             self.config.projection_schema(),
             self.toolchain.schemas().graph(),
             self.toolchain.schemas().unit(),
-            cohort(self, layout.paths(), allocation)?,
+            cohort(self, layout.paths())?,
             self.config.universe_context(),
             self.config.digest(),
         )?;
@@ -360,10 +312,9 @@ impl Request {
                 let materialized = self.materialize_fresh(
                     limits,
                     &mut cargo_allocation,
-                    allocation,
                     definition,
                     (paths.manifest(), paths.source(), paths.lock()),
-                    |phase, allocation| match (phase, &reuse) {
+                    |phase| match (phase, &reuse) {
                         (cargo::MetadataPhase::Provisional, Some(reuse)) => {
                             Ok(reuse.provisional.clone())
                         }
@@ -372,13 +323,12 @@ impl Request {
                             Ok(reuse.candidate.clone())
                         }
                         (cargo::MetadataPhase::Provisional, None) => {
-                            let bytes =
-                                provisional_metadata(&native, self, layout, allocation, limits)?;
+                            let bytes = provisional_metadata(&native, self, layout, limits)?;
                             produced.0 = Some(bytes.clone());
                             Ok(bytes)
                         }
                         (cargo::MetadataPhase::Candidate, None) => {
-                            let bytes = metadata(&native, self, layout, false, allocation, limits)?;
+                            let bytes = metadata(&native, self, layout, false, limits)?;
                             produced.1 = Some(bytes.clone());
                             Ok(bytes)
                         }
@@ -403,23 +353,20 @@ impl Request {
             cargo::PlacementState::Persisted { lock, receipt } => {
                 // File reads are I/O retention bounded by physical
                 // constants (manifest class: tail; lock class: capture).
-                let manifest = cargo::read_bounded_budgeted(
+                let manifest = cargo::read_bounded(
                     "selected persisted manifest",
                     &placement.root.join(cargo::HARNESS_MANIFEST),
                     crate::process::TAIL_BYTES,
-                    allocation,
                 )?;
-                let source = cargo::read_bounded_budgeted(
+                let source = cargo::read_bounded(
                     "selected persisted source",
                     &placement.root.join("src/lib.rs"),
                     crate::process::TAIL_BYTES,
-                    allocation,
                 )?;
-                let locked = cargo::read_bounded_budgeted(
+                let locked = cargo::read_bounded(
                     "selected persisted lock",
                     &placement.root.join("Cargo.lock"),
                     crate::process::CAPTURE_BYTES,
-                    allocation,
                 )?;
                 receipt.preflight_files(
                     cargo::digest(&manifest),
@@ -435,7 +382,7 @@ impl Request {
                 cargo::write_atomic(paths.manifest(), &manifest)?;
                 cargo::write_atomic(paths.source(), &source)?;
                 cargo::write_atomic(paths.lock(), &locked)?;
-                let bytes = metadata(&native, self, layout, true, allocation, limits)?;
+                let bytes = metadata(&native, self, layout, true, limits)?;
                 self.revalidate(limits, "reserved locked persisted metadata")?;
                 cargo::require_exact_file(
                     "reserved persisted lock after metadata",
@@ -461,10 +408,8 @@ impl Request {
             internal,
             &candidate_lock,
             (paths.manifest(), paths.source()),
-            limits,
             cargo_limits,
             &mut cargo_allocation,
-            allocation,
         )?;
         let manifest = cargo::digest(&cargo::read_bounded(
             "final-form harness manifest",
@@ -477,10 +422,10 @@ impl Request {
             crate::process::TAIL_BYTES,
         )?);
         let lock = candidate_lock.digest();
-        let workspace = self.capture_workspace(&metadata, allocation, limits)?;
+        let workspace = self.capture_workspace(&metadata, limits)?;
         let bytes = match &reuse {
             Some(reuse) => reuse.units.clone(),
-            None => units(&native, self, layout, allocation, limits)?,
+            None => units(&native, self, layout, limits)?,
         };
         cargo::require_exact_file(
             "reserved final lock after units",
@@ -552,7 +497,6 @@ impl Request {
             cached.context.rawr().join("bindings"),
         );
         let command_target = extraction_plan.command_target()?;
-        allocation.path(paths.root())?;
         Ok(cargo::Harness {
             context: Arc::new(cached.context.clone()),
             harness_root: paths.root().to_path_buf(),
@@ -561,7 +505,6 @@ impl Request {
             lock,
             metadata,
             workspace,
-            request_allocation: None,
             cargo_allocation,
             selected,
             toolchain,
@@ -577,17 +520,13 @@ impl Request {
     }
 }
 
-pub(in crate::cargo) fn cohort(
-    request: &Request,
-    layout: &layout::Paths,
-    allocation: &mut RequestAllocation,
-) -> Result<cargo::Digest> {
+pub(in crate::cargo) fn cohort(request: &Request, layout: &layout::Paths) -> Result<cargo::Digest> {
     cargo::command_cohort(
         request.toolchain.schemas().graph(),
         &request.target,
         &request.profile,
         request.parallelism,
-        || prefix(request, Path::new("$RAWR_FINAL_BUILD_CONFIG"), allocation),
+        || prefix(request, Path::new("$RAWR_FINAL_BUILD_CONFIG")),
         Some(layout.final_form().config_bytes()),
     )
 }
@@ -596,18 +535,10 @@ pub(in crate::cargo) fn provisional_metadata(
     native: &impl ProductionReplay,
     request: &Request,
     layout: &layout::Layout,
-    allocation: &mut RequestAllocation,
     limits: &Limits,
 ) -> Result<Box<[u8]>> {
     require_configs(layout)?;
-    metadata_at(
-        native,
-        request,
-        layout.provisional(),
-        false,
-        allocation,
-        limits,
-    )
+    metadata_at(native, request, layout.provisional(), false, limits)
 }
 
 pub(in crate::cargo) fn metadata(
@@ -615,18 +546,10 @@ pub(in crate::cargo) fn metadata(
     request: &Request,
     layout: &layout::Layout,
     locked: bool,
-    allocation: &mut RequestAllocation,
     limits: &Limits,
 ) -> Result<Box<[u8]>> {
     require_configs(layout)?;
-    metadata_at(
-        native,
-        request,
-        layout.final_form(),
-        locked,
-        allocation,
-        limits,
-    )
+    metadata_at(native, request, layout.final_form(), locked, limits)
 }
 
 fn metadata_at(
@@ -634,10 +557,9 @@ fn metadata_at(
     request: &Request,
     paths: &layout::Cargo,
     locked: bool,
-    allocation: &mut RequestAllocation,
     limits: &Limits,
 ) -> Result<Box<[u8]>> {
-    let prefix = prefix(request, paths.config(), allocation)?;
+    let prefix = prefix(request, paths.config())?;
     let command = cargo::cargo_metadata_command(
         native,
         request,
@@ -653,12 +575,11 @@ pub(in crate::cargo) fn units(
     native: &impl ProductionReplay,
     request: &Request,
     layout: &layout::Layout,
-    allocation: &mut RequestAllocation,
     limits: &Limits,
 ) -> Result<Box<[u8]>> {
     require_configs(layout)?;
     let paths = layout.final_form();
-    let prefix = prefix(request, paths.config(), allocation)?;
+    let prefix = prefix(request, paths.config())?;
     let command =
         cargo::cargo_unit_command(native, request, paths.manifest(), paths.target(), prefix)?;
     cargo::run_cargo(native, &command, limits)
@@ -673,7 +594,6 @@ pub(in crate::cargo) fn build(
     request: &Request,
     layout: &layout::Layout,
     environment: Box<[(OsString, OsString)]>,
-    allocation: &mut RequestAllocation,
     limits: &Limits,
 ) -> Result<(Box<[u8]>, Box<[(OsString, OsString)]>)> {
     require_configs(layout)?;
@@ -693,7 +613,7 @@ pub(in crate::cargo) fn build(
     let build = rawr.join("build");
     let shared = crate::deps::directory(&build)
         .map_err(io("create Rawr's Cargo build directory", &build))?;
-    let mut prefix = prefix(request, paths.config(), allocation)?;
+    let mut prefix = prefix(request, paths.config())?;
     // The shared directory overrides the reserved config's bundle build root;
     // relocation then fills that root with the files this resolution reads.
     prefix.extend(shared_arguments(&shared));
@@ -723,42 +643,12 @@ pub(in crate::cargo) fn require_configs(layout: &layout::Layout) -> Result<()> {
     })
 }
 
-pub(in crate::cargo) fn prefix(
-    request: &Request,
-    config: &Path,
-    allocation: &mut RequestAllocation,
-) -> Result<Vec<OsString>> {
-    allocation.string("--config")?;
-    allocation.path(config)?;
+pub(in crate::cargo) fn prefix(request: &Request, config: &Path) -> Result<Vec<OsString>> {
     let mut prefix = cargo::config_arguments(request.config.explicit_configs());
-    let required = prefix.len().checked_add(2).ok_or(Error::Limit {
-        resource: "request retained bytes",
-        limit: allocation.byte_limit,
-        actual: usize::MAX,
-    })?;
-    if required > prefix.capacity() {
-        let layout = std::alloc::Layout::array::<OsString>(required).map_err(|_| Error::Limit {
-            resource: "request retained bytes",
-            limit: allocation.byte_limit,
-            actual: usize::MAX,
-        })?;
-        allocation.bytes(layout.size())?;
-    }
     // Cargo applies later --config values after the explicit config files.
     prefix.push("--config".into());
     prefix.push(config.as_os_str().to_owned());
     Ok(prefix)
-}
-
-/// A reserved preparation runs on an account that still holds everything
-/// its request was charged.
-fn require_request_account(request: &Request, allocation: &RequestAllocation, limits: &Limits) {
-    assert!(
-        allocation.matches(limits)
-            && allocation.items >= request.allocation.items
-            && allocation.bytes >= request.allocation.bytes,
-        "a reserved preparation retains its request's account"
-    );
 }
 
 #[cfg(test)]
