@@ -11,10 +11,15 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
     graph: &crate::api::Graph<crate::api::Extracted>,
     limits: &crate::cargo::Limits,
 ) -> Result<Contract, Error> {
-    let parent = graph.node_chain().cloned().ok_or(Error::ForeignEvidence)?;
-    if parent.output_limit() != limits.node_output_bytes() {
-        return Err(Error::DefinitionDrift);
-    }
+    let parent = graph
+        .node_chain()
+        .cloned()
+        .expect("rawr classifies a cached profile under its graph's node");
+    assert_eq!(
+        parent.output_limit(),
+        limits.node_output_bytes(),
+        "rawr classifies a profile under its graph's own limits"
+    );
     let identity = definition.identity();
     let version = definition.version();
     let observations = graph.callback_observations(graph.freshness_fingerprint());
@@ -31,6 +36,7 @@ pub(super) fn classify<C: Checked, D: Definition<C>>(
     product
         .value()
         .replay(identity, version, graph, chain, limits)
+        .map_err(Error::fresh)
 }
 
 pub(crate) fn authority(
@@ -164,11 +170,10 @@ mod tests {
                 "rawr.profile.cached-test",
                 &crate::cargo::Limits::standard(),
             )
-            .expect("the test profile identity seals")
         }
 
         fn version(&self) -> crate::profile::Version {
-            crate::profile::Version::new(1).expect("the test profile version seals")
+            crate::profile::Version::new(1)
         }
 
         fn classify(
@@ -251,21 +256,36 @@ mod tests {
             expected
         );
         assert!(replay.encode(expected.len() - 1).is_err());
-        let foreign = crate::profile::Identity::new("foreign.profile", &limits)
-            .expect("foreign profile identity seals");
-        assert!(product.owned(foreign, version, &graph, &limits).is_err());
-        assert!(product
-            .owned(
-                identity,
-                crate::profile::Version::new(2).expect("version seals"),
-                &graph,
-                &limits
-            )
-            .is_err());
+        // Read under other inputs, a stored contract is stale: the replay
+        // rebuilds it, and no message reaches the program (#538).
+        let stale = |result: Result<crate::profile::contract::Parts, crate::profile::Error>| {
+            matches!(result, Err(crate::profile::Error::Stale))
+        };
+        let foreign = crate::profile::Identity::new("foreign.profile", &limits);
+        assert!(stale(product.owned(foreign, version, &graph, &limits)));
+        assert!(stale(product.owned(
+            identity,
+            crate::profile::Version::new(2),
+            &graph,
+            &limits
+        )));
         let mut trailing = product.canonical.into_vec();
         trailing.push(b' ');
         let product =
             Product::decode(&trailing, limits.node_output_bytes()).expect("bounded framing");
-        assert!(product.owned(identity, version, &graph, &limits).is_err());
+        assert!(stale(product.owned(identity, version, &graph, &limits)));
+    }
+
+    /// An entry keyed by every input it decodes under can't be stale, so a
+    /// hit or fresh build that doesn't decode is a rawr bug and panics
+    /// naming the invariant; other failures pass through (#538, D664).
+    #[test]
+    #[should_panic(
+        expected = "rawr's cached profile entries decode under the inputs that key them"
+    )]
+    fn a_keyed_profile_entry_that_does_not_decode_is_a_rawr_bug() {
+        let allocation = crate::profile::Error::Allocation.fresh();
+        assert!(matches!(allocation, crate::profile::Error::Allocation));
+        let _ = crate::profile::Error::Stale.fresh();
     }
 }

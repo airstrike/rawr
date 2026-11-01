@@ -92,9 +92,8 @@ pub struct Definition {
 impl Definition {
     pub fn new(mode: Mode, lease: Option<PathBuf>, limits: &rawr_import::cargo::Limits) -> Self {
         Self {
-            identity: profile::Identity::new("rawr.test.profile-clock", limits)
-                .expect("the synthetic identity is bounded"),
-            version: profile::Version::new(1).expect("the synthetic version is nonzero"),
+            identity: profile::Identity::new("rawr.test.profile-clock", limits),
+            version: profile::Version::new(1),
             mode,
             lease,
         }
@@ -123,7 +122,7 @@ impl profile::Definition<Checked> for Definition {
                     rawr_import::api::model::Kind::Struct { .. }
                 ) && definition.display_path().last() == Some("Clock")
             })
-            .ok_or(profile::Error::ForeignEvidence)?;
+            .expect("the synthetic profile finds its evidence");
         output.definition(anchor)?;
         Ok(())
     }
@@ -138,7 +137,7 @@ impl profile::Definition<Checked> for Definition {
             .evidence()
             .next()
             .copied()
-            .ok_or(profile::Error::ForeignEvidence)?;
+            .expect("the synthetic profile finds its evidence");
         output.hook(evidence, "runner-entry")?;
         Ok(())
     }
@@ -152,14 +151,14 @@ impl profile::Definition<Checked> for Definition {
             .hooks()
             .next()
             .copied()
-            .ok_or(profile::Error::ForeignEvidence)?;
+            .expect("the synthetic profile finds its evidence");
         let source = match self.mode {
             Mode::Success => success_source(),
             Mode::FailActivate => failure_source(),
             Mode::Exclusive => exclusive_source(
                 self.lease
                     .as_deref()
-                    .ok_or(profile::Error::ForeignEvidence)?,
+                    .expect("the synthetic profile finds its evidence"),
             ),
         };
         output.projection(hook, source.as_bytes())

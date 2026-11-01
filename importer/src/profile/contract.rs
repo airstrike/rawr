@@ -275,8 +275,8 @@ impl Parts {
                 actual: bytes.len(),
             });
         }
-        let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
-        let canonical = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
+        let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
+        let canonical = serde_json::to_vec(&stored).expect("a profile contract serializes");
         if canonical.as_slice() != bytes
             || stored.schema != 7
             || stored.identity != *identity.as_bytes()
@@ -308,7 +308,7 @@ impl Parts {
                 .iter()
                 .any(|evidence| !matches_graph(evidence))
         {
-            return Err(Error::Canonical);
+            return Err(Error::Stale);
         }
         Ok(Self {
             identity,
@@ -320,7 +320,7 @@ impl Parts {
     }
 
     pub(crate) fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
-        let bytes = serde_json::to_vec(&self.stored).map_err(|_| Error::Encoding)?;
+        let bytes = serde_json::to_vec(&self.stored).expect("a profile contract serializes");
         if bytes.len() > limit {
             return Err(Error::Limit {
                 resource: "profile contract bytes",
@@ -328,9 +328,11 @@ impl Parts {
                 actual: bytes.len(),
             });
         }
-        if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.rules {
-            return Err(Error::Canonical);
-        }
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(&bytes)),
+            self.rules,
+            "a profile contract encodes to the bytes it was sealed from"
+        );
         Ok(bytes.into_boxed_slice())
     }
 
@@ -372,7 +374,7 @@ impl Contract {
             endpoints: &self.endpoints,
             projections: &self.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a profile contract serializes");
         if canonical.len() > limit {
             return Err(Error::Limit {
                 resource: "profile contract bytes",
@@ -380,9 +382,11 @@ impl Contract {
                 actual: canonical.len(),
             });
         }
-        if <[u8; 32]>::from(Sha256::digest(&canonical)) != self.rules {
-            return Err(Error::Canonical);
-        }
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(&canonical)),
+            self.rules,
+            "a profile contract encodes to the bytes it was sealed from"
+        );
         Ok(canonical.into_boxed_slice())
     }
 
@@ -458,29 +462,6 @@ impl Contract {
         &self.rules
     }
 
-    /// Close the unique selected projection rule into a non-executable
-    /// capability suitable only for one mapper-bearing invocation witness.
-    #[doc(hidden)]
-    pub fn event_projection_rules(&self) -> Result<EventProjectionRules, Error> {
-        let mut projections = self.projections.iter();
-        let projection = projections.next().ok_or(Error::ForeignEvidence)?;
-        if projections.next().is_some() {
-            return Err(Error::Canonical);
-        }
-        let source = self
-            .source(projection.source)
-            .ok_or(Error::ForeignEvidence)?;
-        Ok(EventProjectionRules {
-            profile: *self.identity.as_bytes(),
-            version: self.version.get(),
-            rules: self.rules,
-            source: *source.selector(),
-            projection: *projection.selector(),
-            target: *projection.target_identity(),
-            widget_trait: *source.widget_trait_evidence(),
-        })
-    }
-
     pub(crate) fn contains(&self, evidence: &Evidence) -> bool {
         self.evidence.binary_search(evidence).is_ok()
     }
@@ -501,13 +482,6 @@ impl Contract {
         self.sources
             .binary_search_by_key(&source.selector, |candidate| candidate.selector)
             .is_ok_and(|index| canonical_equal(&self.sources[index], source))
-    }
-
-    pub(crate) fn source(&self, key: SourceKey) -> Option<&ProjectionSourceSite> {
-        self.sources
-            .binary_search_by_key(&key.0, |candidate| candidate.selector)
-            .ok()
-            .map(|index| &self.sources[index])
     }
 
     pub(crate) fn contains_abi(&self, abi: &ExtensionAbi) -> bool {
@@ -938,563 +912,12 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             .graph
             .definitions()
             .position(|candidate| candidate == definition)
-            .ok_or(Error::ForeignEvidence)?;
+            .expect("a profile classifies definitions of the graph it was given");
         self.insert(
             Kind::Definition,
             index,
             *crate::surface::identity::Definition::of(definition.id()).as_bytes(),
         )
-    }
-
-    /// Retain one exact export outcome borrowed from the authoritative graph.
-    pub fn export(&mut self, export: &crate::api::ledger::Path) -> Result<Evidence, Error> {
-        let index = self
-            .graph
-            .exports()
-            .position(|candidate| candidate == export)
-            .ok_or(Error::ForeignEvidence)?;
-        let digest = match export {
-            crate::api::ledger::Path::Imported(export) => {
-                *crate::surface::identity::Export::imported(export).as_bytes()
-            }
-            crate::api::ledger::Path::Excluded { key, .. }
-            | crate::api::ledger::Path::Rejected { key, .. } => {
-                *crate::surface::identity::Export::unresolved(key).as_bytes()
-            }
-        };
-        self.insert(Kind::Export, index, digest)
-    }
-
-    /// Retain one exact implementation borrowed from the authoritative graph.
-    pub fn implementation(
-        &mut self,
-        implementation: &crate::api::model::Implementation,
-    ) -> Result<Evidence, Error> {
-        let index = self
-            .graph
-            .implementations()
-            .position(|candidate| candidate == implementation)
-            .ok_or(Error::ForeignEvidence)?;
-        let digest = crate::surface::identity::Implementation::of(implementation)
-            .map_err(|_| Error::ForeignEvidence)?;
-        self.insert(Kind::Implementation, index, *digest.as_bytes())
-    }
-
-    /// Seal one exact profile-owned support ABI role.
-    pub fn extension_abi(
-        &mut self,
-        export: Evidence,
-        definition: Evidence,
-        role: &str,
-        linked: [u8; 32],
-        arguments: &[AbiArgument],
-    ) -> Result<(), Error> {
-        if export.kind != Kind::Export
-            || definition.kind != Kind::Definition
-            || role.is_empty()
-            || linked == [0; 32]
-            || !self.evidence.contains(&export)
-            || !self.evidence.contains(&definition)
-            || !arguments
-                .windows(2)
-                .all(|pair| abi_parameter(pair[0]) < abi_parameter(pair[1]))
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let export_path = imported_export(self.graph, export)?;
-        let definition_value = graph_definition(self.graph, definition)?;
-        let site = crate::surface::facade::AbiSite::checked(export_path, definition_value)
-            .map_err(surface_error)?
-            .ok_or(Error::ForeignEvidence)?;
-        if site.export_identity() != export.digest()
-            || site.definition_identity() != definition.digest()
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(arguments.len())
-            .map_err(|_| Error::Allocation)?;
-        retained.extend_from_slice(arguments);
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.import.profile.extension-abi/v1");
-        digest.update(site.selector());
-        framed_bytes(&mut digest, role.as_bytes());
-        digest.update(linked);
-        for argument in arguments {
-            match argument {
-                AbiArgument::DefaultF32 { parameter } => {
-                    digest.update([0]);
-                    digest.update(parameter.to_le_bytes());
-                }
-            }
-        }
-        let selector = digest.finalize().into();
-        let proof = ExtensionAbi {
-            site,
-            export,
-            definition,
-            role: copy_string(role)?,
-            linked,
-            arguments: retained.into_boxed_slice(),
-            selector,
-        };
-        match self
-            .abis
-            .binary_search_by_key(&selector, |candidate| candidate.selector)
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .evidence
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile extension ABI items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile extension ABI items", self.item_limit, actual);
-                self.abis
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.abis.insert(position, proof);
-                Ok(())
-            }
-        }
-    }
-
-    /// Seal one support-only operation site through an exact profile-owned join.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the endpoint proof bundle requires every compiler/profile join at once"
-    )]
-    pub fn operation_endpoint(
-        &mut self,
-        export: Evidence,
-        definition: Evidence,
-        source: SourceKey,
-        projection: &Projection,
-        arguments: &[EndpointArgument],
-        linked: [u8; 32],
-    ) -> Result<(), Error> {
-        if export.kind != Kind::Export
-            || definition.kind != Kind::Definition
-            || !self.evidence.contains(&export)
-            || !self.evidence.contains(&definition)
-            || self.source_for_key(source).is_none()
-            || !self
-                .projections
-                .binary_search_by_key(projection.selector(), |candidate| *candidate.selector())
-                .is_ok_and(|index| self.projections[index] == *projection)
-            || projection.source_selector() != &source.0
-            || linked == [0; 32]
-            || !endpoint_arguments(arguments)
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let export_path = imported_export(self.graph, export)?;
-        let definition_value = graph_definition(self.graph, definition)?;
-        let site = crate::surface::facade::OperationSite::checked(export_path, definition_value)
-            .map_err(surface_error)?
-            .ok_or(Error::ForeignEvidence)?;
-        if site.export_identity() != export.digest()
-            || site.definition_identity() != definition.digest()
-            || site.formals().len() != arguments.len()
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        for (formal, argument) in site.formals().iter().zip(arguments) {
-            let valid = formal.index() == endpoint_parameter(*argument)
-                && match argument {
-                    EndpointArgument::Region { .. } => {
-                        formal.kind() == crate::surface::facade::ParameterKind::Lifetime
-                    }
-                    EndpointArgument::Definition { definition, .. } => {
-                        formal.kind() == crate::surface::facade::ParameterKind::Type
-                            && definition.kind == Kind::Definition
-                            && self.evidence.contains(definition)
-                    }
-                    EndpointArgument::OwnedString { lifetime, .. } => {
-                        formal.kind() == crate::surface::facade::ParameterKind::Type
-                            && arguments.iter().any(|candidate| {
-                                matches!(candidate, EndpointArgument::Region { parameter } if parameter == lifetime)
-                            })
-                    }
-                };
-            if !valid {
-                return Err(Error::ForeignEvidence);
-            }
-        }
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(arguments.len())
-            .map_err(|_| Error::Allocation)?;
-        retained.extend_from_slice(arguments);
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.import.profile.operation-endpoint/v1");
-        digest.update(self.identity.as_bytes());
-        digest.update(self.version.get().to_le_bytes());
-        digest.update(site.selector());
-        digest.update(source.0);
-        digest.update(projection.selector());
-        digest.update(linked);
-        for argument in arguments {
-            hash_endpoint_argument(&mut digest, *argument);
-        }
-        let selector = digest.finalize().into();
-        let proof = OperationEndpoint {
-            site,
-            export,
-            definition,
-            source,
-            projection: *projection.selector(),
-            arguments: retained.into_boxed_slice(),
-            linked,
-            selector,
-        };
-        match self
-            .endpoints
-            .binary_search_by_key(&selector, |candidate| candidate.selector)
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .evidence
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile endpoint items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile endpoint items", self.item_limit, actual);
-                self.endpoints
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.endpoints.insert(position, proof);
-                Ok(())
-            }
-        }
-    }
-
-    /// Seal one compiler-authenticated public alias and normalized target.
-    pub fn alias_target(
-        &mut self,
-        export: Evidence,
-        alias: Evidence,
-        target: Evidence,
-    ) -> Result<AliasKey, Error> {
-        if export.kind != Kind::Export
-            || alias.kind != Kind::Definition
-            || target.kind != Kind::Definition
-            || !self.evidence.contains(&export)
-            || !self.evidence.contains(&alias)
-            || !self.evidence.contains(&target)
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let path = self
-            .graph
-            .exports()
-            .nth(usize::try_from(export.index).map_err(|_| Error::ForeignEvidence)?)
-            .ok_or(Error::ForeignEvidence)?;
-        let crate::api::ledger::Path::Imported(export_path) = path else {
-            return Err(Error::ForeignEvidence);
-        };
-        let alias_definition = self
-            .graph
-            .definitions()
-            .nth(usize::try_from(alias.index).map_err(|_| Error::ForeignEvidence)?)
-            .ok_or(Error::ForeignEvidence)?;
-        let target_definition = self
-            .graph
-            .definitions()
-            .nth(usize::try_from(target.index).map_err(|_| Error::ForeignEvidence)?)
-            .ok_or(Error::ForeignEvidence)?;
-        let site = crate::surface::facade::AliasSite::checked(
-            export_path,
-            alias_definition,
-            target_definition,
-        )
-        .map_err(surface_error)?
-        .ok_or(Error::ForeignEvidence)?;
-        if site.export_identity() != export.digest()
-            || site.alias_identity() != alias.digest()
-            || site.target_identity() != target.digest()
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.import.profile.alias-target/v2");
-        digest.update(site.selector());
-        digest.update(export.digest());
-        digest.update(alias.digest());
-        digest.update(target.digest());
-        let selector = digest.finalize().into();
-        let proof = AliasTarget {
-            site,
-            export,
-            alias,
-            target,
-            selector,
-        };
-        match self
-            .aliases
-            .binary_search_by_key(&selector, |candidate| candidate.selector)
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .evidence
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile alias target items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile alias target items", self.item_limit, actual);
-                self.aliases
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.aliases.insert(position, proof);
-                Ok(AliasKey(selector))
-            }
-        }
-    }
-
-    /// Seal one exact source alias, Widget implementation, and target alias proof.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the source-site proof bundle must validate every compiler authority"
-    )]
-    pub fn projection_source_site(
-        &mut self,
-        export: Evidence,
-        alias: Evidence,
-        source: Evidence,
-        widget_trait: Evidence,
-        widget: Evidence,
-        target: AliasKey,
-    ) -> Result<SourceKey, Error> {
-        if export.kind != Kind::Export
-            || alias.kind != Kind::Definition
-            || source.kind != Kind::Definition
-            || widget_trait.kind != Kind::Definition
-            || widget.kind != Kind::Implementation
-            || !self.evidence.contains(&export)
-            || !self.evidence.contains(&alias)
-            || !self.evidence.contains(&source)
-            || !self.evidence.contains(&widget_trait)
-            || !self.evidence.contains(&widget)
-            || self
-                .aliases
-                .binary_search_by_key(&target.0, |candidate| candidate.selector)
-                .is_err()
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let export_path = imported_export(self.graph, export)?;
-        let alias_definition = graph_definition(self.graph, alias)?;
-        let source_definition = graph_definition(self.graph, source)?;
-        let widget_definition = graph_definition(self.graph, widget_trait)?;
-        let widget_implementation = graph_implementation(self.graph, widget)?;
-        let site = crate::surface::facade::ProjectionSourceSite::checked(
-            export_path,
-            alias_definition,
-            source_definition,
-        )
-        .map_err(surface_error)?
-        .ok_or(Error::ForeignEvidence)?;
-        if site.export_identity() != export.digest()
-            || site.alias_identity() != alias.digest()
-            || site.source_identity() != source.digest()
-            || !exact_positive_trait_implementation(
-                widget_implementation,
-                widget_definition,
-                source_definition.id(),
-            )
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(site.parameters().len())
-            .map_err(|_| Error::Allocation)?;
-        for parameter in site.parameters() {
-            arguments.push(match parameter.kind() {
-                crate::surface::facade::ParameterKind::Lifetime => SourceArgument::Region {
-                    alias: parameter.alias_index(),
-                    source: parameter.target_index(),
-                },
-                kind @ (crate::surface::facade::ParameterKind::Type
-                | crate::surface::facade::ParameterKind::Const) => SourceArgument::Parameter {
-                    kind,
-                    alias: parameter.alias_index(),
-                    source: parameter.target_index(),
-                },
-            });
-        }
-        if arguments
-            .iter()
-            .filter(|argument| matches!(argument, SourceArgument::Region { .. }))
-            .count()
-            != 1
-        {
-            return Err(Error::ForeignEvidence);
-        }
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.import.profile.projection-source-site/v3");
-        digest.update(site.selector());
-        digest.update(widget_trait.digest());
-        digest.update(widget.digest());
-        digest.update(target.0);
-        for argument in &arguments {
-            match argument {
-                SourceArgument::Region { alias, source } => {
-                    digest.update([0]);
-                    digest.update(alias.to_le_bytes());
-                    digest.update(source.to_le_bytes());
-                }
-                SourceArgument::Parameter {
-                    kind,
-                    alias,
-                    source,
-                } => {
-                    digest.update([match kind {
-                        crate::surface::facade::ParameterKind::Lifetime => 1,
-                        crate::surface::facade::ParameterKind::Type => 2,
-                        crate::surface::facade::ParameterKind::Const => 3,
-                    }]);
-                    digest.update(alias.to_le_bytes());
-                    digest.update(source.to_le_bytes());
-                }
-            }
-        }
-        let selector = digest.finalize().into();
-        let proof = ProjectionSourceSite {
-            site,
-            export,
-            alias,
-            source,
-            widget_trait,
-            widget,
-            target,
-            arguments: arguments.into_boxed_slice(),
-            selector,
-        };
-        match self
-            .sources
-            .binary_search_by_key(&selector, |candidate| candidate.selector)
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                self.sources
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.sources.insert(position, proof);
-                Ok(SourceKey(selector))
-            }
-        }
-    }
-
-    /// Seal one exact source/target pair and its two required implementation proofs.
-    pub fn projection(
-        &mut self,
-        source: SourceKey,
-        alias: AliasKey,
-        arguments: &[Argument],
-    ) -> Result<Projection, Error> {
-        let target = self
-            .aliases
-            .binary_search_by_key(&alias.0, |candidate| candidate.selector)
-            .ok()
-            .map(|index| self.aliases[index].target)
-            .ok_or(Error::ForeignEvidence)?;
-        let source_site = self.source_for_key(source).ok_or(Error::ForeignEvidence)?;
-        if source_site.target != alias || !self.evidence.contains(&target) {
-            return Err(Error::ForeignEvidence);
-        }
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(arguments.len())
-            .map_err(|_| Error::Allocation)?;
-        retained.extend_from_slice(arguments);
-        let mut digest = Sha256::new();
-        digest.update(b"rawr.import.profile.projection/v3");
-        digest.update(source.0);
-        digest.update(alias.0);
-        for argument in arguments {
-            match argument {
-                Argument::Source(index) => {
-                    digest.update([0]);
-                    digest.update(index.to_le_bytes());
-                }
-                Argument::Fresh => digest.update([1]),
-            }
-        }
-        let projection = Projection {
-            source,
-            alias,
-            target,
-            arguments: retained.into_boxed_slice(),
-            selector: digest.finalize().into(),
-        };
-        match self
-            .projections
-            .binary_search_by_key(&projection.selector, |candidate| candidate.selector)
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .evidence
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile projection items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile projection items", self.item_limit, actual);
-                self.projections
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.projections.insert(position, projection.clone());
-                Ok(projection)
-            }
-        }
-    }
-
-    fn source_for_key(&self, key: SourceKey) -> Option<&ProjectionSourceSite> {
-        self.sources
-            .binary_search_by_key(&key.0, |candidate| candidate.selector)
-            .ok()
-            .map(|index| &self.sources[index])
     }
 
     fn insert(&mut self, kind: Kind, index: usize, digest: [u8; 32]) -> Result<Evidence, Error> {
@@ -1509,7 +932,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             digest,
         };
         match self.evidence.binary_search(&evidence) {
-            Ok(_) => Err(Error::Canonical),
+            Ok(_) => panic!("a profile classifies each piece of evidence once"),
             Err(position) => {
                 let actual = self.evidence.len().checked_add(1).ok_or(Error::Limit {
                     resource: "profile evidence items",
@@ -1540,7 +963,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             endpoints: &self.endpoints,
             projections: &self.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a profile contract serializes");
         // The canonical size is an accounting target recorded on the
         // profile account; the node content ceiling is the physical bound.
         self.account
@@ -1595,130 +1018,11 @@ fn evidence_matches_graph(
     digest == Some(evidence.digest)
 }
 
-fn imported_export(
-    graph: &crate::api::Graph<impl crate::api::Phase>,
-    evidence: Evidence,
-) -> Result<&crate::api::ledger::Export, Error> {
-    let path = graph
-        .exports()
-        .nth(usize::try_from(evidence.index).map_err(|_| Error::ForeignEvidence)?)
-        .ok_or(Error::ForeignEvidence)?;
-    match path {
-        crate::api::ledger::Path::Imported(export) => Ok(export),
-        crate::api::ledger::Path::Excluded { .. } | crate::api::ledger::Path::Rejected { .. } => {
-            Err(Error::ForeignEvidence)
-        }
-    }
-}
-
-fn graph_definition(
-    graph: &crate::api::Graph<impl crate::api::Phase>,
-    evidence: Evidence,
-) -> Result<&crate::api::model::Definition, Error> {
-    graph
-        .definitions()
-        .nth(usize::try_from(evidence.index).map_err(|_| Error::ForeignEvidence)?)
-        .ok_or(Error::ForeignEvidence)
-}
-
-fn graph_implementation(
-    graph: &crate::api::Graph<impl crate::api::Phase>,
-    evidence: Evidence,
-) -> Result<&crate::api::model::Implementation, Error> {
-    graph
-        .implementations()
-        .nth(usize::try_from(evidence.index).map_err(|_| Error::ForeignEvidence)?)
-        .ok_or(Error::ForeignEvidence)
-}
-
-fn exact_positive_trait_implementation(
-    implementation: &crate::api::model::Implementation,
-    trait_definition: &crate::api::model::Definition,
-    self_definition: &crate::api::identity::Definition,
-) -> bool {
-    use crate::api::model;
-
-    if implementation.polarity() != model::Polarity::Positive {
-        return false;
-    }
-    let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-        return false;
-    };
-    id == trait_definition.id()
-        && matches!(
-            implementation.self_type(),
-            model::Type::Definition { id, .. } if id == self_definition
-        )
-}
-
+/// Copying a facade site fails only for want of memory.
 fn surface_error(error: crate::surface::Error) -> Error {
     match error {
         crate::surface::Error::Allocation => Error::Allocation,
-        crate::surface::Error::Limit {
-            resource,
-            limit,
-            actual,
-        } => Error::Limit {
-            resource,
-            limit,
-            actual,
-        },
-        _ => Error::ForeignEvidence,
-    }
-}
-
-const fn abi_parameter(argument: AbiArgument) -> u32 {
-    match argument {
-        AbiArgument::DefaultF32 { parameter } => parameter,
-    }
-}
-
-fn endpoint_arguments(arguments: &[EndpointArgument]) -> bool {
-    arguments
-        .windows(2)
-        .all(|pair| endpoint_parameter(pair[0]) < endpoint_parameter(pair[1]))
-        && arguments
-            .iter()
-            .filter(|argument| matches!(argument, EndpointArgument::Region { .. }))
-            .count()
-            == 1
-        && arguments
-            .iter()
-            .filter(|argument| matches!(argument, EndpointArgument::OwnedString { .. }))
-            .count()
-            == 1
-}
-
-const fn endpoint_parameter(argument: EndpointArgument) -> u32 {
-    match argument {
-        EndpointArgument::Region { parameter }
-        | EndpointArgument::Definition { parameter, .. }
-        | EndpointArgument::OwnedString { parameter, .. } => parameter,
-    }
-}
-
-fn hash_endpoint_argument(digest: &mut Sha256, argument: EndpointArgument) {
-    match argument {
-        EndpointArgument::Region { parameter } => {
-            digest.update([0]);
-            digest.update(parameter.to_le_bytes());
-        }
-        EndpointArgument::Definition {
-            parameter,
-            definition,
-        } => {
-            digest.update([1]);
-            digest.update(parameter.to_le_bytes());
-            digest.update(definition.digest());
-        }
-        EndpointArgument::OwnedString {
-            parameter,
-            lifetime,
-        } => {
-            digest.update([2]);
-            digest.update(parameter.to_le_bytes());
-            digest.update(lifetime.to_le_bytes());
-        }
+        error => panic!("copying a facade site fails only for want of memory: {error}"),
     }
 }
 
@@ -1729,11 +1033,6 @@ fn copy_string(value: &str) -> Result<Box<str>, Error> {
         .map_err(|_| Error::Allocation)?;
     output.push_str(value);
     Ok(output.into_boxed_str())
-}
-
-fn framed_bytes(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    digest.update(bytes);
 }
 
 impl Builder<'_, crate::api::Extracted> {

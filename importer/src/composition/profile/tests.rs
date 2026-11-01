@@ -160,10 +160,9 @@ fn identity() -> profile::Identity {
         "rawr.composition.downstream",
         &crate::cargo::Limits::standard(),
     )
-    .expect("identity")
 }
 fn version() -> profile::Version {
-    profile::Version::new(1).expect("version")
+    profile::Version::new(1)
 }
 
 #[test]
@@ -823,13 +822,21 @@ fn pair_request_rejects_arbitrary_runner_before_callbacks() {
         .replay_demand(Arbitrary, &prefix.contract, source, &limits)
         .unwrap();
     let mut owner = crate::supervisor::Owner::new();
-    assert!(symbolic
-        .request_retained(
-            crate::input::proof::Proof::fixture_runner_harness(&root.0).unwrap(),
-            pair,
-            owner.revision().unwrap()
-        )
-        .is_err());
+    let native = crate::input::proof::Proof::fixture_runner_harness(&root.0).unwrap();
+    let revision = owner.revision().unwrap();
+    // A demand without the trusted runner never reaches a retained pair
+    // outside a rawr bug, which panics naming the invariant (#538, D664).
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        symbolic
+            .request_retained(native, pair, revision)
+            .map(|_| ())
+            .map_err(|_| ())
+    }))
+    .expect_err("an arbitrary runner panics before its callbacks");
+    assert_eq!(
+        rejected.downcast_ref::<String>().map(String::as_str),
+        Some("rawr's generated Rust agrees with the crates on owned runner bindings ancestry")
+    );
 }
 
 #[test]

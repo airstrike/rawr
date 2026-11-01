@@ -212,11 +212,7 @@ impl<B> GenerationRequestKey<B> {
 pub fn fixture_runner_harness(
     project: &std::path::Path,
 ) -> Result<std::path::PathBuf, request::Error> {
-    crate::input::proof::Proof::fixture_runner_harness_manifest(project).map_err(|error| {
-        request::Error::Manifest {
-            reason: error.to_string().into_boxed_str(),
-        }
-    })
+    crate::input::proof::Proof::fixture_runner_harness_manifest(project).map_err(request::misread)
 }
 
 /// Build one deterministic generated-owner request under a supplied test DAG parent.
@@ -231,11 +227,8 @@ pub fn fixture_generation(
 ) -> Result<GenerationRequestKey<()>, request::Error> {
     let mut request = crate::surface::Request::fixture((), limits);
     request.snapshot = snapshot;
-    let native = crate::input::proof::Proof::fixture_runner_harness(project).map_err(|error| {
-        request::Error::Manifest {
-            reason: error.to_string().into_boxed_str(),
-        }
-    })?;
+    let native =
+        crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
     let profile =
         crate::profile::Proof::neutral_with_chain_application(chain, *snapshot.as_bytes());
     let build = build_request_key(&request, &native, &profile)?;
@@ -285,16 +278,11 @@ pub fn fixture_lifecycle_generation_application<B: crate::surface::Runner>(
 ) -> Result<GenerationRequestKey<B>, request::Error> {
     let mut request = crate::surface::Request::fixture(brand, limits);
     request.snapshot = snapshot;
-    let native = crate::input::proof::Proof::fixture_runner_harness(project).map_err(|error| {
-        request::Error::Manifest {
-            reason: error.to_string().into_boxed_str(),
-        }
-    })?;
+    let native =
+        crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
     let profile =
         crate::profile::Proof::fixture_lifecycle_with_chain_application(chain, application, limits)
-            .map_err(|error| request::Error::Manifest {
-                reason: error.to_string().into_boxed_str(),
-            })?;
+            .map_err(request::misread)?;
     let build = build_request_key(&request, &native, &profile)?;
     Ok(GenerationRequestKey {
         request,
@@ -316,11 +304,8 @@ pub fn fixture_generation_from_demand<B: crate::surface::Runner>(
     revision: crate::supervisor::Revision,
 ) -> Result<GenerationRequestKey<B>, request::Error> {
     let request = demand.into_request();
-    let native = crate::input::proof::Proof::fixture_runner_harness(project).map_err(|error| {
-        request::Error::Manifest {
-            reason: error.to_string().into_boxed_str(),
-        }
-    })?;
+    let native =
+        crate::input::proof::Proof::fixture_runner_harness(project).map_err(request::misread)?;
     let build = build_request_key(&request, &native, &profile)?;
     Ok(GenerationRequestKey {
         request,

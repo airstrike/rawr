@@ -128,7 +128,7 @@ impl Demand {
             endpoints: &self.endpoints,
             projections: &self.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a profile demand serializes");
         if canonical.len() > limit {
             return Err(Error::Limit {
                 resource: "profile demand bytes",
@@ -136,9 +136,11 @@ impl Demand {
                 actual: canonical.len(),
             });
         }
-        if <[u8; 32]>::from(Sha256::digest(&canonical)) != self.digest {
-            return Err(Error::Canonical);
-        }
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(&canonical)),
+            self.digest,
+            "a profile demand encodes to the bytes it was sealed from"
+        );
         Ok(canonical.into_boxed_slice())
     }
 
@@ -189,8 +191,8 @@ impl Demand {
         account: &mut crate::surface::account::Account,
     ) -> Result<Parts, Error> {
         account.exceeded("profile demand bytes", limits.json_bytes, bytes.len());
-        let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
-        let canonical = serde_json::to_vec(&stored).map_err(|_| Error::Encoding)?;
+        let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
+        let canonical = serde_json::to_vec(&stored).expect("a profile demand serializes");
         let items = stored
             .hooks
             .len()
@@ -260,7 +262,7 @@ impl Demand {
                 .iter()
                 .any(|projection| !contract.contains_projection(projection))
         {
-            return Err(Error::Canonical);
+            return Err(Error::Stale);
         }
         Ok(Parts(Self {
             identity: contract.identity(),
@@ -453,9 +455,10 @@ impl<'contract> Builder<'contract> {
 
     /// Demand one named hook derived from classified compiler evidence.
     pub fn hook(&mut self, evidence: contract::Evidence, name: &str) -> Result<Hook, Error> {
-        if !self.contract.contains(&evidence) || name.is_empty() {
-            return Err(Error::ForeignEvidence);
-        }
+        assert!(
+            self.contract.contains(&evidence) && !name.is_empty(),
+            "a profile demands named hooks on its own contract's evidence"
+        );
         // The name length is an accounting target, recorded not refused.
         self.account
             .exceeded("profile hook name bytes", self.string_limit, name.len());
@@ -469,7 +472,7 @@ impl<'contract> Builder<'contract> {
             identity: digest.finalize().into(),
         };
         match self.hooks.binary_search(&hook) {
-            Ok(_) => Err(Error::Canonical),
+            Ok(_) => panic!("a profile demands each hook once"),
             Err(position) => {
                 let actual = self.hooks.len().checked_add(1).ok_or(Error::Limit {
                     resource: "profile hook items",
@@ -483,134 +486,6 @@ impl<'contract> Builder<'contract> {
                     .map_err(|_| Error::Allocation)?;
                 self.hooks.insert(position, hook);
                 Ok(hook)
-            }
-        }
-    }
-
-    /// Demand one exact compiler-classified direct projection pair.
-    pub fn projection(&mut self, projection: &contract::Projection) -> Result<(), Error> {
-        if !self.contract.contains_projection(projection) {
-            return Err(Error::ForeignEvidence);
-        }
-        let alias = self
-            .contract
-            .alias_targets()
-            .find(|candidate| candidate.selector() == projection.alias_selector())
-            .ok_or(Error::ForeignEvidence)?;
-        let source = self
-            .contract
-            .source(contract::SourceKey(*projection.source_selector()))
-            .ok_or(Error::ForeignEvidence)?;
-        match self
-            .aliases
-            .binary_search_by_key(alias.selector(), |candidate| *candidate.selector())
-        {
-            Ok(_) => {}
-            Err(position) => {
-                self.aliases
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.aliases.insert(position, alias.try_copy()?);
-            }
-        }
-        match self
-            .sources
-            .binary_search_by_key(source.selector(), |candidate| *candidate.selector())
-        {
-            Ok(_) => {}
-            Err(position) => {
-                self.sources
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.sources.insert(position, source.try_copy()?);
-            }
-        }
-        match self
-            .projections
-            .binary_search_by_key(projection.selector(), |candidate| *candidate.selector())
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .hooks
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile demand items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile demand items", self.item_limit, actual);
-                self.projections
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.projections.insert(position, projection.clone());
-                Ok(())
-            }
-        }
-    }
-
-    /// Demand one exact support-only ABI proof already sealed by the profile.
-    pub fn extension_abi(&mut self, abi: &contract::ExtensionAbi) -> Result<(), Error> {
-        if !self.contract.contains_abi(abi) {
-            return Err(Error::ForeignEvidence);
-        }
-        match self
-            .abis
-            .binary_search_by_key(abi.selector(), |candidate| *candidate.selector())
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                let actual = self
-                    .hooks
-                    .len()
-                    .checked_add(self.aliases.len())
-                    .and_then(|items| items.checked_add(self.sources.len()))
-                    .and_then(|items| items.checked_add(self.abis.len()))
-                    .and_then(|items| items.checked_add(self.endpoints.len()))
-                    .and_then(|items| items.checked_add(self.projections.len()))
-                    .and_then(|items| items.checked_add(1))
-                    .ok_or(Error::Limit {
-                        resource: "profile ABI demand items",
-                        limit: self.item_limit,
-                        actual: usize::MAX,
-                    })?;
-                self.account
-                    .exceeded("profile ABI demand items", self.item_limit, actual);
-                self.abis
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.abis.insert(position, abi.try_copy()?);
-                Ok(())
-            }
-        }
-    }
-
-    /// Demand one exact support-only operation endpoint.
-    pub fn operation_endpoint(
-        &mut self,
-        endpoint: &contract::OperationEndpoint,
-    ) -> Result<(), Error> {
-        if !self.contract.contains_endpoint(endpoint) {
-            return Err(Error::ForeignEvidence);
-        }
-        match self
-            .endpoints
-            .binary_search_by_key(endpoint.selector(), |candidate| *candidate.selector())
-        {
-            Ok(_) => Err(Error::Canonical),
-            Err(position) => {
-                self.endpoints
-                    .try_reserve_exact(1)
-                    .map_err(|_| Error::Allocation)?;
-                self.endpoints.insert(position, endpoint.try_copy()?);
-                Ok(())
             }
         }
     }
@@ -630,7 +505,7 @@ impl<'contract> Builder<'contract> {
             endpoints: &self.endpoints,
             projections: &self.projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a profile demand serializes");
         self.account
             .exceeded("profile demand bytes", self.byte_limit, canonical.len());
         Ok(Demand {
@@ -676,12 +551,14 @@ impl<'demand> Generator<'demand> {
     /// recorded on the profile account; the reservations are the physical
     /// bound and checked-arithmetic overflow stays terminal.
     pub fn projection(&mut self, hook: Hook, source: &[u8]) -> Result<(), Error> {
-        if self.demand.hooks.binary_search(&hook).is_err() || source.is_empty() {
-            return Err(Error::ForeignEvidence);
-        }
-        if self.chunks.iter().any(|chunk| chunk.hook == hook) {
-            return Err(Error::Canonical);
-        }
+        assert!(
+            self.demand.hooks.binary_search(&hook).is_ok() && !source.is_empty(),
+            "a profile generates source for its own demanded hooks"
+        );
+        assert!(
+            self.chunks.iter().all(|chunk| chunk.hook != hook),
+            "a profile generates each hook's source once"
+        );
         self.account.exceeded(
             "generated profile projection bytes",
             self.string_limit,
@@ -712,9 +589,11 @@ impl<'demand> Generator<'demand> {
 
     pub(crate) fn seal(mut self, product_lifecycle: bool) -> Result<Proof, Error> {
         self.chunks.sort_unstable_by_key(|chunk| chunk.hook);
-        if self.chunks.len() != self.demand.hooks.len() {
-            return Err(Error::ForeignEvidence);
-        }
+        assert_eq!(
+            self.chunks.len(),
+            self.demand.hooks.len(),
+            "a profile generates source for every hook it demanded"
+        );
         let framing = self
             .chunks
             .len()
@@ -764,7 +643,8 @@ impl<'demand> Generator<'demand> {
         for endpoint in &self.demand.endpoints {
             endpoints.push(endpoint.try_copy()?);
         }
-        let application = super::application_semantic(self.demand)?;
+        let application = super::application_semantic(self.demand)
+            .expect("a checked program's profile payload is its application identity");
         let canonical = serde_json::to_vec(&super::OwnerCanonical {
             schema: 9,
             identity: self.demand.identity.as_bytes(),
@@ -778,7 +658,7 @@ impl<'demand> Generator<'demand> {
             endpoints: &endpoints,
             projections: &projections,
         })
-        .map_err(|_| Error::Encoding)?;
+        .expect("a generated profile proof serializes");
         let owner = super::owner_digest(&canonical);
         Ok(Proof {
             digest: super::proof_digest(self.demand, owner, application, product_lifecycle),
@@ -807,8 +687,8 @@ mod owned_tests {
     fn contract(limits: &crate::cargo::Limits) -> Contract {
         let graph = crate::test_fixture::graph();
         contract::Builder::new(
-            Identity::new("rawr.profile.owned-demand-test", limits).expect("identity"),
-            Version::new(1).expect("version"),
+            Identity::new("rawr.profile.owned-demand-test", limits),
+            Version::new(1),
             &graph,
             limits,
         )

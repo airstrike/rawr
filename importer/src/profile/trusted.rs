@@ -94,9 +94,10 @@ impl<T: Operations> Adapter<T> {
         payload: &[u8],
         limits: &crate::cargo::Limits,
     ) -> Result<super::Demand, Error> {
-        if self.identity != contract.identity() || self.version != contract.version() {
-            return Err(Error::DefinitionDrift);
-        }
+        assert!(
+            self.identity == contract.identity() && self.version == contract.version(),
+            "rawr demands a profile's hooks under the profile that classified its contract"
+        );
         let mut output = demand::Builder::new(contract, fingerprint, payload, limits)?;
         self.operations.demand(
             Contract::from_current(contract),
@@ -111,9 +112,10 @@ impl<T: Operations> Adapter<T> {
         demand: &super::Demand,
         limits: &crate::cargo::Limits,
     ) -> Result<super::Proof, Error> {
-        if self.identity != demand.identity() || self.version != demand.version() {
-            return Err(Error::DefinitionDrift);
-        }
+        assert!(
+            self.identity == demand.identity() && self.version == demand.version(),
+            "rawr generates a profile's source under the profile that demanded it"
+        );
         let mut output = demand::Generator::new(demand, limits);
         self.operations
             .generate(Demand::from_current(demand), &mut output)?;
@@ -264,8 +266,8 @@ mod tests {
     fn explicit_adapter_classifies_owned_parts_without_current_authority() {
         let limits = crate::cargo::Limits::standard();
         let graph = crate::test_fixture::graph();
-        let identity = Identity::new("trusted.empty", &limits).expect("identity");
-        let version = Version::new(1).expect("version");
+        let identity = Identity::new("trusted.empty", &limits);
+        let version = Version::new(1);
         let adapter = Adapter::trusted(Empty, identity, version, false);
         let parts = adapter
             .classify_parts(&graph, &limits)

@@ -59,10 +59,9 @@ impl profile::Definition<Checked> for Definition {
             "rawr.composition.fixture",
             &crate::cargo::Limits::standard(),
         )
-        .expect("profile identity")
     }
     fn version(&self) -> profile::Version {
-        profile::Version::new(1).expect("profile version")
+        profile::Version::new(1)
     }
     fn classify(
         &self,

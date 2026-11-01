@@ -240,18 +240,22 @@ where
             return Ok(None);
         };
         let api_fingerprint = crate::api::Fingerprint::from_bytes(header.api);
-        let profile_parts = profile
-            .value()
-            .owned_resolved(
-                profile_identity.0,
-                profile_identity.1,
-                (
-                    api_fingerprint,
-                    crate::api::Fingerprint::from_bytes(header.semantic),
-                ),
-                limits,
-            )
-            .map_err(|error| failure(&error))?;
+        // The resolved product records the API it was resolved under; a
+        // profile entry that doesn't decode under it is stale, and the
+        // full path rebuilds it (#538).
+        let profile_parts = match profile.value().owned_resolved(
+            profile_identity.0,
+            profile_identity.1,
+            (
+                api_fingerprint,
+                crate::api::Fingerprint::from_bytes(header.semantic),
+            ),
+            limits,
+        ) {
+            Ok(parts) => parts,
+            Err(crate::profile::Error::Stale) => return Ok(None),
+            Err(error) => return Err(failure(&error)),
+        };
         let authority = checked::authority(
             crate::contract::fingerprint::Fingerprint(header.contract),
             api_fingerprint,

@@ -288,7 +288,7 @@ where
             let profile_parts = profile
                 .value()
                 .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
-                .map_err(|error| cache(failure(error)))?;
+                .map_err(|error| cache(failure(error.fresh())))?;
             let authority = checked::authority(
                 parts.fingerprint,
                 graph.graph().fingerprint(),
@@ -389,7 +389,7 @@ where
                         let profile_parts = profile
                             .value()
                             .owned(adapter.identity(), adapter.version(), graph.graph(), limits)
-                            .map_err(failure)?;
+                            .map_err(|error| failure(error.fresh()))?;
                         let authority = checked::authority(
                             parts.fingerprint,
                             graph.graph().fingerprint(),

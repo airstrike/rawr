@@ -19,13 +19,13 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         .node_chain()
         .or_else(|| contract.node_chain())
         .cloned()
-        .ok_or(Error::ForeignEvidence)?;
-    if parent.output_limit() != limits.node_output_bytes()
-        || definition.identity() != contract.identity()
-        || definition.version() != contract.version()
-    {
-        return Err(Error::DefinitionDrift);
-    }
+        .expect("rawr demands a cached profile under its contract's node");
+    assert!(
+        parent.output_limit() == limits.node_output_bytes()
+            && definition.identity() == contract.identity()
+            && definition.version() == contract.version(),
+        "rawr demands a profile's hooks under the profile and limits that classified it"
+    );
     let checked_fingerprint = checked.profile_fingerprint();
     let payload = checked.profile_payload();
     // Preserve the callback order: the payload target is recorded before
@@ -49,7 +49,10 @@ pub(crate) fn evaluate<C: crate::profile::Checked, D: crate::profile::Definition
         })
         .map_err(|error| Error::Node(Box::new(error)))?;
     let chain = parent.child(&product);
-    product.value().replay(contract, checked, chain, limits)
+    product
+        .value()
+        .replay(contract, checked, chain, limits)
+        .map_err(Error::fresh)
 }
 
 pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition<C>>(
@@ -57,13 +60,16 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
     demand: &Demand,
     limits: &crate::cargo::Limits,
 ) -> Result<crate::profile::Proof, Error> {
-    let parent = demand.node_chain().cloned().ok_or(Error::ForeignEvidence)?;
-    if parent.output_limit() != limits.node_output_bytes()
-        || definition.identity() != demand.identity()
-        || definition.version() != demand.version()
-    {
-        return Err(Error::DefinitionDrift);
-    }
+    let parent = demand
+        .node_chain()
+        .cloned()
+        .expect("rawr generates a cached profile under its demand's node");
+    assert!(
+        parent.output_limit() == limits.node_output_bytes()
+            && definition.identity() == demand.identity()
+            && definition.version() == demand.version(),
+        "rawr generates a profile's source under the profile and limits that demanded it"
+    );
     let product_lifecycle = definition.owns_product_lifecycle();
     let authority = generated_authority(
         definition.identity(),
@@ -85,6 +91,7 @@ pub(crate) fn generate<C: crate::profile::Checked, D: crate::profile::Definition
     product
         .value()
         .replay(demand, product_lifecycle, chain, limits)
+        .map_err(Error::fresh)
 }
 
 /// Encode the existing demand identity from captured, immutable inputs.
@@ -315,7 +322,7 @@ mod tests {
 
         let limits = crate::cargo::Limits::standard();
         let identity = crate::profile::Identity([1; 32]);
-        let version = crate::profile::Version::new(7).expect("nonzero version");
+        let version = crate::profile::Version::new(7);
         let demand =
             super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", &limits, None)
                 .expect("bounded demand authority");
@@ -370,7 +377,7 @@ mod tests {
         let mut limits = crate::cargo::Limits::standard();
         limits.string_bytes = 3;
         let identity = crate::profile::Identity([1; 32]);
-        let version = crate::profile::Version::new(7).expect("nonzero version");
+        let version = crate::profile::Version::new(7);
         let exact =
             super::demand_authority(identity, version, &[2; 32], &[3; 32], b"abc", &limits, None)
                 .expect("the exact payload target admits");

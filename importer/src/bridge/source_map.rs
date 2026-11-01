@@ -29,7 +29,7 @@ where
     W: std::io::Write,
 {
     let records = Borrowed { request, spans };
-    serde_json::to_writer(writer, &records).map_err(|_| crate::bridge::request::Error::Encoding)
+    serde_json::to_writer(writer, &records).map_err(crate::bridge::request::unwritable)
 }
 
 struct Borrowed<'a, B> {

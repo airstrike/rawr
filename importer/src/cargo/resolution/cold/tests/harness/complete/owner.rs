@@ -1623,8 +1623,8 @@ impl crate::profile::Checked for ApiChecked {
 fn api_adapter(limits: &Limits) -> crate::profile::trusted::Adapter<ApiProfile> {
     crate::profile::trusted::Adapter::trusted(
         ApiProfile,
-        crate::profile::Identity::new("api.continuation.fixture", limits).unwrap(),
-        crate::profile::Version::new(1).unwrap(),
+        crate::profile::Identity::new("api.continuation.fixture", limits),
+        crate::profile::Version::new(1),
         false,
     )
     .semantic_api()

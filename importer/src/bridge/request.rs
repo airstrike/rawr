@@ -1,19 +1,17 @@
 //! Structured generated-bridge request failures.
 
-/// Failure before a generated manifest can be sealed.
+/// Failure before a generated manifest can be sealed. rawr writes the
+/// runner's source, Cargo.toml and lock itself, so a runner it can't read
+/// back or that disagrees with the crates is a rawr bug and panics
+/// ([`drift`], [`misread`], [`unwritable`]), never one of these (#538, D664).
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
     Node(#[source] Box<crate::node::Error>),
     #[error("{0}")]
     Native(#[from] crate::Error),
-    /// rawr wrote a runner Cargo.toml it can't read back: a rawr bug.
-    #[error("internal error: rawr wrote an invalid Cargo.toml for the program: {reason}. This is a rawr bug")]
-    Manifest { reason: Box<str> },
-    /// The generated Rust disagrees with what rawr read of the crates: a
-    /// rawr bug.
-    #[error("internal error: rawr's generated Rust disagrees with the crates on {field}. This is a rawr bug")]
-    Drift { field: &'static str },
+    #[error(transparent)]
+    Surface(#[from] crate::surface::Error),
     #[error("{resource} exceeded limit {limit} with observed size {actual}")]
     Limit {
         resource: &'static str,
@@ -22,8 +20,25 @@ pub enum Error {
     },
     #[error("out of memory while generating the program's Rust")]
     Allocation,
-    #[error(
-        "internal error: rawr could not encode the program's generated Rust. This is a rawr bug"
-    )]
-    Encoding,
+}
+
+/// The generated Rust disagrees with what rawr read of the crates: only a
+/// rawr bug can cause it, so it panics naming the invariant.
+#[track_caller]
+pub(crate) fn drift(field: &'static str) -> Error {
+    panic!("rawr's generated Rust agrees with the crates on {field}")
+}
+
+/// rawr can't read back the runner's Cargo.toml or Cargo.lock that it and
+/// Cargo wrote: only a rawr bug can cause it.
+#[track_caller]
+pub(crate) fn misread(reason: impl std::fmt::Display) -> Error {
+    panic!("rawr reads the runner's Cargo.toml and Cargo.lock as they were written: {reason}")
+}
+
+/// Writing the runner's source in memory failed, which only a rawr bug
+/// can cause.
+#[track_caller]
+pub(crate) fn unwritable(error: impl std::fmt::Display) -> Error {
+    panic!("rawr writes the runner's generated source in memory: {error}")
 }
