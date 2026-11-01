@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr run` calls `.map` on a widget returned as `impl Widget<M>`, such as a `button(..)` behind `fn part() -> impl Widget<Part>`, at the renderer the `impl Widget` names, as `cargo run` does. (#428)
+- `rawr run` names iced types that the `iced` crate doesn't re-export, such as the `Map` that `.map` returns, through the crate that defines them. (#476)
 
 ## 0.3.41 (2026-10-31)
 

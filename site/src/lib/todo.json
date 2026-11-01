@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr run` calls `.map` on a widget returned as `impl Widget<M>`, such as a `button(..)` behind `fn part() -> impl Widget<Part>`, at the renderer the `impl Widget` names, as `cargo run` does.","issues":[428]},
+        {"text":"`rawr run` names iced types that the `iced` crate doesn't re-export, such as the `Map` that `.map` returns, through the crate that defines them.","issues":[476]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.41",
@@ -954,7 +960,7 @@
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)","release":"0.3.39"},
     {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
-    {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"open","category":"Divergences from rustc"},
+    {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"closed","category":"Divergences from rustc"},
     {"issue":429,"title":"A tuple struct's constructor named through its module has no binding","state":"open","category":"No glue (D593)"},
     {"issue":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed","category":"No glue (D593)","release":"0.3.32"},
     {"issue":431,"title":"On Linux, `rawr run` compiles rawr's runtime again","state":"closed","category":"Platforms","release":"0.3.31"},
@@ -1002,7 +1008,7 @@
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
     {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":475,"title":"The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)"},
-    {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"open","category":"No glue (D593)"},
+    {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)"},
     {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"open","category":"No glue (D593)"},
     {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"},
@@ -1024,7 +1030,10 @@
     {"issue":495,"title":"Cache the Linux workflow's release build of the importer","state":"open","category":"Health"},
     {"issue":496,"title":"Deploy the site on each push to main, not only at release","state":"closed","category":"Health"},
     {"issue":497,"title":"A site change that needs a newer rawr-web or image goes live before them","state":"open","category":"Health"},
-    {"issue":498,"title":"An image pushed from a Mac leaves the site workflow without rawr-web","state":"open","category":"Health"}
+    {"issue":498,"title":"An image pushed from a Mac leaves the site workflow without rawr-web","state":"open","category":"Health"},
+    {"issue":499,"title":"A crate type reached only through a path dependency can't be named by the runner","state":"open","category":"No glue (D593)"},
+    {"issue":500,"title":"Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc"},
+    {"issue":501,"title":"Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -1558,7 +1567,8 @@
           "note": "rawr mcp and the editor",
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"open"}
-          ]
+          ],
+          "milestone": "0.5"
         },
         {
           "id": "breakpoints",
@@ -1569,7 +1579,8 @@
           "note": "The interpreter's hooks in rawr run",
           "issues": [
             {"number":489,"title":"Breakpoints and stepping under rawr run","state":"open"}
-          ]
+          ],
+          "milestone": "0.5"
         },
         {
           "id": "repl",
@@ -1580,7 +1591,8 @@
           "note": "The same interpreter, the same errors",
           "issues": [
             {"number":490,"title":"Evaluate Rust in a paused frame","state":"open"}
-          ]
+          ],
+          "milestone": "0.5"
         },
         {
           "id": "record-replay",
@@ -1591,7 +1603,8 @@
           "note": "Messages and state over time",
           "issues": [
             {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"}
-          ]
+          ],
+          "milestone": "0.5"
         }
       ]
     },
