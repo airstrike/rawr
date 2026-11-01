@@ -785,6 +785,59 @@ fn pair_request_rejects_arbitrary_runner_before_callbacks() {
     );
 }
 
+/// An entry the check read that goes stale before the profile, the request
+/// or the runner's source uses it is reported stale at each of them, so
+/// the run prepares again instead of failing (#613).
+#[test]
+fn stale_entries_after_the_check_report_stale() {
+    let root = Root::new();
+    write_retained_runner_harness(&root);
+    let limits = crate::cargo::Limits::standard();
+    let source = snapshot(&limits);
+    let witnesses = Arc::new(AtomicUsize::new(0));
+    let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let definition = Definition(Arc::new(Calls::default()));
+    let adapter = profile::trusted::Adapter::trusted(&definition, identity(), version(), false);
+    let prefix = || {
+        crate::composition::evaluate_retained(
+            crate::composition::tests::graph_with_change(
+                &root.0,
+                &witnesses,
+                Arc::clone(&changed),
+                &limits,
+            ),
+            &adapter,
+            &crate::classify::Policy::standard(),
+            source,
+            &limits,
+            |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
+        )
+        .unwrap()
+    };
+    let mut owner = crate::supervisor::Owner::new();
+    let native = || crate::input::proof::Proof::fixture_runner_harness(&root.0).unwrap();
+
+    // The profile and the request retain what the check read; the runner's
+    // source is where it is used, and finds it stale.
+    let checked = prefix();
+    let pair =
+        super::prepare_retained(&adapter, &checked.profile, &checked.checked, &limits).unwrap();
+    let request = checked
+        .checked
+        .replay_demand((), &checked.contract, source, &limits)
+        .unwrap()
+        .with_trusted_runner(false, &checked.facade, &checked.contract)
+        .unwrap()
+        .request_retained(native(), pair, owner.revision().unwrap())
+        .unwrap();
+    changed.store(true, Ordering::Relaxed);
+    let error = request
+        .generate(&limits)
+        .map(drop)
+        .expect_err("a stale request is never generated");
+    assert!(error.is_stale(), "{error:?}");
+}
+
 #[test]
 fn historical_pair_rejects_drift_at_actual_render_boundary() {
     let root = Root::new();

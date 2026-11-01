@@ -24,6 +24,17 @@ pub enum Error {
 }
 
 impl Error {
+    /// Whether a cache entry this step read went stale before it was used
+    /// (`crate::Error::is_stale`), so the run prepares again (#613).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        match self {
+            Self::Node(error) => error.is_stale(),
+            Self::Stale => true,
+            Self::Limit { .. } | Self::Allocation => false,
+        }
+    }
+
     /// A failure from an entry whose key holds every input it decodes
     /// under: the profile's version and identity, its parent and the
     /// checked program. A fresh build writes such an entry and a hit reads

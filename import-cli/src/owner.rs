@@ -220,6 +220,9 @@ fn session(
     // The preparation a restart was last announced for.
     let mut announced = None;
     let mut native_inputs = None;
+    // A save whose runner build found a cache entry stale is attempted
+    // again, whose preparation rebuilds it (#613).
+    let mut restarts = crate::Restarts::default();
     loop {
         match lane.reap_if_exited() {
             Ok(true) => return Ok(Ended::Exit(0)),
@@ -440,6 +443,7 @@ fn session(
                 preparation,
                 rawr_import::process::hot::Preparation::Prepared(_)
             );
+            let mut stale = false;
             let admitted = match preparation {
                 rawr_import::process::hot::Preparation::Prepared(prepared) => lane
                     .revalidate_compile(prepared)
@@ -480,17 +484,21 @@ fn session(
                         announced = Some(next_manifests.clone());
                     }
                     let (request, snapshot) = miss.into_parts();
+                    let mut report = |error: &dyn std::fmt::Display, again: bool| {
+                        stale |= again;
+                        framework(error, source.clone())
+                    };
                     request
                         .generate(&limits)
-                        .map_err(|error| framework(error, source.clone()))
+                        .map_err(|error| report(&error, restarts.again(&error)))
                         .and_then(|generated| {
                             lane.build(generated)
-                                .map_err(|error| framework(error, source.clone()))
+                                .map_err(|error| report(&error, restarts.again(&error)))
                         })
                         .and_then(|mut built| {
                             built
                                 .retain_startup(&snapshot)
-                                .map_err(|error| framework(error, source.clone()))?;
+                                .map_err(|error| report(&error, restarts.again(&error)))?;
                             built
                                 .revalidate_prepared()
                                 .map_err(|error| framework(error, source.clone()))?;
@@ -522,6 +530,7 @@ fn session(
                     native_baseline = next_native_baseline;
                     native_inputs = None;
                     refresh_required = false;
+                    restarts = crate::Restarts::default();
                     for error in adapter
                         .commit_inputs(staged)
                         .map_err(|error| framework(error, source.clone()))?
@@ -532,6 +541,15 @@ fn session(
                     }
                 }
                 Ok(crate::native::Watched::Obsolete) => drop(staged),
+                // The save is attempted again, and its preparation rebuilds
+                // the entry that went stale.
+                Err(_) if stale => {
+                    drop(staged);
+                    adapter
+                        .gate()
+                        .observe(Instant::now())
+                        .map_err(|error| framework(error, source.clone()))?;
+                }
                 Err(report) => {
                     drop(staged);
                     settle_failure(&mut lane, &adapter, report)?;
@@ -761,6 +779,9 @@ fn prepare_on_lane(
     // A save while the runner builds (D531.9): the build is kept, and the
     // program is prepared again from the saved files.
     let mut saved = None;
+    // A cache entry that went stale before the runner's build used it
+    // prepares again, whose lookups rebuild it (#613).
+    let mut restarts = crate::Restarts::default();
     loop {
         let target = saved.as_ref().unwrap_or(target);
         let revision = lane
@@ -784,17 +805,23 @@ fn prepare_on_lane(
         let mut prepared = prepared;
         let settlement = prepared.take_settlement();
         let (request, snapshot, _, inputs) = prepared.into_parts();
-        let generated = request
-            .generate(&limits)
-            .map_err(|error| framework(error, source.clone()))?;
+        let generated = match request.generate(&limits) {
+            Ok(generated) => generated,
+            Err(error) if restarts.again(&error) => continue,
+            Err(error) => return Err(framework(error, source.clone())),
+        };
         // The API phase has ended; hand its freed allocator pages back before the build.
         crate::release::freed_memory();
-        let mut built =
-            lane.build(generated)
-                .map_err(|error| match settlement.drift_diagnostic() {
+        let mut built = match lane.build(generated) {
+            Ok(built) => built,
+            Err(error) if restarts.again(&error) => continue,
+            Err(error) => {
+                return Err(match settlement.drift_diagnostic() {
                     Some(drift) => framework(format!("{drift}\n\n{error}"), source.clone()),
                     None => framework(error, source.clone()),
-                })?;
+                })
+            }
+        };
         // Shared bindings are published, or refused, once the project's
         // own build has run their build scripts (D609.4).
         settlement
@@ -810,6 +837,7 @@ fn prepare_on_lane(
                 });
             }
             Err(rawr_import::node::Error::SourceChanged(_)) => saved = Some(discover(target)?),
+            Err(error) if restarts.again(&error) => {}
             Err(error) => return Err(framework(error, source.clone())),
         }
     }
