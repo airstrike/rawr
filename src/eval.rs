@@ -17,12 +17,12 @@ pub use data_check::calc_data_sizes;
 #[cfg(feature = "debugging")]
 pub use debugger::CallStackFrame;
 #[cfg(feature = "debugging")]
-pub(crate) use debugger::FrameBindings;
-#[cfg(feature = "debugging")]
 pub use debugger::{
     BreakPoint, BreakPositions, Debugger, DebuggerCommand, DebuggerEvent, DebuggerStatus,
     OnDebuggerCallback, OnDebuggingInit,
 };
+#[cfg(feature = "debugging")]
+pub(crate) use debugger::{FrameBindings, Held};
 pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;

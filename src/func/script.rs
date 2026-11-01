@@ -74,19 +74,24 @@ impl Engine {
         })));
 
         // Push a new call stack frame. Its bindings stay where the call
-        // keeps them: the scope from here, and the receiver (#511, #513).
+        // keeps them: the scope from here, and the receiver (#511, #513),
+        // read there while this call is the innermost and through what it
+        // lends each call it makes (#540).
         #[cfg(feature = "debugging")]
         if self.is_debugger_registered() {
             let bindings = crate::eval::FrameBindings {
-                scope: std::ptr::NonNull::from(&mut *scope).cast(),
                 start: orig_scope_len,
-                this: this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
                 this_name: fn_def.this_name.clone(),
             };
             let source = global.source.clone();
-            global
-                .debugger_mut()
-                .push_script_frame(fn_def.name.clone(), source, pos, bindings);
+            let holds_this = this_ptr.is_some();
+            global.debugger_mut().push_script_frame(
+                fn_def.name.clone(),
+                source,
+                pos,
+                bindings,
+                holds_this,
+            );
         }
 
         // Merge in encapsulated environment, if any

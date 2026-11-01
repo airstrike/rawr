@@ -41,7 +41,9 @@ fn check_struct_sizes() {
         return;
     }
 
-    assert_eq!(size_of::<Scope>(), 24);
+    // Its values are a `Vec`, which a debugger can find each of without
+    // borrowing the others (#540).
+    assert_eq!(size_of::<Scope>(), 40);
     assert_eq!(size_of::<FnPtr>(), 48);
     assert_eq!(size_of::<LexError>(), 48);
     // The type, the position and the error as rustc prints it.

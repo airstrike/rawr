@@ -28,20 +28,20 @@ pub type FnCallArgs<'a> = [&'a mut Dynamic];
 
 /// A type that temporarily stores a mutable reference to a `Dynamic`,
 /// replacing it with a cloned copy.
+///
+/// The copy lives outside the backup, in the caller's own local: the
+/// closure that restores the first argument holds the backup, and the
+/// copy it lends must not be part of what that closure borrows (#540).
 #[derive(Debug)]
 struct ArgBackup<'a> {
     orig_mut: Option<&'a mut Dynamic>,
-    value_copy: Dynamic,
 }
 
 impl<'a> ArgBackup<'a> {
     /// Create a new `ArgBackup`.
     #[inline(always)]
     pub fn new() -> Self {
-        Self {
-            orig_mut: None,
-            value_copy: Dynamic::UNIT,
-        }
+        Self { orig_mut: None }
     }
     /// This function replaces the first argument of a method call with a clone copy.
     /// This is to prevent a pure function unintentionally consuming the first argument.
@@ -61,9 +61,9 @@ impl<'a> ArgBackup<'a> {
     ///
     /// Panics when `args` is empty.
     #[inline(always)]
-    pub fn change_first_arg_to_copy(&mut self, args: &mut FnCallArgs<'a>) {
+    pub fn change_first_arg_to_copy(&mut self, args: &mut FnCallArgs<'a>, copy: &mut Dynamic) {
         // Clone the original value.
-        self.value_copy = args[0].clone();
+        *copy = args[0].clone();
 
         // Replace the first reference with a reference to the clone, force-casting the lifetime.
         // Must remember to restore it later with `restore_first_arg`.
@@ -76,7 +76,7 @@ impl<'a> ArgBackup<'a> {
         // We can do this here because, before the end of this scope, we'd restore the original
         // reference via `restore_first_arg`. Therefore this shorter lifetime does not leak.
         self.orig_mut = Some(mem::replace(&mut args[0], unsafe {
-            mem::transmute::<&mut Dynamic, &'a mut Dynamic>(&mut self.value_copy)
+            mem::transmute::<&mut Dynamic, &'a mut Dynamic>(copy)
         }));
     }
     /// This function restores the first argument that was replaced by `change_first_arg_to_copy`.
@@ -358,6 +358,7 @@ impl Engine {
                 .as_ref()
                 .map_or(0, |dbg| dbg.call_stack().len());
 
+            let mut copy = Dynamic::UNIT;
             let backup = &mut ArgBackup::new();
 
             // Calling non-method function but the first argument is a reference?
@@ -369,18 +370,21 @@ impl Engine {
 
             if swap {
                 // Clone the first argument
-                backup.change_first_arg_to_copy(args);
+                backup.change_first_arg_to_copy(args, &mut copy);
             }
 
             #[cfg(feature = "debugging")]
             if self.is_debugger_registered() {
                 let source = source.clone().or_else(|| global.source.clone());
 
+                // Its name and position only: the arguments are the
+                // call's while it runs (#513).
+                let holds_first = is_ref_mut && !swap && !args.is_empty();
                 global.debugger_mut().push_call_stack_frame(
                     self.get_interned_string(name),
-                    args.iter().map(|v| (*v).clone()),
                     source,
                     pos,
+                    holds_first,
                 );
             }
 
@@ -665,13 +669,14 @@ impl Engine {
                     )
                 } else {
                     // Normal call of script function
+                    let mut copy = Dynamic::UNIT;
                     let backup = &mut ArgBackup::new();
 
                     // The first argument is a reference?
                     let swap = is_ref_mut && !args.is_empty();
 
                     if swap {
-                        backup.change_first_arg_to_copy(args);
+                        backup.change_first_arg_to_copy(args, &mut copy);
                     }
 
                     defer! { args = (args) if swap => move |a| backup.restore_first_arg(a) }
@@ -1128,14 +1133,24 @@ impl Engine {
                             arg_values.push(value);
                         }
                         let args = &mut arg_values.iter_mut().collect::<FnArgsVec<_>>();
+                        #[cfg(feature = "debugging")]
+                        self.lend_bindings(
+                            global,
+                            Some(std::ptr::NonNull::from(&mut *scope)),
+                            this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                            None,
+                        );
                         let scope = &mut Scope::new();
                         let env = env.as_deref();
 
                         defer! { let orig_level = global.level; global.level += 1 }
 
-                        return self.call_script_fn(
+                        let result = self.call_script_fn(
                             global, caches, scope, None, env, &fn_def, args, true, pos,
                         );
+                        #[cfg(feature = "debugging")]
+                        self.unlend_bindings(global);
+                        return result;
                     }
                     // Native function - short-circuit
                     FnPtrType::Native(ref func) => {
@@ -1535,7 +1550,7 @@ impl Engine {
 
         // Normal function call - except for Fn, curry, call and eval (handled above)
         // A place a closure reaches (`KEYWORD_HELD`), lent to the call.
-        let mut lent: Option<crate::eval::Target> = None;
+        let mut loaned: Option<crate::eval::Target> = None;
         let mut arg_values = FnArgsVec::with_capacity(num_args);
         let mut args = FnArgsVec::with_capacity(num_args + curry.len());
         let mut is_ref_mut = false;
@@ -1553,19 +1568,40 @@ impl Engine {
             args.extend(curry.iter_mut());
             args.extend(arg_values.iter_mut());
 
-            // Use parent scope
+            // Use parent scope, which the call extends.
+            #[cfg(feature = "debugging")]
+            self.lend_bindings(
+                global,
+                None,
+                this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                None,
+            );
             let scope = Some(scope);
 
-            return self
+            let result = self
                 .exec_fn_call(
                     global, caches, scope, fn_name, op_token, hashes, &mut args, is_ref_mut, false,
                     pos,
                 )
                 .map(|(v, ..)| v);
+            #[cfg(feature = "debugging")]
+            self.unlend_bindings(global);
+            return result;
         }
 
         // Call with blank scope
         let has_non_shared_this_ptr = this_ptr.as_ref().is_some_and(|v| !v.is_shared());
+
+        // What the call is lent of this caller, for a debugger (#540): its
+        // scope and receiver, each taken after this caller's last use of
+        // them before the call, and the place the call is given by
+        // reference.
+        #[cfg(feature = "debugging")]
+        let mut lent: (
+            Option<std::ptr::NonNull<Scope>>,
+            Option<std::ptr::NonNull<Dynamic>>,
+            Option<crate::eval::Held>,
+        );
 
         // If the first argument is a variable, and there are no curried arguments,
         // convert to method-call style in order to leverage potential &mut first argument
@@ -1587,6 +1623,15 @@ impl Engine {
                         this_ptr.as_deref_mut(),
                         expr,
                     )?);
+                }
+
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (
+                        Some(std::ptr::NonNull::from(&mut *scope)),
+                        None,
+                        Some(crate::eval::Held::This),
+                    );
                 }
 
                 is_ref_mut = true;
@@ -1611,8 +1656,27 @@ impl Engine {
 
                 // A constant is lent too: a call that would change it changes
                 // a copy (`exec_native_fn_call`'s `by_value`).
-                let target =
-                    self.search_namespace(global, caches, scope, this_ptr.as_deref_mut(), first)?;
+                //
+                // The search borrows the scope and receiver through the
+                // pointers lent to the call, so they stay the most recent
+                // borrows while it runs (#540).
+                let scope_ptr = std::ptr::NonNull::from(&mut *scope);
+                let this_lent = this_ptr.as_deref_mut().map(std::ptr::NonNull::from);
+                // SAFETY: the pointers are this function's own borrows of
+                // `scope` and `this_ptr`, which nothing else uses while the
+                // target lives: it is dropped, with `args`, before
+                // `end_loans` uses them again.
+                let target = self.search_namespace(
+                    global,
+                    caches,
+                    unsafe { &mut *scope_ptr.as_ptr() },
+                    this_lent.map(|this| unsafe { &mut *this.as_ptr() }),
+                    first,
+                )?;
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (Some(scope_ptr), this_lent, None);
+                }
 
                 // A place a closure reaches through a shared handle is the
                 // place itself, held locked for the call, not a copy.
@@ -1624,12 +1688,16 @@ impl Engine {
                         && !arg_values.iter().any(Dynamic::is_fnptr)
                 {
                     is_ref_mut = true;
-                    args.push(lent.insert(target).as_mut());
+                    args.push(loaned.insert(target).as_mut());
                 } else if target.is_shared() || target.is_temp_value() {
                     arg_values.insert(0, target.take_or_clone().flatten());
                 } else {
                     // Turn it into a method call only if the object is not shared and not a simple value
                     is_ref_mut = true;
+                    #[cfg(feature = "debugging")]
+                    {
+                        lent.2 = target.held_address().map(crate::eval::Held::Local);
+                    }
                     let obj_ref = target.take_ref().unwrap();
                     args.push(obj_ref);
                 }
@@ -1646,18 +1714,30 @@ impl Engine {
                     )?);
                 }
                 args.extend(curry.iter_mut());
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (
+                        Some(std::ptr::NonNull::from(&mut *scope)),
+                        this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                        None,
+                    );
+                }
             }
         }
 
         args.extend(arg_values.iter_mut());
 
+        #[cfg(feature = "debugging")]
+        self.lend_bindings(global, lent.0, lent.1, lent.2);
         let result = self
             .exec_fn_call(
                 global, caches, None, fn_name, op_token, hashes, &mut args, is_ref_mut, false, pos,
             )
             .map(|(v, ..)| v);
+        #[cfg(feature = "debugging")]
+        self.unlend_bindings(global);
         drop(args);
-        drop(lent);
+        drop(loaned);
         Self::end_loans(scope, this_ptr, first_arg.into_iter().chain(args_expr));
         result
     }
@@ -1731,12 +1811,23 @@ impl Engine {
         pos: Position,
     ) -> RawrResult {
         // A place a closure reaches (`KEYWORD_HELD`), lent to the call.
-        let mut lent: Option<crate::eval::Target> = None;
+        let mut loaned: Option<crate::eval::Target> = None;
         let mut arg_values = FnArgsVec::with_capacity(args_expr.len());
         let args = &mut FnArgsVec::with_capacity(args_expr.len());
         let mut first_arg_value = None;
 
         let has_non_shared_this_ptr = this_ptr.as_ref().is_some_and(|v| !v.is_shared());
+        // Whether the first argument is the caller's place, by reference.
+        let mut first_by_ref = false;
+
+        // What the call is lent of this caller, for a debugger (#540), as
+        // in `make_function_call`.
+        #[cfg(feature = "debugging")]
+        let mut lent: (
+            Option<std::ptr::NonNull<Scope>>,
+            Option<std::ptr::NonNull<Dynamic>>,
+            Option<crate::eval::Held>,
+        );
 
         // See if the first argument is a variable.
         // If so, convert to method-call style in order to leverage potential
@@ -1757,9 +1848,19 @@ impl Engine {
                     arg_values.push(value.flatten());
                 }
 
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (
+                        Some(std::ptr::NonNull::from(&mut *scope)),
+                        None,
+                        Some(crate::eval::Held::This),
+                    );
+                }
+
                 // func(x, ...) -> x.func(...)
                 let (first, rest) = arg_values.split_first_mut().unwrap();
                 first_arg_value = Some(first);
+                first_by_ref = true;
                 args.push(this_ptr.unwrap());
                 args.extend(rest.iter_mut());
             }
@@ -1778,11 +1879,27 @@ impl Engine {
                     arg_values.push(value.flatten());
                 }
 
-                let target = self.search_namespace(global, caches, scope, this_ptr, first)?;
+                // The search borrows the scope and receiver through the
+                // pointers lent to the call (#540).
+                let scope_ptr = std::ptr::NonNull::from(&mut *scope);
+                let this_lent = this_ptr.map(std::ptr::NonNull::from);
+                // SAFETY: the pointers are this function's own borrows of
+                // `scope` and `this_ptr`, which it doesn't use again.
+                let target = self.search_namespace(
+                    global,
+                    caches,
+                    unsafe { &mut *scope_ptr.as_ptr() },
+                    this_lent.map(|this| unsafe { &mut *this.as_ptr() }),
+                    first,
+                )?;
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (Some(scope_ptr), this_lent, None);
+                }
 
                 if held_place(first, &target) {
                     let (_, rest) = arg_values.split_first_mut().unwrap();
-                    args.push(lent.insert(target).as_mut());
+                    args.push(loaned.insert(target).as_mut());
                     args.extend(rest.iter_mut());
                 } else if target.is_shared() || target.is_temp_value() {
                     arg_values[0] = target.take_or_clone().flatten();
@@ -1792,6 +1909,11 @@ impl Engine {
                     // func(x, ...) -> x.func(...)
                     let (first, rest) = arg_values.split_first_mut().unwrap();
                     first_arg_value = Some(first);
+                    first_by_ref = true;
+                    #[cfg(feature = "debugging")]
+                    {
+                        lent.2 = target.held_address().map(crate::eval::Held::Local);
+                    }
                     let obj_ref = target.take_ref().unwrap();
                     args.push(obj_ref);
                     args.extend(rest.iter_mut());
@@ -1805,8 +1927,25 @@ impl Engine {
                     arg_values.push(value.flatten());
                 }
                 args.extend(arg_values.iter_mut());
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (
+                        Some(std::ptr::NonNull::from(&mut *scope)),
+                        this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                        None,
+                    );
+                }
             }
-            None => (),
+            None => {
+                #[cfg(feature = "debugging")]
+                {
+                    lent = (
+                        Some(std::ptr::NonNull::from(&mut *scope)),
+                        this_ptr.map(std::ptr::NonNull::from),
+                        None,
+                    );
+                }
+            }
         }
 
         // Search for the root namespace
@@ -1863,11 +2002,34 @@ impl Engine {
         {
             *first = args[0].clone();
             args[0] = first;
+            first_by_ref = false;
         }
 
         defer! { let orig_level = global.level; global.level += 1 }
 
-        match func {
+        // A native function's frame has its name and position only (#513).
+        #[cfg(feature = "debugging")]
+        let orig_call_stack_len = global
+            .debugger
+            .as_ref()
+            .map_or(0, |dbg| dbg.call_stack().len());
+        #[cfg(feature = "debugging")]
+        {
+            self.lend_bindings(global, lent.0, lent.1, lent.2);
+            if self.is_debugger_registered() && func.is_some_and(RawrFunc::is_native) {
+                let source = module.id_raw().cloned();
+                global.debugger_mut().push_call_stack_frame(
+                    self.get_interned_string(fn_name),
+                    source,
+                    pos,
+                    first_by_ref,
+                );
+            }
+        }
+        #[cfg(not(feature = "debugging"))]
+        let _ = first_by_ref;
+
+        let result = match func {
             Some(RawrFunc::Script { fn_def, env }) => {
                 let env = env.as_deref();
                 let scope = &mut Scope::new();
@@ -1921,7 +2083,13 @@ impl Engine {
                 pos,
             )
             .into()),
+        };
+        #[cfg(feature = "debugging")]
+        if self.is_debugger_registered() {
+            global.debugger_mut().rewind_call_stack(orig_call_stack_len);
+            self.unlend_bindings(global);
         }
+        result
     }
 
     /// Evaluate a text script in place - used primarily for 'eval'.
@@ -2004,10 +2172,21 @@ impl Engine {
                 Ok((!b).into())
             } else {
                 let operand = &mut [&mut value];
-                self.exec_fn_call(
-                    global, caches, None, name, op_token, *hashes, operand, false, false, pos,
-                )
-                .map(|(v, ..)| v)
+                #[cfg(feature = "debugging")]
+                self.lend_bindings(
+                    global,
+                    Some(std::ptr::NonNull::from(&mut *scope)),
+                    this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                    None,
+                );
+                let result = self
+                    .exec_fn_call(
+                        global, caches, None, name, op_token, *hashes, operand, false, false, pos,
+                    )
+                    .map(|(v, ..)| v);
+                #[cfg(feature = "debugging")]
+                self.unlend_bindings(global);
+                result
             };
         }
 
@@ -2039,7 +2218,16 @@ impl Engine {
 
             let operands = &mut [&mut lhs, &mut rhs];
 
-            return self
+            // The operands are copies: the call holds none of this
+            // caller's bindings (#540).
+            #[cfg(feature = "debugging")]
+            self.lend_bindings(
+                global,
+                Some(std::ptr::NonNull::from(&mut *scope)),
+                this_ptr.as_deref_mut().map(std::ptr::NonNull::from),
+                None,
+            );
+            let result = self
                 .exec_fn_call(
                     global,
                     caches,
@@ -2053,6 +2241,9 @@ impl Engine {
                     pos,
                 )
                 .map(|(v, ..)| v);
+            #[cfg(feature = "debugging")]
+            self.unlend_bindings(global);
+            return result;
         }
 
         if !namespace.is_empty() {

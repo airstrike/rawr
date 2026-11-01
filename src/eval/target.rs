@@ -168,6 +168,23 @@ pub enum Target<'a> {
 }
 
 impl<'a> Target<'a> {
+    /// Where the place this [`Target`] holds by reference is, for a
+    /// debugger to leave it alone while a call holds it (#540): `None` for a
+    /// temporary value or one behind a shared handle's lock. Only the
+    /// address; it is never read through.
+    #[cfg(feature = "debugging")]
+    #[must_use]
+    pub(crate) fn held_address(&self) -> Option<*const Dynamic> {
+        match self {
+            Self::RefMut(place) => Some(std::ptr::from_ref::<Dynamic>(place)),
+            Self::Bit { source, .. }
+            | Self::BitField { source, .. }
+            | Self::BlobByte { source, .. }
+            | Self::StringChar { source, .. }
+            | Self::StringSlice { source, .. } => Some(std::ptr::from_ref::<Dynamic>(source)),
+            Self::SharedValue { .. } | Self::SharedPart { .. } | Self::TempValue(..) => None,
+        }
+    }
     /// Is the [`Target`] a reference pointing to other data?
     #[allow(dead_code)]
     #[inline]

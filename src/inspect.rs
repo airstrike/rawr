@@ -120,67 +120,116 @@ fn depth_of(context: &EvalContext) -> usize {
     script_frames(context).len().max(1)
 }
 
+/// One binding of a frame: its name, and its value or why it can't be read
+/// there.
+type Entry<'c> = (&'c str, Result<&'c Dynamic, String>);
+
+/// The scope frame `frame` keeps its bindings in where `context` is, and
+/// where its own entries end in it. `None` when it can't be read there.
+fn scope_of<'c>(
+    context: &'c EvalContext,
+    stack: &'c [crate::debugger::CallStackFrame],
+    frames: &[usize],
+    frame: usize,
+) -> Option<(&'c crate::Scope<'c>, usize)> {
+    if frame == 0 {
+        return Some((context.scope(), usize::MAX));
+    }
+    let index = *frames.get(frame)?;
+    let call = stack.get(index + 1)?;
+    match call.caller.as_ref()?.scope {
+        // SAFETY: the call at `index + 1` is on the call stack, so it runs
+        // on this thread below the step `context` is at. Its caller lent
+        // it this pointer after its last use of its scope before the call,
+        // and uses it again only when the call returns (`Lent`), so no
+        // live `&mut` aliases it. The reference ends with `context`'s
+        // borrow, inside this step's callback.
+        Some(scope) => Some((
+            unsafe { scope.cast::<crate::Scope<'c>>().as_ref() },
+            usize::MAX,
+        )),
+        // The call extended this frame's scope: it is the next frame in,
+        // whose entries start where this frame's end.
+        None if frames.get(frame - 1) == Some(&(index + 1)) => {
+            let end = call.bindings.as_ref()?.start;
+            scope_of(context, stack, frames, frame - 1).map(|(scope, _)| (scope, end))
+        }
+        None => None,
+    }
+}
+
 /// The entries of frame `frame` where `context` is (0 is the function the
 /// program is in, 1 its caller, and on), the newest first: its scope's
 /// entries, then its receiver under the name the program gave it (#534).
-/// `None` when the program isn't that deep.
-fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<(&'c str, &'c Dynamic)>> {
+/// A caller's bindings are read where the call it made was lent them
+/// (#540); one that call holds by reference reads as borrowed, as Rust
+/// would have it, and a caller that lent nothing (native code called the
+/// next frame in) has none to read. `None` when the program isn't that
+/// deep.
+fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<Entry<'c>>> {
     let frames = script_frames(context);
     let stack = context
         .global_runtime_state()
         .debugger
         .as_ref()
-        .map(|debugger| debugger.call_stack());
-    let at =
-        |index: usize| stack.and_then(|stack| stack.get(*frames.get(index)?)?.bindings.as_ref());
-    let mut found: Vec<(&'c str, &'c Dynamic)> = Vec::new();
-    let current: *const crate::Scope = context.scope();
+        .map_or(&[][..], |debugger| debugger.call_stack());
+    let own = |index: usize| stack.get(*frames.get(index)?)?.bindings.as_ref();
+    let mut found: Vec<Entry<'c>> = Vec::new();
     if frame == 0 {
         found.extend(
             context
                 .scope()
                 .iter_rev_inner()
-                .map(|(name, _, value)| (name.as_str(), value)),
+                .map(|(name, _, value)| (name.as_str(), Ok(value))),
         );
         if let (Some(name), Some(this)) = (
-            at(0).and_then(|bindings| bindings.this_name.as_ref()),
+            own(0).and_then(|bindings| bindings.this_name.as_ref()),
             context.this_ptr(),
         ) {
-            found.push((name.as_str(), this));
+            found.push((name.as_str(), Ok(this)));
         }
         return Some(found);
     }
-    let bindings = at(frame)?;
-    // The caller's scope is the current one when the call extended it.
-    let scope: &'c crate::Scope =
-        if std::ptr::eq(bindings.scope.as_ptr().cast_const().cast(), current) {
-            context.scope()
-        } else {
-            // SAFETY: the frame is on the call stack, so its call runs on this
-            // thread below the step `context` is at, and its scope lives
-            // (`FrameBindings`). Nothing changes it while this step's callback
-            // runs, and the reference ends with `context`'s borrow.
-            unsafe { bindings.scope.cast::<crate::Scope<'c>>().as_ref() }
-        };
-    // Its entries end where a call it made extended the same scope.
-    let end = (0..frame)
-        .filter_map(at)
-        .filter(|inner| inner.scope == bindings.scope)
-        .map(|inner| inner.start)
-        .min()
-        .unwrap_or(usize::MAX);
-    let mut own: Vec<(&'c str, &'c Dynamic)> = scope
-        .iter_inner()
+    let bindings = own(frame)?;
+    let index = frames[frame];
+    let call = stack.get(index + 1)?;
+    let (Some(lent), Some((scope, end))) = (
+        call.caller.as_ref(),
+        scope_of(context, stack, &frames, frame),
+    ) else {
+        return Some(found);
+    };
+    let callee = crate::resolve::lower_nominal::function_display_name(&call.fn_name);
+    let borrowed = |name: &str| format!("`{name}` is borrowed by the call to `{callee}`");
+    let places: Vec<(&'c str, *const Dynamic)> = scope
+        .places()
         .enumerate()
         .filter(|(index, _)| (bindings.start..end).contains(index))
-        .map(|(_, (name, _, value))| (name.as_str(), value))
+        .map(|(_, (name, place))| (name.as_str(), place))
         .collect();
-    own.reverse();
-    found.extend(own);
-    if let (Some(name), Some(this)) = (bindings.this_name.as_ref(), bindings.this) {
-        // SAFETY: as for the scope: the receiver is the call's own, which
-        // runs below this step.
-        found.push((name.as_str(), unsafe { this.as_ref() }));
+    let held = match lent.held {
+        Some(crate::eval::Held::Local(place)) => Some(place),
+        _ => None,
+    };
+    // A place inside one of the frame's values, or inside its receiver:
+    // which one isn't known, so the whole frame reads as borrowed.
+    let all_held = held.is_some_and(|held| places.iter().all(|&(_, place)| place != held));
+    for &(name, place) in places.iter().rev() {
+        if all_held || held == Some(place) {
+            found.push((name, Err(borrowed(name))));
+        } else {
+            // SAFETY: as for the scope in `scope_of`; the one place the
+            // call holds by reference is not read.
+            found.push((name, Ok(unsafe { &*place })));
+        }
+    }
+    if let Some(name) = bindings.this_name.as_ref() {
+        if all_held || lent.held == Some(crate::eval::Held::This) {
+            found.push((name.as_str(), Err(borrowed(name))));
+        } else if let Some(this) = lent.this {
+            // SAFETY: as for the scope in `scope_of`.
+            found.push((name.as_str(), Ok(unsafe { this.as_ref() })));
+        }
     }
     Some(found)
 }
@@ -190,20 +239,20 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<(&'c str, &
 /// program isn't that deep.
 fn read(context: &mut EvalContext, frame: usize, name: Option<&str>) -> Option<Vec<Binding>> {
     let mut seen = HashSet::new();
-    let mut found: Vec<(String, Dynamic)> = entries(context, frame)?
+    let mut found: Vec<(String, Result<Dynamic, String>)> = entries(context, frame)?
         .into_iter()
         .filter(|(entry, _)| {
             name.map_or_else(|| is_written(entry), |name| *entry == name)
                 && seen.insert(entry.to_string())
         })
-        .map(|(entry, value)| (entry.to_owned(), value.flatten_clone()))
+        .map(|(entry, value)| (entry.to_owned(), value.map(Dynamic::flatten_clone)))
         .collect();
     found.reverse();
     Some(
         found
             .into_iter()
             .map(|(name, value)| Binding {
-                value: debug_text(context, &value),
+                value: value.and_then(|value| debug_text(context, &value)),
                 name,
             })
             .collect(),
@@ -1111,7 +1160,10 @@ mod tests {
                         format!(
                             "{}={}",
                             binding.name,
-                            binding.value.clone().unwrap_or_default()
+                            binding
+                                .value
+                                .clone()
+                                .unwrap_or_else(|error| format!("<{error}>"))
                         )
                     })
                     .collect::<Vec<_>>()
@@ -1171,6 +1223,90 @@ mod tests {
                 .any(|saw| saw == "inner: x=6 | outer: a=5 b=6 | run: n=5 | : none"),
             "{seen:?}"
         );
+    }
+
+    /// Each frame's function and bindings where `context` is.
+    fn every_frame(context: &mut crate::EvalContext) -> String {
+        (0..depth_of(context))
+            .map(|frame| {
+                format!(
+                    "{}: {}",
+                    frame_function(context, frame).unwrap_or_default(),
+                    shown(context, frame)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    #[test]
+    fn a_caller_binding_a_running_call_holds_reads_as_borrowed() {
+        let seen = at_steps(
+            "struct Counter { count: i64 }\n\
+             impl Counter { fn bump(&mut self, by: i64) { self.count += by; } }\n\
+             pub fn run() -> i64 { let k = 7; let mut c = Counter { count: 1 }; c.bump(4); c.count + k }\n\
+             run()",
+            "bump",
+            every_frame,
+        );
+        // A method's frame is named by its symbol, which ends in its name.
+        assert!(
+            seen.iter().any(|saw| {
+                let (bump, run) = saw.split_once(" | ").unwrap();
+                bump.ends_with("bump: self=Counter { count: 1 } by=4")
+                    && run.starts_with("run: k=7 c=<`c` is borrowed by the call to `")
+                    && run.ends_with("bump`>")
+            }),
+            "{seen:?}"
+        );
+        let seen = at_steps(
+            "fn tick(count: &mut u64, step: u64) { *count += step; }\n\
+             pub fn run() -> i64 { let k = 7; let mut n: u64 = 3; tick(&mut n, 2); n as i64 + k }\n\
+             run()",
+            "tick",
+            every_frame,
+        );
+        assert!(
+            seen.iter().any(|saw| saw
+                == "tick: count=3 step=2 | run: k=7 n=<`n` is borrowed by the call to `tick`>"),
+            "{seen:?}"
+        );
+    }
+
+    /// A value whose copies are counted.
+    struct Counted;
+
+    static COPIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            COPIES.fetch_add(1, Ordering::Relaxed);
+            Self
+        }
+    }
+
+    #[test]
+    fn a_native_call_frame_copies_no_argument() {
+        let copies = |debugged: bool| {
+            let mut engine = crate::Engine::new();
+            engine
+                .register_type_with_name::<Counted>("Counted")
+                .register_fn("counted", || Counted)
+                .register_fn("touch", |_: Counted| ());
+            if debugged {
+                #[allow(deprecated)]
+                engine.register_debugger(
+                    |_, debugger| debugger,
+                    |_, _, _, _, _| Ok(crate::debugger::DebuggerCommand::Continue),
+                );
+            }
+            let before = COPIES.load(Ordering::Relaxed);
+            engine
+                .run("pub fn run() { let c = counted(); touch(c); touch(counted()); } run()")
+                .unwrap_or_else(|error| panic!("{error}"));
+            COPIES.load(Ordering::Relaxed) - before
+        };
+        assert_eq!(copies(true), copies(false));
     }
 
     #[derive(Clone)]
