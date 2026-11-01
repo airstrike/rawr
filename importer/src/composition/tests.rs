@@ -29,7 +29,9 @@ impl Drop for Root {
 struct Api;
 impl crate::node::Value for Api {
     const KIND: crate::node::Kind = crate::node::Kind::Api;
-    const SCHEMA: u32 = u32::MAX;
+    // The current API schema: an action with another is one an older rawr
+    // wrote, which the store evicts (#630).
+    const SCHEMA: u32 = <crate::api::cached::Product as crate::node::Value>::SCHEMA;
     fn encode(&self, _: usize) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::from(&b"composition-api"[..]))
     }

@@ -8,6 +8,23 @@ const DOMAIN: &[u8] = b"rawr.generated.overlay/v3";
 const MAGIC: &[u8; 8] = b"RAWROVL1";
 const HEADER_BYTES: usize = 112;
 
+/// The overlay's store schema: its codec with the versions its action key
+/// carries through the generator and the build request key (request schema,
+/// contract schema and classifier), so an overlay an older generator wrote
+/// has another schema and the store evicts it (#630).
+pub(crate) const SCHEMA: u32 = {
+    let contract = crate::classify::contract_versions();
+    node::reader_schema(
+        1,
+        &[
+            super::super::generator_version(),
+            super::super::request_schema(),
+            contract[0],
+            contract[1],
+        ],
+    )
+};
+
 #[cfg(all(test, feature = "test-fixtures"))]
 #[path = "cached/tests.rs"]
 mod retained_tests;
@@ -238,7 +255,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Overlay;
-    const SCHEMA: u32 = 1;
+    const SCHEMA: u32 = SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();

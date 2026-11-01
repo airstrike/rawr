@@ -30,7 +30,9 @@ impl Drop for Root {
 struct Owned;
 impl Value for Owned {
     const KIND: Kind = Kind::Facade;
-    const SCHEMA: u32 = 1;
+    // The current bindings schema: an action with another is one an older
+    // rawr wrote, which the store evicts (#630).
+    const SCHEMA: u32 = <crate::surface::facade::cached::Product as crate::node::Value>::SCHEMA;
     fn encode(&self, _: usize) -> Result<Box<[u8]>, Error> {
         Ok(Box::from(&b"owned"[..]))
     }

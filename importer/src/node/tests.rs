@@ -70,7 +70,9 @@ struct Derived(Box<[u8]>);
 
 impl Value for Derived {
     const KIND: Kind = Kind::Facade;
-    const SCHEMA: u32 = 1;
+    // The current bindings schema: an action with another is one an older
+    // rawr wrote, which the store evicts (#630).
+    const SCHEMA: u32 = <crate::surface::facade::cached::Product as crate::node::Value>::SCHEMA;
 
     fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
         retain_fixture_bytes(&self.0, limit, "fixture derived bytes")
@@ -2451,7 +2453,7 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
             .join(first.receipt().action().directory());
         let content = store
             .root()
-            .join("content/facade/00000001")
+            .join(format!("content/facade/{:08x}", Derived::SCHEMA))
             .join(first.content().digest().directory());
         let (path, length) = match kind {
             0 => (
@@ -5285,6 +5287,90 @@ fn a_store_over_its_recency_bound_evicts_the_oldest_unpinned_execution() {
 
     drop(guard);
     drop((pinned, unpinned, newest));
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// Bindings an older rawr selected: their schema folds in other versions.
+struct OldDerived(Derived);
+
+impl Value for OldDerived {
+    const KIND: Kind = Kind::Facade;
+    const SCHEMA: u32 = Derived::SCHEMA.wrapping_add(1);
+
+    fn encode(&self, limit: usize) -> Result<Box<[u8]>, Error> {
+        self.0.encode(limit)
+    }
+
+    fn decode(bytes: &[u8], limit: usize) -> Result<Self, Error> {
+        Derived::decode(bytes, limit).map(Self)
+    }
+}
+
+/// Plain entries an older rawr wrote (an API, generic contract, overlay or
+/// bindings action and its content) are evicted when the store opens, as
+/// executions are, and current entries stay (#630).
+#[test]
+fn a_store_evicts_plain_entries_an_older_rawr_wrote_when_it_opens() {
+    let root = temporary("store-unreadable-plain");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the store opens");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let current = evaluator
+        .direct(
+            &context
+                .direct::<Derived>(b"plain-current", 4_096)
+                .expect("the current recipe seals"),
+            || Ok(Derived(Box::from(b"current".as_slice()))),
+        )
+        .expect("the current entry publishes");
+    // This rawr evicts an old entry whenever it makes room, so the old one
+    // publishes last, as the older rawr's run would have left it.
+    let old = evaluator
+        .direct(
+            &context
+                .direct::<OldDerived>(b"plain-old", 4_096)
+                .expect("the old recipe seals"),
+            || Ok(OldDerived(Derived(Box::from(b"old".as_slice())))),
+        )
+        .expect("the old entry publishes");
+    let action = |key: super::ActionKey| {
+        store
+            .root()
+            .join("actions/facade")
+            .join(super::STORAGE_DIRECTORY)
+            .join(key.directory())
+    };
+    let content = |schema: u32, digest: super::Digest| {
+        store
+            .root()
+            .join(format!("content/facade/{schema:08x}"))
+            .join(digest.directory())
+    };
+    let old_action = action(old.receipt().action());
+    let old_content = content(OldDerived::SCHEMA, old.receipt().content_digest());
+    let current_action = action(current.receipt().action());
+    let current_content = content(Derived::SCHEMA, current.receipt().content_digest());
+    for path in [&old_action, &old_content, &current_action, &current_content] {
+        assert!(path.exists(), "{} is published", path.display());
+    }
+    drop((evaluator, old, current));
+    drop(store);
+
+    // The next run opens the store.
+    let store = context.open_store().expect("the store opens");
+    assert!(
+        !old_action.exists() && !old_content.exists(),
+        "the old entry and its content evict"
+    );
+    assert!(
+        current_action.exists() && current_content.exists(),
+        "a current entry stays"
+    );
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
     store.retire_fixture().expect("the store retires");
     fs::remove_dir_all(root).expect("the fixture retires");
 }
