@@ -10,7 +10,7 @@ use crate::input::membership::{
     },
     stored, Budget, Error, Result,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 const PATH: &[u8] = b"/fixture/HEAD";
 
@@ -138,13 +138,11 @@ impl System for Script {
 
 fn capture(script: &mut Script, role: Role) -> observed::Record {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     acquire(
         PATH,
         role,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         script,
@@ -163,10 +161,8 @@ pub(in crate::input::membership) fn path(contents: &[u8]) -> observed::Record {
 #[test]
 fn configuration_reuses_caller_capacity_keeps_descriptor_during_completion_and_replays() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut buffer = git_read::Buffer::with_capacity(512, &mut budget).unwrap();
@@ -211,10 +207,8 @@ fn configuration_reuses_caller_capacity_keeps_descriptor_during_completion_and_r
 #[test]
 fn configuration_open_failure_retains_buffer_and_completion_refusal_closes_once() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut buffer = git_read::Buffer::with_capacity(512, &mut budget).unwrap();
@@ -247,17 +241,10 @@ fn configuration_open_failure_retains_buffer_and_completion_refusal_closes_once(
     assert_eq!(denied.events, [Native::Open]);
     let mut refused = Script::new(b"new");
     let live = refused.live_observer.clone();
-    let result = super::configuration(
-        PATH,
-        &mut buffer,
-        &mut budget,
-        &mut refused,
-        |_, _, budget| {
-            assert!(live.get());
-            budget.graph.paths(usize::MAX)?;
-            Ok(())
-        },
-    );
+    let result = super::configuration(PATH, &mut buffer, &mut budget, &mut refused, |_, _, _| {
+        assert!(live.get());
+        Err::<(), _>(crate::node::Error::Allocation.into())
+    });
     assert!(result.is_err());
     assert!(!live.get());
     assert_eq!(
@@ -272,10 +259,8 @@ fn configuration_open_failure_retains_buffer_and_completion_refusal_closes_once(
 
 fn roundtrip(record: observed::Record, role: Role) -> git_read::Outcome {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[record], &mut budget).unwrap();
@@ -447,10 +432,8 @@ fn git_read_rejects_shape_and_reached_request_tampering() {
         value: observed::Value::GitRead(transcript),
     };
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[record], &mut budget).unwrap();
@@ -463,119 +446,8 @@ fn git_read_rejects_shape_and_reached_request_tampering() {
 }
 
 #[test]
-fn git_read_refusal_keeps_prepaid_cleanup_and_stops_native_work() {
-    let limits = cargo::Limits::standard();
-    let mut measured = input::Allocation::new(&limits);
-    let graph = node::GraphBudget::new();
-    let mut script = Script::new(b"prefix");
-    script.reads = [Ok(3), Err(libc::EIO)].into();
-    acquire(
-        PATH,
-        Role::LooseReference,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut measured,
-        },
-        &mut script,
-    )
-    .unwrap();
-    let total = measured.usage();
-    let baseline = script.events.clone();
-    // Boundaries include initial buffer, event-vector growth and failed-byte
-    // evidence. A byte target below the total is recorded, never
-    // refused; the acquisition completes with the same events and one close.
-    for bytes in [0, 64, 128, 256, total.bytes - 1, total.bytes] {
-        let graph = node::GraphBudget::new();
-        let mut allocation =
-            input::Allocation::with_limits(total.items, bytes, limits.string_bytes);
-        let mut script = Script::new(b"prefix");
-        script.reads = [Ok(3), Err(libc::EIO)].into();
-        acquire(
-            PATH,
-            Role::LooseReference,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut script,
-        )
-        .expect("bytes past the target are owned");
-        assert!(!script.live);
-        assert_eq!(script.events, baseline);
-        assert_eq!(allocation.usage(), total);
-    }
-    // Checked-arithmetic overflow is a genuine refusal at the same boundaries.
-    // Every refused case must close any successfully acquired File.
-    for bytes in [0, 64, 128, 256, total.bytes - 1, total.bytes] {
-        let graph = node::GraphBudget::new();
-        let mut allocation =
-            input::Allocation::with_limits(total.items, usize::MAX, limits.string_bytes);
-        allocation.bytes(usize::MAX - bytes).unwrap();
-        let mut script = Script::new(b"prefix");
-        script.reads = [Ok(3), Err(libc::EIO)].into();
-        let result = acquire(
-            PATH,
-            Role::LooseReference,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut script,
-        );
-        assert_eq!(result.is_ok(), bytes == total.bytes);
-        assert!(!script.live);
-        assert!(
-            script
-                .events
-                .iter()
-                .filter(|event| **event == Native::Close)
-                .count()
-                <= 1
-        );
-    }
-    // Two path checks pay for cleanup and open; the descriptor-metadata check
-    // past the graph path constant is still made and the read completes.
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2).unwrap();
-    let mut allocation = input::Allocation::new(&limits);
-    let mut script = Script::new(b"abc");
-    acquire(
-        PATH,
-        Role::LooseReference,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        },
-        &mut script,
-    )
-    .expect("path checks past the target are still made");
-    assert!(!script.live);
-    assert_eq!(script.events[..2], [Native::Open, Native::Length]);
-    // Overflowing the graph account at the same point is a genuine refusal
-    // that keeps the prepaid cleanup and stops native work.
-    let graph = node::GraphBudget::new();
-    graph.paths(usize::MAX - 2).unwrap();
-    let mut allocation = input::Allocation::new(&limits);
-    let mut script = Script::new(b"abc");
-    assert!(matches!(
-        acquire(
-            PATH,
-            Role::LooseReference,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation
-            },
-            &mut script
-        ),
-        Err(Error::Budget(node::Error::Allocation))
-    ));
-    assert_eq!(script.events, [Native::Open, Native::Close]);
-}
-
-#[test]
 fn git_read_oversize_error_refuses_and_still_closes_the_live_descriptor_once() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::new(&limits);
     let mut script = Script::new(b"");
     script.lengths = [Ok(65537)].into();
@@ -583,7 +455,6 @@ fn git_read_oversize_error_refuses_and_still_closes_the_live_descriptor_once() {
         PATH,
         Role::DiscoveryPath,
         &mut Budget {
-            graph: &graph,
             allocation: &mut measured,
         },
         &mut script,
@@ -593,7 +464,6 @@ fn git_read_oversize_error_refuses_and_still_closes_the_live_descriptor_once() {
     // A genuine refusal while the oversize error is built: the account's
     // checked arithmetic overflowing on its last byte latches the account and
     // still closes the live descriptor once.
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.bytes(usize::MAX - (required.bytes - 1)).unwrap();
     let mut script = Script::new(b"");
@@ -602,7 +472,6 @@ fn git_read_oversize_error_refuses_and_still_closes_the_live_descriptor_once() {
         PATH,
         Role::DiscoveryPath,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation
         },
         &mut script

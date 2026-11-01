@@ -48,8 +48,7 @@ pub(super) fn current(
     }
     writer.output.push(b'\n');
     let output = budget.owned_box(writer.output)?;
-    let hashed = BuildProjection::hash_bytes(output.len()).ok_or_else(|| budget.overflow())?;
-    budget.hash(hashed)?;
+    budget.check()?;
     Ok(BuildProjection::from_canonical(output))
 }
 

@@ -69,22 +69,6 @@ impl<'image, 'budget> Host<'image, 'budget> {
     }
 
     fn lookup(&mut self, query: &observed::Query) -> Result<usize> {
-        // Every lookup consumes current graph work, including repeated requests.
-        if matches!(
-            query,
-            observed::Query::Metadata { .. }
-                | observed::Query::Read { .. }
-                | observed::Query::Link(_)
-                | observed::Query::Directory(_)
-                | observed::Query::File(_)
-                | observed::Query::Discovery { .. }
-                | observed::Query::Canonical(_)
-                | observed::Query::DirectoryStream(_)
-                | observed::Query::Traversal { .. }
-                | observed::Query::GitRead { .. }
-        ) {
-            self.budget.graph.paths(1)?;
-        }
         let records = self.image.records();
         let mut start = 0;
         let mut end = records.len();

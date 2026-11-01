@@ -151,9 +151,6 @@ impl<'image> Entry<'_, 'image> {
             return Err(Error::ObservationType);
         }
         host.budget.allocation.items(1)?;
-        if observed::stream::hint(self.row.raw_kind).is_none() {
-            host.budget.graph.paths(1)?;
-        }
         let result = self.row.inspected.ok_or(Error::Unobserved)?;
         *self.inspected = true;
         *self.refused = false;

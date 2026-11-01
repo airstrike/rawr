@@ -2,7 +2,7 @@ use rawr_toml::document;
 
 use super::{Field, Original, Value};
 use crate::input::membership::manifest::{reference, session, storage, value, Error, Stop};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 const SOURCE: &str = r#"
 cargo-features=['profile-rustflags']
@@ -138,16 +138,7 @@ fn whole_original_charges_the_original_account() {
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut budget = input::membership::Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

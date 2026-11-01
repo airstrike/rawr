@@ -1,17 +1,15 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::storage::slots;
 use crate::input::membership::observed::discovery::{
     After, Attempt, Exists, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 
 fn budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -81,12 +79,10 @@ fn run(
         stored::Stored::decode(&image.encode(budget).unwrap(), budget).unwrap()
     });
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -220,13 +216,11 @@ fn successful_home_canonicalization_still_admits_eager_fallback_copy() {
     let image = budget(|budget| stored::Stored::from_records(&records, budget).unwrap());
     let run = || {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.bytes(31).unwrap();
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

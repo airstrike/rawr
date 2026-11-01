@@ -112,9 +112,6 @@ mod tests {
         };
         let mut allocation = Allocation::for_proof(prior, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("all decoding already spent");
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         let mut token = Token::new();
         // Token storage is a copy owned once by the input allocation.
@@ -123,10 +120,6 @@ mod tests {
             .expect("token storage charges no graph decode");
         assert_eq!(token.value.capacity(), 2);
         assert_eq!(token.admitted, 2);
-        assert_eq!(
-            graph.census_usage().expect("graph census").0,
-            node::MAX_DECODED_BYTES_PER_GRAPH
-        );
         assert_eq!(
             allocation.usage(),
             Usage {

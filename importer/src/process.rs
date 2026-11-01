@@ -742,7 +742,6 @@ impl Native {
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,
         limits: Limits,
-        budget: &crate::node::GraphBudget,
     ) -> Result<Self> {
         let path = environment
             .entries()
@@ -760,7 +759,6 @@ impl Native {
                     current_dir.join(directory)
                 }
             }),
-            budget,
         )?;
         let command_environment = environment
             .entries()
@@ -789,11 +787,11 @@ impl Native {
             limits,
         )?;
         #[cfg(feature = "rustc-driver")]
-        let driver = find_driver_in(Some(budget))?;
+        let driver = find_driver_in()?;
         Ok(Self {
-            cargo: canonical_program_in("cargo executable", &cargo, Some(budget))?,
-            rustc: canonical_program_in("rustc executable", &rustc, Some(budget))?,
-            rustdoc: canonical_program_in("rustdoc executable", &rustdoc, Some(budget))?,
+            cargo: canonical_program_in("cargo executable", &cargo)?,
+            rustc: canonical_program_in("rustc executable", &rustc)?,
+            rustdoc: canonical_program_in("rustdoc executable", &rustdoc)?,
             rustup,
             #[cfg(feature = "rustc-driver")]
             driver,
@@ -825,7 +823,6 @@ impl Native {
     pub(crate) fn selected_in(
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,
-        budget: &crate::node::GraphBudget,
     ) -> Result<Self> {
         let value = |name: &str| {
             environment
@@ -844,7 +841,6 @@ impl Native {
                     current_dir.join(directory)
                 }
             }),
-            budget,
         )?;
         let rustup_home = value("RUSTUP_HOME")
             .map(PathBuf::from)
@@ -864,35 +860,24 @@ impl Native {
             crate::cargo::toolchain::CHANNEL,
             crate::cargo::toolchain::HOST,
         ));
-        budget.paths(1).map_err(selection_budget)?;
-        crate::store::path::canonical(&requested_toolchain, budget).map_err(selection_budget)?;
         let toolchain = fs::canonicalize(&requested_toolchain).map_err(|source| Error::Io {
             operation: "canonicalize pinned toolchain root",
             path: requested_toolchain,
             source,
         })?;
-        let selected_cargo = canonical_program_in(
-            "Cargo executable",
-            &toolchain.join("bin/cargo"),
-            Some(budget),
-        )?;
-        let selected_rustc = canonical_program_in(
-            "rustc executable",
-            &toolchain.join("bin/rustc"),
-            Some(budget),
-        )?;
-        let selected_rustdoc = canonical_program_in(
-            "rustdoc executable",
-            &toolchain.join("bin/rustdoc"),
-            Some(budget),
-        )?;
+        let selected_cargo =
+            canonical_program_in("Cargo executable", &toolchain.join("bin/cargo"))?;
+        let selected_rustc =
+            canonical_program_in("rustc executable", &toolchain.join("bin/rustc"))?;
+        let selected_rustdoc =
+            canonical_program_in("rustdoc executable", &toolchain.join("bin/rustdoc"))?;
         Ok(Self {
             cargo: selected_cargo,
             rustc: selected_rustc,
             rustdoc: selected_rustdoc,
             rustup,
             #[cfg(feature = "rustc-driver")]
-            driver: find_driver_in(Some(budget))?,
+            driver: find_driver_in()?,
         })
     }
 
@@ -1296,16 +1281,11 @@ fn find_program(name: &'static str) -> Result<PathBuf> {
     Err(not_found(name))
 }
 
-fn find_program_in(
-    name: &str,
-    directories: impl IntoIterator<Item = PathBuf>,
-    budget: &crate::node::GraphBudget,
-) -> Result<PathBuf> {
+fn find_program_in(name: &str, directories: impl IntoIterator<Item = PathBuf>) -> Result<PathBuf> {
     for directory in directories {
         let candidate = directory.join(name);
-        selection_input(&candidate, budget)?;
         if candidate.is_file() {
-            return canonical_program_in("rustup executable", &candidate, Some(budget));
+            return canonical_program_in("rustup executable", &candidate);
         }
     }
     Err(not_found(name))
@@ -1321,11 +1301,11 @@ fn not_found(name: &str) -> Error {
 
 #[cfg(feature = "rustc-driver")]
 fn find_driver() -> Result<PathBuf> {
-    find_driver_in(None)
+    find_driver_in()
 }
 
 #[cfg(feature = "rustc-driver")]
-fn find_driver_in(budget: Option<&crate::node::GraphBudget>) -> Result<PathBuf> {
+fn find_driver_in() -> Result<PathBuf> {
     let executable = std::env::current_exe().map_err(|source| Error::Io {
         operation: "discover current importer executable",
         path: PathBuf::from("<current-executable>"),
@@ -1349,7 +1329,7 @@ fn find_driver_in(budget: Option<&crate::node::GraphBudget>) -> Result<PathBuf> 
         "rawr-import-driver{}",
         std::env::consts::EXE_SUFFIX
     ));
-    canonical_program_in("metadata probe driver", &candidate, budget)
+    canonical_program_in("metadata probe driver", &candidate)
 }
 
 fn rustup_which(rustup: &Path, program: Program) -> Result<PathBuf> {
@@ -1421,26 +1401,15 @@ fn rustup_which_in(
 }
 
 fn canonical_program(field: &'static str, path: &Path) -> Result<PathBuf> {
-    canonical_program_in(field, path, None)
+    canonical_program_in(field, path)
 }
 
-fn canonical_program_in(
-    field: &'static str,
-    path: &Path,
-    budget: Option<&crate::node::GraphBudget>,
-) -> Result<PathBuf> {
-    if let Some(budget) = budget {
-        budget.paths(1).map_err(selection_budget)?;
-        crate::store::path::canonical(path, budget).map_err(selection_budget)?;
-    }
+fn canonical_program_in(field: &'static str, path: &Path) -> Result<PathBuf> {
     let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
         operation: "canonicalize executable",
         path: path.to_path_buf(),
         source,
     })?;
-    if let Some(budget) = budget {
-        selection_input(&canonical, budget)?;
-    }
     if !canonical.is_file() {
         return Err(Error::Path {
             field,
@@ -1449,18 +1418,6 @@ fn canonical_program_in(
         });
     }
     Ok(canonical)
-}
-
-fn selection_input(path: &Path, budget: &crate::node::GraphBudget) -> Result<()> {
-    budget.paths(1).map_err(selection_budget)?;
-    crate::store::path::input(path, budget).map_err(selection_budget)
-}
-
-fn selection_budget(source: crate::node::Error) -> Error {
-    Error::Node {
-        operation: "toolchain selection",
-        source: Box::new(source),
-    }
 }
 
 fn read_bounded(
@@ -1554,67 +1511,43 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
             .expect("executable name")
             .to_str()
             .expect("UTF-8 fixture");
-        let budget = crate::node::GraphBudget::new();
         let selected = find_program_in(
             name,
             [
                 directory.join("missing-selection-directory"),
                 directory.to_path_buf(),
             ],
-            &budget,
         )
         .expect("second PATH entry selects executable");
         assert_eq!(
             selected,
             fs::canonicalize(&executable).expect("canonical test executable")
         );
-        let (decoded, paths, hashed) = budget.census_usage().expect("usage");
-        assert_eq!(paths, 4, "two PATH probes, canonicalize, selected metadata");
-        assert_eq!(hashed, 0, "selection is separate from executable capture");
-        assert!(decoded >= crate::store::path::canonical_allocation() as u64);
     }
 
     #[test]
     fn sealed_tool_selection_charges_before_filesystem_work() {
         let missing = Path::new("/rawr-tool-selection-must-not-be-opened");
         // Exact selection charges against a missing path, on a fresh account.
-        let probe = crate::node::GraphBudget::new();
-        find_program_in("rustup", [missing.to_path_buf()], &probe).expect_err("probe misses");
-        let (_, probe_paths, _) = probe.census_usage().expect("usage");
-        assert_eq!(probe_paths, 1, "one PATH probe");
-        let probe = crate::node::GraphBudget::new();
-        canonical_program_in("tool", missing, Some(&probe)).expect_err("canonicalize fails");
-        let (canonical_decoded, canonical_paths, _) = probe.census_usage().expect("usage");
-        assert_eq!(canonical_paths, 1, "one canonicalize probe");
-        assert!(
-            canonical_decoded > 0,
-            "canonical storage is charged before realpath"
-        );
+        find_program_in("rustup", [missing.to_path_buf()]).expect_err("probe misses");
+        canonical_program_in("tool", missing).expect_err("canonicalize fails");
         // An exhausted path target never refuses selection. Each probe is
         // still charged before its filesystem work and recorded past the target,
         // and the work then reports its own missing-path outcome.
-        let budget = crate::node::GraphBudget::new();
-        budget
-            .paths(crate::node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("fill path account");
         assert!(matches!(
-            find_program_in("rustup", [missing.to_path_buf()], &budget),
+            find_program_in("rustup", [missing.to_path_buf()]),
             Err(Error::Request { reason })
                 if reason.starts_with("could not find `rustup` in `PATH`")
         ));
         assert!(matches!(
-            canonical_program_in("tool", missing, Some(&budget)),
+            canonical_program_in("tool", missing),
             Err(Error::Io {
                 operation: "canonicalize executable",
                 ..
             })
         ));
-        let budget = crate::node::GraphBudget::new();
-        budget
-            .decode(crate::node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("fill decode account");
         assert!(matches!(
-            canonical_program_in("tool", missing, Some(&budget)),
+            canonical_program_in("tool", missing),
             Err(Error::Io {
                 operation: "canonicalize executable",
                 ..

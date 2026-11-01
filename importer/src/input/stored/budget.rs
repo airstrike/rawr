@@ -11,9 +11,6 @@ pub(crate) struct Budget<'account> {
     pub(in crate::input) limits: cargo::Limits,
     allocation: &'account mut Allocation,
     graph: &'account node::GraphBudget,
-    /// Address range of the enclosing record whose wire this budget already
-    /// charged, so a nested section decoded from it is not charged again.
-    framed: Option<(usize, usize)>,
     #[cfg(test)]
     allocations: usize,
 }
@@ -51,7 +48,7 @@ impl<'account> Budget<'account> {
         self.check()?;
         let result = {
             let mut account =
-                crate::input::workspace::Account::borrow(self.allocation, self.graph, &self.limits);
+                crate::input::workspace::Account::borrow(self.allocation, &self.limits);
             crate::input::workspace::roots(authority, metadata, &mut account)
                 .and_then(|roots| crate::input::workspace::capture(roots, &mut account))
         };
@@ -75,7 +72,6 @@ impl<'account> Budget<'account> {
             limits,
             allocation,
             graph,
-            framed: None,
             #[cfg(test)]
             allocations: 0,
         }
@@ -145,60 +141,9 @@ impl<'account> Budget<'account> {
         Ok(())
     }
 
-    #[track_caller]
-    pub(super) fn wire(&mut self, bytes: usize) -> Result<()> {
-        self.check()?;
-        self.graph.decode(bytes).map_err(|error| {
-            self.allocation.refused = true;
-            error.into()
-        })
-    }
-
-    /// Charge an enclosing record's wire once and remember its extent, so the
-    /// sections decoded from it within this budget are framed by that charge.
-    #[track_caller]
-    pub(in crate::input) fn wire_record(&mut self, bytes: &[u8]) -> Result<()> {
-        self.wire(bytes.len())?;
-        let start = bytes.as_ptr() as usize;
-        self.framed = Some((start, start.saturating_add(bytes.len())));
-        Ok(())
-    }
-
-    /// Charge a section's wire unless it lies inside the record this budget
-    /// already framed; a standalone or repeated decode charges in full.
-    #[track_caller]
-    pub(in crate::input) fn wire_section(&mut self, bytes: &[u8]) -> Result<()> {
-        let start = bytes.as_ptr() as usize;
-        let end = start.saturating_add(bytes.len());
-        if self
-            .framed
-            .is_some_and(|(framed_start, framed_end)| start >= framed_start && end <= framed_end)
-        {
-            return self.check();
-        }
-        self.wire(bytes.len())
-    }
-
     pub(crate) fn digest(&mut self, bytes: &[u8]) -> Result<cargo::Digest> {
-        self.hash(bytes.len())?;
+        self.check()?;
         Ok(cargo::digest(bytes))
-    }
-
-    pub(in crate::input) fn hash(&mut self, bytes: usize) -> Result<()> {
-        self.check()?;
-        self.graph.hash(bytes).map_err(|error| {
-            self.allocation.refused = true;
-            error.into()
-        })
-    }
-
-    /// Actual filesystem attempts, including failed probes, retries and EOF.
-    pub(super) fn paths(&mut self, count: usize) -> Result<()> {
-        self.check()?;
-        self.graph.paths(count).map_err(|error| {
-            self.allocation.refused = true;
-            error.into()
-        })
     }
 
     /// New filesystem-observation ownership is owned once by the original
@@ -207,15 +152,6 @@ impl<'account> Budget<'account> {
     #[track_caller]
     pub(in crate::input) fn storage(&mut self, items: usize, bytes: usize) -> Result<()> {
         self.admit(items, bytes)
-    }
-
-    #[track_caller]
-    pub(in crate::input) fn decode(&mut self, bytes: usize) -> Result<()> {
-        self.check()?;
-        self.graph.decode(bytes).map_err(|error| {
-            self.allocation.refused = true;
-            error.into()
-        })
     }
 
     #[track_caller]

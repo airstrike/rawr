@@ -3,7 +3,7 @@ use crate::input::membership::{
     observed::stream::{Row, Transcript},
     Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use nix::libc;
 
 fn rows() -> Vec<Row> {
@@ -15,10 +15,8 @@ fn rows() -> Vec<Row> {
 }
 fn image(transcript: Transcript) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let record = observed::Record {
@@ -62,10 +60,8 @@ fn consume(host: &mut Host<'_, '_>) -> Result<()> {
 fn ordered_roundtrip_and_exact_cursor_completion() {
     let original = sample();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let encoded = original.encode(&mut budget).unwrap();
@@ -80,12 +76,10 @@ fn abandoned_missing_and_extra_inspections_cannot_consume_image() {
     let image = sample();
     let limits = cargo::Limits::standard();
     for mode in 1..3 {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -119,12 +113,10 @@ fn open_failure_is_distinct_from_empty_completed_stream() {
     ] {
         let image = image(transcript);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -138,12 +130,10 @@ fn open_failure_is_distinct_from_empty_completed_stream() {
         end: observed::End::Eof,
     });
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -161,25 +151,10 @@ fn foreign_image_cursor_is_rejected() {
     let first = sample();
     let second = sample();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut a = input::Allocation::new(&limits);
     let mut b = input::Allocation::new(&limits);
-    let mut first_host = Host::from_image(
-        &first,
-        Budget {
-            graph: &graph,
-            allocation: &mut a,
-        },
-    )
-    .unwrap();
-    let mut second_host = Host::from_image(
-        &second,
-        Budget {
-            graph: &graph,
-            allocation: &mut b,
-        },
-    )
-    .unwrap();
+    let mut first_host = Host::from_image(&first, Budget { allocation: &mut a }).unwrap();
+    let mut second_host = Host::from_image(&second, Budget { allocation: &mut b }).unwrap();
     let mut cursor = first_host.stream(b"/dir").unwrap().unwrap();
     assert!(matches!(
         cursor.next(&mut second_host),
@@ -199,20 +174,16 @@ fn malformed_results_truncations_and_old_schema_are_rejected() {
     .is_err());
     let image = sample();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let bytes = image.encode(&mut budget).unwrap();
     for end in 0..bytes.len() {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         assert!(stored::Stored::decode(
             &bytes[..end],
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation
             }
         )
@@ -227,13 +198,11 @@ fn same_image_cursors_cannot_transfer_work_or_completion_to_another_host() {
     let image = sample();
     let limits = cargo::Limits::standard();
     for operation in 0..3 {
-        let graph = node::GraphBudget::new();
         let mut first_allocation = input::Allocation::new(&limits);
         let mut second_allocation = input::Allocation::new(&limits);
         let mut first = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut first_allocation,
             },
         )
@@ -241,7 +210,6 @@ fn same_image_cursors_cannot_transfer_work_or_completion_to_another_host() {
         let mut second = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut second_allocation,
             },
         )

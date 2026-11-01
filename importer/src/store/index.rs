@@ -36,21 +36,14 @@ pub(crate) fn lookup(
     kind: Kind,
     output_schema: u32,
     lookup: LookupKey,
-    budget: &crate::node::GraphBudget,
 ) -> Result<Candidates, Error> {
     let relative = bucket_relative(kind, lookup);
-    let bucket = match super::entry::existing_directory_budgeted(root, &relative, budget) {
+    let bucket = match super::entry::existing_directory_budgeted(root, &relative) {
         Ok(Some(bucket)) => bucket,
         Ok(None) => return Ok(empty(false)),
         Err(error @ Error::Io { .. }) => return Err(error),
         Err(_) => return Ok(empty(true)),
     };
-    if !budget_admitted(budget.lookup())? {
-        return Ok(empty(true));
-    }
-    if !budget_admitted(budget.paths(1))? {
-        return Ok(empty(true));
-    }
     let mut directory = fs::read_dir(&bucket).map_err(|source| Error::Io {
         operation: "read discoverable candidate bucket",
         path: bucket.clone(),
@@ -61,9 +54,6 @@ pub(crate) fn lookup(
         .try_reserve_exact(MAX_CANDIDATES)
         .map_err(|_| Error::Allocation)?;
     loop {
-        if !budget_admitted(budget.paths(1))? {
-            return Ok(empty(true));
-        }
         let Some(child) = directory.next() else {
             break;
         };
@@ -74,9 +64,6 @@ pub(crate) fn lookup(
             Ok(child) => child,
             Err(_) => return Ok(empty(true)),
         };
-        if !budget_admitted(budget.paths(1))? || !budget_admitted(budget.comparison())? {
-            return Ok(empty(true));
-        }
         let file_type = match child.file_type() {
             Ok(file_type) => file_type,
             Err(_) => return Ok(empty(true)),
@@ -85,7 +72,7 @@ pub(crate) fn lookup(
             return Ok(empty(true));
         }
         let row_path = child.path().join("row");
-        let bytes = match super::entry::read_file_budgeted(&row_path, ROW_BYTES, budget) {
+        let bytes = match super::entry::read_file_budgeted(&row_path, ROW_BYTES) {
             Ok(bytes) => bytes,
             Err(_) => return Ok(empty(true)),
         };
@@ -729,14 +716,6 @@ fn empty(rejected: bool) -> Candidates {
     }
 }
 
-fn budget_admitted(admission: Result<(), Error>) -> Result<bool, Error> {
-    match admission {
-        Ok(()) => Ok(true),
-        Err(Error::Limit { .. }) => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
 fn lower_digest(name: &std::ffi::OsStr) -> bool {
     decode_digest(name).is_some()
 }
@@ -838,16 +817,10 @@ mod tests {
             actions.push(action);
         }
         assert_eq!(
-            lookup(
-                &root,
-                Kind::Runner,
-                2,
-                key,
-                &crate::node::GraphBudget::new(),
-            )
-            .expect("the exact candidate bucket reads")
-            .actions
-            .len(),
+            lookup(&root, Kind::Runner, 2, key,)
+                .expect("the exact candidate bucket reads")
+                .actions
+                .len(),
             MAX_CANDIDATES
         );
         let ninth = ActionKey::from_bytes([0x51; 32]);
@@ -870,14 +843,8 @@ mod tests {
         .expect("one retired action releases its exact index row");
         publish_fixture(&root, Kind::Runner, 2, key, ninth)
             .expect("one candidate can grow after exact retirement");
-        let observed = lookup(
-            &root,
-            Kind::Runner,
-            2,
-            key,
-            &crate::node::GraphBudget::new(),
-        )
-        .expect("the replacement candidate bucket reads");
+        let observed =
+            lookup(&root, Kind::Runner, 2, key).expect("the replacement candidate bucket reads");
         assert_eq!(observed.actions.len(), MAX_CANDIDATES);
         assert!(observed.actions.binary_search(&actions[0]).is_err());
         assert!(observed.actions.binary_search(&ninth).is_ok());

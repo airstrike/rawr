@@ -19,9 +19,9 @@ impl rawr_directory::Admission for Host<'_, '_> {
         use rawr_directory::{Storage, Work};
         self.budget.check()?;
         match work {
-            Work::Open { .. } | Work::Reopen { .. } => self.budget.paths(2), // open and prospective one-shot cleanup
+            Work::Open { .. } | Work::Reopen { .. } => self.budget.check(), // open and prospective one-shot cleanup
             Work::Mount | Work::Read { .. } | Work::Record | Work::EntryType { .. } => {
-                self.budget.paths(1)
+                self.budget.check()
             }
             Work::Allocate { storage, bytes, .. } => {
                 let items = match storage {

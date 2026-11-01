@@ -2,9 +2,9 @@ use rawr_toml::document;
 
 use super::super::Host;
 use super::{parse, Account};
+use crate::input;
 use crate::input::membership::manifest::{session, storage, Error, Stop};
 use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[test]
 fn every_admission_refusal_stops_host_trials_before_additional_storage() {
@@ -74,20 +74,9 @@ const OPAQUE: &str = "ééééééééé";
 
 #[test]
 fn host_scalar_work_does_not_reset_or_spend_unrelated_graph_accounts() {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -97,12 +86,10 @@ fn host_scalar_work_does_not_reset_or_spend_unrelated_graph_accounts() {
 }
 
 fn opaque(source: &str) -> (bool, input::Usage) {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(3).unwrap();
     allocation.bytes(7).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

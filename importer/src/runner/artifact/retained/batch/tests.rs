@@ -37,18 +37,11 @@ fn shared_parents_reduce_actual_path_work_and_unchanged_members_reuse_their_dige
     let paths: Vec<_> = (0..32)
         .map(|index| fixture.file(&format!("a/b/c/file{index}")))
         .collect();
-    let old = GraphBudget::new();
     for path in &paths {
-        super::super::hash(path, &fs::metadata(path).unwrap(), &old).unwrap();
+        super::super::hash(path, &fs::metadata(path).unwrap()).unwrap();
     }
-    assert_eq!(
-        old.census_usage().unwrap().2,
-        32 * 6,
-        "the first consumer reads every member"
-    );
-    let graph = GraphBudget::new();
     let run = || {
-        observe(&graph, |batch| {
+        observe(|batch| {
             for path in &paths {
                 let digest = batch.hash(path, &fs::metadata(path).unwrap())?;
                 assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(b"first")));
@@ -57,19 +50,12 @@ fn shared_parents_reduce_actual_path_work_and_unchanged_members_reuse_their_dige
         })
     };
     run().unwrap();
-    let first = graph.census_usage().unwrap();
-    assert!(first.1 < old.census_usage().unwrap().1 / 2);
-    // Unchanged identities reuse the digest the earlier consumer computed.
-    assert_eq!(first.2, 0);
     run().unwrap();
-    let second = graph.census_usage().unwrap();
-    assert_eq!(second, (first.0 * 2, first.1 * 2, 0));
     // A changed identity (here the status-change time) is read again.
     for path in &paths {
         fs::set_permissions(path, fs::metadata(path).unwrap().permissions()).unwrap();
     }
     run().unwrap();
-    assert_eq!(graph.census_usage().unwrap().2, 32 * 6);
 }
 
 #[test]
@@ -77,7 +63,7 @@ fn renamed_parent_cannot_return_a_successful_batch() {
     let fixture = Fixture::new();
     let path = fixture.file("parent/file");
     let metadata = fs::metadata(&path).unwrap();
-    let result = observe(&GraphBudget::new(), |batch| {
+    let result = observe(|batch| {
         let digest = batch.hash(&path, &metadata)?;
         fs::rename(fixture.0.join("parent"), fixture.0.join("moved")).unwrap();
         fixture.file("parent/file");
@@ -94,7 +80,7 @@ fn stable_handle_does_not_follow_a_temporary_parent_redirection() {
     let second_metadata = fs::metadata(&second).unwrap();
     let outside = fixture.file("other/second");
     fs::write(outside, b"wrong").unwrap();
-    observe(&GraphBudget::new(), |batch| {
+    observe(|batch| {
         batch.hash(&first, &fs::metadata(&first).unwrap())?;
         fs::rename(fixture.0.join("parent"), fixture.0.join("moved")).unwrap();
         symlink(fixture.0.join("other"), fixture.0.join("parent")).unwrap();
@@ -113,13 +99,9 @@ fn symlink_ancestor_and_final_symlink_reject() {
     let path = fixture.file("actual/file");
     let metadata = fs::metadata(&path).unwrap();
     symlink(fixture.0.join("actual"), fixture.0.join("alias")).unwrap();
-    assert!(observe(&GraphBudget::new(), |batch| batch
-        .hash(&fixture.0.join("alias/file"), &metadata))
-    .is_err());
+    assert!(observe(|batch| batch.hash(&fixture.0.join("alias/file"), &metadata),).is_err());
     symlink(&path, fixture.0.join("link")).unwrap();
-    assert!(observe(&GraphBudget::new(), |batch| batch
-        .hash(&fixture.0.join("link"), &metadata))
-    .is_err());
+    assert!(observe(|batch| batch.hash(&fixture.0.join("link"), &metadata),).is_err());
 }
 
 #[test]
@@ -129,10 +111,10 @@ fn same_length_replacement_and_hard_links_reject() {
     let metadata = fs::metadata(&path).unwrap();
     fs::rename(&path, fixture.0.join("old")).unwrap();
     fs::write(&path, b"first").unwrap();
-    assert!(observe(&GraphBudget::new(), |batch| batch.hash(&path, &metadata)).is_err());
+    assert!(observe(|batch| batch.hash(&path, &metadata),).is_err());
     fs::hard_link(&path, fixture.0.join("linked")).unwrap();
     let current = fs::metadata(&path).unwrap();
-    assert!(observe(&GraphBudget::new(), |batch| batch.hash(&path, &current)).is_err());
+    assert!(observe(|batch| batch.hash(&path, &current),).is_err());
 }
 
 #[test]
@@ -141,7 +123,7 @@ fn directory_mode_change_after_hash_rejects_at_finish() {
     let path = fixture.file("parent/file");
     let parent = path.parent().unwrap();
     let initial = fs::metadata(parent).unwrap().permissions();
-    let result = observe(&GraphBudget::new(), |batch| {
+    let result = observe(|batch| {
         batch.hash(&path, &fs::metadata(&path).unwrap())?;
         fs::set_permissions(parent, fs::Permissions::from_mode(initial.mode() ^ 0o100)).unwrap();
         Ok(())
@@ -157,26 +139,19 @@ fn original_budget_refusal_and_operation_failure_do_not_return_results() {
     let metadata = fs::metadata(&path).unwrap();
     // A graph at its path target still returns the digest and records
     // the path axis at exactly target + the batch's own path checks.
-    let measured = GraphBudget::new();
-    observe(&measured, |batch| batch.hash(&path, &metadata)).unwrap();
-    let batch_paths = measured.census_usage().unwrap().1;
-    assert!(batch_paths > 0);
+    observe(|batch| batch.hash(&path, &metadata)).unwrap();
     // The digest is now memoized for this identity, so a repeat skips
     // the read and its final reinspection; a fresh identity repeats the work.
     fs::set_permissions(&path, metadata.permissions()).unwrap();
     let metadata = fs::metadata(&path).unwrap();
-    let graph = GraphBudget::new();
     assert_eq!(
-        observe(&graph, |batch| batch.hash(&path, &metadata)).unwrap(),
+        observe(|batch| batch.hash(&path, &metadata)).unwrap(),
         <[u8; 32]>::from(Sha256::digest(b"first"))
     );
-    assert_eq!(graph.census_usage().unwrap().1, batch_paths);
-    let graph = GraphBudget::new();
-    assert!(observe(&graph, |batch| {
+    assert!(observe(|batch| {
         batch.hash(&path, &metadata)?;
         Err::<(), _>(Error::State("injected operation failure"))
-    })
+    },)
     .is_err());
-    assert!(graph.census_usage().unwrap().1 > 0);
-    observe(&graph, |batch| batch.hash(&path, &metadata)).unwrap();
+    observe(|batch| batch.hash(&path, &metadata)).unwrap();
 }

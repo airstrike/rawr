@@ -266,7 +266,7 @@ fn complete_spec_refusal_never_falls_back_or_restarts_after_prior_spend() {
 
 #[test]
 fn complete_spec_charges_the_original_account_after_prior_usage() {
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
     let text = "git+https://例え.jp/pkg?rev=a%20b#other@1.2.3-pre+build";
     let mut observed = Account::default();
     assert!(parse(text, &mut observed).is_ok());
@@ -283,16 +283,7 @@ fn complete_spec_charges_the_original_account_after_prior_usage() {
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut budget = input::membership::Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

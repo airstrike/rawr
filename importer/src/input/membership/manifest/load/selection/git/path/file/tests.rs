@@ -14,7 +14,7 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 enum Form {
     Gitdir,
@@ -24,10 +24,8 @@ enum Form {
 
 fn consume(record: observed::Record, form: Form) -> Result<Option<PathBuf>, Failure> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[record], &mut budget).unwrap();
@@ -90,10 +88,8 @@ fn path_consumers_connect_live_codec_replay_and_preserve_capacity_and_native_spe
 
 fn native_error(events: Vec<Event>) -> observed::Record {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     observed::Record {
@@ -166,10 +162,8 @@ fn semantic_errors_own_whole_input_or_the_source_formatted_path_error() {
     );
 
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = Session::new(&mut budget);
@@ -185,10 +179,8 @@ fn semantic_errors_own_whole_input_or_the_source_formatted_path_error() {
 #[test]
 fn nul_path_is_a_local_io_error_with_source_conversion_ownership_and_no_host_query() {
     for length in [383usize, 384] {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(10_000, 10_000, 1024);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let image = stored::Stored::from_records(&[], &mut budget).unwrap();

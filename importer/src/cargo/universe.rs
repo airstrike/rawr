@@ -214,10 +214,6 @@ impl KeySource {
     fn is_empty(&self) -> bool {
         matches!(self, Self::Path)
     }
-
-    fn len(&self) -> usize {
-        self.as_ref().len()
-    }
 }
 
 impl AsRef<str> for KeySource {
@@ -292,11 +288,6 @@ type MetadataProjection = (
 );
 
 impl BuildProjection {
-    /// Domain and payload bytes fed to the projection hash.
-    pub(crate) fn hash_bytes(payload: usize) -> Option<usize> {
-        BUILD_PROJECTION_DOMAIN.len().checked_add(payload)
-    }
-
     /// Transform one already-canonical bounded JSON record into owned proof state.
     pub(crate) fn from_canonical(bytes: Box<[u8]>) -> Self {
         let digest = build_projection_digest(&bytes);
@@ -431,12 +422,8 @@ impl Definition {
         &self,
         bytes: Box<[u8]>,
         allocation: &mut super::RequestAllocation,
-        graph: &crate::node::GraphBudget,
     ) -> Result<Candidate> {
-        self.candidate_in(
-            bytes,
-            &mut super::ControlAccount::current(allocation, graph),
-        )
+        self.candidate_in(bytes, &mut super::ControlAccount::current(allocation))
     }
 
     pub(super) fn candidate_in(
@@ -447,8 +434,7 @@ impl Definition {
         // Match the existing authority TOML ownership precharge, retaining it
         // in this evaluation's account across repeated current validations.
         account.parser(bytes.len())?;
-        account.hash(bytes.len())?;
-        let closure = Closure::parse_in_rooted(&bytes, self.root, account)?;
+        let closure = Closure::parse_in_rooted(&bytes, self.root)?;
         let digest = Digest(Sha256::digest(&bytes).into());
         account.holder(Candidate::HOLDER_BYTES)?;
         Ok(Candidate(Arc::new(Locked {
@@ -1129,19 +1115,6 @@ impl ProtectedPackage {
 
     pub(crate) fn sort_roots(roots: &mut [&Self]) {
         roots.sort_unstable_by_key(|package| std::cmp::Reverse(package.root.as_os_str().len()));
-    }
-
-    /// Exact bytes fed to the shared token hash, before any hash work occurs.
-    pub(crate) fn token_hash_bytes(&self) -> Option<usize> {
-        [
-            self.key.name.as_ref(),
-            self.key.version.as_ref(),
-            self.key.source.as_ref(),
-        ]
-        .into_iter()
-        .try_fold(PACKAGE_KEY_DOMAIN.len(), |bytes, value| {
-            bytes.checked_add(8)?.checked_add(value.len())
-        })
     }
 
     pub(crate) fn token_bytes(&self) -> [u8; 64] {
@@ -2860,15 +2833,11 @@ impl Closure {
     }
 
     fn parse_rooted(bytes: &[u8], root: &str) -> Result<Self> {
-        Self::parse_in_rooted(bytes, root, &mut super::ControlAccount::legacy())
+        Self::parse_in_rooted(bytes, root)
     }
 
     /// Parse one lock under the request account that admitted its bytes.
-    fn parse_in_rooted(
-        bytes: &[u8],
-        root: &str,
-        account: &mut super::ControlAccount<'_>,
-    ) -> Result<Self> {
+    fn parse_in_rooted(bytes: &[u8], root: &str) -> Result<Self> {
         let text = std::str::from_utf8(bytes).map_err(|error| Error::Schema {
             document: "resolution universe lock",
             reason: error.to_string().into_boxed_str(),
@@ -2941,20 +2910,6 @@ impl Closure {
         }
         packages.sort_unstable();
         let _ = root;
-        account.hash(b"rawr.import.cargo.resolution-universe-closure/v1".len())?;
-        for package in &packages {
-            account.hash(
-                40 + package.name.len()
-                    + package.version.len()
-                    + package.source.len()
-                    + package.checksum.len(),
-            )?;
-            for dependency in &package.dependencies {
-                account.hash(
-                    24 + dependency.name.len() + dependency.version.len() + dependency.source.len(),
-                )?;
-            }
-        }
         let mut digest = Sha256::new();
         digest.update(b"rawr.import.cargo.resolution-universe-closure/v1");
         for package in &packages {
@@ -3129,25 +3084,23 @@ mod tests {
     fn current_candidate_parser_retains_spending_across_replays() {
         let limits = Limits::standard();
         let definition = definition();
-        let graph = crate::node::GraphBudget::new();
         let mut allocation = super::super::RequestAllocation::new(&limits);
         let owned = SEED.len() + super::Candidate::HOLDER_BYTES;
         let (items, bytes) = (allocation.items, allocation.bytes);
         definition
-            .candidate_accounted(SEED.as_bytes().into(), &mut allocation, &graph)
+            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
             .expect("parser and holder ownership is charged");
         assert_eq!(allocation.bytes, bytes + owned);
         assert_eq!(allocation.items, items + SEED.len() + 1);
         // The replay retains its parser and holder ownership in the same account.
         definition
-            .candidate_accounted(SEED.as_bytes().into(), &mut allocation, &graph)
+            .candidate_accounted(SEED.as_bytes().into(), &mut allocation)
             .expect("the replay charges and parses");
         assert_eq!(allocation.bytes, bytes + 2 * owned);
         assert_eq!(allocation.items, items + 2 * (SEED.len() + 1));
 
         let mut malformed = super::super::RequestAllocation::new(&limits);
-        let Err(error) =
-            definition.candidate_accounted(b"[".as_slice().into(), &mut malformed, &graph)
+        let Err(error) = definition.candidate_accounted(b"[".as_slice().into(), &mut malformed)
         else {
             panic!("malformed TOML refuses");
         };

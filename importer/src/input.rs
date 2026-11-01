@@ -1236,11 +1236,7 @@ impl Baseline {
                     Recipe::path(Role::Authority, retained.path(), &mut allocation)?
                 });
             }
-            workspace.require(&mut workspace::Account::borrow(
-                &mut allocation,
-                context.graph_budget(),
-                limits,
-            ))?;
+            workspace.require(&mut workspace::Account::borrow(&mut allocation, limits))?;
             let workspace_expected = workspace.entry;
             allocation.items(workspace.roots.len())?;
             allocation.bytes(
@@ -1254,7 +1250,6 @@ impl Baseline {
             }
             recipe!(Recipe::Workspace {
                 roots: workspace.roots,
-                graph: context.graph_budget().clone(),
             });
             for (path, expected) in probe_artifacts {
                 let actual = file_digest_accounted(path, &mut allocation)?;
@@ -1480,7 +1475,6 @@ impl Baseline {
                         protected,
                         target,
                         &mut allocation,
-                        context.graph_budget(),
                     )
                 })
                 .transpose()?;

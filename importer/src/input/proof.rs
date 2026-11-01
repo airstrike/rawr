@@ -49,7 +49,6 @@ pub(crate) struct Harness {
 pub(super) enum Recipe {
     Workspace {
         roots: Box<[PathBuf]>,
-        graph: crate::node::GraphBudget,
     },
     File {
         role: Role,
@@ -998,16 +997,8 @@ pub(super) fn protected_digest_accounted(
     protected: &cargo::universe::MetadataProof,
     target: &str,
     allocation: &mut Allocation,
-    graph: &crate::node::GraphBudget,
 ) -> Result<cargo::universe::BuildProjection> {
-    protected::project::legacy_accounted(
-        &proof.entries,
-        evidence,
-        protected,
-        target,
-        allocation,
-        graph,
-    )
+    protected::project::legacy_accounted(&proof.entries, evidence, protected, target, allocation)
 }
 
 #[cfg(test)]
@@ -1057,7 +1048,7 @@ pub(super) fn evaluate(
         })?;
         let entry = match recipe.view() {
             View::Workspace { roots } => {
-                let Recipe::Workspace { graph, .. } = recipe else {
+                let Recipe::Workspace { .. } = recipe else {
                     return Err(super::input(
                         "workspace-recipe",
                         "missing original graph account",
@@ -1065,7 +1056,7 @@ pub(super) fn evaluate(
                 };
                 super::workspace::observe(
                     roots,
-                    &mut super::workspace::Account::borrow(allocation, graph, limits),
+                    &mut super::workspace::Account::borrow(allocation, limits),
                 )?
             }
             View::File {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{input, node};
+use crate::input;
 use std::{
     fs,
     os::unix::ffi::OsStrExt as _,
@@ -30,10 +30,8 @@ impl Drop for Fixture {
 }
 
 fn run(path: &[u8]) -> Result<observed::Record> {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     match open(path, &mut budget)? {
@@ -86,10 +84,8 @@ fn native_capture_preserves_order_and_only_reached_inspections() {
 #[test]
 fn unfinished_or_refused_capture_never_returns_a_record() {
     let fixture = Fixture::new();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, 4096, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let Start::Opened(capture) = open(fixture.bytes(), &mut budget).unwrap() else {
@@ -109,10 +105,8 @@ fn unfinished_or_refused_capture_never_returns_a_record() {
 #[test]
 fn failed_external_graph_probe_poisoning_survives_observed_eof() {
     let fixture = Fixture::new();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let Start::Opened(mut capture) = open(fixture.bytes(), &mut budget).unwrap() else {
@@ -123,7 +117,7 @@ fn failed_external_graph_probe_poisoning_survives_observed_eof() {
         Next::End(observed::End::Eof)
     ));
     assert!(capture
-        .probe(|budget| Ok(budget.graph.paths(usize::MAX)?))
+        .probe(|_| Err::<(), _>(crate::node::Error::Allocation.into()))
         .is_err());
     assert!(matches!(capture.finish(), Err(Error::Unconsumed)));
 }
@@ -145,10 +139,8 @@ fn live_capture_roundtrips_into_consumed_replay_with_the_same_reached_queries() 
     fs::write(fixture.0.join("file.rs"), b"").unwrap();
     fs::write(fixture.0.join(".skip"), b"").unwrap();
     let record = run(fixture.bytes()).unwrap();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let retained = stored::Stored::from_records(&[record], &mut budget).unwrap();
@@ -178,10 +170,8 @@ fn recorded_non_utf8_name_roundtrips_without_an_unreached_type_query() {
     // The installed filesystem rejects creation of this name with EILSEQ.
     // Exercise its lossless stored/replay path with native byte data instead.
     use crate::input::membership::{host, stored};
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let record = record(

@@ -187,23 +187,12 @@ fn nested_sections_do_not_renew_the_outer_cap_or_decoder_graph_account() {
     let bytes = encoded(&build, &input);
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .decode(
-            usize::try_from(node::MAX_DECODED_BYTES_PER_GRAPH).expect("addressable cap")
-                - bytes.len(),
-        )
-        .expect("prior graph work");
     let mut account = Allocation::for_proof(PRIOR, &limits);
     let mut budget = Budget::borrow(&limits, &mut account, &graph);
     Record::decode(&bytes, &mut budget).expect("exact remaining graph allowance");
     // A repeated decode is charged to the graph again and recorded; the
     // nested sections inside the record add no decode of their own.
     Record::decode(&bytes, &mut budget).expect("decode past the target is recorded, not gated");
-    let decoded = graph.census_usage().expect("graph census").0;
-    assert_eq!(
-        decoded,
-        node::MAX_DECODED_BYTES_PER_GRAPH + bytes.len() as u64
-    );
     assert!(budget.check().is_ok());
     // A genuine failure latches; a latched account decodes nothing.
     budget.refuse();

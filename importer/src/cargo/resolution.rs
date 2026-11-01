@@ -139,7 +139,7 @@ impl Metadata {
         limits: &super::Limits,
         budget: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
-        require_configuration_free_with_budget(context, limits, Some(budget))?;
+        require_configuration_free_with_budget(context, limits)?;
         self.validate_canonical(limits)?;
         let (manifest_digest, lock_digest) = input_digests_budgeted(
             &context.project().join("Cargo.toml"),
@@ -269,8 +269,7 @@ fn read_hashed_input(
     limit: usize,
     budget: Option<&node::GraphBudget>,
 ) -> Result<Vec<u8>, node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
+    if budget.is_some() {
         let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
             operation: "inspect cached Cargo input before hashing",
             path: path.to_path_buf(),
@@ -287,7 +286,6 @@ fn read_hashed_input(
                 actual: length,
             });
         }
-        budget.hash(length)?;
     }
     Ok(super::read_bounded(resource, path, limit)?)
 }
@@ -296,13 +294,12 @@ fn require_configuration_free(
     context: &Context,
     limits: &super::Limits,
 ) -> Result<(), node::Error> {
-    require_configuration_free_with_budget(context, limits, None)
+    require_configuration_free_with_budget(context, limits)
 }
 
 fn require_configuration_free_with_budget(
     context: &Context,
     limits: &super::Limits,
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
     let mut directories = 0_usize;
     for ancestor in context.project().ancestors() {
@@ -314,20 +311,14 @@ fn require_configuration_free_with_budget(
                 actual: directories,
             });
         }
-        require_absent_budgeted(&ancestor.join(".cargo/config.toml"), budget)?;
-        require_absent_budgeted(&ancestor.join(".cargo/config"), budget)?;
+        require_absent_budgeted(&ancestor.join(".cargo/config.toml"))?;
+        require_absent_budgeted(&ancestor.join(".cargo/config"))?;
     }
-    require_absent_budgeted(&context.cargo_home().join("config.toml"), budget)?;
-    require_absent_budgeted(&context.cargo_home().join("config"), budget)
+    require_absent_budgeted(&context.cargo_home().join("config.toml"))?;
+    require_absent_budgeted(&context.cargo_home().join("config"))
 }
 
-fn require_absent_budgeted(
-    path: &Path,
-    budget: Option<&node::GraphBudget>,
-) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-    }
+fn require_absent_budgeted(path: &Path) -> Result<(), node::Error> {
     require_absent(path)
 }
 
@@ -1755,7 +1746,7 @@ mod tests {
                         &context,
                         &[42; 32],
                         &crate::extract::Policy::empty()
-                            .cache_identity(context.graph_budget())
+                            .cache_identity()
                             .expect("fixture policy identity"),
                         &build,
                         &post_unit,

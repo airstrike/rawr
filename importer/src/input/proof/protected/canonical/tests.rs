@@ -52,29 +52,14 @@ fn canonical_output_spends_exact_storage_and_hash_work() {
         .expect("canonical")
         .len()
         + 1;
-    let hashed = BuildProjection::hash_bytes(bytes).expect("bounded hash");
     let limits = Limits::standard();
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("all decoding already spent");
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - hashed)
-        .expect("prior hashed work");
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     let result = current(&entries, &mut budget);
     // The canonical output is one item of exactly `bytes` on the original
     // account and `hashed` on the hash axis, and it is never a decode.
     assert_eq!(result.expect("canonical output").bytes().len(), bytes);
-    assert_eq!(
-        graph.census_usage().expect("graph census"),
-        (
-            node::MAX_DECODED_BYTES_PER_GRAPH,
-            0,
-            node::MAX_HASHED_BYTES_PER_GRAPH
-        )
-    );
     budget.check().expect("the account is not latched");
     assert_eq!(
         allocation.usage(),
@@ -104,15 +89,5 @@ fn canonical_output_counts_the_trailing_newline() {
             items: PRIOR.items + 1,
             bytes: PRIOR.bytes + 7,
         }
-    );
-    // The canonical output is owned by the original account and hashed on the
-    // hash axis: no decode happened.
-    assert_eq!(
-        graph.census_usage().expect("graph census"),
-        (
-            0,
-            0,
-            BuildProjection::hash_bytes(7).expect("bounded hash") as u64
-        )
     );
 }

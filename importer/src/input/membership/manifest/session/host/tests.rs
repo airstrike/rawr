@@ -2,17 +2,15 @@ use crate::input::membership::manifest::{
     load, schema::manifest::Original, session::Session, value, Error, Stop,
 };
 use crate::input::membership::{host, observed, stored, Budget, Error as InputError};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 mod canonical;
 mod environment;
 
 fn image(values: &[(&[u8], observed::Value, bool)]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = values
@@ -73,12 +71,10 @@ fn predicates_preserve_all_present_kinds_absence_and_recorded_os_errors() {
         let directory = matches!(&value, observed::Value::Metadata(metadata) if metadata.kind == observed::Kind::Directory);
         let image = image(&[(b"/native/\xff", value, false)]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -96,12 +92,10 @@ fn predicates_preserve_all_present_kinds_absence_and_recorded_os_errors() {
 fn missing_observation_is_terminal_and_not_an_absent_file() {
     let image = image(&[(b"/known", metadata(observed::Kind::File), false)]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -129,12 +123,10 @@ fn whole_file_read_error_precedes_utf8_and_syntax_and_stays_terminal() {
             true,
         )]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -169,14 +161,12 @@ fn complete_document_original_initial_configuration_and_probe_share_original_acc
     ]);
     let run = || {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
@@ -238,12 +228,10 @@ fn absent_document_is_data_but_eof_parse_failures_are_terminal() {
         let encoding = matches!(&value, observed::Value::File { bytes, .. } if bytes == &[0xff]);
         let image = image(&[(b"/Cargo.toml", value, true)]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

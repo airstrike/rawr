@@ -186,12 +186,10 @@ fn bounded() -> Result<(), Error<crate::input::membership::Error>> {
     records.extend(environment());
     let image = image(records);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {

@@ -1,14 +1,12 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::{load::features, storage::slots::Slots, Error, Source};
 use crate::input::membership::{observed, stored, Budget, Error as InputError};
-use crate::{input, node};
 
 fn image(files: &[(&[u8], &[u8], observed::End)]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = files
@@ -49,12 +47,10 @@ fn repeated_reads_retain_decoded_text_and_publish_each_checked_root() {
         (b"/two/Cargo.toml", b"[workspace]", observed::End::Eof),
     ]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -124,15 +120,12 @@ fn run(
 ) -> Result<(), Error<InputError>> {
     let image = image(&[(path.as_os_str().as_bytes(), bytes, end)]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1).unwrap();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -208,12 +201,10 @@ fn source_failure_prevents_later_read_and_root_publication() {
         (b"/later/Cargo.toml", b"[workspace]", observed::End::Eof),
     ]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -266,12 +257,10 @@ fn sourced_reads_keep_each_manifest_identity_and_retained_original() {
         (b"/two/Cargo.toml", b"[workspace]", observed::End::Eof),
     ]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

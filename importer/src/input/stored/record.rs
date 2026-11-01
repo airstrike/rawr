@@ -84,7 +84,7 @@ impl<'bytes> Record<'bytes> {
     /// Validate the complete outer framing and borrow its five fixed sections.
     pub(crate) fn decode(bytes: &'bytes [u8], budget: &mut Budget<'_>) -> Result<Self> {
         budget.check()?;
-        budget.wire_record(bytes)?;
+        budget.check()?;
         let mut reader = Reader::new(bytes, budget);
         if reader.take(MAGIC.len())? != MAGIC
             || reader.bytes()? != toolchain::supported_cargo_commit().as_bytes()

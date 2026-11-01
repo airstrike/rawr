@@ -120,7 +120,6 @@ fn unknown_operational_refusal_and_external_drift_never_nominate_retirement() {
 
 fn inventory_owner(
     attempt: crate::store::bundle::Attempt,
-    graph: &super::super::GraphBudget,
 ) -> Result<super::super::Bundled<BundleValue>, Error> {
     use crate::runner::artifact::retained;
     fs::write(attempt.generated().join("input"), b"generated")
@@ -129,7 +128,6 @@ fn inventory_owner(
         &attempt.root(),
         attempt.reference(),
         retained::Mode::Pending,
-        graph,
     )?;
     let value = BundleValue {
         reference: attempt.reference(),
@@ -150,12 +148,9 @@ fn validate_inventory(
     use crate::runner::artifact::retained;
     value.validate_published(store)?;
     let root = store.root().join(value.reference.relative());
-    let bytes = crate::store::read_file_budgeted(
-        &root.join("seal"),
-        super::super::MAX_CONTENT_BYTES,
-        store.graph_budget(),
-    )?;
-    let inventory = retained::Stored::decode(&bytes, &root, value.reference, store.graph_budget())?;
+    let bytes =
+        crate::store::read_file_budgeted(&root.join("seal"), super::super::MAX_CONTENT_BYTES)?;
+    let inventory = retained::Stored::decode(&bytes, &root, value.reference)?;
     inventory.replay_published(
         &root,
         store,
@@ -176,12 +171,11 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
         .discover::<BundleValue>(b"owned-member", 4096)
         .unwrap();
     let current = store.clone();
-    let graph = store.graph_budget().clone();
     let first = Evaluator::new(&store, &Counts::default())
         .discover_bundled(
             &recipe,
             move |value| validate_inventory(value, &current),
-            move |attempt| inventory_owner(attempt, &graph),
+            inventory_owner,
         )
         .unwrap();
     let old_root = store.root().join(first.value().reference.relative());
@@ -192,13 +186,12 @@ fn same_size_frozen_owned_member_digest_corruption_repairs_same_action() {
     fs::set_permissions(&member, frozen).unwrap();
     let fresh = fixture_context(&root).open_store().unwrap();
     let current = fresh.clone();
-    let graph = fresh.graph_budget().clone();
     let counts = Counts::default();
     let repaired = Evaluator::new(&fresh, &counts)
         .discover_bundled(
             &recipe,
             move |value| validate_inventory(value, &current),
-            move |attempt| inventory_owner(attempt, &graph),
+            inventory_owner,
         )
         .unwrap();
     assert_eq!(first.receipt().action(), repaired.receipt().action());

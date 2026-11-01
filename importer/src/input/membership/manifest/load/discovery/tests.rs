@@ -1,7 +1,7 @@
 use super::*;
 use crate::input::membership::manifest::Error;
 use crate::input::membership::{observed, stored, Budget, Error as InputError};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 #[derive(Default)]
 struct Account;
@@ -14,10 +14,8 @@ impl document::Admission for Account {
 
 fn image(env: Option<Option<&[u8]>>, paths: &[(&[u8], bool)]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();
@@ -57,13 +55,10 @@ fn image(env: Option<Option<&[u8]>>, paths: &[(&[u8], bool)]) -> stored::Stored 
 fn cache_hit_does_not_read_environment_or_probe_candidates() {
     let image = image(None, &[]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -104,12 +99,10 @@ fn present_candidate_yields_before_any_later_probe() {
         &[(b"/root/a/Cargo.toml", false), (b"/root/Cargo.toml", true)],
     );
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -198,12 +191,10 @@ fn unrecorded_environment_and_metadata_are_terminal() {
     for env in [None, Some(None)] {
         let image = image(env, &[]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -245,12 +236,10 @@ fn non_unicode_test_root_matches_absent_but_valid_stop_is_inclusive() {
         };
         let image = image(Some(env), paths);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -285,20 +274,13 @@ fn discovery_spends_original_allocation_and_graph_accounts() {
         Some(None),
         &[(b"/root/a/Cargo.toml", false), (b"/root/Cargo.toml", true)],
     );
-    // `overflow` fills the graph path account so the first check is a
-    // genuine failure.
-    let run = |overflow: bool| {
-        let graph = node::GraphBudget::new();
-        if overflow {
-            graph.paths(usize::MAX).unwrap();
-        }
+    let run = || {
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
@@ -324,9 +306,6 @@ fn discovery_spends_original_allocation_and_graph_accounts() {
             Ok(())
         })();
         let result = session.finish(result);
-        if overflow {
-            assert!(matches!(result, Err(Error::Host(InputError::Budget(_)))));
-        }
         let ok = result.is_ok();
         if ok {
             host.finish().unwrap();
@@ -336,9 +315,7 @@ fn discovery_spends_original_allocation_and_graph_accounts() {
         assert!(allocation.check().is_ok());
         ok
     };
-    assert!(run(false));
-    // Only a genuine graph failure refuses, and the next candidate stays refused.
-    assert!(!run(true));
+    assert!(run());
 }
 
 #[test]
@@ -353,12 +330,10 @@ fn driver_search_preserves_explicit_cache_and_lazy_discovery_branches() {
             image(None, &[])
         };
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

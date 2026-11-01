@@ -369,14 +369,12 @@ fn exercise(outcome: Outcome) {
                             replay_request.config.universe_context(),
                             replay_request.config.digest(),
                         )?;
-                        let replay_paths = cargo::resolution::layout::Paths::observe(
-                            layout.root().to_path_buf(),
-                            store.graph_budget(),
-                        )
-                        .map_err(|source| Error::Node {
-                            operation: "observe retained fixture paths",
-                            source: Box::new(source),
-                        })?;
+                        let replay_paths =
+                            cargo::resolution::layout::Paths::observe(layout.root().to_path_buf())
+                                .map_err(|source| Error::Node {
+                                    operation: "observe retained fixture paths",
+                                    source: Box::new(source),
+                                })?;
                         let paths = replay_paths.final_form();
                         fs::remove_file(layout.paths().record()).unwrap();
                         let scope = cargo::resolution::content::Scope::complete(

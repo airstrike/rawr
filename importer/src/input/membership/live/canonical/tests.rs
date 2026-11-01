@@ -45,12 +45,7 @@ fn run(
     reply: Reply,
     items: usize,
     bytes: usize,
-    available_paths: usize,
 ) -> (Result<observed::Record>, Native, input::Usage) {
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - available_paths)
-        .unwrap();
     let mut allocation = input::Allocation::with_limits(items, bytes, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
@@ -58,7 +53,6 @@ fn run(
     let result = acquire(
         path,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         &mut native,
@@ -74,7 +68,7 @@ fn bytes(value: &[u8]) -> Reply {
 fn exact_native_query_and_actual_success_bytes_are_owned_under_original_account() {
     let path = b"/p//./\xff";
     let output = b"/canonical/\xff";
-    let (result, native, usage) = run(path, bytes(output), usize::MAX, usize::MAX, 1);
+    let (result, native, usage) = run(path, bytes(output), usize::MAX, usize::MAX);
     let record = result.unwrap();
     let observed::Query::Canonical(query) = record.query else {
         panic!("canonical query")
@@ -99,7 +93,6 @@ fn positive_native_errors_remain_exact_data_without_retry_or_output_ownership() 
             )),
             usize::MAX,
             usize::MAX,
-            1,
         );
         assert!(
             matches!(result.unwrap().value, observed::Value::Canonical(Err(actual)) if actual == code)
@@ -120,12 +113,12 @@ fn malformed_native_results_and_unsupported_are_outer_terminal_errors() {
         rawr_canonical::Error::Native(std::io::Error::from_raw_os_error(-1)),
         rawr_canonical::Error::Native(std::io::Error::from(std::io::ErrorKind::Other)),
     ] {
-        let (result, native, _) = run(b"/p", Reply::Error(error), usize::MAX, usize::MAX, 1);
+        let (result, native, _) = run(b"/p", Reply::Error(error), usize::MAX, usize::MAX);
         assert!(matches!(result, Err(Error::Encoding(_))));
         assert_eq!(native.queries.len(), 1);
     }
     for output in [b"".as_slice(), b"relative"] {
-        let (result, native, _) = run(b"/p", bytes(output), usize::MAX, usize::MAX, 1);
+        let (result, native, _) = run(b"/p", bytes(output), usize::MAX, usize::MAX);
         assert!(matches!(result, Err(Error::Encoding(_))));
         assert_eq!(native.queries.len(), 1);
     }
@@ -133,7 +126,6 @@ fn malformed_native_results_and_unsupported_are_outer_terminal_errors() {
 
 #[test]
 fn output_refusal_latches_original_account_and_prevents_another_native_call() {
-    let graph = node::GraphBudget::new();
     // The first input spends five bytes; the nine-byte output overflows the
     // account's checked arithmetic, a genuine failure. Nothing else
     // prevents another query/input unless that refusal is latched.
@@ -141,7 +133,6 @@ fn output_refusal_latches_original_account_and_prevents_another_native_call() {
     allocation.bytes(usize::MAX - 5).unwrap();
     let mut native = Native::new(bytes(b"/resolved"));
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     assert!(matches!(
@@ -161,11 +152,9 @@ fn output_refusal_latches_original_account_and_prevents_another_native_call() {
 
     // Crossing the byte target instead is recorded and never latches: the
     // output is owned and another native call is still made.
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, 10, usize::MAX);
     let mut native = Native::new(bytes(b"/resolved"));
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     acquire(b"/p", &mut budget, &mut native).expect("output past the target is owned");
@@ -181,7 +170,7 @@ fn output_refusal_latches_original_account_and_prevents_another_native_call() {
 fn input_longer_than_transfer_capacity_reaches_native_unchanged() {
     let mut path = vec![b'x'; rawr_canonical::BUFFER_BYTES * 2];
     path[0] = b'/';
-    let (result, native, _) = run(&path, bytes(b"/short"), usize::MAX, usize::MAX, 1);
+    let (result, native, _) = run(&path, bytes(b"/short"), usize::MAX, usize::MAX);
     assert!(result.is_ok());
     assert_eq!(native.queries[0].len(), path.len() + 1);
     assert_eq!(&native.queries[0][..path.len()], path);
@@ -190,7 +179,7 @@ fn input_longer_than_transfer_capacity_reaches_native_unchanged() {
 #[test]
 fn invalid_observation_queries_do_not_call_native() {
     for path in [b"".as_slice(), b"relative", b"/nul\0tail"] {
-        let (result, native, _) = run(path, bytes(b"/unused"), usize::MAX, usize::MAX, 1);
+        let (result, native, _) = run(path, bytes(b"/unused"), usize::MAX, usize::MAX);
         assert!(matches!(result, Err(Error::Encoding(_))));
         assert!(native.queries.is_empty());
     }
@@ -213,12 +202,10 @@ fn native_adapter_preserves_exact_queries_and_matches_std_in_quiescent_fixture()
 
     fn compare(path: &Path) {
         let limits = crate::cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let record = super::super::canonical(
             path.as_os_str().as_bytes(),
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

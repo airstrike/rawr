@@ -157,13 +157,11 @@ impl file::System for Script {
 
 fn run(script: &mut Script, limit: usize) -> Result<Acquired> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     file::acquire(
         PATH,
         limit,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         script,
@@ -298,10 +296,8 @@ fn terminal_errors_preserve_errno_and_never_promote_read_enoent_to_absence() {
             assert_eq!(script.closed(), 1);
 
             let limits = cargo::Limits::standard();
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::new(&limits);
             let mut budget = Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             };
             let image =
@@ -438,7 +434,6 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
         [b"/".as_slice(), &vec![b'x'; 4096]].concat(),
     ] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut script = Script::new([]);
         script.path = path.clone();
@@ -447,7 +442,6 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
             &path,
             1,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
             &mut script,
@@ -467,7 +461,6 @@ fn exact_native_query_keeps_non_utf8_bytes_and_overlong_spelling() {
 #[test]
 fn original_prior_ownership_covers_full_replacements() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::new(&limits);
     measured.items(7).unwrap();
     measured.bytes(19).unwrap();
@@ -483,7 +476,6 @@ fn original_prior_ownership_covers_full_replacements() {
         PATH,
         8,
         &mut Budget {
-            graph: &graph,
             allocation: &mut measured,
         },
         &mut script,
@@ -497,85 +489,6 @@ fn original_prior_ownership_covers_full_replacements() {
     );
 }
 
-#[test]
-fn every_graph_floor_refuses_before_the_next_syscall_and_still_closes() {
-    let mut baseline = Script::new([bytes(b"abc"), Step::Eof]);
-    run(&mut baseline, 3).unwrap();
-    let required = baseline.events.len();
-    // The path-check target is measured, never a gate. Every cut below
-    // the required work completes the acquisition with the baseline's events
-    // and records the exceedance with a truthful high water.
-    for available in 0..=required {
-        let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - available)
-            .unwrap();
-        let mut allocation = input::Allocation::new(&limits);
-        let mut script = Script::new([bytes(b"abc"), Step::Eof]);
-        file::acquire(
-            PATH,
-            3,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut script,
-        )
-        .expect("path checks past the target are still made");
-        assert_eq!(script.events, baseline.events);
-        assert!(!script.live);
-        assert_eq!(script.closed(), 1);
-        assert!(allocation.items(0).is_ok());
-    }
-    // Checked-arithmetic overflow of the graph account is a genuine refusal:
-    // saturating it leaves exactly `available` charges before the next path
-    // check fails ahead of its syscall, and the descriptor still closes.
-    for available in 0..=required {
-        let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        node::PATH_SITES.with(|sites| sites.borrow_mut().clear());
-        graph.paths(usize::MAX - available).unwrap();
-        let mut allocation = input::Allocation::new(&limits);
-        let mut script = Script::new([bytes(b"abc"), Step::Eof]);
-        let result = file::acquire(
-            PATH,
-            3,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation,
-            },
-            &mut script,
-        );
-        assert_eq!(result.is_ok(), available == required);
-        let ordinary: Vec<_> = script
-            .events
-            .iter()
-            .copied()
-            .filter(|event| *event != Event::Close)
-            .collect();
-        let expected: Vec<_> = baseline
-            .events
-            .iter()
-            .copied()
-            .filter(|event| *event != Event::Close)
-            .take(ordinary.len())
-            .collect();
-        assert_eq!(ordinary, expected);
-        assert!(!script.live);
-        assert_eq!(
-            script.closed(),
-            usize::from(script.events.contains(&Event::Open))
-        );
-        if result.is_err() {
-            assert!(matches!(
-                result,
-                Err(Error::Budget(node::Error::Allocation))
-            ));
-        }
-    }
-}
-
 /// Every interrupted open or read attempt is charged to the original
 /// attempt's path account, and charging past the target records an exceedance
 /// instead of refusing. A finite interruption stream therefore completes, with
@@ -585,8 +498,6 @@ fn interrupted_open_and_read_charge_the_original_attempt_budget_past_its_target(
     const INTERRUPTIONS: usize = 7;
     for opening in [true, false] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 9).unwrap();
         let mut allocation = input::Allocation::new(&limits);
         let mut script = Script::new([bytes(b"xyz"), Step::Eof]);
         script.interrupt_open = if opening { INTERRUPTIONS } else { 0 };
@@ -595,7 +506,6 @@ fn interrupted_open_and_read_charge_the_original_attempt_budget_past_its_target(
             PATH,
             3,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
             &mut script,
@@ -620,8 +530,6 @@ fn interrupted_open_and_read_charge_the_original_attempt_budget_past_its_target(
             if opening { INTERRUPTIONS + 1 } else { 1 }
         );
         assert!(!script.live);
-        let (_, paths, _) = graph.census_usage().unwrap();
-        assert!(paths > node::MAX_PATH_CHECKS_PER_GRAPH);
         assert!(
             allocation.items(0).is_ok(),
             "an exceedance never latches the account"
@@ -634,13 +542,11 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
     // A genuine refusal is the account's checked arithmetic overflowing
     // on the two-byte replacement layout; it precedes the reservation even
     // though the vector already holds allocator bonus capacity.
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(100, usize::MAX, 100);
     allocation.bytes(usize::MAX - 1).unwrap();
     file::RESERVATIONS.with(|count| count.set(0));
     assert!(matches!(
         file::bonus_refusal(&mut Budget {
-            graph: &graph,
             allocation: &mut allocation
         }),
         Err(Error::Input(crate::Error::Node { ref source, .. }))
@@ -656,7 +562,6 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
     let mut allocation = input::Allocation::with_limits(100, 1, 100);
     file::RESERVATIONS.with(|count| count.set(0));
     file::bonus_refusal(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
     .expect("bytes past the target are owned");
@@ -676,7 +581,6 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
             PATH,
             1,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation
             },
             &mut script
@@ -696,7 +600,6 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
         PATH,
         1,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         &mut script,
@@ -710,23 +613,13 @@ fn allocation_refusal_precedes_reservation_and_cannot_spend_allocator_bonus() {
 #[test]
 fn pure_copy_identity_and_growth_do_not_spend_hash_decode_or_candidate_accounts() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let mut allocation = input::Allocation::new(&limits);
     let mut script = Script::new([bytes(b"a"), bytes(b"b"), Step::Eof]);
     let acquired = file::acquire(
         PATH,
         2,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         &mut script,
@@ -740,12 +633,10 @@ fn pure_copy_identity_and_growth_do_not_spend_hash_decode_or_candidate_accounts(
 fn acquired_record_flows_through_stored_host_and_document_under_one_account() {
     let source = b"[package]\nname='demo'\nversion='1.2.3'\n[unused]\nx=[1,{y=true}]\n";
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut script = Script::new([bytes(source), Step::Eof]);

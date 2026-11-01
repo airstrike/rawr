@@ -508,14 +508,12 @@ impl Store {
         decode: impl FnOnce(Stored<K>) -> Result<T, Error>,
     ) -> Result<Option<T>, Error> {
         let action_relative = self.action_relative::<K>(recipe.action());
-        let Some(action) =
-            entry::existing_directory_budgeted(&self.root, &action_relative, budget)?
-        else {
+        let Some(action) = entry::existing_directory_budgeted(&self.root, &action_relative)? else {
             return Ok(None);
         };
 
         let envelope_path = action.join("envelope");
-        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES, budget)?;
+        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
         self.validate_allocation(
             &action,
             accounting::Class::Action,
@@ -537,7 +535,7 @@ impl Store {
             });
         }
         let content_relative = self.content_relative::<K>(envelope.content);
-        let content = entry::existing_directory_budgeted(&self.root, &content_relative, budget)?
+        let content = entry::existing_directory_budgeted(&self.root, &content_relative)?
             .ok_or_else(|| Error::Corrupt {
                 path: self.root.join(&content_relative),
                 reason: "content-addressed directory is missing",
@@ -548,7 +546,6 @@ impl Store {
             &content_path,
             envelope.content_length,
             envelope.output_limit,
-            budget,
         )?;
         let (sha, current) = payload_digests::<K>(&content_path, before.as_ref(), &bytes);
         let record = self.validate_allocation_record(
@@ -563,7 +560,6 @@ impl Store {
             accounting::Record::read_budgeted,
         )?;
         accounting::registered_with_budget(&self.root, &record, Some(budget))?;
-        budget.hash(bytes.len())?;
         if bytes.len() != envelope.content_length || current != envelope.content {
             return Err(Error::Corrupt {
                 path: content_path,
@@ -1549,9 +1545,8 @@ impl Store {
     pub(crate) fn candidates<K: Value>(
         &self,
         lookup: crate::node::LookupKey,
-        budget: &crate::node::GraphBudget,
     ) -> Result<index::Candidates, Error> {
-        index::lookup(&self.root, K::KIND, K::SCHEMA, lookup, budget)
+        index::lookup(&self.root, K::KIND, K::SCHEMA, lookup)
     }
 
     pub(crate) fn inspect_candidate<K: Value>(
@@ -1561,14 +1556,13 @@ impl Store {
         budget: &crate::node::GraphBudget,
     ) -> Result<Option<crate::node::replay::Replayed<K>>, Error> {
         let action_relative = self.action_relative::<K>(action);
-        let Some(action_path) =
-            entry::existing_directory_budgeted(&self.root, &action_relative, budget)?
+        let Some(action_path) = entry::existing_directory_budgeted(&self.root, &action_relative)?
         else {
             return Ok(None);
         };
         let envelope_path = action_path.join("envelope");
         let envelope_bytes =
-            entry::read_candidate_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES, budget)?;
+            entry::read_candidate_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
         let action_record = self.validate_allocation_record(
             &action_path,
             accounting::Class::Action,
@@ -1598,7 +1592,7 @@ impl Store {
             });
         }
         let content_relative = self.content_relative::<K>(envelope.content);
-        let content = entry::existing_directory_budgeted(&self.root, &content_relative, budget)?
+        let content = entry::existing_directory_budgeted(&self.root, &content_relative)?
             .ok_or_else(|| Error::Corrupt {
                 path: self.root.join(&content_relative),
                 reason: "candidate content-addressed directory is missing",
@@ -1609,7 +1603,6 @@ impl Store {
             &content_path,
             envelope.content_length,
             output_limit,
-            budget,
         )?;
         let (sha, current) = payload_digests::<K>(&content_path, before.as_ref(), &bytes);
         let content_record = self.validate_allocation_record(
@@ -1623,15 +1616,13 @@ impl Store {
             Some(budget),
             accounting::Record::read_candidate_budgeted,
         )?;
-        budget.hash(bytes.len())?;
         if bytes.len() != envelope.content_length || current != envelope.content {
             return Err(Error::Corrupt {
                 path: content_path,
                 reason: "candidate content length or digest changed",
             });
         }
-        let bundled =
-            accounting::registered_action(&self.root, &action_record, &content_record, budget)?;
+        let bundled = accounting::registered_action(&self.root, &action_record, &content_record)?;
         Stored::new(envelope, bytes, bundled)
             .inspect(output_limit, budget)
             .map(Some)
@@ -1706,25 +1697,19 @@ impl Store {
         (length, digest): (usize, [u8; 32]),
         payload_name: &'static str,
         budget: Option<&crate::node::GraphBudget>,
-        read_record: fn(&Path, &crate::node::GraphBudget) -> Result<accounting::Record, Error>,
+        read_record: fn(&Path) -> Result<accounting::Record, Error>,
     ) -> Result<accounting::Record, Error> {
         let path = directory.join(payload_name);
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-        }
         let metadata = fs::metadata(&path).map_err(|source| Error::Io {
             operation: "inspect typed store accounted payload",
             path,
             source,
         })?;
         let record = match budget {
-            Some(budget) => read_record(directory, budget),
+            Some(_) => read_record(directory),
             None => accounting::Record::read(directory),
         }
         .and_then(|record| {
-            if let Some(budget) = budget {
-                budget.hash(length)?;
-            }
             record
                 .validate_digest(
                     class,
@@ -1767,9 +1752,8 @@ impl Store {
         length: u64,
         digest: [u8; 32],
         metadata: &fs::Metadata,
-        budget: &crate::node::GraphBudget,
     ) -> Result<accounting::Record, Error> {
-        accounting::Record::read_budgeted(directory, budget)
+        accounting::Record::read_budgeted(directory)
             .and_then(|record| {
                 record
                     .validate_digest(class, kind, schema, key, length, digest, metadata)
@@ -1797,13 +1781,15 @@ impl Store {
             .join(expected.kind.directory())
             .join(crate::node::STORAGE_DIRECTORY)
             .join(expected.action.directory());
-        let action = entry::existing_directory_budgeted(&self.root, &action_relative, budget)?
-            .ok_or_else(|| Error::Corrupt {
-                path: self.root.join(&action_relative),
-                reason: "read-set action directory is missing",
+        let action =
+            entry::existing_directory_budgeted(&self.root, &action_relative)?.ok_or_else(|| {
+                Error::Corrupt {
+                    path: self.root.join(&action_relative),
+                    reason: "read-set action directory is missing",
+                }
             })?;
         let envelope_path = action.join("envelope");
-        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES, budget)?;
+        let envelope_bytes = entry::read_file_budgeted(&envelope_path, MAX_ENVELOPE_BYTES)?;
         let action_record = self.validate_allocation_record(
             &action,
             accounting::Class::Action,
@@ -1836,7 +1822,7 @@ impl Store {
             .join(expected.kind.directory())
             .join(format!("{:08x}", expected.schema))
             .join(expected.content.directory());
-        let content = entry::existing_directory_budgeted(&self.root, &content_relative, budget)?
+        let content = entry::existing_directory_budgeted(&self.root, &content_relative)?
             .ok_or_else(|| Error::Corrupt {
                 path: self.root.join(&content_relative),
                 reason: "read-set content directory is missing",
@@ -1848,7 +1834,6 @@ impl Store {
             &payload,
             envelope.content_length,
             envelope.output_limit,
-            budget,
         )?;
         let identity = crate::file_digest::Identity::of(&metadata);
         let content_domain = crate::file_digest::Domain::Content {
@@ -1864,10 +1849,7 @@ impl Store {
                     &payload,
                     envelope.content_length,
                     envelope.output_limit,
-                    budget,
                 )?;
-                budget.hash(bytes.len())?;
-                budget.hash(bytes.len())?;
                 let sha: [u8; 32] = sha2::Sha256::digest(&bytes).into();
                 let current =
                     content_digest_parts(expected.kind, expected.schema, &bytes).as_bytes();
@@ -1888,7 +1870,6 @@ impl Store {
             metadata.len(),
             sha,
             &metadata,
-            budget,
         )?;
         if metadata.len() != envelope.content_length as u64
             || Digest::from_bytes(current) != expected.content
@@ -1898,7 +1879,7 @@ impl Store {
                 reason: "read-set content length or digest changed",
             });
         }
-        if accounting::registered_action(&self.root, &action_record, &content_record, budget)?
+        if accounting::registered_action(&self.root, &action_record, &content_record)?
             != expected.bundled
         {
             return Err(Error::StaleReadSet {

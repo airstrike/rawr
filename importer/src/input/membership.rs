@@ -69,7 +69,6 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// The caller's original cumulative ownership and graph-work accounts.
 struct Budget<'budget> {
-    graph: &'budget node::GraphBudget,
     allocation: &'budget mut Allocation,
 }
 

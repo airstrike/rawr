@@ -3,7 +3,7 @@ use crate::input::membership::{
     observed::stream::{Row, Transcript},
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn row(name: &[u8], kind: u8, inspected: Option<Result<observed::Kind, i32>>) -> Row {
     Row::checked(name.to_vec(), kind, inspected).unwrap()
@@ -28,10 +28,8 @@ fn image(
     metadata: Vec<(&[u8], observed::Value)>,
 ) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = vec![observed::Record {
@@ -61,12 +59,10 @@ fn started(rows: Vec<Row>) -> Transcript {
 }
 fn run(image: &stored::Stored, bins: bool, root: &Path, relative: &Path) -> Vec<(String, PathBuf)> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -149,12 +145,10 @@ fn native_open_error_is_empty_and_main_probe_is_still_required_first() {
         Vec::new(),
     );
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -173,12 +167,10 @@ fn missing_subdirectory_probe_refuses_instead_of_becoming_absent() {
         Vec::new(),
     );
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

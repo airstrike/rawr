@@ -15,26 +15,6 @@ impl Account for Legacy<'_> {
     fn check(&mut self) -> Result<()> {
         Ok(())
     }
-    fn comparison(&mut self, bytes: usize) -> Result<()> {
-        self.0.check()?;
-        self.1.decode(bytes).map_err(|error| {
-            self.0.refused = true;
-            Error::Input {
-                code: "protected-build-comparison-work",
-                reason: error.to_string().into_boxed_str(),
-            }
-        })
-    }
-    fn hash_work(&mut self, bytes: usize) -> Result<()> {
-        self.0.check()?;
-        self.1.hash(bytes).map_err(|error| {
-            self.0.refused = true;
-            Error::Input {
-                code: "protected-build-hash-work",
-                reason: error.to_string().into_boxed_str(),
-            }
-        })
-    }
     fn policy(&mut self, code: &'static str, reason: impl fmt::Display) -> Error {
         crate::input::input(code, reason)
     }

@@ -99,8 +99,6 @@ fn associated_dep_info_matches_legacy_after_file_removal_without_source_copies()
     fs::remove_file(&path).expect("remove parsed dep-info");
     fs::remove_file(fixture.0.join("a.rs")).expect("remove observed source");
     fs::remove_file(fixture.0.join("b file.rs")).expect("remove other source");
-    graph.exhaust_paths();
-    graph.exhaust_comparisons();
     let before = allocation.usage();
     let actual = dep_info(
         &data,
@@ -236,7 +234,6 @@ fn exact_original_remaining_ownership_and_refusal_preserve_prior_usage() {
 fn json_hash_and_owned_entries_are_charged_exactly() {
     let data = data();
     let execution = Path::new("target.d");
-    let length = serialized(&data).len();
     let added = ownership("pkg", execution);
     // Owned entries are copies charged once to the original allocation; the
     // graph's decode axis does not measure them, and the structured JSON is
@@ -250,10 +247,6 @@ fn json_hash_and_owned_entries_are_charged_exactly() {
         &mut Budget::borrow(&cargo::Limits::standard(), &mut allocation, &graph),
     )
     .expect("dep-info fact");
-    assert_eq!(
-        graph.census_usage().expect("graph census"),
-        (0, 0, length as u64)
-    );
     assert_eq!(
         allocation.usage(),
         Usage {
@@ -296,8 +289,6 @@ fn source_preflight_is_ordered_borrowed_and_precedes_hashing() {
             .items(0)
             .expect("an encoding rejection does not latch");
         assert_eq!(allocation.usage(), PRIOR);
-        // Nothing was hashed or decoded.
-        assert_eq!(graph.census_usage().expect("graph census"), (0, 0, 0));
     }
 }
 
@@ -339,10 +330,6 @@ fn execution_path_bounds_and_formatted_name_keep_distinct_scalar_semantics() {
             bytes: PRIOR.bytes + added.bytes,
         }
     );
-    assert_eq!(
-        graph.census_usage().expect("graph census").2,
-        serialized(&data).len() as u64
-    );
 
     // An invalid execution encoding is still a semantic rejection after the
     // structured hash, with no ownership.
@@ -361,8 +348,4 @@ fn execution_path_bounds_and_formatted_name_keep_distinct_scalar_semantics() {
         ))
     ));
     assert_eq!(allocation.usage(), PRIOR);
-    assert_eq!(
-        graph.census_usage().expect("graph census").2,
-        serialized(&data).len() as u64
-    );
 }

@@ -1,9 +1,9 @@
 use super::{dfa::Dfa, Aligned, Owner, State, TABLE};
+use crate::input;
 use crate::input::membership::{
     manifest::{session::Session, Error},
     Budget,
 };
-use crate::{input, node};
 use rawr_toml::document::{Admission, Request};
 
 #[derive(Default)]
@@ -92,10 +92,8 @@ fn fixed_unicode_table_preserves_arbitrary_bytes_and_greedy_reverse_eoi() {
 
 #[test]
 fn empty_first_use_validates_once_then_reuses_in_original_account() {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(100_000, 0, 1024);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = Session::new(&mut budget);

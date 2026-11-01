@@ -34,7 +34,7 @@ impl Record<'_> {
             let path = layout.paths().record();
             admit_path(path, budget)?;
             // Reserve close before opening. Each write and sync is charged below.
-            budget.paths(2)?;
+            budget.check()?;
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -43,7 +43,7 @@ impl Record<'_> {
                 .map_err(|error| io("create retained resolution record", error))?;
             let mut remaining = self.encoded;
             while !remaining.is_empty() {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.write(remaining) {
                     Ok(0) => {
                         return Err(io(
@@ -56,7 +56,7 @@ impl Record<'_> {
                     Err(error) => return Err(io("write retained resolution record", error)),
                 }
             }
-            budget.paths(1)?;
+            budget.check()?;
             file.sync_all()
                 .map_err(|error| io("sync retained resolution record", error))?;
             Ok(Commitment {
@@ -102,7 +102,7 @@ impl Commitment {
             budget.check()?;
             let path = paths.record();
             admit_path(path, budget)?;
-            budget.paths(2)?;
+            budget.check()?;
             // NONBLOCK prevents a substituted FIFO from stalling before fstat.
             let mut file = OpenOptions::new()
                 .read(true)
@@ -114,7 +114,7 @@ impl Commitment {
             bytes.resize(self.length, 0);
             let mut remaining = bytes.as_mut_slice();
             while !remaining.is_empty() {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.read(remaining) {
                     Ok(0) => return Err(Error::Encoding("retained resolution record shortened")),
                     Ok(count) => remaining = &mut remaining[count..],
@@ -123,7 +123,7 @@ impl Commitment {
                 }
             }
             loop {
-                budget.paths(1)?;
+                budget.check()?;
                 match file.read(&mut [0]) {
                     Ok(0) => break,
                     Ok(_) => return Err(Error::Encoding("retained resolution record grew")),
@@ -142,7 +142,7 @@ impl Commitment {
 }
 
 fn require_file(file: &File, length: usize, budget: &mut Budget<'_>) -> Result<()> {
-    budget.paths(1)?;
+    budget.check()?;
     let metadata = file
         .metadata()
         .map_err(|error| io("inspect retained resolution record", error))?;

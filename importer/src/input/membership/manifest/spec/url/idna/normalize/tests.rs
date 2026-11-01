@@ -229,16 +229,7 @@ fn every_constructor_and_next_refusal_stops_delegate_and_future_emissions() {
 fn original_account_preserves_prior_items_layouts_and_between_emission_refusal() {
     use crate::input;
     use crate::input::membership::Budget;
-    use crate::node;
 
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let exact_bytes = 19
         + std::alloc::Layout::array::<Character>(4).unwrap().size()
         + std::alloc::Layout::array::<Character>(8).unwrap().size();
@@ -246,7 +237,6 @@ fn original_account_preserves_prior_items_layouts_and_between_emission_refusal()
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -267,7 +257,6 @@ fn original_account_preserves_prior_items_layouts_and_between_emission_refusal()
     let mut allocation = input::Allocation::with_limits(0, 0, 0);
     allocation.items(1).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

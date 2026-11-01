@@ -112,15 +112,13 @@ fn every_admission_refusal_is_terminal_before_output_allocation() {
 
 #[test]
 fn original_account_retains_prior_usage_and_exact_output_layout() {
+    use crate::input;
     use crate::input::membership::Budget;
-    use crate::{input, node};
 
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = Session::new(&mut budget);

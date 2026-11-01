@@ -127,14 +127,12 @@ impl System for Script {
 
 fn run(script: &mut Script, warn: bool) -> Result<observed::Record> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     acquire(
         DIRECTORY,
         Filename::Config,
         warn,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
         script,
@@ -249,7 +247,6 @@ fn native_join_matches_fixed_source_basename_without_normalizing_directory() {
     ] {
         for filename in [Filename::Config, Filename::Credentials] {
             let limits = cargo::Limits::standard();
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::new(&limits);
             let mut script = Script::new([Err(2)], [], Some(Stat::Error(2)));
             let record = acquire(
@@ -257,7 +254,6 @@ fn native_join_matches_fixed_source_basename_without_normalizing_directory() {
                 filename,
                 false,
                 &mut Budget {
-                    graph: &graph,
                     allocation: &mut allocation,
                 },
                 &mut script,
@@ -377,104 +373,10 @@ fn scenario(index: usize) -> (Script, bool, usize) {
 }
 
 #[test]
-fn every_graph_cut_preserves_first_refusal_and_prepaid_cleanup() {
-    for index in 0..7 {
-        let (mut baseline, warn, required) = scenario(index);
-        run(&mut baseline, warn).expect("baseline");
-        // The path-check target is measured, never a gate. Every cut
-        // completes the acquisition with the baseline's events; a cut below
-        // the required work records the exceedance with a truthful high water.
-        for available in 0..=required {
-            let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
-            graph
-                .paths(node::MAX_PATH_CHECKS_PER_GRAPH - available)
-                .expect("prior work");
-            let limits = cargo::Limits::standard();
-            let mut allocation = input::Allocation::new(&limits);
-            acquire(
-                DIRECTORY,
-                Filename::Config,
-                warn,
-                &mut Budget {
-                    graph: &graph,
-                    allocation: &mut allocation,
-                },
-                &mut script,
-            )
-            .unwrap_or_else(|error| panic!("scenario {index}, work {available}: {error:?}"));
-            assert!(script.live.is_empty());
-            assert_eq!(script.events, baseline.events);
-            assert!(allocation.items(0).is_ok());
-        }
-        // Checked-arithmetic overflow of the graph account is a genuine
-        // refusal: saturating the account leaves exactly `available` charges
-        // before the next path check fails, before its syscall.
-        for available in 0..=required {
-            let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
-            node::PATH_SITES.with(|sites| sites.borrow_mut().clear());
-            graph
-                .paths(usize::MAX - available)
-                .expect("saturating prior work");
-            let limits = cargo::Limits::standard();
-            let mut allocation = input::Allocation::new(&limits);
-            let result = acquire(
-                DIRECTORY,
-                Filename::Config,
-                warn,
-                &mut Budget {
-                    graph: &graph,
-                    allocation: &mut allocation,
-                },
-                &mut script,
-            );
-            assert_eq!(
-                result.is_ok(),
-                available == required,
-                "scenario {index}, work {available}"
-            );
-            if available < required {
-                assert!(matches!(
-                    result,
-                    Err(Error::Budget(node::Error::Allocation))
-                ));
-            }
-            assert!(script.live.is_empty());
-            let physical = |events: &[Event]| {
-                events
-                    .iter()
-                    .filter(|event| !matches!(event, Event::Close(_) | Event::Diagnostic(..)))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
-            let actual = physical(&script.events);
-            assert_eq!(actual, physical(&baseline.events)[..actual.len()]);
-            let opens = script
-                .events
-                .iter()
-                .filter(|event| matches!(event, Event::Fstat(_)))
-                .count();
-            let closes = script
-                .events
-                .iter()
-                .filter(|event| matches!(event, Event::Close(_)))
-                .count();
-            assert!(closes >= opens && closes <= 2);
-            if available == required {
-                assert_eq!(script.events, baseline.events);
-                assert!(graph.paths(1).is_err());
-            }
-        }
-    }
-}
-
-#[test]
 fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
     for index in 0..7 {
         let (mut baseline, warn, _) = scenario(index);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut measured = input::Allocation::new(&limits);
         measured.items(7).expect("prior items");
         measured.bytes(19).expect("prior bytes");
@@ -483,7 +385,6 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
             Filename::Config,
             warn,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut measured,
             },
             &mut baseline,
@@ -512,7 +413,6 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
         // only keep the completed legacy operations and their mandatory cleanup.
         for bytes in 19..=total.bytes {
             let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
             let mut allocation =
                 input::Allocation::with_limits(usize::MAX, usize::MAX, limits.string_bytes);
             allocation.items(7).expect("prior items");
@@ -525,7 +425,6 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
                 Filename::Config,
                 warn,
                 &mut Budget {
-                    graph: &graph,
                     allocation: &mut allocation,
                 },
                 &mut script,
@@ -546,7 +445,6 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
         }
         for items in 7..=total.items {
             let (mut script, _, _) = scenario(index);
-            let graph = node::GraphBudget::new();
             let mut allocation =
                 input::Allocation::with_limits(usize::MAX, usize::MAX, limits.string_bytes);
             allocation
@@ -558,7 +456,6 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
                 Filename::Config,
                 warn,
                 &mut Budget {
-                    graph: &graph,
                     allocation: &mut allocation,
                 },
                 &mut script,
@@ -575,10 +472,8 @@ fn all_allocation_cuts_preserve_reached_conversion_and_ownership_order() {
 #[test]
 fn result_replays_under_the_same_original_account_without_current_authority() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut script = Script::new([Ok(17), Ok(23)], [metadata(1), metadata(2)], None);

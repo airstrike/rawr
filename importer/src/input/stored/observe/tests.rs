@@ -182,12 +182,6 @@ fn every_other_recipe_rejects_without_filesystem_or_account_work() {
     let baseline = stored::tests::baseline();
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("spent paths");
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("spent decoding");
     let prior = Usage {
         items: 7,
         bytes: 31,
@@ -229,7 +223,6 @@ fn actual_directory_ownership_obeys_exact_prior_usage_and_terminal_refusal() {
     let usage = measured.usage();
     let mut allocation = Allocation::for_proof(prior, &limits);
     let graph = node::GraphBudget::new();
-    graph.exhaust_comparisons();
     let result = entry(
         recipe.view(),
         &fixture.0,
@@ -295,8 +288,6 @@ fn file_graph_paths_and_hashing_are_exact_per_new_identity_and_metadata_storage_
         &mut Budget::borrow(&limits, &mut allocation, &graph),
     )
     .expect("file entry");
-    // Eight path checks, three hashed bytes and no decode.
-    assert_eq!(graph.census_usage().expect("graph census"), (0, 8, 3));
 }
 
 #[test]
@@ -321,9 +312,6 @@ fn initial_refusal_prevents_io_and_read_length_changes_cannot_succeed() {
         Err(stored::Error::Refused)
     ));
     assert_eq!(allocation.usage(), prior);
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("no filesystem admission occurred");
     let source = fixture.0.join("source");
     fs::write(&source, b"one").expect("source");
     for expected in [0, 2, 4] {
@@ -436,25 +424,21 @@ fn an_unchanged_freshness_file_is_hashed_once_and_a_rewrite_is_hashed_again() {
     let digest = |expected: usize| {
         let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
         let graph = node::GraphBudget::new();
-        let digest = super::read::digest(
+        super::read::digest(
             &source,
             expected,
             &mut Budget::borrow(&limits, &mut allocation, &graph),
         )
-        .expect("the freshness file digests");
-        (digest, graph.census_usage().expect("usage").2)
+        .expect("the freshness file digests")
     };
-    let (first, hashed) = digest(5);
-    assert_eq!(hashed, 5, "the first consumer reads and hashes the file");
-    assert_eq!(
-        digest(5),
-        (first, 0),
-        "a later consumer reuses the same digest"
-    );
+    let first = digest(5);
+    assert_eq!(digest(5), first, "a later consumer reuses the same digest");
     fs::write(&source, b"other").expect("same-length rewrite");
-    let (changed, hashed) = digest(5);
-    assert_eq!(hashed, 5, "a changed identity is read and hashed again");
-    assert_ne!(changed, first);
+    let changed = digest(5);
+    assert_ne!(
+        changed, first,
+        "a changed identity is read and hashed again"
+    );
 }
 
 /// #520: a config candidate under a symlinked `.cargo` keeps the path Cargo

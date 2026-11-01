@@ -1,6 +1,6 @@
 use super::*;
 use crate::input::membership::{observed, stored, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use observed::stream::{Row, Transcript};
 
 fn present() -> observed::Value {
@@ -19,10 +19,8 @@ fn present() -> observed::Value {
 }
 fn image(rows: Option<Vec<Row>>, metadata: Vec<(&[u8], observed::Value)>) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();
@@ -60,12 +58,10 @@ fn run(
     legacy: Legacy,
 ) -> Result<Resolved, String> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

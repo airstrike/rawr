@@ -463,12 +463,10 @@ fn original_failure_prevents_resume_and_preserves_first_cause() {
 fn package_budget() -> Result<(), Error<crate::input::membership::Error>> {
     let image = image(vec![file("/p/Cargo.toml", "[workspace.package]\nlicense-file='docs/../LICENSE'\n[package]\nname='p'\nbuild='one/../build.rs'\nreadme=false\nlicense-file.workspace=true")]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {

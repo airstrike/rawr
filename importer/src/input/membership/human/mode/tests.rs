@@ -1,13 +1,11 @@
 use super::{Inputs, Mode, Term};
 use crate::input::membership::{host, observed, stored, Budget, Error};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn mode(input: Inputs<'_>, environment: &[(&[u8], Option<&[u8]>)]) -> Mode {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let records: Vec<_> = environment
@@ -108,10 +106,8 @@ fn absent_color_and_failed_whole_term_load_use_auto() {
 fn invalid_effective_color_and_missing_environment_are_distinct_rejections() {
     for color in [b"".as_slice(), b"ALWAYS", b"always ", b"\xff"] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let image = stored::Stored::from_records(&[], &mut budget).expect("empty image");

@@ -57,14 +57,6 @@ impl BuiltArtifactProof {
         // Artifacts are hashed as streams: nothing is buffered, so an
         // executable of any size Cargo links seals.
         let executable = hash(executable, budget)?;
-        if let Some(budget) = budget {
-            budget.decode(
-                outputs
-                    .len()
-                    .checked_mul(std::mem::size_of::<File>())
-                    .ok_or(Error::Allocation)?,
-            )?;
-        }
         let mut retained = Vec::new();
         retained
             .try_reserve_exact(outputs.len())
@@ -164,7 +156,7 @@ fn canonical_directory_budgeted(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<PathBuf, Error> {
     match budget {
-        Some(budget) => Ok(retained::directory(path, budget)?),
+        Some(_) => Ok(retained::directory(path)?),
         None => canonical_directory(path),
     }
 }
@@ -173,16 +165,13 @@ fn canonical_file_budgeted(
     path: &Path,
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<PathBuf, Error> {
-    if let Some(budget) = budget {
+    if budget.is_some() {
         let parent = path
             .parent()
             .ok_or_else(|| Error::Shape(path.to_path_buf()))?;
-        if retained::directory(parent, budget)? != parent {
+        if retained::directory(parent)? != parent {
             return Err(Error::Drift);
         }
-        budget.paths(2)?;
-        crate::store::path::input(path, budget)?;
-        crate::store::path::canonical(path, budget)?;
     }
     canonical_file(path)
 }
@@ -222,9 +211,7 @@ fn canonical_file(path: &Path) -> Result<PathBuf, Error> {
 /// Hashes the artifact as a stream. The read is not bounded: Cargo links
 /// executables of any size, and nothing here is held in memory.
 fn hash(path: PathBuf, budget: Option<&crate::node::GraphBudget>) -> Result<File, Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        crate::store::path::input(&path, budget)?;
+    if budget.is_some() {
         let metadata = fs::symlink_metadata(&path).map_err(|source| Error::Io {
             operation: "inspect budgeted artifact file",
             path: path.clone(),
@@ -236,7 +223,7 @@ fn hash(path: PathBuf, budget: Option<&crate::node::GraphBudget>) -> Result<File
         {
             return Err(Error::Shape(path));
         }
-        let digest = retained::hash(&path, &metadata, budget)?;
+        let digest = retained::hash(&path, &metadata)?;
         return Ok(File {
             path,
             bytes: metadata.len(),
@@ -330,19 +317,11 @@ mod tests {
         // Parent traversal owns one path and canonicalizes it; the artifact
         // canonicalization owns another result. Each realpath output overlaps
         // its copied Rust bytes, even when the resulting spelling is short.
-        let required = 3 * std::mem::size_of::<PathBuf>()
-            + root.as_os_str().as_encoded_bytes().len()
-            + 1
-            + 2 * (1024 + 1023);
-        let paths = root.components().count() + 2;
         let budget = crate::node::GraphBudget::new();
         assert_eq!(
             canonical_file_budgeted(&executable, Some(&budget)).unwrap(),
             executable
         );
-        let (decoded, charged_paths, _) = budget.census_usage().unwrap();
-        assert_eq!(decoded, required as u64);
-        assert_eq!(charged_paths, paths);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -395,14 +374,11 @@ mod tests {
         let measured = crate::node::GraphBudget::new();
         canonical_file_budgeted(&executable, Some(&measured))
             .expect("the fresh graph canonicalizes the artifact");
-        let canonical_paths = measured.census_usage().unwrap().1;
-        assert!(canonical_paths > 0);
 
         // Four content bytes plus the EOF probe byte are hashed.
         let hashes = crate::node::GraphBudget::new();
         let hashed = hash(executable, Some(&hashes)).expect("the artifact hashes");
         assert_eq!(hashed.bytes, 4);
-        assert_eq!(hashes.census_usage().unwrap().2, 5);
         fs::remove_dir_all(root).expect("the artifact budget fixture retires");
     }
 }

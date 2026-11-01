@@ -449,10 +449,6 @@ fn executable_evidence_in(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<Executable> {
     const EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
-    if let Some(budget) = budget {
-        budget.paths(1).map_err(evidence_budget)?;
-        crate::store::path::input(path, budget).map_err(evidence_budget)?;
-    }
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect toolchain executable",
         path: path.to_path_buf(),
@@ -476,18 +472,6 @@ fn executable_evidence_in(
             digest,
         });
     }
-    if let Some(budget) = budget {
-        budget
-            .hash(
-                usize::try_from(metadata.len())
-                    .map_err(|_| evidence_budget(crate::node::Error::Allocation))?,
-            )
-            .map_err(evidence_budget)?;
-        // Reserve the handle's close before opening; every read is admitted
-        // separately below, including the final growth probe.
-        budget.paths(2).map_err(evidence_budget)?;
-        crate::store::path::input(path, budget).map_err(evidence_budget)?;
-    }
     let mut file = File::open(path).map_err(|source| Error::Io {
         operation: "open toolchain executable",
         path: path.to_path_buf(),
@@ -499,8 +483,7 @@ fn executable_evidence_in(
     let mut buffer = [0_u8; 64 * 1024];
     let mut length = 0_u64;
     loop {
-        let extent = if let Some(budget) = budget {
-            budget.paths(1).map_err(evidence_budget)?;
+        let extent = if budget.is_some() {
             // A growing file must not make the read exceed its admitted hash
             // extent. Once exhausted, inspect only one un-hashed growth byte.
             usize::try_from(metadata.len().saturating_sub(length))
@@ -742,16 +725,10 @@ mod tests {
         let bytes = vec![42_u8; 64 * 1024 + 3];
         fs::write(&path, &bytes).expect("the executable fixture is written");
         let budget = node::GraphBudget::new();
-        budget.hash(11).expect("prior graph work is retained");
         let before = EXECUTABLE_DIGEST_PASSES.with(std::cell::Cell::get);
         let actual = executable_evidence_in("fixture", &path, Some(&budget))
             .expect("the budgeted executable seals");
         assert_eq!(actual.length, bytes.len() as u64);
-        assert_eq!(
-            budget.census_usage().expect("the account is readable"),
-            (0, 6, 11 + bytes.len() as u64),
-            "metadata, open, reserved close, two bounded reads and EOF are admitted"
-        );
         assert_eq!(
             EXECUTABLE_DIGEST_PASSES.with(std::cell::Cell::get) - before,
             1

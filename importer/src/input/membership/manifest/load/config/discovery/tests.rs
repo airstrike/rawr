@@ -5,14 +5,12 @@ use crate::input::membership::observed::discovery::{
     After, Attempt, Exists, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn with_budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -92,12 +90,10 @@ fn selects_exact_native_joined_path_for_each_family_mode_and_branch() {
                         transcript(filename, warn, selected),
                     )]);
                     let limits = cargo::Limits::standard();
-                    let graph = node::GraphBudget::new();
                     let mut allocation = input::Allocation::new(&limits);
                     let mut host = host::Host::from_image(
                         &image,
                         Budget {
-                            graph: &graph,
                             allocation: &mut allocation,
                         },
                     )
@@ -128,16 +124,11 @@ fn local_nul_produces_none_after_both_joins_without_any_host_query() {
     for directory in [b"/p\0".as_slice(), b"relative\0"] {
         for filename in [Filename::Config, Filename::Credentials] {
             for warn in [false, true] {
-                let graph = node::GraphBudget::new();
-                graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-                    .expect("exhaust native queries");
                 let limits = cargo::Limits::standard();
                 let mut allocation = input::Allocation::new(&limits);
                 let mut host = host::Host::from_image(
                     &image,
                     Budget {
-                        graph: &graph,
                         allocation: &mut allocation,
                     },
                 )
@@ -165,14 +156,12 @@ fn local_nul_produces_none_after_both_joins_without_any_host_query() {
     // The second source join crossing the string target is recorded
     // before NUL selects None; both spellings stay owned and nothing latches.
     let directory = Path::new(std::ffi::OsStr::from_bytes(b"/p\0"));
-    let graph = node::GraphBudget::new();
     let legacy_bytes = b"/p\0/config".len();
     let toml_bytes = b"/p\0/config.toml".len();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, legacy_bytes);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -190,12 +179,10 @@ fn local_nul_produces_none_after_both_joins_without_any_host_query() {
     // The second source join can still refuse before NUL would select None:
     // its byte charge overflows the account's checked arithmetic, a genuine
     // failure that latches the account.
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -227,12 +214,10 @@ fn missing_or_relative_domain_gap_latches_without_cargo_rejection_or_absence() {
         (Path::new("/known/./"), Filename::Config, true),
     ] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -261,17 +246,12 @@ fn selection_charges_the_original_allocation() {
         transcript(Filename::Config, false, Selection::Legacy),
     )]);
     let run = || {
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1)
-            .expect("prior work");
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).expect("prior items");
         allocation.bytes(31).expect("prior bytes");
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -312,12 +292,10 @@ fn selected_file_and_includes_load_without_unselected_read_evidence() {
             file(b"/p/child.toml", content("answer=1\nchild=true")),
         ]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -369,12 +347,10 @@ fn selection_absence_never_loads_and_selected_read_failure_stays_first() {
         }
         let image = image(records);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

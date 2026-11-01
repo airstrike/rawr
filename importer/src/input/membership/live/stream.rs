@@ -229,10 +229,12 @@ impl rawr_directory::Admission for Admission<'_, '_> {
         use rawr_directory::{Storage, Work};
         self.0.allocation.check()?;
         match work {
-            Work::Open { .. } | Work::Reopen { .. } => self.0.graph.paths(2)?,
-            Work::Mount | Work::Read { .. } | Work::Record | Work::EntryType { .. } => {
-                self.0.graph.paths(1)?
-            }
+            Work::Open { .. }
+            | Work::Reopen { .. }
+            | Work::Mount
+            | Work::Read { .. }
+            | Work::Record
+            | Work::EntryType { .. } => {}
             Work::Allocate { storage, bytes, .. } => {
                 let items = match storage {
                     Storage::Entries => bytes / std::mem::size_of::<rawr_directory::Name>(),

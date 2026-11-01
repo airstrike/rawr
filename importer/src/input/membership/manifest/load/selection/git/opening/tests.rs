@@ -8,16 +8,14 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 #[test]
 fn complete_discovery_calls_opening_cwd_and_replays_commondir_before_stage_one() {
     for refuse_opening in [false, true] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut records = Vec::new();
@@ -147,10 +145,8 @@ fn complete_discovery_calls_opening_cwd_and_replays_commondir_before_stage_one()
 fn local_configuration_controls_all_four_transforms_after_original_spelling_read() {
     for enabled in [false, true] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let git = Path::new("/cafe\u{301}/.git");

@@ -1,14 +1,12 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::Stop;
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 
 fn image(files: &[(&str, &str)]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = files
@@ -37,12 +35,10 @@ fn run<T>(
 ) -> Result<T, Error<input::membership::Error>> {
     let image = image(files);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -336,14 +332,12 @@ fn refused_original_account_stops_every_later_load() {
     // `latched` injects a genuine original-account failure.
     let run = |latched| {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )

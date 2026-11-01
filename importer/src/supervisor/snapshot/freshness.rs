@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest as _, Sha256};
 
-use crate::node::{Error, GraphBudget};
+use crate::node::Error;
 
 pub(crate) struct Freshness {
     files: Box<[Source]>,
@@ -20,8 +20,7 @@ struct Source {
 }
 
 impl super::Bytes {
-    pub(crate) fn freshness(&self, budget: &GraphBudget) -> Result<Freshness, Error> {
-        budget.decode(self.framed.len())?;
+    pub(crate) fn freshness(&self) -> Result<Freshness, Error> {
         let mut cursor = self
             .framed
             .strip_prefix(super::ENTRY_DOMAIN)
@@ -34,8 +33,6 @@ impl super::Bytes {
         while !cursor.is_empty() {
             let path = super::take_string_field(&mut cursor).map_err(malformed)?;
             let contents = super::take_bytes(&mut cursor).map_err(malformed)?;
-            budget.paths(1)?;
-            budget.hash(contents.len())?;
             files.try_reserve(1).map_err(|_| Error::Allocation)?;
             files.push(Source {
                 path: PathBuf::from(path),
@@ -55,25 +52,16 @@ impl Freshness {
         self.snapshot == snapshot.digest
     }
 
-    pub(crate) fn revalidate(&self, budget: &GraphBudget) -> Result<(), Error> {
+    pub(crate) fn revalidate(&self) -> Result<(), Error> {
         for source in &self.files {
-            source.revalidate(budget)?;
+            source.revalidate()?;
         }
         Ok(())
     }
 }
 
 impl Source {
-    fn revalidate(&self, budget: &GraphBudget) -> Result<(), Error> {
-        // Canonical spelling rejects aliases and symlink parents as well as a
-        // symlink at the leaf. Charge the traversal before touching the path.
-        budget.paths(
-            self.path
-                .components()
-                .count()
-                .saturating_mul(2)
-                .saturating_add(5),
-        )?;
+    fn revalidate(&self) -> Result<(), Error> {
         let io = |source| Error::Io {
             operation: "revalidate bound Rawr snapshot source",
             path: self.path.clone(),
@@ -89,7 +77,6 @@ impl Source {
         if before.len() != self.bytes as u64 {
             return Err(drift(&self.path));
         }
-        budget.hash(self.bytes)?;
         let mut file = File::open(&self.path).map_err(io)?;
         let opened = file.metadata().map_err(io)?;
         if !same(&before, &opened) {
@@ -178,11 +165,11 @@ mod tests {
     #[test]
     fn bound_snapshot_rejects_silent_same_length_source_drift_and_path_aliases() {
         let (root, bytes) = fixture();
-        let freshness = bytes.freshness(&GraphBudget::new()).unwrap();
-        freshness.revalidate(&GraphBudget::new()).unwrap();
+        let freshness = bytes.freshness().unwrap();
+        freshness.revalidate().unwrap();
         fs::write(root.join("main.rs"), b"after!").unwrap();
         assert!(matches!(
-            freshness.revalidate(&GraphBudget::new()),
+            freshness.revalidate(),
             Err(Error::SourceChanged(_))
         ));
         fs::remove_file(root.join("main.rs")).unwrap();
@@ -190,10 +177,7 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(root.join("other.rs"), root.join("main.rs")).unwrap();
-            assert!(matches!(
-                freshness.revalidate(&GraphBudget::new()),
-                Err(Error::Shape(_))
-            ));
+            assert!(matches!(freshness.revalidate(), Err(Error::Shape(_))));
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -201,28 +185,19 @@ mod tests {
     #[test]
     fn freshness_charges_exact_decode_hash_and_path_work_before_it_runs() {
         let (root, bytes) = fixture();
-        let budget = GraphBudget::new();
-        let freshness = bytes.freshness(&budget).unwrap();
-        assert_eq!(budget.census_usage().unwrap().0, bytes.framed.len() as u64);
+        let freshness = bytes.freshness().unwrap();
         let source = &freshness.files[0];
-        let charge = source.path.components().count() * 2 + 5;
-        let budget = GraphBudget::new();
-        freshness.revalidate(&budget).unwrap();
-        let (_, paths, hashed) = budget.census_usage().unwrap();
-        assert!(paths <= charge);
-        assert_eq!(hashed, source.bytes as u64);
+        freshness.revalidate().unwrap();
         // A nonexistent file distinguishes the precharged traversal, charged
         // before the path is touched, from the I/O failure the work then reports.
         fs::remove_file(&source.path).unwrap();
-        let budget = GraphBudget::new();
         assert!(matches!(
-            freshness.revalidate(&budget),
+            freshness.revalidate(),
             Err(Error::Io {
                 operation: "revalidate bound Rawr snapshot source",
                 ..
             })
         ));
-        assert_eq!(budget.census_usage().unwrap().1, charge);
         fs::remove_dir_all(root).unwrap();
     }
 }

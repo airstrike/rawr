@@ -1,4 +1,5 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::load::{
     features::{self, Features},
     Warnings,
@@ -10,15 +11,12 @@ use crate::input::membership::observed::discovery::{
     After, Attempt, Exists, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 use rawr_toml::document;
 
 fn budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -139,12 +137,10 @@ macro_rules! fixture {
     ($records:expr, |$owner:ident, $session:ident, $limits:ident| $body:block) => {{
         let image = image($records);
         let $limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&$limits);
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -555,14 +551,12 @@ fn repeated_owner_operations_charge_the_original_budget() {
         }
         let image = image(records);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
@@ -692,12 +686,10 @@ fn crates_io_memo_retains_incumbent_and_is_bound_to_source_history() {
         assert_eq!(sources.get(first, &mut session).unwrap().label(), None);
         // A successful memo hit needs neither any observation nor any positive
         // admission. An empty image and zero-capacity account make that exact.
-        let graph = node::GraphBudget::new();
         let mut zero = input::Allocation::with_limits(0, 0, 0);
         let mut empty_host = host::Host::from_image(
             &empty_image,
             Budget {
-                graph: &graph,
                 allocation: &mut zero,
             },
         )

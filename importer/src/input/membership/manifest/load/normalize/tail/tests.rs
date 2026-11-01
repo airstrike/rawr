@@ -173,12 +173,10 @@ fn edition_2024_alias_fails_before_inherited_dependency_or_lint() {
 fn bounded() -> Result<(), Error<crate::input::membership::Error>> {
     let image = image(Vec::new());
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {

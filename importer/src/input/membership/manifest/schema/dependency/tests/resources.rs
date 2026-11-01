@@ -3,8 +3,8 @@ use rawr_toml::document;
 use super::super::super::super::{session, storage, value, walk, Error, Stop};
 use super::super::{inheritable, Inheritable};
 use super::parse;
+use crate::input;
 use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[derive(Default)]
 struct Account {
@@ -93,20 +93,9 @@ fn deep_initial_and_flattened_capture_has_flat_success_and_failure_teardown() {
 #[test]
 fn borrowed_trials_do_not_mint_a_fresh_graph_account() {
     let document = parse(FIXTURE);
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let captured =

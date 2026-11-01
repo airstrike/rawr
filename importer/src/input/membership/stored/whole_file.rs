@@ -1,12 +1,10 @@
 use super::{observed, Budget, Error, Stored};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn with_budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -156,14 +154,11 @@ fn whole_file_retention_and_decode_preserve_prior_ownership() {
     let items = 7 + 3; // prior + record + native path + raw content
     let owned = 19 + std::mem::size_of::<observed::Record>() + 4 + 8;
     for decode in [false, true] {
-        let graph = node::GraphBudget::new();
-        graph.decode(31).unwrap();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
         allocation.items(7).unwrap();
         allocation.bytes(19).unwrap();
         super::super::OWNED_BYTES.with(|count| count.set(0));
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let result = if decode {
@@ -182,46 +177,14 @@ fn whole_file_retention_and_decode_preserve_prior_ownership() {
 }
 
 #[test]
-fn whole_file_decode_graph_overflow_refuses_before_any_owned_record() {
-    let bytes = encoded(&[record(b"/raw", content(b"data", observed::End::Eof))]);
-    // Checked-arithmetic overflow of the graph's decode account is a genuine
-    // failure that precedes every owned record.
-    let graph = node::GraphBudget::new();
-    graph.decode(usize::MAX).unwrap();
-    let limits = cargo::Limits::standard();
-    let mut allocation = input::Allocation::new(&limits);
-    allocation.items(7).unwrap();
-    allocation.bytes(19).unwrap();
-    super::super::OWNED_VECTORS.with(|count| count.set(0));
-    super::super::OWNED_BYTES.with(|count| count.set(0));
-    let result = Stored::decode(
-        &bytes,
-        &mut Budget {
-            graph: &graph,
-            allocation: &mut allocation,
-        },
-    );
-    assert!(matches!(
-        result,
-        Err(Error::Budget(node::Error::Allocation))
-    ));
-    assert_eq!(allocation.usage().items, 7);
-    assert_eq!(allocation.usage().bytes, 19);
-    assert_eq!(super::super::OWNED_VECTORS.with(std::cell::Cell::get), 0);
-    assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 0);
-}
-
-#[test]
 fn whole_file_encoding_precharges_the_complete_result_layout() {
     let records = [record(b"/raw", content(b"data", observed::End::Error(5)))];
     let image = with_budget(|budget| Stored::from_records(&records, budget).unwrap());
     let expected = encoded(&records);
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let result = image.encode(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     });
     // The complete layout is charged as one item and one byte count

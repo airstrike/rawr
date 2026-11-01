@@ -3,7 +3,7 @@ use rawr_toml::document;
 use super::super::{schema, session, storage, value, walk, Error};
 use super::{parse, Account};
 use crate::input::membership::Budget;
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn through_temporary_capture<'d>(
     document: &'d document::Document<'d>,
@@ -171,7 +171,6 @@ fn deeply_compounded_generic_success_and_failure_have_flat_teardown() {
 fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
     let source = deep_source("1");
     let document = parse(&source);
-    let graph = node::GraphBudget::new();
     let mut measured = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     measured.items(7).unwrap();
     measured.bytes(19).unwrap();
@@ -179,7 +178,6 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
         super::input(&document),
         value::Mode::Content,
         &mut Budget {
-            graph: &graph,
             allocation: &mut measured,
         },
     )
@@ -190,7 +188,6 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let captured =
@@ -212,21 +209,10 @@ fn already_captured_deep_content_can_be_ignored_at_the_exact_original_floor() {
 #[test]
 fn pure_interpretation_uses_no_filesystem_hash_or_candidate_comparison_event() {
     let document = growth_fixture();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let limits = cargo::Limits::standard();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     walk::project(
@@ -259,12 +245,10 @@ fn native_acquisition_stored_host_document_and_target_share_one_original_account
     .unwrap();
 
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(11).unwrap();
     allocation.bytes(23).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let acquired = live::manifest(path.as_os_str().as_bytes(), &mut budget).unwrap();

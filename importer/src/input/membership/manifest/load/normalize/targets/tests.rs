@@ -3,7 +3,7 @@ use crate::input::membership::{
     manifest::{reference, value},
     observed, stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use observed::stream::{Row, Transcript};
 
 fn image(
@@ -12,10 +12,8 @@ fn image(
     values: Vec<(&[u8], observed::Value)>,
 ) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();
@@ -82,12 +80,10 @@ fn run(
 ) -> Output {
     let document = rawr_toml::document::parse(source, 80, &mut reference::Account).unwrap();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

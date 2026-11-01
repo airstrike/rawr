@@ -46,7 +46,7 @@ impl<T: Send + 'static> Key<T> {
 
     /// Preserve an already-spent account; replacing an existing cell is refused.
     pub(crate) fn seed(&self, graph: &GraphBudget, value: T) -> Result<(), Error> {
-        graph.accounts.insert(self.id, graph, value)
+        graph.accounts.insert(self.id, value)
     }
 
     /// Initialize once in this graph, then continue the same mutable account.
@@ -58,7 +58,6 @@ impl<T: Send + 'static> Key<T> {
     ) -> Result<R, Error> {
         let cell = graph.accounts.get_or_insert(
             self.id,
-            graph,
             Cell::<T> {
                 value: None,
                 refused: false,
@@ -90,15 +89,7 @@ impl<T: Send + 'static> Key<T> {
 }
 
 impl Registry {
-    fn insert<T: Send + 'static>(
-        &self,
-        id: u64,
-        graph: &GraphBudget,
-        value: T,
-    ) -> Result<(), Error> {
-        // Own the initialized cell before taking the registry lock. On refusal
-        // the guard drops first, so arbitrary T destruction cannot reenter it.
-        graph.decode(Self::cell_bytes::<T>()?)?;
+    fn insert<T: Send + 'static>(&self, id: u64, value: T) -> Result<(), Error> {
         let value = Arc::new(Mutex::new(Cell {
             value: Some(value),
             refused: false,
@@ -118,7 +109,6 @@ impl Registry {
     fn get_or_insert<T: Send + 'static>(
         &self,
         id: u64,
-        graph: &GraphBudget,
         value: Cell<T>,
     ) -> Result<Arc<Mutex<Cell<T>>>, Error> {
         let mut cells = self
@@ -130,27 +120,14 @@ impl Registry {
                 .downcast::<Mutex<Cell<T>>>()
                 .map_err(|_| Error::State("graph account type differs"));
         }
-        Self::push(&mut cells, id, graph, value)
-    }
-
-    fn cell_bytes<T>() -> Result<usize, Error> {
-        std::mem::size_of::<Mutex<Cell<T>>>()
-            .checked_add(2 * std::mem::size_of::<usize>())
-            .and_then(|bytes| bytes.checked_add(std::mem::align_of::<Mutex<Cell<T>>>()))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Entry>()))
-            .ok_or(Error::Allocation)
+        Self::push(&mut cells, id, value)
     }
 
     fn push<T: Send + 'static>(
         cells: &mut Vec<Entry>,
         id: u64,
-        graph: &GraphBudget,
         value: Cell<T>,
     ) -> Result<Arc<Mutex<Cell<T>>>, Error> {
-        // Arc's two counters, its aligned payload, and an alignment allowance
-        // are admitted before allocating the erased cell. Registry slots are
-        // charged on every insertion; no retirement refunds graph work.
-        graph.decode(Self::cell_bytes::<T>()?)?;
         cells.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
         let value = Arc::new(Mutex::new(value));
         cells.push(Entry {
@@ -209,7 +186,7 @@ mod tests {
         let key = Key::<Dropped>::new().unwrap();
         let graph = GraphBudget::new();
         key.seed(&graph, Dropped(count.clone())).unwrap();
-        key.with(&graph, || panic!("seed retained"), |_| graph.hash(1))
+        key.with(&graph, || panic!("seed retained"), |_| Ok(()))
             .unwrap();
         let sibling = graph.clone();
         drop(graph);

@@ -47,13 +47,13 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
         )
     {
         drop(path::terminated(path, budget)?);
-        budget.paths(3)?;
+        budget.check()?;
         budget.physical("freshness file", expected, expected)?;
         length(metadata.len(), budget)?;
         return Ok(digest);
     }
     let source = open(path, budget)?;
-    budget.paths(1)?;
+    budget.check()?;
     let opened =
         raw(stat::fstat(&source.0)).map_err(|error| io("inspect bounded input handle", error))?;
     let actual = usize::try_from(opened.st_size as u64).map_err(|_| budget.overflow())?;
@@ -71,7 +71,7 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
     let mut chunk = [0_u8; crate::input::DIGEST_CHUNK_BYTES];
     let mut remaining = expected;
     while remaining != 0 {
-        budget.paths(1)?;
+        budget.check()?;
         let wanted = remaining.min(chunk.len());
         match raw(rustix::io::read(&source.0, &mut chunk[..wanted])) {
             Ok(0) => return Err(Error::Drift("input-changed-during-read").into()),
@@ -84,7 +84,7 @@ pub(super) fn digest(path: &Path, expected: usize, budget: &mut Budget<'_>) -> R
         }
     }
     probe(&source, budget)?;
-    budget.hash(expected)?;
+    budget.check()?;
     let digest: [u8; 32] = hasher.finalize().into();
     if actual == expected
         && raw(stat::fstat(&source.0))
@@ -121,7 +121,7 @@ fn content(path: &Path, extent: Extent, budget: &mut Budget<'_>) -> Result<Vec<u
         Extent::Opened => None,
     };
     let source = open(path, budget)?;
-    budget.paths(1)?;
+    budget.check()?;
     let opened =
         raw(stat::fstat(&source.0)).map_err(|error| io("inspect bounded input handle", error))?;
     let actual = match extent {
@@ -145,7 +145,7 @@ fn content(path: &Path, extent: Extent, budget: &mut Budget<'_>) -> Result<Vec<u
     bytes.resize(actual, 0);
     let mut offset = 0;
     while offset < actual {
-        budget.paths(1)?;
+        budget.check()?;
         // Like read_exact, request the complete remaining admitted extent. The
         // existing input ceiling is below the supported native read range.
         match raw(rustix::io::read(&source.0, &mut bytes[offset..])) {
@@ -164,9 +164,9 @@ fn open(path: &Path, budget: &mut Budget<'_>) -> Result<Descriptor> {
     let native = path::terminated(path, budget)?;
     let native =
         CStr::from_bytes_with_nul(&native).map_err(|_| Error::Policy("input path contains NUL"))?;
-    budget.paths(1)?;
+    budget.check()?;
     loop {
-        budget.paths(1)?;
+        budget.check()?;
         match raw(stat::open(
             native,
             OFlags::RDONLY | OFlags::CLOEXEC,
@@ -182,7 +182,7 @@ fn open(path: &Path, budget: &mut Budget<'_>) -> Result<Descriptor> {
 /// Probe for growth after the admitted extent was read.
 fn probe(source: &Descriptor, budget: &mut Budget<'_>) -> Result<()> {
     let mut extra = [0; 1];
-    budget.paths(1)?;
+    budget.check()?;
     // Match the legacy single read after read_exact: a probe EINTR is an error.
     if raw(rustix::io::read(&source.0, &mut extra))
         .map_err(|error| io("probe bounded input growth", error))?

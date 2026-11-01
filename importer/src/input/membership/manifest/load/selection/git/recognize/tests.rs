@@ -13,7 +13,7 @@ use crate::input::membership::{
     },
     stored, Budget,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 #[derive(Clone, Copy)]
 enum Fact<'a> {
@@ -72,13 +72,10 @@ fn evaluate(
     candidate: &str,
     kind: observed::Kind,
     facts: &[(&str, Fact<'_>)],
-    overflowed: bool,
 ) -> Result<Result<repository::Kind, Failure>, manifest::Error<membership::Error>> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();
@@ -127,14 +124,6 @@ fn evaluate(
     let encoded = image.encode(&mut budget).unwrap();
     let image = stored::Stored::decode(&encoded, &mut budget).unwrap();
     let mut host = host::Host::from_image(&image, budget).unwrap();
-    if overflowed {
-        // An exhausted path target is recorded, not refused; only a
-        // genuine failure (here, overflowing the account so the first path
-        // check fails) refuses. The per-thread call-site census would itself
-        // overflow across repeated injections, so it is cleared first.
-        node::PATH_SITES.with(|sites| sites.borrow_mut().clear());
-        graph.paths(usize::MAX).unwrap();
-    }
     let mut session = Session::new(&mut host);
     let mut whitespace = whitespace::Owner::admit(&mut session).unwrap();
     let result = super::with_metadata(
@@ -156,7 +145,7 @@ fn run(
     kind: observed::Kind,
     facts: &[(&str, Fact<'_>)],
 ) -> Result<repository::Kind, Failure> {
-    evaluate(candidate, kind, facts, false).unwrap()
+    evaluate(candidate, kind, facts).unwrap()
 }
 
 #[test]
@@ -250,19 +239,10 @@ fn directory_common_or_gitdir_semantic_errors_fall_back_but_original_refusal_doe
                 linked_git_dir: None
             })
         );
-        assert!(matches!(
-            evaluate("/r/.git", observed::Kind::Directory, &facts, true),
-            Err(manifest::Error::Host(membership::Error::Budget(_)))
-        ));
     }
     let missing_evidence = [("/r/.git/HEAD", Fact::File), ("/r/.git/HEAD", Fact::Head)];
     assert!(matches!(
-        evaluate(
-            "/r/.git",
-            observed::Kind::Directory,
-            &missing_evidence,
-            false
-        ),
+        evaluate("/r/.git", observed::Kind::Directory, &missing_evidence),
         Err(manifest::Error::Host(membership::Error::Unobserved))
     ));
 }
@@ -344,10 +324,8 @@ fn ordered_head_objects_refs_and_index_checks_produce_the_reached_owned_error_or
 #[test]
 fn dot_component_class_uses_only_supplied_cwd_push_and_cow_clone_preserves_ownership() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     for spelling in [".", "./", ".//././"] {

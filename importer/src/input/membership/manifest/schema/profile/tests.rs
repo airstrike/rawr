@@ -284,23 +284,13 @@ fn every_string_and_diagnostic_refusal_is_terminal_for_later_fixed_scalars() {
 fn original_account_charges_the_retained_inline_slot() {
     use crate::input;
     use crate::input::membership::Budget;
-    use crate::node;
 
     let document = parse("value=-9223372036854775808");
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let bytes = 19 + 4 * std::mem::size_of::<Opt>();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

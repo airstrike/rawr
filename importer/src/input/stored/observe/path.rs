@@ -19,7 +19,7 @@ pub(in crate::input) fn metadata(
     no_follow: bool,
     budget: &mut Budget<'_>,
 ) -> Result<fs::Metadata> {
-    budget.paths(1)?;
+    budget.check()?;
     input(path, budget)?;
     if no_follow {
         fs::symlink_metadata(path)
@@ -98,7 +98,7 @@ pub(in crate::input) fn canonical(
 ) -> Result<PathBuf> {
     let absolute = absolute(path, base, budget)?;
     let normalized = normalize(&absolute, budget)?;
-    budget.paths(1)?;
+    budget.check()?;
     input(&absolute, budget)?;
     let output = store::path::canonical_allocation();
     // The original heap account covers the libc allocation and copied native

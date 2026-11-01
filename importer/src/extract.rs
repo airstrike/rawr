@@ -497,7 +497,7 @@ pub(crate) fn from_owner_parts(
     policy: &Policy,
     limits: &cargo::Limits,
 ) -> Result<api::Graph<api::Extracted>> {
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let (product, graph) = api::cached::evaluate_owner(
         context,
         request,
@@ -590,7 +590,7 @@ pub(crate) fn retain_from_owner_parts(
         + Send
         + 'static,
 ) -> Result<api::Continuation> {
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let memo = memo(&policy_identity);
     api::cached::retain_owner(
         context,
@@ -677,7 +677,7 @@ pub(crate) fn retain_shared(
             source: Box::new(source),
         }
     };
-    let policy_identity = policy.cache_identity(context.graph_budget())?;
+    let policy_identity = policy.cache_identity()?;
     let retention = crate::node::read_set::Retention::from_validated(parent.as_ref(), None)
         .map_err(node_error("shared bindings retention"))?;
     api::cached::retain_under(
@@ -1219,7 +1219,7 @@ impl Publication {
         let (product, graph) = api::cached::evaluate(
             &dag.context,
             dag.request.as_bytes(),
-            &policy.cache_identity(dag.context.graph_budget())?,
+            &policy.cache_identity()?,
             &dag.build,
             &dag.post_unit,
             &dag.post_metadata,
@@ -2517,16 +2517,10 @@ impl Invocations {
 impl Policy {
     /// API policy is independent of the Rust owner, but controls the extracted
     /// surface and its diagnostics. Frame every field without retaining a copy.
-    pub(crate) fn cache_identity(&self, budget: &crate::node::GraphBudget) -> Result<[u8; 32]> {
+    pub(crate) fn cache_identity(&self) -> Result<[u8; 32]> {
         use sha2::{Digest as _, Sha256};
         let mut digest = Sha256::new();
         let mut field = |bytes: &[u8]| -> Result<()> {
-            budget
-                .hash(8usize.saturating_add(bytes.len()))
-                .map_err(|source| Error::Node {
-                    operation: "API policy identity",
-                    source: Box::new(source),
-                })?;
             digest.update((bytes.len() as u64).to_le_bytes());
             digest.update(bytes);
             Ok(())

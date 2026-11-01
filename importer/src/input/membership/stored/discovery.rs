@@ -2,14 +2,12 @@ use super::{
     observed, After, Attempt, Budget, Error, Exists, Filename, Identity, NativeError, Stored,
     Transcript,
 };
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn with_budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -305,12 +303,10 @@ fn discovery_retention_and_decode_preserve_original_ownership() {
     let items = 7 + 2; // prior, record vector and directory bytes; inert transcript
     let owned = 19 + std::mem::size_of::<observed::Record>() + 4;
     for decode in [false, true] {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
         allocation.items(7).expect("prior items");
         allocation.bytes(19).expect("prior bytes");
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let result = if decode {
@@ -329,10 +325,6 @@ fn discovery_retention_and_decode_preserve_original_ownership() {
     }
     // Decoding past the graph's decode constant still decodes; only
     // checked-arithmetic overflow refuses, before any ownership.
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + 1)
-        .expect("prior decode work");
     let limits = cargo::Limits::standard();
     let mut allocation = input::Allocation::new(&limits);
     allocation.items(7).expect("prior items");
@@ -340,30 +332,10 @@ fn discovery_retention_and_decode_preserve_original_ownership() {
     Stored::decode(
         &bytes,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
-    .expect("decode past the graph constant");
+    .expect("decode");
     assert_eq!(allocation.usage().items, items);
     assert_eq!(allocation.usage().bytes, owned);
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(usize::MAX)
-        .expect("saturate the decode account");
-    let mut allocation = input::Allocation::new(&limits);
-    allocation.items(7).expect("prior items");
-    allocation.bytes(19).expect("prior bytes");
-    let before = allocation.usage();
-    assert!(matches!(
-        Stored::decode(
-            &bytes,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation
-            }
-        ),
-        Err(Error::Budget(node::Error::Allocation))
-    ));
-    assert_eq!(allocation.usage(), before);
 }

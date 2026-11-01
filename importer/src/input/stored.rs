@@ -154,7 +154,7 @@ impl Stored {
     /// Decode completely under the caller's existing ownership and work account.
     pub(crate) fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> Result<Self> {
         budget.check()?;
-        budget.wire_section(bytes)?;
+        budget.check()?;
         let mut reader = codec::Reader::new(bytes, budget);
         let (schema, usage) = reader.header()?;
         let entries = reader.entries()?;

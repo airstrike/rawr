@@ -235,8 +235,7 @@ impl Product {
 
     // The schema-versioned owner wire binds fixed placement, sealed evidence,
     // and exact completion. Native semantic identity is a separate concern.
-    fn completed(&self, graph: &node::GraphBudget) -> Result<Box<[u8]>, node::Error> {
-        graph.decode(BYTES)?;
+    fn completed(&self) -> Result<Box<[u8]>, node::Error> {
         <Self as node::Value>::encode(self, BYTES)
     }
 
@@ -300,10 +299,8 @@ impl StagedRecord {
 thread_local! {
     /// Staged lock/receipt reuses observed on this test thread.
     pub(crate) static STAGE_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Per-validate graph decode growth on this test thread: total and by file.
-    pub(crate) static REPLAY_TRACE: std::cell::RefCell<
-        Vec<(u64, std::collections::BTreeMap<String, u64>)>,
-    > = const { std::cell::RefCell::new(Vec::new()) };
+    /// Owner replays validated on this test thread.
+    pub(crate) static REPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn stage_hit() {
@@ -446,14 +443,8 @@ fn preflight(
             "resolution owner requires versioned universe",
         ))?;
         let manifest = cargo::render_manifest_accounted(&request, None, limits, &mut allocation)?;
-        cargo::select_placement_accounted(
-            &request,
-            catalog,
-            &manifest,
-            &mut allocation,
-            context.graph_budget(),
-        )
-        .map_err(node::Error::from)
+        cargo::select_placement_accounted(&request, catalog, &manifest, &mut allocation)
+            .map_err(node::Error::from)
     })();
     let placement = result?;
     Ok(Preflight {
@@ -703,7 +694,7 @@ impl Evaluation {
                     current.wire == value.wire() && current.watched.unchanged()
                 })
             {
-                return value.completed(graph);
+                return value.completed();
             }
             captured.replay = None;
             captured.current = None;
@@ -713,11 +704,6 @@ impl Evaluation {
                 "complete current input entries differ".into(),
             ));
         }
-        #[cfg(test)]
-        let trace_before = (
-            graph.census_usage()?.0,
-            node::DECODE_SITES.with(|sites| sites.borrow().clone()),
-        );
         let outcome = self.accounts.with(
             graph,
             || Ok(self.initial_accounts()),
@@ -730,7 +716,6 @@ impl Evaluation {
                         stored::Budget::borrow(&self.limits, &mut accounts.input, graph);
                     let stored =
                         bundle::Stored::decode(&value.bundle, &mut budget).map_err(error)?;
-                    graph.hash(b"rawr.node.content/v1".len() + 1 + 4 + 8 + BYTES)?;
                     let observed = stored
                         .read_published_scoped_for_replay(
                             &self.store,
@@ -748,7 +733,7 @@ impl Evaluation {
                             "resolution owner completion identity differs",
                         ));
                     }
-                    Ok((replay, value.completed(graph)?))
+                    Ok((replay, value.completed()?))
                 })();
                 if result.as_ref().is_err_and(refusal) {
                     accounts.refused = true;
@@ -757,20 +742,7 @@ impl Evaluation {
             },
         );
         #[cfg(test)]
-        {
-            let decoded = graph.census_usage()?.0 - trace_before.0;
-            let mut files = std::collections::BTreeMap::<String, u64>::new();
-            node::DECODE_SITES.with(|sites| {
-                for (site, (_, bytes)) in sites.borrow().iter() {
-                    let before = trace_before.1.get(site).map_or(0, |(_, bytes)| *bytes);
-                    let file = site
-                        .rsplit_once(':')
-                        .map_or(site.as_str(), |(file, _)| file);
-                    *files.entry(file.to_owned()).or_default() += bytes - before;
-                }
-            });
-            REPLAY_TRACE.with(|trace| trace.borrow_mut().push((decoded, files)));
-        }
+        REPLAYS.with(|replays| replays.set(replays.get() + 1));
         let (mut replay, completed) = outcome?;
         let mut captured = self
             .captured
@@ -824,14 +796,10 @@ impl Evaluation {
                             paths.final_form().lock(),
                             crate::process::CAPTURE_BYTES,
                             request_account,
-                            graph,
                         )?;
                         observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
-                        let lock = definition.candidate_accounted(
-                            lock_bytes.into_boxed_slice(),
-                            request_account,
-                            graph,
-                        )?;
+                        let lock = definition
+                            .candidate_accounted(lock_bytes.into_boxed_slice(), request_account)?;
                         stage.lock = Some((self.limits, lock.clone()));
                         lock
                     }
@@ -850,10 +818,9 @@ impl Evaluation {
                             paths.receipt(),
                             crate::process::CAPTURE_BYTES,
                             request_account,
-                            graph,
                         )?;
                         observed.require_bytes(paths.receipt(), &receipt_bytes)?;
-                        cargo::ControlAccount::current(request_account, graph)
+                        cargo::ControlAccount::current(request_account)
                             .parser(receipt_bytes.len())?;
                         let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
                         stage.receipt = Some(StagedReceipt {
@@ -911,7 +878,7 @@ impl Evaluation {
             }) {
                 Some(staged) => {
                     // A hit allocates nothing but the holder this replay retains.
-                    cargo::ControlAccount::current(request_account, graph)
+                    cargo::ControlAccount::current(request_account)
                         .holder(std::mem::size_of::<Arc<replay::Decoded>>())?;
                     stage_hit();
                     Ok(Some(Arc::clone(&staged.decoded)))
@@ -1065,7 +1032,7 @@ impl Evaluation {
             bundle: stored.encode(),
             complete,
         };
-        let bundled = node::Bundled::validate(product, pending, |value, _| value.completed(graph))?;
+        let bundled = node::Bundled::validate(product, pending, |value, _| value.completed())?;
         accounts.refused = false;
         Ok(bundled)
     }
@@ -1127,10 +1094,8 @@ fn read(
     path: &Path,
     limit: usize,
     allocation: &mut cargo::RequestAllocation,
-    graph: &node::GraphBudget,
 ) -> Result<Vec<u8>, node::Error> {
-    cargo::read_bounded_in("resolution replay control", path, limit, allocation, graph)
-        .map_err(Into::into)
+    cargo::read_bounded_in("resolution replay control", path, limit, allocation).map_err(Into::into)
 }
 
 fn error(error: stored::Error) -> node::Error {
@@ -1387,24 +1352,10 @@ mod tests {
             bundle: [1; 156],
             complete: [2; 32],
         };
-        let graph = node::GraphBudget::new();
-        let facts = product.completed(&graph).unwrap();
+        let facts = product.completed().unwrap();
         assert_eq!(facts.as_ref(), product.wire());
-        assert_eq!(graph.census_usage().unwrap(), (BYTES as u64, 0, 0));
         let decoded = <Product as node::Value>::decode(&facts, BYTES).unwrap();
-        assert_eq!(decoded.completed(&graph).unwrap(), facts);
-        assert_eq!(graph.census_usage().unwrap(), (2 * BYTES as u64, 0, 0));
-
-        graph
-            .decode((node::MAX_DECODED_BYTES_PER_GRAPH - 2 * BYTES as u64) as usize)
-            .unwrap();
-        // Completion produces the canonical wire and charges the original
-        // graph by exactly the wire's length.
-        assert_eq!(product.completed(&graph).unwrap(), facts);
-        assert_eq!(
-            graph.census_usage().unwrap(),
-            (node::MAX_DECODED_BYTES_PER_GRAPH + BYTES as u64, 0, 0)
-        );
+        assert_eq!(decoded.completed().unwrap(), facts);
         // The node content bound is physical and still refuses.
         assert!(matches!(
             <Product as node::Value>::encode(&product, BYTES - 1),
@@ -1519,16 +1470,12 @@ mod tests {
 
     #[test]
     fn wrapped_control_graph_refusal_remains_terminal() {
-        // The control read charges its seven path checks in full on the
-        // spent account and fails only for its own reason.
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1).unwrap();
+        // The control read fails only for its own reason.
         let mut request = cargo::RequestAllocation::new(&Limits::standard());
         let error = read(
             Path::new("/nonexistent-rawr-owner-control"),
             1024,
             &mut request,
-            &graph,
         )
         .unwrap_err();
         assert!(
@@ -1547,10 +1494,10 @@ mod tests {
         let control = root.join("control");
         std::fs::write(&control, b"sixteen bytes!!!").unwrap();
         assert_eq!(
-            read(&control, 1024, &mut request, &graph).unwrap(),
+            read(&control, 1024, &mut request).unwrap(),
             b"sixteen bytes!!!"
         );
-        let physical = read(&control, 8, &mut request, &graph).unwrap_err();
+        let physical = read(&control, 8, &mut request).unwrap_err();
         assert!(matches!(&physical, node::Error::Importer(inner)
             if matches!(inner.as_ref(), crate::Error::Limit { limit: 8, actual: 16, .. })));
         assert!(refusal(&physical));
@@ -1570,7 +1517,6 @@ mod tests {
         ];
         for wrapped in failures {
             let error = node::Error::Importer(Box::new(wrapped));
-            graph.paths(1).unwrap();
             assert!(refusal(&error), "{error:?}");
         }
         assert!(refusal(&node::Error::Allocation));

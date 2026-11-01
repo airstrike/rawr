@@ -1,15 +1,13 @@
 use super::{observed, stored, Budget, Error, Host};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use observed::discovery::{
     After, Attempt, Exists, Filename, Identity, NativeError, Selection, Transcript,
 };
 
 fn with_budget<T>(run: impl FnOnce(Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -71,17 +69,12 @@ fn discovery_requires_exact_native_directory_family_and_warning_mode() {
 #[test]
 fn discovery_repeated_queries_preserve_original_ownership_and_graph_work() {
     let image = image(no_selection());
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2)
-        .expect("prior work");
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     allocation.items(7).expect("prior items");
     allocation.bytes(19).expect("prior bytes");
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -94,8 +87,6 @@ fn discovery_repeated_queries_preserve_original_ownership_and_graph_work() {
     let total_bytes = 19 + std::mem::size_of::<bool>() + 8;
     assert_eq!(host.budget().allocation.usage().items, 10);
     assert_eq!(host.budget().allocation.usage().bytes, total_bytes);
-    let (_, paths, _) = graph.census_usage().expect("census");
-    assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
     host.finish().expect("first query consumed record");
     for transcript in [
         no_selection(),
@@ -111,16 +102,11 @@ fn discovery_repeated_queries_preserve_original_ownership_and_graph_work() {
         .expect("native fstat failure"),
     ] {
         let image = self::image(transcript);
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2)
-            .expect("prior work");
         let limits = cargo::Limits::standard();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -145,15 +131,10 @@ fn discovery_repeated_queries_preserve_original_ownership_and_graph_work() {
 #[test]
 fn discovery_invalid_missing_and_refused_queries_do_not_consume_record() {
     let image = image(no_selection());
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2)
-        .expect("prior work");
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -177,8 +158,6 @@ fn discovery_invalid_missing_and_refused_queries_do_not_consume_record() {
         (after.items - before.items, after.bytes - before.bytes),
         (1, 5)
     );
-    let (_, paths, _) = graph.census_usage().expect("census");
-    assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH - 1);
     // A genuinely latched account refuses before ownership and lookup.
     host.budget().allocation.refuse();
     assert!(matches!(
@@ -190,8 +169,5 @@ fn discovery_invalid_missing_and_refused_queries_do_not_consume_record() {
         Err(Error::Input(crate::Error::InputAccountRefused))
     ));
     assert_eq!(host.budget().allocation.usage(), after);
-    graph
-        .paths(1)
-        .expect("refused paths never reached graph lookup");
     assert!(matches!(host.finish(), Err(Error::Unconsumed)));
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::input::membership::{observed, stored, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use std::ffi::OsStr;
 
 #[allow(
@@ -86,10 +86,8 @@ fn lexical_resolution_matches_pinned_one_parent_join_and_normalize() {
 
 fn image(records: Vec<(&[u8], observed::Value)>) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records: Vec<_> = records
@@ -123,22 +121,13 @@ fn metadata(kind: observed::Kind) -> observed::Value {
 
 fn check(
     image: &stored::Stored,
-    paths: usize,
     run: impl FnOnce(&mut Session<'_, host::Host<'_, '_>>) -> Step<()>,
 ) {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - paths)
-        .unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -164,7 +153,7 @@ fn optional_only_probes_normalized_followed_path_and_preserves_os_false() {
         (observed::Value::Error(13), false),
     ] {
         let image = image(vec![(b"/native/\xff/a.toml", value)]);
-        check(&image, 1, |session| {
+        check(&image, |session| {
             let include = Include {
                 path: "nul\0/../a.toml",
                 definition: Definition::Path(Path::new(OsStr::from_bytes(
@@ -182,7 +171,7 @@ fn optional_only_probes_normalized_followed_path_and_preserves_os_false() {
         });
     }
     let image = image(vec![]);
-    check(&image, 0, |session| {
+    check(&image, |session| {
         for optional in [false, true] {
             let include = Include {
                 path: "nul\0.toml",
@@ -240,12 +229,10 @@ fn every_lexical_refusal_retains_original_cause() {
 fn unobserved_optional_path_is_terminal_and_cannot_become_a_skip() {
     let image = image(vec![]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -274,10 +261,8 @@ fn unobserved_optional_path_is_terminal_and_cannot_become_a_skip() {
 #[test]
 fn recorded_file_to_extraction_and_resolution_share_the_original_account() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let config_path = b"/project/.cargo/config.toml";

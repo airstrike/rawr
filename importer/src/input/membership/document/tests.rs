@@ -1,15 +1,13 @@
 use super::{parse, Budget, Error};
 use crate::input::membership::{host, observed, stored};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 const PATH: &[u8] = b"/raw";
 
 fn encoded(bytes: &[u8]) -> Vec<u8> {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let record = observed::Record {
@@ -27,12 +25,10 @@ fn encoded(bytes: &[u8]) -> Vec<u8> {
 
 fn image(bytes: &[u8]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     stored::Stored::decode(
         &encoded(bytes),
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -56,13 +52,11 @@ fn complete_document_borrows_the_decoded_image_and_retains_unknown_tables() {
     let bytes = b"[package]\nname = 'demo'\nversion = '1.2.3'\n[unknown]\nx = [1, 2]\n";
     let image = image(bytes);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let document = from_image(
         &image,
         &limits,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -93,13 +87,11 @@ fn document_rejects_invalid_utf8_and_trailing_syntax_after_successful_eof() {
     ] {
         let image = image(bytes);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let result = from_image(
             &image,
             &limits,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         );
@@ -122,12 +114,10 @@ fn manifest_byte_target_is_recorded_before_utf8_or_parser_work() {
         for floor in [false, true] {
             let mut limits = cargo::Limits::standard();
             limits.manifest_bytes = bytes.len() - usize::from(floor);
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::new(&limits);
             let mut host = host::Host::from_image(
                 &image,
                 Budget {
-                    graph: &graph,
                     allocation: &mut allocation,
                 },
             )
@@ -151,20 +141,10 @@ fn decoding_query_and_document_share_prior_ownership_without_fake_graph_work() {
     let bytes = encoded(b"name = \"ab\\u0063d\"\na = [1, { b = true }]\n");
     let limits = cargo::Limits::standard();
     let run = |allocation: &mut input::Allocation| {
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1).unwrap();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len())
-            .unwrap();
-        let mut budget = Budget {
-            graph: &graph,
-            allocation,
-        };
+        let mut budget = Budget { allocation };
         let image = stored::Stored::decode(&bytes, &mut budget)?;
         let document = from_image(&image, &limits, budget)?;
         assert!(document.table().get("name").is_some());
-        graph.paths(1).unwrap();
-        graph.decode(1).unwrap();
         Ok::<_, Error>(())
     };
     let mut baseline = input::Allocation::new(&limits);
@@ -180,13 +160,11 @@ fn caller_depth_limit_refuses() {
         let image = image(b"key = [[1]]\n");
         let mut limits = cargo::Limits::standard();
         limits.depth = depth;
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let result = from_image(
             &image,
             &limits,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         );

@@ -136,7 +136,6 @@ fn acquired_data_matches_legacy_after_source_removal_and_preserves_execution_spe
         ).expect("legacy full entry");
         let pointers = (declarations.directives.as_ptr(), declarations.paths.as_ptr(), declarations.environment.as_ptr());
         fs::remove_file(fixture.output()).expect("source removed after parsing");
-        graph.exhaust_paths();
         let before = allocation.usage();
         let actual = saved_output(
             &declarations, &execution,
@@ -237,25 +236,11 @@ fn original_remaining_account_is_exact_and_refusal_survives_a_new_graph_argument
 fn graph_hash_is_exact_and_retained_entry_storage_adds_no_decode() {
     let declarations = data();
     let execution = Path::new("execution");
-    let length = serialized(&declarations).len();
     let added = ownership(&declarations, execution);
     // Retained entries are copies owned once by the original allocation.
-    for kind in 0..2 {
+    {
         {
             let graph = node::GraphBudget::new();
-            graph
-                .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-                .expect("all paths already spent");
-            graph.exhaust_comparisons();
-            if kind == 0 {
-                graph
-                    .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - length)
-                    .expect("prior hash work");
-            } else {
-                graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("all decoding already spent");
-            }
             let mut allocation = account();
             let result = saved_output(
                 &declarations,
@@ -270,18 +255,6 @@ fn graph_hash_is_exact_and_retained_entry_storage_adds_no_decode() {
                     bytes: PRIOR.bytes + added.bytes
                 }
             );
-            if kind == 0 {
-                // The hash charge is exactly the serialized length.
-                assert_eq!(
-                    graph.census_usage().expect("graph census").2,
-                    node::MAX_HASHED_BYTES_PER_GRAPH
-                );
-            } else {
-                assert_eq!(
-                    graph.census_usage().expect("graph census").0,
-                    node::MAX_DECODED_BYTES_PER_GRAPH
-                );
-            }
         }
     }
 }

@@ -234,8 +234,7 @@ fn post_bind_witness_drift_uses_the_same_open_store_and_never_calls_admission() 
     let value = evaluator
         .discover_budgeted(
             &recipe,
-            move |value, budget| {
-                budget.paths(1)?;
+            move |value, _| {
                 let _ = validation.fixture_project_usage()?;
                 if validating.load(Ordering::SeqCst) && counting.fetch_add(1, Ordering::SeqCst) == 1
                 {

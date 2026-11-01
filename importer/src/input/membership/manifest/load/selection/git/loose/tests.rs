@@ -170,15 +170,13 @@ fn invalid_byte_owns_its_payload_and_refusal_cannot_become_parse_failure() {
 #[test]
 fn git_read_live_codec_replay_reaches_loose_decoder() {
     use crate::input::membership::{host, live, stored, Budget};
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
 
     for contents in [b"ref: refs/heads/main\n".as_slice(), b"broken"] {
         let record = live::git_read::tests::head(contents);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let image = stored::Stored::from_records(&[record], &mut budget).unwrap();

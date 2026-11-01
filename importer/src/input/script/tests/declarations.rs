@@ -206,15 +206,6 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
     // Declared path copies are owned once by the original allocation.
     let mut allocation = account();
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("all decoding already spent");
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("all path work already spent");
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("all hashing already spent");
     let mut paths = Vec::new();
     let result = script::declarations(
         &fixture.script,
@@ -244,11 +235,6 @@ fn current_paths_use_exact_original_storage_without_graph_decode_or_filesystem_w
             items: PRIOR.items + 4,
             bytes: PRIOR.bytes + bytes
         }
-    );
-    // Every graph axis was spent beforehand; no decode work happened here.
-    assert_eq!(
-        graph.census_usage().expect("graph census").0,
-        node::MAX_DECODED_BYTES_PER_GRAPH
     );
     // Only a genuine failure latches; the latch precedes every emission.
     let mut allocation = account();
@@ -337,9 +323,6 @@ fn callback_failure_prevents_later_path_normalization() {
     fixture.declarations.paths =
         Box::from(["x".repeat(crate::input::LINE_BYTES + 1).into_boxed_str()]);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("all storage already spent");
     let mut allocation = account();
     let mut calls = 0;
     let result = script::declarations(

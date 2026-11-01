@@ -71,9 +71,9 @@ impl Metadata {
 
 impl Lookup {
     pub(super) fn open(path: &CStr, budget: &mut Budget<'_>) -> Result<Self> {
-        budget.paths(1)?;
+        budget.check()?;
         let descriptor = loop {
-            budget.paths(1)?;
+            budget.check()?;
             match raw(stat::open(
                 path,
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
@@ -84,7 +84,7 @@ impl Lookup {
                 Err(error) => return Err(io("open independent input lookup directory", error)),
             }
         };
-        budget.paths(1)?;
+        budget.check()?;
         let metadata = raw(stat::fstat(&descriptor.0))
             .map_err(|error| io("inspect input lookup directory", error))?;
         if !Metadata::from_stat(&metadata).is_dir() {
@@ -97,7 +97,7 @@ impl Lookup {
     }
 
     pub(super) fn revalidate(&self, path: &CStr, budget: &mut Budget<'_>) -> Result<()> {
-        budget.paths(1)?;
+        budget.check()?;
         let metadata = raw(stat::lstat(path))
             .map_err(|error| io("recheck input enumeration association", error))?;
         if !Metadata::from_stat(&metadata).is_dir()
@@ -109,7 +109,7 @@ impl Lookup {
     }
 
     pub(super) fn metadata(&self, name: &CStr, budget: &mut Budget<'_>) -> Result<Metadata> {
-        budget.paths(1)?;
+        budget.check()?;
         let metadata = raw(stat::statat(
             &self.descriptor.0,
             name,

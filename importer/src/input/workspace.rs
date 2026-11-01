@@ -41,7 +41,6 @@ impl Storage for Allocation {
 
 pub(crate) struct Account<'a> {
     storage: &'a mut dyn Storage,
-    graph: &'a node::GraphBudget,
     limits: &'a cargo::Limits,
 }
 
@@ -60,16 +59,8 @@ impl<T> Slots<T> {
 }
 
 impl<'a> Account<'a> {
-    pub(crate) fn borrow(
-        storage: &'a mut dyn Storage,
-        graph: &'a node::GraphBudget,
-        limits: &'a cargo::Limits,
-    ) -> Self {
-        Self {
-            storage,
-            graph,
-            limits,
-        }
+    pub(crate) fn borrow(storage: &'a mut dyn Storage, limits: &'a cargo::Limits) -> Self {
+        Self { storage, limits }
     }
 
     // Copies of admitted bytes are owned once by the original storage
@@ -121,7 +112,6 @@ impl<'a> Account<'a> {
     }
 
     fn probe(&mut self, path: &Path) -> Result<()> {
-        self.graph.paths(1).map_err(graph_error)?;
         let bytes = crate::store::path::input_allocation(path).map_err(graph_error)?;
         self.retain(usize::from(bytes != 0), bytes)
     }
@@ -134,9 +124,6 @@ impl<'a> Account<'a> {
     }
 
     fn frame(&self, hash: &mut Sha256, bytes: &[u8]) -> Result<()> {
-        self.graph
-            .hash(bytes.len().checked_add(8).ok_or_else(overflow)?)
-            .map_err(graph_error)?;
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
         Ok(())
@@ -457,7 +444,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     account.probe(path)?;
     let mut file =
         File::open(path).map_err(|source| io("open workspace manifest", path, source))?;
-    account.graph.paths(1).map_err(graph_error)?;
     let length = file
         .metadata()
         .map_err(|source| io("inspect workspace manifest handle", path, source))?
@@ -476,7 +462,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     bytes.resize(length, 0);
     let mut offset = 0;
     while offset < bytes.len() {
-        account.graph.paths(1).map_err(graph_error)?;
         match file.read(&mut bytes[offset..]) {
             Ok(0) => return Err(drift("workspace manifest shortened during read")),
             Ok(amount) => offset += amount,
@@ -486,7 +471,6 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     }
     let mut extra = [0];
     let extra = loop {
-        account.graph.paths(1).map_err(graph_error)?;
         match file.read(&mut extra) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             result => {

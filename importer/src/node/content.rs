@@ -189,9 +189,6 @@ impl Chain {
     ) -> Result<Self, super::Error> {
         let parent = Parent::validated(parent);
         retention.require_parents(std::slice::from_ref(&parent))?;
-        context
-            .graph_budget()
-            .decode(std::mem::size_of::<super::read_set::Retention>())?;
         Ok(Self {
             context,
             parent,

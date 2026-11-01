@@ -210,24 +210,14 @@ fn independently_reserved_attempts_fix_distinct_complete_namespaces() {
 
 #[test]
 fn original_path_account_charges_the_layout_with_cleanup() {
-    // Each Cargo form creates four directories and one fixed config; extraction creates two directories.
-    const PATHS: usize = 12;
     let fixture = Fixture::open("paths");
     let mut attempted = None;
     let result = fixture.reserve(|attempt| {
         let root = attempt.root();
         attempted = Some(root.clone());
         let original = fixture.store.graph_budget();
-        let sibling = original.clone();
-        sibling.paths(7)?;
-        let before = original.census_usage()?.1;
         let layout = Layout::bind(attempt, original)?;
         inspect(&layout);
-        assert_eq!(
-            original.census_usage()?.1 - before,
-            PATHS,
-            "the layout charges its paths to the shared original account"
-        );
         drop(layout);
         assert!(!root.exists());
         Ok(())
@@ -246,10 +236,6 @@ fn original_allocation_refusal_cleans_the_reserved_attempt() {
     let result = fixture.reserve(|attempt| {
         attempted = Some(attempt.root());
         let original = fixture.store.graph_budget();
-        let sibling = original.clone();
-        let spent = original.census_usage()?.0 as usize;
-        sibling.decode(17)?;
-        sibling.decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - spent - 17)?;
         // A spent decode account is a target; binding completes and the
         // original account records the crossing with its call site.
         let layout = Layout::bind(attempt, original)?;
@@ -297,7 +283,7 @@ fn consuming_seal_transfers_cleanup_to_pending_without_relocating_paths() {
                 root
             );
             let before = snapshot(&root);
-            let observed = Paths::observe(root.clone(), fixture.store.graph_budget())?;
+            let observed = Paths::observe(root.clone())?;
             assert_eq!(observed.root(), root);
             assert_eq!(observed.final_form().source(), source);
             assert_eq!(observed.receipt(), receipt);
@@ -323,12 +309,6 @@ fn seal_cannot_replace_the_original_exhausted_graph_account() {
             let layout = Layout::bind(attempt, fixture.store.graph_budget())?;
             let root = layout.root().to_path_buf();
             attempted = Some(root.clone());
-            let original = fixture.store.graph_budget();
-            let sibling = original.clone();
-            sibling.exhaust_paths();
-            // Sealing charges the same spent original account. The
-            // crossing is recorded there, never refused; a replacement account
-            // would have left the original's record empty.
             let pending = layout.seal(Box::from(&b"recorded seal"[..]))?;
             assert!(root.join("seal").is_file());
             drop(pending);
@@ -387,10 +367,7 @@ fn read_only_paths_reject_missing_directory_and_changed_config_without_repair() 
                         .expect("change config");
                 }
                 let before = snapshot(layout.root());
-                assert!(
-                    Paths::observe(layout.root().to_path_buf(), fixture.store.graph_budget())
-                        .is_err()
-                );
+                assert!(Paths::observe(layout.root().to_path_buf()).is_err());
                 assert_eq!(
                     snapshot(layout.root()),
                     before,
@@ -414,9 +391,7 @@ fn read_only_paths_reject_internal_directory_aliases() {
             fs::remove_dir(protocol).expect("remove protocol");
             std::os::unix::fs::symlink(layout.final_form().target(), protocol)
                 .expect("internal alias");
-            assert!(
-                Paths::observe(layout.root().to_path_buf(), fixture.store.graph_budget()).is_err()
-            );
+            assert!(Paths::observe(layout.root().to_path_buf()).is_err());
             assert!(fs::symlink_metadata(protocol)
                 .expect("alias remains")
                 .file_type()
@@ -724,7 +699,7 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     let grandparent_permissions = fs::metadata(grandparent).unwrap().permissions();
     fs::set_permissions(grandparent, fs::Permissions::from_mode(0o755)).unwrap();
     let moved = grandparent.join("detached");
-    let detached = crate::runner::artifact::retained::observe_hashes(graph, |hashes| {
+    let detached = crate::runner::artifact::retained::observe_hashes(|hashes| {
         hashes.hash(&artifact, &fs::metadata(&artifact).unwrap())?;
         fs::rename(parent, &moved).unwrap();
         fs::create_dir(parent).unwrap();

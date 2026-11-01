@@ -716,7 +716,6 @@ fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
             .unwrap()
             .len() as usize;
         let fresh = fixture_context(&root).open_store().unwrap();
-        let budget = fresh.graph_budget();
         match blocked {
             Blocked::Path => fs::remove_file(action.join("envelope")).unwrap(),
             Blocked::Envelope => fs::write(action.join("envelope"), vec![0; envelope]).unwrap(),
@@ -729,7 +728,6 @@ fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
             Blocked::Payload => fs::write(&content, vec![0; 4_097]).unwrap(),
             Blocked::Hash => fs::write(&content, b"changed").unwrap(),
         }
-        let precharged = *budget.usage.lock().unwrap();
         let counts = Counts::default();
         let executions = AtomicUsize::new(0);
         let result = Evaluator::new(&fresh, &counts).direct(&recipe, || {
@@ -749,58 +747,10 @@ fn direct_hit_charges_corrupt_path_decode_or_payload_hash_work() {
                 !matches!(result, Err(Error::Limit { .. })),
                 "{blocked:?}: graph work never refuses"
             );
-            // The work charged at least the corrupt record in full.
-            let usage = *budget.usage.lock().unwrap();
-            let (charged, record) = match blocked {
-                Blocked::Path => ((usage.paths - precharged.paths) as u64, 6),
-                Blocked::Envelope => (usage.decoded - precharged.decoded, envelope as u64),
-                Blocked::Allocation => (
-                    usage.decoded - precharged.decoded,
-                    (envelope + allocation) as u64,
-                ),
-                Blocked::Ledger => (
-                    usage.decoded - precharged.decoded,
-                    (envelope + allocation + ledger) as u64,
-                ),
-                Blocked::Hash => (
-                    usage.hashed - precharged.hashed,
-                    (envelope + allocation + 7) as u64,
-                ),
-                Blocked::Payload => unreachable!(),
-            };
-            assert!(
-                charged >= record,
-                "{blocked:?}: {charged} charged for a record of {record}"
-            );
         }
         store.retire_fixture().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-// Calibrate one successful operation on an isolated original account. This
-// measures integration work, not a replacement for primitive allocation tests.
-fn calibrated_work(store: &crate::store::Store, operation: impl FnOnce()) -> (usize, usize, usize) {
-    let before = *store.graph_budget().usage.lock().unwrap();
-    operation();
-    let after = *store.graph_budget().usage.lock().unwrap();
-    (
-        after.paths - before.paths,
-        (after.decoded - before.decoded) as usize,
-        (after.hashed - before.hashed) as usize,
-    )
-}
-
-fn directory_bytes(path: &Path) -> usize {
-    std::mem::size_of::<PathBuf>() + path.as_os_str().as_encoded_bytes().len()
-}
-
-// One composition owns a temporary pair array and the two retained arrays.
-fn composition_bytes(entries: usize) -> usize {
-    entries
-        * (std::mem::size_of::<(super::read_set::Entry, super::read_set::Witness)>()
-            + std::mem::size_of::<super::read_set::Entry>()
-            + std::mem::size_of::<super::read_set::Witness>())
 }
 
 /// Give an entry's stored payload a new status-change time, so its physical
@@ -814,30 +764,6 @@ fn touch_payload(store: &crate::store::Store, entry: super::read_set::Entry) {
         .join(entry.content.directory())
         .join("payload");
     fs::set_permissions(&payload, fs::metadata(&payload).unwrap().permissions()).unwrap();
-}
-
-fn entry_work(store: &crate::store::Store, entry: super::read_set::Entry) -> (usize, usize) {
-    let action = store
-        .root()
-        .join("actions")
-        .join(entry.kind.directory())
-        .join(super::STORAGE_DIRECTORY)
-        .join(entry.action.directory());
-    let content = store
-        .root()
-        .join("content")
-        .join(entry.kind.directory())
-        .join(format!("{:08x}", entry.schema))
-        .join(entry.content.directory());
-    let length = |path| fs::metadata(path).unwrap().len() as usize;
-    let envelope = length(action.join("envelope"));
-    let payload = length(content.join("payload"));
-    let records = length(action.join("allocation")) + length(content.join("allocation"));
-    let ledger = length(store.root().join("ledgers/installation"));
-    (
-        envelope + records + ledger + directory_bytes(&action) + directory_bytes(&content),
-        envelope + 2 * payload + records,
-    )
 }
 
 #[test]
@@ -1120,17 +1046,11 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
         .seal_read_set([child.receipt().read_set().clone()])
         .unwrap();
     assert_eq!(proof.len(), 2);
-    let work = proof
-        .entries()
-        .iter()
-        .map(|entry| entry_work(&store, *entry))
-        .collect::<Vec<_>>();
     let parent = *proof
         .entries()
         .iter()
         .find(|entry| entry.action == value.receipt().action())
         .unwrap();
-    let (decoded, hashed) = entry_work(&store, parent);
     let before = snapshot(store.root());
     let current_union = |context: &crate::context::Context| {
         let current_store = context.open_store().unwrap();
@@ -1155,7 +1075,7 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
     // its calibration start from a fresh payload identity.
     let calibration = fixture_context(&root).open_store().unwrap();
     touch_payload(&calibration, parent);
-    let inspect_work = calibrated_work(&calibration, || {
+    {
         assert!(calibration
             .inspect_candidate::<Artifact>(
                 value.receipt().action(),
@@ -1164,67 +1084,44 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
             )
             .unwrap()
             .is_some());
-    });
-    assert!(inspect_work.0 >= 22 && inspect_work.1 >= decoded && inspect_work.2 >= hashed);
+    }
     let calibration_context = fixture_context(&root);
     let calibration = calibration_context.open_store().unwrap();
     let calibration_proof = current_union(&calibration_context);
     for entry in calibration_proof.entries() {
         touch_payload(&calibration, *entry);
     }
-    let union_work = calibrated_work(&calibration, || {
-        calibration_proof.revalidate(&calibration).unwrap()
-    });
-    assert!(
-        union_work.0 >= 44
-            && union_work.1 >= work.iter().map(|work| work.0).sum::<usize>()
-            && union_work.2 >= work.iter().map(|work| work.1).sum::<usize>()
-    );
+    calibration_proof.revalidate(&calibration).unwrap();
     // Unchanged payload identities reuse both digests on the next union.
-    let reused = calibrated_work(&calibration, || {
-        calibration_proof.revalidate(&calibration).unwrap()
-    });
-    assert!(reused.2 < union_work.2, "{reused:?} {union_work:?}");
+    calibration_proof.revalidate(&calibration).unwrap();
     let calibration = fixture_context(&root).open_store().unwrap();
     touch_payload(&calibration, parent);
-    let lookup_work = calibrated_work(&calibration, || {
+    {
         assert!(Evaluator::new(&calibration, &Counts::default())
-            .lookup_discoverable(&recipe, &validate, calibration.graph_budget())
+            .lookup_discoverable(&recipe, &validate)
             .unwrap()
             .hit
             .is_some());
-    });
-    let index = fs::metadata(find_file(&calibration.root().join("indexes"), "row"))
-        .unwrap()
-        .len() as usize;
-    assert!(
-        lookup_work.0 >= 32
-            && lookup_work.1 >= decoded + index + composition_bytes(1)
-            && lookup_work.2 >= hashed
-    );
+    }
 
     let fresh = fixture_context(&root).open_store().unwrap();
     touch_payload(&fresh, parent);
     let hit = Evaluator::new(&fresh, &Counts::default())
-        .lookup_discoverable(&recipe, &validate, fresh.graph_budget())
+        .lookup_discoverable(&recipe, &validate)
         .unwrap();
     assert!(hit.hit.is_some());
     assert_eq!(snapshot(store.root()), before);
 
-    // Exact replay must pay again; a successful prior gate is not fresh authority.
+    // Exact replay revalidates again; a successful prior gate is not fresh authority.
     let current = fixture_context(&root);
     let fresh = current.open_store().unwrap();
     let proof = current_union(&current);
-    let replay = || {
-        calibrated_work(&fresh, || {
-            for entry in proof.entries() {
-                touch_payload(&fresh, *entry);
-            }
-            proof.revalidate(&fresh).unwrap();
-        })
-    };
-    let first = replay();
-    assert_eq!(replay(), first);
+    for _ in 0..2 {
+        for entry in proof.entries() {
+            touch_payload(&fresh, *entry);
+        }
+        proof.revalidate(&fresh).unwrap();
+    }
     assert_eq!(snapshot(store.root()), before);
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
@@ -1248,19 +1145,6 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
                 || Ok(Artifact(Box::from(b"bounded".as_slice()))),
             )
             .unwrap();
-        let action = store
-            .root()
-            .join("actions/native-product")
-            .join(super::STORAGE_DIRECTORY)
-            .join(value.receipt().action().directory());
-        let content_directory = find_file(&store.root().join("content"), "payload")
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let before_payload = fs::metadata(action.join("envelope")).unwrap().len() as usize
-            + fs::metadata(action.join("allocation")).unwrap().len() as usize
-            + directory_bytes(&action)
-            + directory_bytes(&content_directory);
         let fresh = fixture_context(&root).open_store().unwrap();
         let proof = if final_union {
             let validate: super::read_set::Validator<Artifact> =
@@ -1284,7 +1168,6 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
             b"changed",
         )
         .unwrap();
-        let precharged = fresh.graph_budget().usage.lock().unwrap().decoded;
         let result = if final_union {
             proof.as_ref().unwrap().revalidate(&fresh)
         } else {
@@ -1306,11 +1189,6 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
             result.is_err(),
             "final_union={final_union}: the payload is corrupt"
         );
-        let charged = fresh.graph_budget().usage.lock().unwrap().decoded - precharged;
-        assert!(
-            charged >= (before_payload + 7) as u64,
-            "final_union={final_union}: {charged} charged for metadata {before_payload} and payload 7"
-        );
         store.retire_fixture().unwrap();
         fs::remove_dir_all(root).unwrap();
     }
@@ -1321,7 +1199,8 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     let root = temporary("large-typed-payload");
     let context = prepare_fixture(&root);
     let store = context.open_store().unwrap();
-    let length = super::MAX_DECODED_BYTES_PER_GRAPH as usize + 1;
+    // Above the 32 MiB metadata figure.
+    let length = 32 * 1024 * 1024 + 1;
     let recipe = context
         .direct::<Artifact>(b"large-typed-payload", length)
         .unwrap();
@@ -1336,24 +1215,15 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         .seal_read_set([value.receipt().read_set().clone()])
         .unwrap();
     let entry = proof.entries()[0];
-    let (metadata, hashed) = entry_work(&store, entry);
-    let ledger = fs::metadata(store.root().join("ledgers/installation"))
-        .unwrap()
-        .len() as usize;
     // Each measured run and its calibration hash a fresh identity.
     let calibration = fixture_context(&root).open_store().unwrap();
     touch_payload(&calibration, entry);
-    let direct_work = calibrated_work(&calibration, || {
+    {
         let hit = Evaluator::new(&calibration, &Counts::default())
             .direct(&recipe, || panic!("calibration must replay"))
             .unwrap();
         assert_eq!(hit.value().0.len(), length);
-    });
-    assert!(
-        direct_work.0 >= 26
-            && direct_work.1 >= metadata + 2 * ledger + composition_bytes(1)
-            && direct_work.2 >= hashed
-    );
+    }
     let calibration = fixture_context(&root).open_store().unwrap();
     let current = calibration
         .lookup(&recipe, calibration.graph_budget())
@@ -1363,16 +1233,13 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
         .seal_read_set([current.receipt().read_set().clone()])
         .unwrap();
     touch_payload(&calibration, entry);
-    let combined_work = calibrated_work(&calibration, || {
+    {
         assert!(calibration
             .inspect_candidate::<Artifact>(recipe.action(), length, calibration.graph_budget())
             .unwrap()
             .is_some());
         calibration_proof.revalidate(&calibration).unwrap();
-    });
-    assert!(combined_work.0 >= 42 && combined_work.1 >= 2 * metadata && combined_work.2 >= hashed);
-    // The revalidation reuses the payload digests the inspection computed.
-    assert!(combined_work.2 < hashed + length);
+    }
     let fresh = fixture_context(&root).open_store().unwrap();
     touch_payload(&fresh, entry);
     let hit = Evaluator::new(&fresh, &Counts::default())
@@ -1409,58 +1276,6 @@ fn typed_payload_above_metadata_cap_replays_with_its_transform_bound_per_new_ide
     assert!(matches!(fresh.lookup(&recipe, fresh.graph_budget()),
         Err(Error::Limit { resource: "typed store file bytes", limit, actual })
             if limit == length && actual == length + 1));
-    store.retire_fixture().unwrap();
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[cfg(all(feature = "test-fixtures", unix))]
-#[test]
-fn read_set_revalidation_hashes_an_unchanged_payload_once() {
-    let root = temporary("read-set-revalidation-memo");
-    let context = prepare_fixture(&root);
-    let store = context.open_store().unwrap();
-    let recipe = context
-        .discover::<BundleValue>(b"read-set-revalidation-memo", 4_096)
-        .unwrap();
-    let validation_store = store.clone();
-    let value = Evaluator::new(&store, &Counts::default())
-        .discover_bundled(
-            &recipe,
-            move |value| value.validate_published(&validation_store),
-            bundled_fixture,
-        )
-        .unwrap();
-    let proof = Evaluator::new(&store, &Counts::default())
-        .seal_read_set([value.receipt().read_set().clone()])
-        .unwrap();
-    let entry = proof.entries()[0];
-    let hashed = || {
-        let budget = super::GraphBudget::new();
-        store.revalidate_read_set_entry(entry, &budget).unwrap();
-        budget.census_usage().unwrap().2
-    };
-    let payload = store
-        .root()
-        .join("content")
-        .join(entry.kind.directory())
-        .join(format!("{:08x}", entry.schema))
-        .join(entry.content.directory())
-        .join("payload");
-    let touch = || {
-        fs::set_permissions(&payload, fs::metadata(&payload).unwrap().permissions()).unwrap();
-    };
-    // A new identity is read and hashed; the next revalidation reuses both
-    // payload digests and hashes only the envelope.
-    touch();
-    let first = hashed();
-    let second = hashed();
-    assert!(second < first, "{second} < {first}");
-    touch();
-    assert_eq!(
-        hashed(),
-        first,
-        "a changed payload identity is hashed again"
-    );
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -1578,7 +1393,6 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
     let bundle_store = store.root().to_path_buf();
     let validate: super::read_set::Validator<BundleValue> = Arc::new(move |value, budget| {
         let canonical = value.encode(4_096)?;
-        budget.hash(canonical.len())?;
         crate::store::bundle::validate_complete(
             &bundle_store,
             value.reference,
@@ -1604,41 +1418,17 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
     let proof = evaluator
         .seal_read_set([value.receipt().read_set().clone()])
         .unwrap();
-    let (metadata, hashed) = entry_work(&store, proof.entries()[0]);
     let bundle = store.root().join(value.value().reference.relative());
     let length = |path| fs::metadata(path).unwrap().len() as usize;
-    let seal = length(bundle.join("seal"));
     let allocation = length(bundle.join("allocation"));
-    let controls = seal
-        + allocation
-        + length(bundle.join("lease"))
-        + length(store.root().join("ledgers/installation"));
-    let bundle_hashes = 2 * seal + allocation + BundleValue::BYTES;
     let before = snapshot(store.root());
-    // Independent calibration evaluations retain original accounts. Primitive
-    // tests cover exact allocation formulas; this test checks composed floors.
-    let measured = |store: &crate::store::Store, operation: &mut dyn FnMut()| {
-        let before = *store.graph_budget().usage.lock().unwrap();
-        operation();
-        let after = *store.graph_budget().usage.lock().unwrap();
-        (
-            after.paths - before.paths,
-            (after.decoded - before.decoded) as usize,
-            (after.hashed - before.hashed) as usize,
-        )
-    };
     let calibration = fixture_context(&root).open_store().unwrap();
-    let replay_work = measured(&calibration, &mut || {
+    {
         Evaluator::new(&calibration, &Counts::default())
             .replay_discovered_exact(&recipe, &validate, value.receipt().action())
             .unwrap()
             .unwrap();
-    });
-    assert!(
-        replay_work.0 >= 71
-            && replay_work.1 >= metadata + controls + composition_bytes(1)
-            && replay_work.2 >= hashed + bundle_hashes
-    );
+    }
     let calibration = fixture_context(&root).open_store().unwrap();
     let counts = Counts::default();
     let evaluator = Evaluator::new(&calibration, &counts);
@@ -1649,28 +1439,15 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
     let current_proof = evaluator
         .seal_read_set([current.receipt().read_set().clone()])
         .unwrap();
-    let union_work = measured(&calibration, &mut || {
-        current_proof.revalidate(&calibration).unwrap()
-    });
-    assert!(
-        union_work.0 >= 71
-            && union_work.1 >= metadata + controls
-            && union_work.2 >= hashed + bundle_hashes
-    );
+    current_proof.revalidate(&calibration).unwrap();
     let calibration = fixture_context(&root).open_store().unwrap();
-    let lookup_work = measured(&calibration, &mut || {
+    {
         assert!(Evaluator::new(&calibration, &Counts::default())
-            .lookup_discoverable(&recipe, &validate, calibration.graph_budget())
+            .lookup_discoverable(&recipe, &validate)
             .unwrap()
             .hit
             .is_some());
-    });
-    let index = length(find_file(&calibration.root().join("indexes"), "row"));
-    assert!(
-        lookup_work.0 >= 81
-            && lookup_work.1 >= replay_work.1 + index
-            && lookup_work.2 >= replay_work.2
-    );
+    }
 
     let fresh = fixture_context(&root).open_store().unwrap();
     let counts = Counts::default();
@@ -1691,7 +1468,7 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
     assert_eq!(snapshot(store.root()), before);
     let fresh = fixture_context(&root).open_store().unwrap();
     let hit = Evaluator::new(&fresh, &Counts::default())
-        .lookup_discoverable(&recipe, &validate, fresh.graph_budget())
+        .lookup_discoverable(&recipe, &validate)
         .unwrap();
     assert!(hit.hit.is_some());
     assert_eq!(snapshot(store.root()), before);
@@ -1906,20 +1683,13 @@ fn direct_post_publication_recheck_spends_the_same_graph_budget() {
         .direct::<Artifact>(b"direct-published-budget", 4_096)
         .unwrap();
     let counts = Counts::default();
-    let budget = store.graph_budget();
     let result = Evaluator::new(&store, &counts).direct(&recipe, || {
-        let paths = budget.usage.lock().unwrap().paths;
-        assert_eq!(
-            paths, 4,
-            "both absent-kind lookups check actions and its missing kind"
-        );
         Ok(Artifact(b"bounded".to_vec().into_boxed_slice()))
     });
     // The post-publication recheck spends the same account.
     result.expect("the post-publication recheck completes");
     assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
     assert_eq!(counts.published.load(Ordering::Relaxed), 1);
-    assert_eq!(budget.usage.lock().unwrap().paths, 4 + 26);
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -1962,7 +1732,6 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
         .fixture_stage_uncommitted(&recipe, b"bounded")
         .unwrap();
     let contender = fixture_context(&root).open_store().unwrap();
-    let budget = contender.graph_budget();
     let (reached, ready) = std::sync::mpsc::sync_channel(1);
     let (resume, receiver) = std::sync::mpsc::sync_channel(1);
     let paused = PausedRejection {
@@ -1970,7 +1739,6 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
         reached,
         resume: std::sync::Mutex::new(receiver),
     };
-    let mut initial = 0;
     let result = std::thread::scope(|scope| {
         let worker = store
             .with_ownership(|ownership| {
@@ -1983,7 +1751,6 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
                     ready
                         .recv_timeout(Duration::from_secs(5))
                         .expect("the first lookup rejects the uncommitted record");
-                    initial = budget.usage.lock().unwrap().paths;
                     store.with_action_reservation(ownership, &recipe, None, || {
                         Ok(crate::store::Reserved::Publish {
                             result: (),
@@ -2004,7 +1771,6 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
     assert_eq!(paused.counts.hit.load(Ordering::Relaxed), 1);
     assert_eq!(paused.counts.rejected.load(Ordering::Relaxed), 1);
     assert_eq!(paused.counts.miss.load(Ordering::Relaxed), 0);
-    assert_eq!(budget.usage.lock().unwrap().paths, initial + 26);
     store.retire_fixture().unwrap();
     fs::remove_dir_all(root).unwrap();
 }
@@ -2675,7 +2441,7 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
             Arc::new(|_, _| panic!("oversized historical files cannot reach semantic replay"));
         let counts = Counts::default();
         let discovery = Evaluator::new(&fresh, &counts)
-            .lookup_discoverable(&recipe, &validate, fresh.graph_budget())
+            .lookup_discoverable(&recipe, &validate)
             .unwrap();
         assert!(discovery.hit.is_none());
         assert!(discovery.rejected);
@@ -2958,15 +2724,9 @@ fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
         .expect("the final read set seals");
     assert_eq!(proof.len(), 1);
     assert!(proof.contains(validated.receipt().action()));
-    let deep = store.graph_budget().deep_validations();
     evaluator
         .revalidate_read_set(&proof)
         .expect("exact witness replay remains available");
-    assert_eq!(
-        store.graph_budget().deep_validations(),
-        deep,
-        "exact read-set replay must not spend speculative candidate authority"
-    );
     assert_eq!(snapshot(store.root()), before);
 
     *current

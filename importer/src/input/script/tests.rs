@@ -134,15 +134,6 @@ fn borrowed_budget_consumer_allocates_only_formatted_names() {
             bytes: PRIOR.bytes + 14
         }
     );
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("formatted storage is owned by the original account, not graph decode");
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("no hashing");
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("no native observation");
 }
 
 #[test]

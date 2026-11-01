@@ -1,12 +1,10 @@
 use super::{observed, stored, Budget, Error, Host};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn image(native_error: bool) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let record = observed::Record {
@@ -27,12 +25,10 @@ fn canonical_host_borrows_output_and_keeps_exact_query_and_native_error() {
     for native_error in [false, true] {
         let image = image(native_error);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -60,17 +56,12 @@ fn canonical_host_borrows_output_and_keeps_exact_query_and_native_error() {
 fn canonical_queries_use_original_ownership_and_graph_on_every_outcome() {
     for native_error in [false, true] {
         let image = image(native_error);
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2)
-            .expect("prior work");
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
         allocation.items(7).expect("prior items");
         allocation.bytes(19).expect("prior bytes");
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -83,8 +74,6 @@ fn canonical_queries_use_original_ownership_and_graph_on_every_outcome() {
         assert!(result.is_ok());
         assert_eq!(host.budget().allocation.usage().items, 10);
         assert_eq!(host.budget().allocation.usage().bytes, 28);
-        let (_, paths, _) = graph.census_usage().expect("census");
-        assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
         host.finish().expect("first query consumed");
     }
 }

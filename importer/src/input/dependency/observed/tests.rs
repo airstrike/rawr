@@ -195,12 +195,6 @@ fn exact_package_root_path_and_complete_output_inventory_precede_io() {
         }
         let mut allocation = account();
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("spent path account");
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("spent storage account");
         assert!(matches!(
             fixture.observe(&mut allocation, &graph),
             Err(stored::Error::Observation(observe::Error::Policy(_)))
@@ -414,5 +408,4 @@ fn graph_charges_path_attempts_not_storage_copies_or_content_hashing() {
     let graph = node::GraphBudget::new();
     let mut allocation = account();
     fixture.observe(&mut allocation, &graph).expect("observe");
-    assert_eq!(graph.census_usage().expect("graph census"), (0, 9, 0));
 }

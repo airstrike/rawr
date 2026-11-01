@@ -135,13 +135,11 @@ fn failure_retention_and_output_allocation_use_one_terminal_account() {
 
 #[test]
 fn expansion_completes_and_empty_output_needs_no_allocation() {
+    use crate::input;
     use crate::input::membership::Budget;
-    use crate::{input, node};
     let raw = "#!/bin/cargo\n---cargo\n[workspace]\n---\nfn main() {}";
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = Session::new(&mut budget);

@@ -35,12 +35,8 @@ pub fn cached(
     }
     let limits = context.limits();
     let store = context.open_store()?;
-    let selected = process::Native::selected_in(
-        context.project(),
-        context.environment(),
-        context.graph_budget(),
-    )
-    .map_err(super::evidence_error)?;
+    let selected = process::Native::selected_in(context.project(), context.environment())
+        .map_err(super::evidence_error)?;
     let recipe = context.discover::<Attestation>(&recipe(&selected), limits.node_output_bytes())?;
     let toolchain = node::Evaluator::new(&store, sink).discover_budgeted(
         &recipe,
@@ -96,7 +92,6 @@ impl Attestation {
             context.project(),
             context.environment(),
             limits.process_limits(),
-            budget,
         )
         .map_err(super::evidence_error)?;
         let environment = context
@@ -124,7 +119,7 @@ impl Attestation {
         budget: Option<&node::GraphBudget>,
     ) -> Result<Self, node::Error> {
         let target_directory = target_directory(&proof.rustc.path, proof.target())?;
-        validate_directory("toolchain target", &target_directory, budget)?;
+        validate_directory("toolchain target", &target_directory)?;
         // One toolchain account per capture records the state targets
         // this capture crosses; nothing here refuses on one.
         let state = state_files_with_budget(&proof.rustc.path, limits, budget)?;
@@ -133,7 +128,7 @@ impl Attestation {
             target_directory,
             state,
         };
-        attestation.validate_fixed_in(budget)?;
+        attestation.validate_fixed_in()?;
         Ok(attestation)
     }
 
@@ -164,8 +159,8 @@ impl Attestation {
         limits: &crate::cargo::Limits,
         budget: Option<&node::GraphBudget>,
     ) -> Result<Box<[u8]>, node::Error> {
-        self.validate_fixed_in(budget)?;
-        validate_directory("toolchain target", &self.target_directory, budget)?;
+        self.validate_fixed_in()?;
+        validate_directory("toolchain target", &self.target_directory)?;
         for expected in self.executables() {
             let actual = evidence_with_budget("toolchain executable", &expected.path, budget)?;
             if actual != expected {
@@ -212,13 +207,13 @@ impl Attestation {
         Ok(())
     }
 
-    fn validate_fixed_in(&self, budget: Option<&node::GraphBudget>) -> Result<(), node::Error> {
+    fn validate_fixed_in(&self) -> Result<(), node::Error> {
         self.validate_fixed()?;
         // Historical decoding validates only the encoded shape. Actual capture
         // and reuse retain both current directory observations in their account.
         let derived = target_directory(&self.proof.rustc.path, self.proof.target())?;
-        validate_directory("toolchain target", &derived, budget)?;
-        validate_directory("toolchain target", &self.target_directory, budget)
+        validate_directory("toolchain target", &derived)?;
+        validate_directory("toolchain target", &self.target_directory)
     }
 
     fn executables(&self) -> impl Iterator<Item = FileEvidence> {
@@ -405,11 +400,7 @@ fn state_files_with_budget(
         .and_then(Path::parent)
         .ok_or(node::Error::Codec("toolchain executable has no root"))?;
     let rustlib = root.join("lib/rustlib");
-    validate_directory("toolchain state", &rustlib, budget)?;
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-        crate::store::path::input(&rustlib, budget)?;
-    }
+    validate_directory("toolchain state", &rustlib)?;
     let directory = fs::read_dir(&rustlib).map_err(|source| node::Error::Io {
         operation: "read toolchain state directory",
         path: rustlib.clone(),
@@ -419,9 +410,6 @@ fn state_files_with_budget(
     let mut paths = Vec::new();
     let mut path_bytes = 0_usize;
     loop {
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-        }
         let Some(child) = directory.next() else {
             break;
         };
@@ -430,10 +418,6 @@ fn state_files_with_budget(
             path: rustlib.clone(),
             source,
         })?;
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-            crate::store::path::input(&child.path(), budget)?;
-        }
         let metadata = child.metadata().map_err(|source| node::Error::Io {
             operation: "inspect toolchain state entry",
             path: child.path(),
@@ -484,15 +468,7 @@ fn evidence_with_budget(
         .map_err(super::evidence_error)
 }
 
-fn validate_directory(
-    field: &'static str,
-    path: &Path,
-    budget: Option<&node::GraphBudget>,
-) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        crate::store::path::input(path, budget)?;
-    }
+fn validate_directory(field: &'static str, path: &Path) -> Result<(), node::Error> {
     let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
         operation: "inspect toolchain directory",
         path: path.to_path_buf(),
@@ -500,10 +476,6 @@ fn validate_directory(
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(node::Error::Shape(path.to_path_buf()));
-    }
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-        crate::store::path::canonical(path, budget)?;
     }
     let canonical = fs::canonicalize(path).map_err(|source| node::Error::Io {
         operation: "canonicalize toolchain directory",
@@ -793,7 +765,6 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(budget.census_usage().unwrap().1, 1);
         fs::remove_dir_all(root).expect("the historical fixture retires");
     }
 
@@ -801,26 +772,7 @@ mod tests {
     fn first_capture_and_warm_evidence_charge_the_same_graph() {
         let root = temporary("toolchain-capture-account");
         let budget = node::GraphBudget::new();
-        budget.hash(7).expect("prior graph work is retained");
         let attestation = fixture_attestation_in(&root, Some(&budget));
-        let hashed = attestation
-            .executables()
-            .map(|file| file.length)
-            .chain(attestation.state.iter().map(|file| file.length))
-            .sum::<u64>();
-        let cold = budget
-            .census_usage()
-            .expect("the capture account is readable");
-        assert_eq!(cold.2, 7 + hashed);
-        assert!(
-            cold.0 > 0,
-            "directory canonicalization allocations are admitted"
-        );
-        assert_eq!(
-            cold.1,
-            5 * attestation.executables().count() + 20,
-            "each small executable uses five operations; capture also validates directories and reads state"
-        );
         let limits = crate::cargo::Limits::standard();
         let current = attestation
             .revalidate_files_budgeted(&limits, Some(&budget))
@@ -829,15 +781,6 @@ mod tests {
             current,
             attestation.encode(limits.node_output_bytes()).unwrap()
         );
-        let warm = budget
-            .census_usage()
-            .expect("the replay account is readable");
-        assert_eq!(
-            warm.2,
-            7 + hashed,
-            "warm validation of unchanged identities hashes nothing"
-        );
-        assert!(warm.1 - cold.1 < cold.1);
         fs::remove_dir_all(root).expect("the capture fixture retires");
     }
 

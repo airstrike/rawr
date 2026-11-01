@@ -150,11 +150,8 @@ fn environment_target_and_limit_drift_change_context_and_direct_action_identity(
     let first = context(environment("one"), "target-a", &limits);
     let environment_changed = context(environment("two"), "target-a", &limits);
     let target_changed = context(environment("one"), "target-b", &limits);
-    let bounded = cargo::Limits::fixture(
-        limits.byte_limit().saturating_sub(1),
-        limits.item_limit(),
-        1024 * 1024,
-    );
+    // Only the physical bounds bind identity: a different recursion depth does.
+    let bounded = limits.with_depth(limits.depth - 1);
     let limits_changed = context(environment("one"), "target-a", &bounded);
     let actions = [
         first

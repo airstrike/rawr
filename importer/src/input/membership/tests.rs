@@ -1,5 +1,5 @@
 use super::{archive, host, observed, rejection, stored, Budget, Error};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn path(bytes: &[u8], budget: &mut Budget<'_>) -> observed::Path {
     observed::Path::from_bytes(bytes, budget).expect("valid absolute fixture path")
@@ -85,10 +85,8 @@ fn image(budget: &mut Budget<'_>) -> stored::Stored {
 #[test]
 fn codec_round_trip_preserves_native_paths_errors_and_complete_frontiers() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = image(&mut budget);
@@ -115,10 +113,8 @@ fn codec_round_trip_preserves_native_paths_errors_and_complete_frontiers() {
 #[test]
 fn host_distinguishes_absence_error_unknown_query_and_unconsumed_record() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = image(&mut budget);
@@ -146,21 +142,17 @@ fn host_distinguishes_absence_error_unknown_query_and_unconsumed_record() {
 #[test]
 fn malformed_truncated_old_and_noncanonical_images_reject() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = image(&mut budget);
     let bytes = image.encode(&mut budget).expect("image encodes");
     for length in 0..bytes.len() {
         let mut allocation = input::Allocation::new(&limits);
-        let graph = node::GraphBudget::new();
         assert!(stored::Stored::decode(
             &bytes[..length],
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation
             }
         )
@@ -194,10 +186,8 @@ fn malformed_truncated_old_and_noncanonical_images_reject() {
 #[test]
 fn directory_omission_and_reordering_do_not_become_complete_frontiers() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     for names in [
@@ -239,25 +229,20 @@ fn directory_omission_and_reordering_do_not_become_complete_frontiers() {
 #[test]
 fn ownership_and_graph_refusal_precede_host_and_decoder_work() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let image = image(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     });
     let bytes = image
         .encode(&mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         })
         .expect("encode fixture");
     let exact = {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         stored::Stored::decode(
             &bytes,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -273,7 +258,6 @@ fn ownership_and_graph_refusal_precede_host_and_decoder_work() {
         host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut refused
             }
         ),
@@ -281,61 +265,31 @@ fn ownership_and_graph_refusal_precede_host_and_decoder_work() {
     ));
     assert_eq!(super::OWNED_VECTORS.with(std::cell::Cell::get), 0);
 
-    // Graph decode past its constant still decodes with the same ownership.
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("consume graph decode constant");
     let mut allocation = input::Allocation::new(&limits);
     stored::Stored::decode(
         &bytes,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
-    .expect("decode past the graph constant");
+    .expect("decode");
     assert_eq!(allocation.usage(), exact);
-    // Checked-arithmetic overflow of the graph account is a genuine failure
-    // that precedes every owned decoder vector.
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(usize::MAX)
-        .expect("saturate the graph decode account");
-    let mut allocation = input::Allocation::new(&limits);
-    super::OWNED_VECTORS.with(|count| count.set(0));
-    assert!(matches!(
-        stored::Stored::decode(
-            &bytes,
-            &mut Budget {
-                graph: &graph,
-                allocation: &mut allocation
-            }
-        ),
-        Err(Error::Budget(node::Error::Allocation))
-    ));
-    assert_eq!(super::OWNED_VECTORS.with(std::cell::Cell::get), 0);
-    assert_eq!(allocation.usage().bytes, 0);
 }
 
 #[test]
 fn borrowed_retention_matches_decode_ownership_with_prior_use() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = image(&mut budget);
     let bytes = image.encode(&mut budget).expect("encode fixture");
     let retain = |decode| {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         allocation.items(7)?;
         allocation.bytes(19)?;
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let retained = if decode {
@@ -360,7 +314,6 @@ fn borrowed_retention_matches_decode_ownership_with_prior_use() {
         stored::Stored::from_records(
             image.records(),
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             }
         ),
@@ -374,10 +327,8 @@ fn borrowed_retention_matches_decode_ownership_with_prior_use() {
 #[test]
 fn borrowed_retention_records_each_oversized_string_and_still_owns_it() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     // (query, value, buffers owned before the oversized string, native path)
@@ -459,7 +410,6 @@ fn borrowed_retention_records_each_oversized_string_and_still_owns_it() {
         for decode in [false, true] {
             let mut exact = input::Allocation::with_limits(usize::MAX, usize::MAX, 5);
             let mut exact_budget = Budget {
-                graph: &graph,
                 allocation: &mut exact,
             };
             super::OWNED_BYTES.with(|count| count.set(0));
@@ -473,10 +423,8 @@ fn borrowed_retention_records_each_oversized_string_and_still_owns_it() {
                 image
             );
             let exact_buffers = super::OWNED_BYTES.with(std::cell::Cell::get);
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
             let mut budget = Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             };
             super::OWNED_BYTES.with(|count| count.set(0));
@@ -503,10 +451,8 @@ fn borrowed_retention_records_each_oversized_string_and_still_owns_it() {
 
 #[test]
 fn borrowed_read_payload_uses_aggregate_bytes_without_a_string_limit() {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let records = [observed::Record {
@@ -549,10 +495,8 @@ fn archive_image(paths: &[(&[u8], observed::Value)], budget: &mut Budget<'_>) ->
 #[test]
 fn archive_preserves_manifest_origin_and_external_collision_precedence() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = archive_image(
@@ -599,10 +543,8 @@ fn archive_preserves_manifest_origin_and_external_collision_precedence() {
 #[test]
 fn archive_collision_uses_path_equality_and_preserves_selected_spelling_and_origin() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = archive_image(
@@ -642,10 +584,8 @@ fn archive_reserved_physical_and_nonunicode_sources_reject() {
         b"/pkg/\xff",
         b"/outside/file",
     ] {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let image = stored::Stored::from_records(&[], &mut budget).expect("empty image");
@@ -670,10 +610,8 @@ fn archive_reserved_physical_and_nonunicode_sources_reject() {
 #[test]
 fn archive_probes_both_missing_fields_and_does_not_add_excluded_build_script() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = archive_image(
@@ -708,7 +646,6 @@ fn archive_probes_both_missing_fields_and_does_not_add_excluded_build_script() {
         .expect("both missing-file probes are retained");
 
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = archive_image(
@@ -795,10 +732,8 @@ fn generated_occupancy_controls_external_metadata_physical_origins() {
     ] {
         for occupied in [false, true] {
             for license_field in [false, true] {
-                let graph = node::GraphBudget::new();
                 let mut allocation = input::Allocation::new(&limits);
                 let mut budget = Budget {
-                    graph: &graph,
                     allocation: &mut allocation,
                 };
                 let image = archive_image(
@@ -853,10 +788,8 @@ fn generated_vcs_occupancy_also_shadows_an_excluded_root_metadata_file() {
     let limits = cargo::Limits::standard();
     for vcs in [false, true] {
         for license_field in [false, true] {
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::new(&limits);
             let mut budget = Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             };
             let image = archive_image(

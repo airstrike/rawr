@@ -99,9 +99,7 @@ impl Fixture {
         let native = evaluator
             .discover_budgeted(
                 &recipe,
-                move |_, budget| {
-                    budget.paths(1)?;
-                    budget.hash(6)?;
+                move |_, _| {
                     let validation = validations.fetch_add(1, Ordering::Relaxed) + 1;
                     if validation == runtime_drift_at.load(Ordering::Relaxed) {
                         corrupt_asset(runtime_asset.lock().unwrap().as_ref().unwrap());
@@ -279,16 +277,13 @@ fn build_fixture(
                 budget,
             )
             .unwrap();
-            let executable = Evidence::capture(&path, budget)?;
-            let carrier = Evidence::capture(
-                &attempt.generated().join("rawr-generated-manifest.carrier"),
-                budget,
-            )?;
+            let executable = Evidence::capture(&path)?;
+            let carrier =
+                Evidence::capture(&attempt.generated().join("rawr-generated-manifest.carrier"))?;
             let retained = retained::Stored::capture(
                 &attempt.root(),
                 attempt.reference(),
                 retained::Mode::Pending,
-                budget,
             )?;
             let seal = bundle_seal(
                 attempt.reference(),
@@ -297,7 +292,6 @@ fn build_fixture(
                 &executable,
                 artifact.digest(),
                 &retained,
-                budget,
             )?;
             let product = Product::capture(
                 attempt.reference(),
@@ -308,7 +302,6 @@ fn build_fixture(
                 manifest.generated.digest(),
                 artifact.digest(),
                 &retained,
-                budget,
             )?;
             let root = attempt.root();
             let mut captured = Some(captured);
@@ -554,50 +547,6 @@ fn startup_handoff_cannot_replace_snapshot_or_existing_ownership() {
     assert!(built.bind_startup_snapshot(&different).is_err());
     assert_eq!(pins(&store), before);
     built.bind_startup_snapshot(&snapshot).unwrap();
-}
-
-#[test]
-fn retained_storage_accounting_is_charged_on_every_refresh() {
-    let mut fixture = Fixture::new();
-    fixture.retain = true;
-    let (cold, snapshot) = fixture.generation(b"before");
-    let mut live = fixture.build(cold);
-    live.bind_snapshot(&snapshot).unwrap();
-    let chain = live.chain.as_ref().unwrap();
-    let store = chain.context().open_store().unwrap();
-    let budget = store.graph_budget();
-    let retention = chain.retention().unwrap();
-    let before = budget.census_usage().unwrap();
-    retention.validate_storage(&store).unwrap();
-    let first = budget.census_usage().unwrap();
-    retention.validate_storage(&store).unwrap();
-    let second = budget.census_usage().unwrap();
-    let delta = |before: (u64, usize, u64), after: (u64, usize, u64)| {
-        (after.0 - before.0, after.1 - before.1, after.2 - before.2)
-    };
-    let storage = delta(before, first);
-    // An unchanged closure still incurs real original-account costs each time;
-    // retention must not turn a previous refresh into free current authority.
-    assert_eq!(storage, delta(first, second));
-    assert!(storage.0 > 0 && storage.1 > 0 && storage.2 > 0);
-    println!(
-        "fixture-account\tstage=runner-storage\tdecoded={}\tpaths={}\thashed={}",
-        storage.0, storage.1, storage.2
-    );
-    let before = budget.census_usage().unwrap();
-    live.pin_prepared().unwrap();
-    let prepared = delta(before, budget.census_usage().unwrap());
-    println!(
-        "fixture-account\tstage=prepared\tdecoded={}\tpaths={}\thashed={}",
-        prepared.0, prepared.1, prepared.2
-    );
-    let before = budget.census_usage().unwrap();
-    live.pin_live_last_good().unwrap();
-    let admitted = delta(before, budget.census_usage().unwrap());
-    println!(
-        "fixture-account\tstage=live-last-good\tdecoded={}\tpaths={}\thashed={}",
-        admitted.0, admitted.1, admitted.2
-    );
 }
 
 #[test]
@@ -1056,11 +1005,7 @@ fn snapshot_binding_cannot_change_after_ownership_and_new_context_has_its_own_bu
         .is_err());
     live.bind_snapshot(&before).unwrap();
     let old_store = live.chain.as_ref().unwrap().context().open_store().unwrap();
-    // Revalidation charges the old evaluation's own graph; the new
-    // context's graph is separate.
-    let before = old_store.graph_budget().census_usage().unwrap().1;
     live.revalidate_prepared().unwrap();
-    assert!(old_store.graph_budget().census_usage().unwrap().1 > before);
     let prepared = fixture.prepare(&live, b"before");
     let new_graph = prepared
         .manifest

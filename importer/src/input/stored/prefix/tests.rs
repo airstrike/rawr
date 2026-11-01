@@ -93,9 +93,6 @@ fn scalar_requires_the_next_recipe_without_skipping_or_owning_mismatches() {
         let limits = Limits::standard();
         let mut allocation = Allocation::for_proof(PRIOR, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("all native work spent");
         let mut entries = Slots::new();
         let mut cursor = recipes.iter();
         let result = scalar(
@@ -122,15 +119,6 @@ fn scalar_storage_uses_original_exact_floors_without_graph_decode_and_latches() 
         limits.input_proof_bytes = PRIOR.bytes + bytes - input_floor;
         let mut allocation = Allocation::for_proof(PRIOR, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("all decoding already spent");
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .expect("all hash work spent");
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("all native work spent");
         let recipes = [fact(), fact()];
         let mut cursor = recipes.iter();
         let mut entries = Slots::new();
@@ -139,10 +127,6 @@ fn scalar_storage_uses_original_exact_floors_without_graph_decode_and_latches() 
         // The scalar storage is owned in full either way; a ceiling one
         // under records the byte axis with the exact total as its high water.
         result.expect("scalar storage is owned, not gated");
-        assert_eq!(
-            graph.census_usage().expect("graph census").0,
-            node::MAX_DECODED_BYTES_PER_GRAPH
-        );
         assert_eq!(entries.as_slice().len(), 1);
         assert!(
             matches!(&entries.as_slice()[0], Entry::Fact { name, value, .. }
@@ -218,9 +202,6 @@ fn native_path_role_and_package_mismatches_stop_before_filesystem_work() {
         let limits = Limits::standard();
         let mut allocation = Allocation::for_proof(PRIOR, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("all native work spent");
         let mut entries = Slots::new();
         assert!(matches!(
             file(
@@ -424,9 +405,6 @@ fn package_inventory_interleaves_files_and_scalars_and_preserves_the_next_recipe
     let mut cursor = recipes.iter();
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("no filesystem work remains");
     assert!(matches!(
         packages(
             &mut cursor,

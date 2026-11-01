@@ -33,21 +33,12 @@ fn exercise(session: &mut Session<'_, host::Host<'_, '_>>) -> Step<()> {
 }
 
 fn run(image: &stored::Stored) -> Result<(), Error<crate::input::membership::Error>> {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH - 4).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
     let mut host = match host::Host::from_image(
         image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {
@@ -97,14 +88,12 @@ fn a_refused_account_prevents_allocation() {
     let image = fixture();
     // Only a genuinely refused original account stops the probe before any
     // allocation or observation.
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(31).unwrap();
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -140,12 +129,10 @@ fn missing_probe_is_terminal_instead_of_skipping_to_a_later_readme() {
         metadata(observed::Kind::File),
     )]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )

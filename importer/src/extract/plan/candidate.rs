@@ -5,7 +5,6 @@ use std::ffi::OsStr;
 use std::path::{Component, Path};
 
 use crate::extract::{protocol::attempt::Completion, Allocation};
-use crate::node::GraphBudget;
 use crate::{Error, Result};
 
 #[derive(Clone, Copy)]
@@ -30,7 +29,6 @@ pub(crate) fn join(
     candidates: &[Candidate<'_>],
     completion: &Completion<'_>,
     allocation: &mut Allocation,
-    graph: &GraphBudget,
 ) -> Result<Joined> {
     let count = candidates.len();
     if count > crate::store::bundle::MAX_MEMBERS as usize {
@@ -53,13 +51,6 @@ pub(crate) fn join(
     }
     // Two sorted borrowed indices and one result row per candidate. There are
     // no copied path bytes, filesystem operations, or content hashes here.
-    let bytes = count
-        .checked_mul(2 * std::mem::size_of::<usize>() + std::mem::size_of::<Flags>())
-        .ok_or_else(allocation_error)?;
-    graph.decode(bytes).map_err(|source| Error::Node {
-        operation: "compiler candidate association",
-        source: Box::new(source),
-    })?;
     allocation.items(count.checked_mul(3).ok_or_else(allocation_error)?)?;
     let mut originals = Vec::new();
     let mut canonical = Vec::new();
@@ -229,7 +220,6 @@ mod tests {
             candidates,
             &Completion::decode(bytes).unwrap(),
             &mut Allocation::with_limits(usize::MAX, usize::MAX),
-            &GraphBudget::new(),
         )
     }
     #[test]

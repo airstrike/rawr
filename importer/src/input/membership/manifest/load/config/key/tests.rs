@@ -27,7 +27,7 @@ fn registry_keys_preserve_components_and_environment_spelling() {
 #[test]
 fn environment_arm_short_circuits_exact_presence_and_requires_negative_evidence() {
     use crate::input::membership::{observed, stored, Budget};
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
     // Empty strings are present. Prefix evidence is reached only after None.
     for (exact, prefix, expected) in [
         (Some(""), None, Some(true)),
@@ -37,10 +37,8 @@ fn environment_arm_short_circuits_exact_presence_and_requires_negative_evidence(
         (None, None, None),
     ] {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut records = vec![observed::Record {

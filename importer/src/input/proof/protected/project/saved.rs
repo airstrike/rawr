@@ -32,18 +32,14 @@ pub(super) fn project<A: Account>(
             value,
         } = entry
         {
-            account.comparison(package_id.len().saturating_add(candidate.len()))?;
+            account.check()?;
             if package_id.as_ref() == package && candidate.as_ref() == execution {
                 ordered.push((*index, value.as_ref()));
             }
         }
     }
     let count = ordered.len();
-    account.comparison(
-        count
-            .saturating_mul(count.max(1).ilog2().saturating_add(1) as usize)
-            .saturating_mul(std::mem::size_of::<usize>()),
-    )?;
+    account.check()?;
     ordered.sort_unstable_by_key(|(index, _)| *index);
     let mut original = account.roots(count)?;
     for (expected_index, (index, value)) in ordered.into_iter().enumerate() {
@@ -114,7 +110,7 @@ fn hash<A: Account>(
         return Err(account.policy("protected-saved-output-size", "serialized size overflow"));
     }
     account.check()?;
-    account.hash_work(writer.bytes)?;
+    account.check()?;
     writer.hash = Some(Sha256::new());
     serde_json::to_writer(&mut writer, value)
         .map_err(|_| account.policy("protected-saved-output-encoding", "serialization failed"))?;
@@ -208,7 +204,7 @@ mod tests {
                 &expected(&values),
                 &evidence,
                 &protected,
-                &mut Legacy(&mut allocation, &graph),
+                &mut Legacy(&mut allocation),
             )
             .expect("cold");
             let mut current_allocation = Allocation::new(&limits);
@@ -254,7 +250,6 @@ mod tests {
             let refs: Vec<_> = entries.iter().collect();
             let (evidence, protected) = fixture();
             let limits = Limits::standard();
-            let graph = GraphBudget::new();
             let mut allocation = Allocation::new(&limits);
             assert!(project(
                 &refs,
@@ -263,7 +258,7 @@ mod tests {
                 &original,
                 &evidence,
                 &protected,
-                &mut Legacy(&mut allocation, &graph)
+                &mut Legacy(&mut allocation)
             )
             .is_err());
         }
@@ -291,7 +286,6 @@ mod tests {
                 "/source".into(),
             );
             let limits = Limits::standard();
-            let graph = GraphBudget::new();
             let mut allocation = Allocation::new(&limits);
             project(
                 &refs,
@@ -300,7 +294,7 @@ mod tests {
                 &expected(&values),
                 &evidence,
                 &protected,
-                &mut Legacy(&mut allocation, &graph),
+                &mut Legacy(&mut allocation),
             )
             .expect("relocated projection")
         }
@@ -314,89 +308,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn overflowed_original_hash_accounts_refuse_and_latch() {
-        let serialized = serde_json::to_vec(&Saved::<&str>(&[]))
-            .expect("serialize")
-            .len() as u64;
-        for current in [false, true] {
-            let (evidence, protected) = fixture();
-            let limits = Limits::standard();
-            let graph = GraphBudget::new();
-            let mut allocation = Allocation::new(&limits);
-            // Both accounts project and hash the exact serialized size, the
-            // original digest first and then the normalized one.
-            let projected = if current {
-                let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-                project(
-                    &[],
-                    "package",
-                    "/out",
-                    &expected(&[]),
-                    &evidence,
-                    &protected,
-                    &mut Current(&mut budget),
-                )
-            } else {
-                project(
-                    &[],
-                    "package",
-                    "/out",
-                    &expected(&[]),
-                    &evidence,
-                    &protected,
-                    &mut Legacy(&mut allocation, &graph),
-                )
-                .map_err(|_| crate::input::stored::Error::Refused)
-            };
-            assert_eq!(projected.expect("admitted").as_ref(), expected(&[]));
-            assert_eq!(
-                graph.census_usage().expect("graph census").2,
-                2 * serialized
-            );
-            allocation.check().expect("the account is not latched");
-            // Checked-arithmetic overflow of the hash account is a genuine
-            // failure: both accounts refuse and latch the original allocation.
-            let hashed = graph.census_usage().expect("graph census").2;
-            graph
-                .hash(usize::try_from(u64::MAX - hashed).expect("addressable remainder"))
-                .expect("saturate the hash account");
-            if current {
-                let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-                assert!(matches!(
-                    project(
-                        &[],
-                        "package",
-                        "/out",
-                        &expected(&[]),
-                        &evidence,
-                        &protected,
-                        &mut Current(&mut budget)
-                    ),
-                    Err(crate::input::stored::Error::Graph(
-                        crate::node::Error::Allocation
-                    ))
-                ));
-            } else {
-                assert!(matches!(
-                    project(
-                        &[],
-                        "package",
-                        "/out",
-                        &expected(&[]),
-                        &evidence,
-                        &protected,
-                        &mut Legacy(&mut allocation, &graph)
-                    ),
-                    Err(crate::Error::Input {
-                        code: "protected-build-hash-work",
-                        ..
-                    })
-                ));
-            }
-            assert!(allocation.check().is_err());
-        }
-    }
     #[test]
     fn unrelated_directives_are_selected_in_one_budgeted_pass() {
         let entries: Vec<_> = (0..200)
@@ -428,12 +339,6 @@ mod tests {
         let (evidence, protected) = fixture();
         let limits = Limits::standard();
         let graph = GraphBudget::new();
-        graph
-            .decode(
-                usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).expect("test range")
-                    - available,
-            )
-            .expect("prior graph work");
         let mut allocation = Allocation::new(&limits);
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         let result = project(

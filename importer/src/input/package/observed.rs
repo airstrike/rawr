@@ -85,7 +85,7 @@ fn acquire(
     if marker.v != REGISTRY_MARKER_SCHEMA {
         return Err(policy("registry-marker-schema"));
     }
-    budget.hash(bytes.len())?;
+    budget.check()?;
     let marker_digest: [u8; 32] = Sha256::digest(&bytes).into();
     if marker_digest != retained.marker_digest {
         return Err(observe::Error::Drift("registry-marker-changed").into());

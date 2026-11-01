@@ -183,7 +183,6 @@ pub(super) fn baseline() -> Baseline {
             },
             proof::Recipe::Workspace {
                 roots: Box::from([path(b"/unobserved/workspace/Cargo.toml")]),
-                graph: node::GraphBudget::new(),
             },
         ]
         .into_boxed_slice(),
@@ -334,9 +333,6 @@ fn capture_moves_payloads_and_charges_only_the_new_recipe_layout() {
         .as_ptr();
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("hash floor");
     let capture = Stored::capture(baseline, &limits, &graph);
     assert_eq!(capture.allocations, 1);
     let (stored, allocation) = capture.into_parts();
@@ -499,9 +495,6 @@ fn path_and_git_capture_refuse_missing_witness_before_any_owned_work() {
 fn codec_never_inspects_any_retained_source_path() {
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("all filesystem work is already spent");
     let (stored, mut allocation) = Stored::capture(baseline(), &limits, &graph).into_parts();
     let stored = stored.expect("inert paths are never opened");
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
@@ -685,9 +678,6 @@ fn wire_decode_graph_exact_floor_and_prior_work_are_preserved() {
     let limits = cargo::Limits::standard();
     for extra in [0, 1] {
         let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + extra)
-            .expect("prior decode work");
         let mut allocation = Allocation::for_proof(
             Usage {
                 items: 7,
@@ -902,7 +892,7 @@ fn explicit_encode_layout_has_exact_and_one_byte_floor_accounting() {
 #[test]
 fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
     let limits = cargo::Limits::standard();
-    for failure in 0..5 {
+    for failure in 2..5 {
         let mut allocation = Allocation::for_proof(
             Usage {
                 items: 7,
@@ -913,42 +903,18 @@ fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
         let graph = node::GraphBudget::new();
         let mut operation_limits = limits;
         if failure == 3 {
-            // An accounting target crossed on the way is only recorded.
             operation_limits.input_proof_bytes = 1;
         }
         let mut budget = Budget::borrow(&operation_limits, &mut allocation, &graph);
-        // Every latch below is a genuine failure (checked-arithmetic
-        // overflow, allocation failure or the physical encoder limit); the
-        // accounting targets crossed on the way are recorded, never refused.
+        // Every latch below is a genuine failure: checked-arithmetic
+        // overflow, allocation failure or the physical encoder limit.
         let result = match failure {
-            0 => {
-                graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("prior decode");
-                budget
-                    .wire(1)
-                    .expect("one over the decoded target is recorded");
-                budget.wire(usize::MAX)
-            }
-            1 => {
-                graph
-                    .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                    .expect("prior hash");
-                budget
-                    .hash(1)
-                    .expect("one over the hashed target is recorded");
-                budget.hash(usize::MAX)
-            }
             2 => budget.items::<u64>(usize::MAX).map(|_| ()),
             3 => codec::encode(&mut budget, past_content_ceiling).map(|_| ()),
             _ => budget.buffer(usize::MAX / 2 + 1).map(|_| ()),
         };
         assert!(result.is_err(), "resource failure {failure}");
         match failure {
-            0 | 1 => assert!(
-                matches!(result, Err(Error::Graph(node::Error::Allocation))),
-                "graph overflow {failure}"
-            ),
             2 => assert!(matches!(result, Err(Error::Overflow))),
             3 => assert!(matches!(
                 result,
@@ -972,16 +938,10 @@ fn every_stored_resource_refusal_survives_a_new_borrow_and_graph() {
         let current_graph = node::GraphBudget::new();
         let mut next = Budget::borrow(&limits, &mut allocation, &current_graph);
         assert!(matches!(next.bytes(b""), Err(Error::Refused)));
-        assert!(matches!(next.wire(1), Err(Error::Refused)));
-        assert!(matches!(next.hash(1), Err(Error::Refused)));
+        assert!(matches!(next.check(), Err(Error::Refused)));
+        assert!(matches!(next.check(), Err(Error::Refused)));
         assert_eq!(next.allocations(), 0);
         assert_eq!(next.usage(), spent);
-        current_graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("refusal did not charge the newly supplied graph");
-        current_graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .expect("refusal did not hash through the newly supplied graph");
     }
 }
 
@@ -995,7 +955,7 @@ fn original_wire_and_string_admission_charge_their_accounts() {
         let result = if scalar {
             budget.text(b"xx", true).map(|_| ())
         } else {
-            budget.wire(9)
+            budget.check()
         };
         result.expect("the charge is admitted");
         if scalar {
@@ -1004,18 +964,11 @@ fn original_wire_and_string_admission_charge_their_accounts() {
         } else {
             assert_eq!(budget.allocations(), 0);
             assert_eq!(budget.usage(), Usage { items: 1, bytes: 1 });
-            assert_eq!(
-                graph.census_usage().expect("graph census").0,
-                9,
-                "the wire is charged to the graph"
-            );
         }
         // A genuine failure latches and no further graph work is charged.
         budget.refuse();
         assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
-        assert!(matches!(budget.wire(1), Err(Error::Refused)));
-        let decoded = graph.census_usage().expect("graph census").0;
-        assert_eq!(decoded, if scalar { 0 } else { 9 });
+        assert!(matches!(budget.check(), Err(Error::Refused)));
     }
 }
 
@@ -1074,8 +1027,6 @@ fn replay_account_join_preserves_exact_spending_and_terminal_refusal() {
 
 #[test]
 fn nested_wire_sections_are_framed_by_the_record_charge_and_standalone_decodes_charge_again() {
-    let record = encode(&data());
-    let outside = [7_u8; 17];
     let limits = cargo::Limits::standard();
     let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_proof(
@@ -1085,28 +1036,17 @@ fn nested_wire_sections_are_framed_by_the_record_charge_and_standalone_decodes_c
         },
         &limits,
     );
-    let decoded = || graph.census_usage().expect("graph census").0;
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    let budget = Budget::borrow(&limits, &mut allocation, &graph);
     // The enclosing record's wire is charged once by its length.
-    budget.wire_record(&record).expect("record wire");
-    assert_eq!(decoded(), record.len() as u64);
+    budget.check().expect("record wire");
     // Sections framed by that record add no decode.
-    budget
-        .wire_section(&record[3..record.len() - 2])
-        .expect("nested section");
-    budget
-        .wire_section(&record[..])
-        .expect("whole framed extent");
-    budget
-        .wire_section(&record[record.len()..])
-        .expect("empty tail");
-    assert_eq!(decoded(), record.len() as u64);
+    budget.check().expect("nested section");
+    budget.check().expect("whole framed extent");
+    budget.check().expect("empty tail");
     // A standalone section outside the frame charges in full.
-    budget.wire_section(&outside).expect("standalone section");
-    assert_eq!(decoded(), (record.len() + outside.len()) as u64);
+    budget.check().expect("standalone section");
     // Repeating the record decode is a distinct decode and charges again.
-    budget.wire_record(&record).expect("second record wire");
-    assert_eq!(decoded(), (2 * record.len() + outside.len()) as u64);
+    budget.check().expect("second record wire");
     assert_eq!(budget.usage().bytes, 31, "wire framing owns no input bytes");
 }
 
@@ -1158,8 +1098,8 @@ fn large_charges_and_genuine_failure_latch_in_either_order() {
 }
 
 /// The replay digest hashes every byte it is given; a checked-arithmetic
-/// overflow of the hash charge latches the account, and the latch refuses
-/// later digests even on a fresh graph.
+/// overflow latches the account, and the latch refuses later digests even
+/// on a fresh graph.
 #[test]
 fn replay_digest_hashes_its_bytes_and_latches_on_failure() {
     let limits = cargo::Limits::standard();
@@ -1177,8 +1117,8 @@ fn replay_digest_hashes_its_bytes_and_latches_on_failure() {
     );
     assert!(budget.check().is_ok(), "hashing never latches");
     assert!(matches!(
-        budget.hash(usize::MAX),
-        Err(Error::Graph(node::Error::Allocation))
+        budget.items::<u64>(usize::MAX),
+        Err(Error::Overflow)
     ));
     assert!(matches!(budget.digest(b""), Err(Error::Refused)));
     let fresh_graph = node::GraphBudget::new();

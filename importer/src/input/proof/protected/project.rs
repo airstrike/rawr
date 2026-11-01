@@ -21,14 +21,7 @@ pub(in crate::input) fn legacy(
     target: &str,
     allocation: &mut Allocation,
 ) -> crate::Result<cargo::universe::BuildProjection> {
-    legacy_accounted(
-        entries,
-        evidence,
-        protected,
-        target,
-        allocation,
-        &crate::node::GraphBudget::new(),
-    )
+    legacy_accounted(entries, evidence, protected, target, allocation)
 }
 
 pub(in crate::input) fn legacy_accounted(
@@ -37,14 +30,13 @@ pub(in crate::input) fn legacy_accounted(
     protected: &cargo::universe::MetadataProof,
     target: &str,
     allocation: &mut Allocation,
-    graph: &crate::node::GraphBudget,
 ) -> crate::Result<cargo::universe::BuildProjection> {
     project(
         entries,
         evidence,
         protected,
         target,
-        &mut Legacy(allocation, graph),
+        &mut Legacy(allocation),
     )
 }
 
@@ -312,7 +304,7 @@ fn project<'evidence, A: Account>(
         artifacts.insert(key, artifact, allocation)?;
     }
 
-    allocation.comparison(entries.len())?;
+    allocation.check()?;
     let count = entries
         .iter()
         .filter(|entry| matches!(entry, Entry::Directive { .. }))
@@ -354,22 +346,11 @@ fn project<'evidence, A: Account>(
                         // Admit package comparison and component-wise prefix work
                         // before inspecting either value; repeated files spend
                         // the same original cumulative account.
-                        allocation.comparison(
-                            package_id
-                                .len()
-                                .min(script.package_id.len())
-                                .saturating_add(1),
-                        )?;
+                        allocation.check()?;
                         if script.package_id.as_ref() != package_id {
                             continue;
                         }
-                        allocation.comparison(
-                            path.as_os_str()
-                                .len()
-                                .saturating_add(script.out_dir.as_os_str().len())
-                                .saturating_mul(2)
-                                .saturating_add(1),
-                        )?;
+                        allocation.check()?;
                         if let Ok(relative) = path.strip_prefix(&script.out_dir)
                             && generated.replace((script, relative)).is_some()
                         {

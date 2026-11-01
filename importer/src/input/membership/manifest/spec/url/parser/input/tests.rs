@@ -1,9 +1,9 @@
 use rawr_toml::document;
 
 use super::Input;
+use crate::input;
 use crate::input::membership::manifest::{session, Error, Stop};
 use crate::input::membership::Budget;
-use crate::{input, node};
 
 mod reference;
 
@@ -125,13 +125,11 @@ fn prefix_count_peek_and_rewind_keep_the_same_raw_remaining_slice() {
 
 #[test]
 fn original_spelling_is_measured_before_trim_and_admission_refusal_is_terminal() {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(13, 31, 1);
     allocation.items(13).unwrap();
     allocation.bytes(31).unwrap();
     let prior = allocation.usage;
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -166,24 +164,13 @@ fn original_spelling_is_measured_before_trim_and_admission_refusal_is_terminal()
 
 #[test]
 fn cursor_borrows_without_spending_items_layouts_or_graph_work() {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let source = " \té\n/\r終 ";
     let mut allocation = input::Allocation::with_limits(13, 31, source.len());
     allocation.items(13).unwrap();
     allocation.bytes(31).unwrap();
     let prior = allocation.usage;
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

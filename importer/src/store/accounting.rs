@@ -433,24 +433,14 @@ impl Record {
         Self::decode(&bytes)
     }
 
-    pub(crate) fn read_budgeted(
-        path: &Path,
-        budget: &crate::node::GraphBudget,
-    ) -> Result<Self, Error> {
-        let bytes =
-            super::entry::read_file_budgeted(&path.join("allocation"), RECORD_BYTES, budget)?;
+    pub(crate) fn read_budgeted(path: &Path) -> Result<Self, Error> {
+        let bytes = super::entry::read_file_budgeted(&path.join("allocation"), RECORD_BYTES)?;
         Self::decode(&bytes)
     }
 
-    pub(super) fn read_candidate_budgeted(
-        path: &Path,
-        budget: &crate::node::GraphBudget,
-    ) -> Result<Self, Error> {
-        let bytes = super::entry::read_candidate_file_budgeted(
-            &path.join("allocation"),
-            RECORD_BYTES,
-            budget,
-        )?;
+    pub(super) fn read_candidate_budgeted(path: &Path) -> Result<Self, Error> {
+        let bytes =
+            super::entry::read_candidate_file_budgeted(&path.join("allocation"), RECORD_BYTES)?;
         Self::decode(&bytes)
     }
 
@@ -460,12 +450,8 @@ impl Record {
         Self::decode(&bytes)
     }
 
-    pub(crate) fn read_bundle_budgeted(
-        path: &Path,
-        budget: &crate::node::GraphBudget,
-    ) -> Result<Self, Error> {
-        let bytes =
-            super::entry::read_file_budgeted(&path.join("allocation"), MAX_RECORD_BYTES, budget)?;
+    pub(crate) fn read_bundle_budgeted(path: &Path) -> Result<Self, Error> {
+        let bytes = super::entry::read_file_budgeted(&path.join("allocation"), MAX_RECORD_BYTES)?;
         Self::decode(&bytes)
     }
 
@@ -539,13 +525,6 @@ impl Record {
             ));
         }
         self.validate_bundle_commitment(kind, schema, key, payload, metadata)
-    }
-
-    const fn encoded_len(&self) -> usize {
-        match self.geometry {
-            Some(_) => BUNDLE_RECORD_BYTES,
-            None => RECORD_BYTES,
-        }
     }
 
     /// The sealed geometry; `None` for a typed record.
@@ -735,9 +714,9 @@ impl Ledger {
         Self::read_with_recovery(root)
     }
 
-    fn read_budgeted(root: &Path, budget: &crate::node::GraphBudget) -> Result<Self, Error> {
+    fn read_budgeted(root: &Path) -> Result<Self, Error> {
         let path = ledger_path(root);
-        let bytes = super::entry::read_file_budgeted(&path, MAX_LEDGER_BYTES, budget)?;
+        let bytes = super::entry::read_file_budgeted(&path, MAX_LEDGER_BYTES)?;
         Self::decode(&bytes).map_err(|_| Error::Corrupt {
             path,
             reason: "installation ledger decoding failed",
@@ -1681,21 +1660,13 @@ pub(crate) fn registered_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<(), Error> {
     let ledger = match budget {
-        Some(budget) => Ledger::read_budgeted(root, budget)?,
+        Some(_) => Ledger::read_budgeted(root)?,
         None => Ledger::read(root)?,
     };
-    registered_in(root, &ledger, record, budget)
+    registered_in(root, &ledger, record)
 }
 
-fn registered_in(
-    root: &Path,
-    ledger: &Ledger,
-    record: &Record,
-    budget: Option<&crate::node::GraphBudget>,
-) -> Result<(), Error> {
-    if let Some(budget) = budget {
-        budget.hash(record.encoded_len())?;
-    }
+fn registered_in(root: &Path, ledger: &Ledger, record: &Record) -> Result<(), Error> {
     let allocation = record.allocation();
     if ledger.registered(allocation) {
         Ok(())
@@ -1839,7 +1810,7 @@ pub(crate) fn action_is_bundled_with_budget(
     budget: Option<&crate::node::GraphBudget>,
 ) -> Result<bool, Error> {
     let ledger = match budget {
-        Some(budget) => Ledger::read_budgeted(root, budget)?,
+        Some(_) => Ledger::read_budgeted(root)?,
         None => Ledger::read(root)?,
     };
     action_is_bundled_in(&ledger, kind, schema, action, content)
@@ -1850,11 +1821,10 @@ pub(super) fn registered_action(
     root: &Path,
     action: &Record,
     content: &Record,
-    budget: &crate::node::GraphBudget,
 ) -> Result<bool, Error> {
-    let ledger = Ledger::read_budgeted(root, budget)?;
-    registered_in(root, &ledger, action, Some(budget))?;
-    registered_in(root, &ledger, content, Some(budget))?;
+    let ledger = Ledger::read_budgeted(root)?;
+    registered_in(root, &ledger, action)?;
+    registered_in(root, &ledger, content)?;
     action_is_bundled_in(
         &ledger,
         action.identity.kind,

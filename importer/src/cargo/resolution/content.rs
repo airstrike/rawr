@@ -85,7 +85,7 @@ impl Scope {
         // All Rawr-owned controls, protocol sidecars, record bytes and generated
         // sources remain content, including files not individually named below.
         for name in ["declared", "generated"] {
-            let path = bundle::path(builder.root, Path::new(name), builder.budget)?;
+            let path = bundle::path(builder.root, Path::new(name))?;
             builder.add(&path, Kind::Tree)?;
         }
         builder.inputs(input.entries(), input.recipes())?;
@@ -214,7 +214,7 @@ impl<'a> Builder<'a> {
                 if omitted.len() >= bundle::MAX_MEMBERS as usize {
                     return Err(Error::Codec("query scope namespace limit exceeded"));
                 }
-                omitted.push(copy_path(&member.path, self.budget)?, self.budget)?;
+                omitted.push(copy_path(&member.path)?)?;
             }
         }
         let mut omitted = omitted.into_vec();
@@ -325,13 +325,12 @@ impl<'a> Builder<'a> {
                 actual: self.obligations.len().saturating_add(1),
             });
         }
-        let path = copy_path(path, self.budget)?;
-        self.obligations
-            .push(Obligation { path, kind }, self.budget)
+        let path = copy_path(path)?;
+        self.obligations.push(Obligation { path, kind })
     }
 
     fn finish(self) -> Result<Scope, Error> {
-        let root = copy_path(self.root, self.budget)?;
+        let root = copy_path(self.root)?;
         let mut obligations = self.obligations.into_vec();
         obligations.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         obligations.dedup_by(|later, earlier| {
@@ -350,9 +349,8 @@ impl<'a> Builder<'a> {
     }
 }
 
-fn copy_path(path: &Path, budget: &GraphBudget) -> Result<PathBuf, Error> {
+fn copy_path(path: &Path) -> Result<PathBuf, Error> {
     let length = path.as_os_str().as_encoded_bytes().len();
-    budget.decode(length)?;
     let mut owned = PathBuf::new();
     owned
         .try_reserve_exact(length)
@@ -451,7 +449,7 @@ mod tests {
             .complete(&completion, &mut allocation, &graph)
             .unwrap();
         namespace
-            .require_selection(&completion, &mut allocation, &graph)
+            .require_selection(&completion, &mut allocation)
             .unwrap();
         let mut builder = Builder::bind(&root, &graph).unwrap();
         builder.namespace(Some(&namespace)).unwrap();
@@ -463,21 +461,14 @@ mod tests {
         let scope = builder.finish().unwrap();
         let stored =
             Stored::capture_resolution(&root, reference, Mode::Pending, &graph, &scope).unwrap();
-        let before = graph.census_usage().unwrap().2;
         stored.replay(&root, Mode::Pending, &graph).unwrap();
-        namespace.revalidate(&mut allocation, &graph).unwrap();
-        let separate = graph.census_usage().unwrap().2 - before;
-        let before = graph.census_usage().unwrap().2;
+        namespace.revalidate(&mut allocation).unwrap();
         assert_eq!(
             namespace
                 .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
                 .unwrap(),
             6
         );
-        let joined = graph.census_usage().unwrap().2 - before;
-        // The six-byte queried member and its EOF probe are read once
-        // and shared, whether the two consumers run separately or joined.
-        assert_eq!(separate, joined);
         let selected = namespace
             .members
             .iter()
@@ -636,9 +627,6 @@ mod tests {
     fn query_ownership_uses_the_spent_original_graph() {
         let budget = GraphBudget::new();
         let mut builder = Builder::bind(Path::new("/bundle"), &budget).unwrap();
-        budget
-            .decode(usize::try_from(crate::node::MAX_DECODED_BYTES_PER_GRAPH).unwrap())
-            .unwrap();
         // The spent decode account is a target. Narrowing still copies
         // every omitted member and charges the original graph, whose record
         // names the first omitted path as the first charge past the target.

@@ -2,9 +2,9 @@ use rawr_toml::document;
 
 use super::super::{text, v4, v6};
 use super::{exercise, Account};
+use crate::input;
 use crate::input::membership::manifest::{session, storage, Error, Stop};
 use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[test]
 fn every_request_refusal_preserves_prior_usage_and_stops_subsequent_operations() {
@@ -63,12 +63,10 @@ fn every_request_refusal_preserves_prior_usage_and_stops_subsequent_operations()
 }
 
 fn charged() -> (bool, input::Usage) {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(13).unwrap();
     allocation.bytes(31).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -124,20 +122,9 @@ fn fixed_text_checks_before_output_and_preserves_terminal_refusal() {
 
 #[test]
 fn ip_conversion_does_not_spend_unrelated_graph_accounts() {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

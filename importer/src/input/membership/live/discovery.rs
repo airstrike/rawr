@@ -54,10 +54,8 @@ impl<S: System> Handles<'_, S> {
     fn acquire(&mut self, slot: Slot, path: &[u8], budget: &mut Budget<'_>) -> Result<Attempt> {
         let descriptor = {
             let native = terminated(path, budget)?;
-            let native = native_path(&native)?;
-            budget.graph.paths(1)?; // One potential close, reserved even if open fails.
+            let native = native_path(&native)?; // One potential close, reserved even if open fails.
             loop {
-                budget.graph.paths(1)?;
                 match self.system.open(native) {
                     Err(code) if code == libc::EINTR => continue,
                     Err(code) => return Ok(Attempt::OpenFailed(native_error(code)?)),
@@ -71,7 +69,6 @@ impl<S: System> Handles<'_, S> {
             }
         };
         *self.slot(slot) = Some(descriptor);
-        budget.graph.paths(1)?;
         match self.system.fstat(descriptor) {
             Ok(Stat::Metadata(metadata)) => Ok(Attempt::Acquired(Identity {
                 device: metadata.device(),
@@ -126,7 +123,6 @@ pub(super) fn acquire(
             // metadata kind means present; open/body-read capability is absent.
             let native = terminated(&toml_path, budget)?;
             let native = native_path(&native)?;
-            budget.graph.paths(1)?;
             After::Fallback(match handles.system.stat(native)? {
                 Stat::Metadata(_) => Exists::Present,
                 Stat::Error(code) => Exists::Failed(native_error(code)?),

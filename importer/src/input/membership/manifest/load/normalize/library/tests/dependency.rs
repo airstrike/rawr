@@ -9,12 +9,10 @@ fn run(artifact: &str) -> Result<(), Error<crate::input::membership::Error>> {
     let text = format!("cargo-features=['public-dependency']\n[package]\nname='p'\nedition='2021'\nbuild=false\nreadme=false\nautolib=false\nautobins=false\nautoexamples=false\nautotests=false\nautobenches=false\n[dependencies]\na={{version='1.2.3-alpha',git='https://example.com/repo',package='actual',features=['one','two','one'],optional=true,default-features=false,public=true{artifact}}}");
     let image = image(vec![file("/p/Cargo.toml", &text)]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut host = match host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     ) {

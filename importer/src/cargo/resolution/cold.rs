@@ -164,9 +164,7 @@ impl Request {
         harness
             .workspace
             .require(&mut crate::input::workspace::Account::borrow(
-                allocation,
-                cached.context.graph_budget(),
-                limits,
+                allocation, limits,
             ))?;
         let (bytes, environment) = build(&native, self, layout, environment, allocation, limits)?;
         let (build, initial) = self.check_build(
@@ -184,7 +182,6 @@ impl Request {
             limits,
             cargo_limits,
             &harness.workspace,
-            cached.context.graph_budget(),
             allocation,
             // The harness files and workspace manifests were revalidated
             // around the build and the inputs are captured after it: Cargo's
@@ -480,8 +477,7 @@ impl Request {
             crate::process::TAIL_BYTES,
         )?);
         let lock = candidate_lock.digest();
-        let workspace =
-            self.capture_workspace(&metadata, allocation, cached.context.graph_budget(), limits)?;
+        let workspace = self.capture_workspace(&metadata, allocation, limits)?;
         let bytes = match &reuse {
             Some(reuse) => reuse.units.clone(),
             None => units(&native, self, layout, allocation, limits)?,

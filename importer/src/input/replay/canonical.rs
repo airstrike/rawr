@@ -50,7 +50,7 @@ pub(in crate::input) fn digest(
         return Err(budget.overflow());
     }
     budget.check()?;
-    budget.hash(count.bytes)?;
+    budget.check()?;
     let mut writer = Canonical {
         hash: Some(Sha256::new()),
         bytes: 0,

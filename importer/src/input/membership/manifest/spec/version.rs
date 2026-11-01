@@ -330,7 +330,7 @@ mod tests {
 
     use super::Version;
     use crate::input::membership::manifest::{scalar, session, Error, Span, Stop, Tag};
-    use crate::{cargo, input, node};
+    use crate::{cargo, input};
 
     #[derive(Default)]
     struct Meter {
@@ -587,16 +587,7 @@ mod tests {
         let mut allocation = input::Allocation::new(&limits);
         allocation.items(7).unwrap();
         allocation.bytes(31).unwrap();
-        let graph = node::GraphBudget::new();
-        graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .unwrap();
         let mut budget = input::membership::Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut session = session::Session::new(&mut budget);

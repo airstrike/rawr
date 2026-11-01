@@ -1,14 +1,12 @@
 use super::{observed, stored, Budget, Error, Host};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn path(bytes: &[u8]) -> observed::Path {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     observed::Path::from_bytes(
         bytes,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -17,12 +15,10 @@ fn path(bytes: &[u8]) -> observed::Path {
 
 fn image(records: &[observed::Record]) -> stored::Stored {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     stored::Stored::from_records(
         records,
         &mut Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -68,12 +64,10 @@ fn native_image() -> stored::Stored {
 fn helpers_borrow_exact_native_payloads_without_owning_output() {
     let image = native_image();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -193,12 +187,10 @@ fn helpers_preserve_absence_immediate_error_and_terminal_frontier_states() {
         },
     ]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -247,12 +239,10 @@ fn omitted_ranges_paths_and_other_query_kinds_refuse_without_normalization() {
         value: observed::Value::Bytes(vec![b'x']),
     }]);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -275,15 +265,10 @@ fn omitted_ranges_paths_and_other_query_kinds_refuse_without_normalization() {
 #[test]
 fn range_and_native_path_rejections_precede_ownership_and_lookup() {
     let image = image(&[]);
-    let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 4)
-        .expect("four path checks remain");
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -310,8 +295,6 @@ fn range_and_native_path_rejections_precede_ownership_and_lookup() {
         (3, 15)
     );
     assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 3);
-    let (_, paths, _) = graph.census_usage().expect("census");
-    assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH - 1);
     // A genuinely latched account refuses before ownership and lookup.
     host.budget().allocation.refuse();
     assert!(matches!(
@@ -324,9 +307,6 @@ fn range_and_native_path_rejections_precede_ownership_and_lookup() {
     ));
     assert_eq!(host.budget().allocation.usage(), after);
     assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 3);
-    graph
-        .paths(1)
-        .expect("refused paths never reached graph lookup");
     host.finish()
         .expect("empty image has no records to consume");
 }
@@ -334,14 +314,12 @@ fn range_and_native_path_rejections_precede_ownership_and_lookup() {
 #[test]
 fn helper_query_ownership_is_cumulative() {
     let image = native_image();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut host = Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -364,10 +342,6 @@ fn helper_query_ownership_is_cumulative() {
 fn each_helper_latched_account_refuses_before_copy_or_lookup() {
     let image = native_image();
     for helper in 0..3 {
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 1)
-            .expect("prior path work");
         let base_items = 7 + image.records().len();
         let base_bytes = 19 + image.records().len() * std::mem::size_of::<bool>();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
@@ -376,7 +350,6 @@ fn each_helper_latched_account_refuses_before_copy_or_lookup() {
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -406,8 +379,6 @@ fn each_helper_latched_account_refuses_before_copy_or_lookup() {
         ));
         assert_eq!(super::super::OWNED_BYTES.with(std::cell::Cell::get), 0);
         assert_eq!(host.budget().allocation.usage().bytes, base_bytes + 4);
-        let (_, paths, _) = graph.census_usage().expect("census");
-        assert_eq!(paths, node::MAX_PATH_CHECKS_PER_GRAPH);
         assert!(matches!(host.finish(), Err(Error::Unconsumed)));
     }
 }
@@ -417,29 +388,21 @@ fn repeated_helper_requests_charge_graph_work_every_time() {
     let image = native_image();
     let limits = cargo::Limits::standard();
     for helper in 0..3 {
-        let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 2)
-            .expect("two path checks remain");
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
         .expect("recorded host");
         for _ in 0..3 {
-            let (_, before, _) = graph.census_usage().expect("census");
             let result = match helper {
                 0 => host.read(b"/p/\xff", 4, 3).map(|_| ()),
                 1 => host.link(b"/p/\xff").map(|_| ()),
                 _ => host.directory(b"/p/\xff").map(|_| ()),
             };
             result.expect("every repeat is answered");
-            let (_, after, _) = graph.census_usage().expect("census");
-            assert!(after > before, "every repeat charges path checks");
         }
     }
 }

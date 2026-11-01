@@ -248,9 +248,6 @@ fn exact_header_owner_paths_and_ordered_out_directories_precede_native_work() {
             _ => unreachable!(),
         }
         let graph = node::GraphBudget::new();
-        graph
-            .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-            .expect("zero remaining path work");
         let mut allocation = Allocation::for_proof(PRIOR, &Limits::standard());
         assert!(
             matches!(

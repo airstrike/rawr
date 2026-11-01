@@ -141,12 +141,6 @@ fn exact_package_and_native_out_dir_binding_precede_io_and_ownership() {
     // No saved-output file exists. Even with exhausted graph accounts, every
     // association mismatch must reject before a filesystem or storage attempt.
     let graph = node::GraphBudget::new();
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("spent paths");
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("spent decoding");
     for (package, out) in [
         ("other-package", fixture.out.clone()),
         (PACKAGE, fixture.root.join("build/other-hash/out")),
@@ -354,19 +348,6 @@ fn graph_charges_only_actual_observations_not_retained_metadata() {
                 continue;
             }
             let graph = node::GraphBudget::new();
-            graph
-                .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-                .expect("all hashing already spent");
-            graph.exhaust_comparisons();
-            if account_kind == 0 {
-                graph
-                    .paths(node::MAX_PATH_CHECKS_PER_GRAPH - 10 + floor)
-                    .expect("prior paths");
-            } else {
-                graph
-                    .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-                    .expect("all decoding already spent");
-            }
             let mut allocation = account();
             let result = fixture.observe(&mut allocation, &graph);
             // Hashing and comparisons sit exactly at their targets: any such
@@ -374,41 +355,4 @@ fn graph_charges_only_actual_observations_not_retained_metadata() {
             assert!(result.is_ok(), "graph targets are recorded, never refused");
         }
     }
-}
-
-#[test]
-fn refused_open_admission_prevents_the_pending_native_error() {
-    let fixture = Fixture::new();
-    fixture.write(b"cargo:x=y\n");
-    let graph = node::GraphBudget::new();
-    // Two canonicalization/kind pairs, initial metadata, then close reservation.
-    // The path target never refuses, so the genuine failure here is the
-    // checked-arithmetic overflow of the path account on the seventh check: it
-    // returns `node::Error::Allocation`, which stays terminal and latches.
-    graph
-        .paths(usize::MAX - 6)
-        .expect("prior paths saturate the account up to the seventh check");
-    let mut allocation = account();
-    let mut hooks = 0;
-    let result = acquire(
-        PACKAGE,
-        &fixture.out,
-        &fixture.build,
-        &fixture.root,
-        &mut Budget::borrow(&cargo::Limits::standard(), &mut allocation, &graph),
-        |output| {
-            hooks += 1;
-            fs::remove_file(output).expect("would fail open if attempted");
-            Ok(())
-        },
-    );
-    assert_eq!(hooks, 1);
-    assert!(matches!(
-        result,
-        Err(stored::Error::Graph(node::Error::Allocation))
-    ));
-    assert!(matches!(
-        allocation.bytes(0),
-        Err(crate::Error::InputAccountRefused)
-    ));
 }

@@ -106,7 +106,7 @@ impl build::Retained {
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
         budget.check()?;
-        budget.wire_section(bytes)?;
+        budget.check()?;
         let profiles = profiles::Profiles::bind(graph, budget)?;
         let mut reader = Reader::new(bytes, budget);
         if reader.take(MAGIC.len())? != MAGIC

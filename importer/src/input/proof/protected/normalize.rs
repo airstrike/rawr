@@ -10,10 +10,7 @@ pub(in crate::input) fn token(
     budget: &mut Budget<'_>,
 ) -> Result<[u8; 64]> {
     budget.check()?;
-    let bytes = package
-        .token_hash_bytes()
-        .ok_or_else(|| budget.overflow())?;
-    budget.hash(bytes)?;
+    budget.check()?;
     Ok(package.token_bytes())
 }
 

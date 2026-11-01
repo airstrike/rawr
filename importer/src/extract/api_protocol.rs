@@ -1140,16 +1140,12 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
         namespace: identity::Namespace::Type,
     };
     let policy = Policy::excluding(key.clone(), "not part of the contract", test_span());
-    let budget = crate::node::GraphBudget::new();
-    let policy_identity = policy.cache_identity(&budget).unwrap();
-    assert_ne!(
-        policy_identity,
-        Policy::empty().cache_identity(&budget).unwrap()
-    );
+    let policy_identity = policy.cache_identity().unwrap();
+    assert_ne!(policy_identity, Policy::empty().cache_identity().unwrap());
     assert_ne!(
         policy_identity,
         Policy::excluding(key.clone(), "changed reason", test_span())
-            .cache_identity(&budget)
+            .cache_identity()
             .unwrap()
     );
     assert_ne!(
@@ -1159,7 +1155,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
             "not part of the contract",
             api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7)
         )
-        .cache_identity(&budget)
+        .cache_identity()
         .unwrap()
     );
     let included = graph(std::slice::from_ref(&root), Policy::empty());
@@ -1179,10 +1175,7 @@ fn explicit_exclusion_is_positioned_and_does_not_import_target() {
         "excluded for a different Rawr policy reason",
         api::model::Span::new("Cargo.toml".into(), 3, 9, 2, 1, 2, 7),
     );
-    assert_ne!(
-        policy_identity,
-        changed_policy.cache_identity(&budget).unwrap()
-    );
+    assert_ne!(policy_identity, changed_policy.cache_identity().unwrap());
     let changed = graph(std::slice::from_ref(&root), changed_policy);
     assert_eq!(excluded.canonical_bytes(), changed.canonical_bytes());
     assert_eq!(excluded.fingerprint(), changed.fingerprint());

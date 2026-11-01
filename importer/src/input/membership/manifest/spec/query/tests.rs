@@ -188,21 +188,11 @@ fn original_account_retains_prior_usage_across_an_expansion() {
     use crate::cargo;
     use crate::input;
     use crate::input::membership;
-    use crate::node;
 
     let limits = cargo::Limits::default();
     let mut allocation = input::Allocation::new(&limits);
     allocation.bytes(7).unwrap();
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     let mut budget = membership::Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

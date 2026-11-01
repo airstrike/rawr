@@ -53,13 +53,9 @@ pub(crate) fn cached(
         |attempt| Product::capture(execute()?, target, protocol, &limits, attempt),
     )?;
     let _pin = crate::store::bundle::pin(store.root(), product.value().reference)?;
-    product.value().restore_budgeted(
-        store.root(),
-        target,
-        protocol,
-        &limits,
-        store.graph_budget(),
-    )?;
+    product
+        .value()
+        .restore_budgeted(store.root(), target, protocol, &limits)?;
     Ok(product)
 }
 
@@ -151,7 +147,7 @@ impl Product {
             self.seal_digest,
             budget,
         )?;
-        validate_bundle_root_with_budget(&root, limits, true, Some(budget))?;
+        validate_bundle_root_with_budget(&root, limits, true)?;
         Ok(self.canonical.clone())
     }
 
@@ -174,7 +170,7 @@ impl Product {
         protocol: &Path,
         limits: &super::super::Limits,
     ) -> Result<(), node::Error> {
-        self.restore_budgeted(store, target, protocol, limits, &node::GraphBudget::new())
+        self.restore_budgeted(store, target, protocol, limits)
     }
 
     fn restore_budgeted(
@@ -183,7 +179,6 @@ impl Product {
         target: &Path,
         protocol: &Path,
         limits: &super::super::Limits,
-        budget: &node::GraphBudget,
     ) -> Result<(), node::Error> {
         let decoded = validate_product(&self.canonical)?;
         if decoded.raw != self.raw
@@ -196,8 +191,6 @@ impl Product {
             ));
         }
         let root = store.join(self.reference.relative());
-        budget.paths(1)?;
-        budget.hash(self.seal_bytes)?;
         let seal = super::super::read_bounded(
             "cached authoritative build bundle seal",
             &root.join("seal"),
@@ -216,8 +209,8 @@ impl Product {
         let count = reader.count;
         // One build account per restoration charges the restored tree; the
         // tree is compared and restored in full.
-        let target_current = current_files_with_budget(target, limits, Some(budget))?;
-        let protocol_current = current_files_with_budget(protocol, limits, Some(budget))?;
+        let target_current = current_files_with_budget(target, limits)?;
+        let protocol_current = current_files_with_budget(protocol, limits)?;
         let target_empty = target_current.is_empty();
         let protocol_empty = protocol_current.is_empty();
         let mut target_expected = BTreeSet::new();
@@ -252,13 +245,7 @@ impl Product {
             }
             let path = destination_root.join(&entry.path);
             if current.contains(&entry.path) {
-                validate_file_with_mode(
-                    &path,
-                    entry.mode,
-                    entry.length,
-                    entry.digest,
-                    Some(budget),
-                )?;
+                validate_file_with_mode(&path, entry.mode, entry.length, entry.digest)?;
             } else if empty {
                 materialize_file(
                     &source_root.join(&entry.path),
@@ -266,7 +253,6 @@ impl Product {
                     entry.mode,
                     entry.length,
                     entry.digest,
-                    Some(budget),
                 )?;
             } else {
                 return Err(node::Error::Corrupt {
@@ -498,7 +484,6 @@ fn capture_root(
             evidence.mode,
             evidence.length,
             evidence.digest,
-            None,
         )?;
         writer.entry(
             namespace,
@@ -613,18 +598,14 @@ fn validate_bundle_root(
     limits: &super::super::Limits,
     frozen: bool,
 ) -> Result<(), node::Error> {
-    validate_bundle_root_with_budget(root, limits, frozen, None)
+    validate_bundle_root_with_budget(root, limits, frozen)
 }
 
 fn validate_bundle_root_with_budget(
     root: &Path,
     limits: &super::super::Limits,
     frozen: bool,
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-    }
     validate_empty_directory(
         &root.join("generated"),
         "authoritative Cargo bundle generated partition changed",
@@ -641,8 +622,8 @@ fn validate_bundle_root_with_budget(
     validate_manifest(&seal, limits)?;
     let target = root.join("target");
     let protocol = root.join("build");
-    let target_current = current_files_with_budget(&target, limits, budget)?;
-    let protocol_current = current_files_with_budget(&protocol, limits, budget)?;
+    let target_current = current_files_with_budget(&target, limits)?;
+    let protocol_current = current_files_with_budget(&protocol, limits)?;
     let mut target_expected = BTreeSet::new();
     let mut protocol_expected = BTreeSet::new();
     let mut reader = ManifestReader::new(&seal, node::MAX_CONTENT_BYTES)?;
@@ -669,7 +650,6 @@ fn validate_bundle_root_with_budget(
             entry.length,
             entry.digest,
             frozen,
-            budget,
         )?;
     }
     reader.finish()?;
@@ -685,22 +665,18 @@ fn current_files(
     root: &Path,
     limits: &super::super::Limits,
 ) -> Result<BTreeSet<PathBuf>, node::Error> {
-    current_files_with_budget(root, limits, None)
+    current_files_with_budget(root, limits)
 }
 
 fn current_files_with_budget(
     root: &Path,
     limits: &super::super::Limits,
-    budget: Option<&node::GraphBudget>,
 ) -> Result<BTreeSet<PathBuf>, node::Error> {
     let mut files = BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];
     let mut path_bytes = 0_usize;
     let mut members = 0usize;
     while let Some(directory) = pending.pop() {
-        if let Some(budget) = budget {
-            budget.paths(1)?;
-        }
         let depth = directory
             .strip_prefix(root)
             .map_err(|_| node::Error::OutsideRoot(directory.clone()))?
@@ -744,9 +720,6 @@ fn current_files_with_budget(
         }
         children.sort_unstable();
         for path in children {
-            if let Some(budget) = budget {
-                budget.paths(1)?;
-            }
             let metadata = fs::symlink_metadata(&path).map_err(|source| node::Error::Io {
                 operation: "inspect restored authoritative build entry",
                 path: path.clone(),
@@ -790,9 +763,8 @@ fn materialize_file(
     mode: u32,
     length: u64,
     digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    clone_file_exact(source, destination, mode, length, digest, budget)
+    clone_file_exact(source, destination, mode, length, digest)
 }
 
 fn clone_file_exact(
@@ -801,11 +773,7 @@ fn clone_file_exact(
     expected_mode: u32,
     expected_length: u64,
     expected_digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(2)?;
-    }
     let parent = destination
         .parent()
         .ok_or_else(|| node::Error::Shape(destination.to_path_buf()))?;
@@ -819,7 +787,7 @@ fn clone_file_exact(
         path: destination.to_path_buf(),
         source,
     })?;
-    let evidence = Evidence::capture_with_budget(destination, budget)?;
+    let evidence = Evidence::capture_with_budget(destination)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: destination.to_path_buf(),
@@ -858,20 +826,13 @@ fn validate_bundle_file(
     expected_length: u64,
     expected_digest: [u8; 32],
     frozen: bool,
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
     let expected_mode = if frozen {
         frozen_mode(original_mode)
     } else {
         original_mode
     };
-    validate_file_with_mode(
-        path,
-        expected_mode,
-        expected_length,
-        expected_digest,
-        budget,
-    )
+    validate_file_with_mode(path, expected_mode, expected_length, expected_digest)
 }
 
 fn validate_file_with_mode(
@@ -879,11 +840,7 @@ fn validate_file_with_mode(
     expected_mode: u32,
     expected_length: u64,
     expected_digest: [u8; 32],
-    budget: Option<&node::GraphBudget>,
 ) -> Result<(), node::Error> {
-    if let Some(budget) = budget {
-        budget.paths(1)?;
-    }
     let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
         operation: "inspect restored authoritative build file",
         path: path.to_path_buf(),
@@ -896,7 +853,7 @@ fn validate_file_with_mode(
     {
         return Err(node::Error::Shape(path.to_path_buf()));
     }
-    let evidence = Evidence::capture_with_budget(path, budget)?;
+    let evidence = Evidence::capture_with_budget(path)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: path.to_path_buf(),
@@ -923,14 +880,11 @@ fn bundle_member_limit() -> usize {
 
 impl Evidence {
     fn capture(path: &Path) -> Result<Self, node::Error> {
-        Self::capture_with_budget(path, None)
+        Self::capture_with_budget(path)
     }
 
     /// Hashes the file as a stream, with no read limit: nothing is buffered.
-    fn capture_with_budget(
-        path: &Path,
-        budget: Option<&node::GraphBudget>,
-    ) -> Result<Self, node::Error> {
+    fn capture_with_budget(path: &Path) -> Result<Self, node::Error> {
         let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
             operation: "inspect authoritative build file",
             path: path.to_path_buf(),
@@ -940,9 +894,6 @@ impl Evidence {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
         let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if let Some(budget) = budget {
-            budget.hash(length)?;
-        }
         let mut file = File::open(path).map_err(|source| node::Error::Io {
             operation: "open authoritative build file",
             path: path.to_path_buf(),

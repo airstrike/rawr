@@ -266,22 +266,12 @@ fn every_encoder_and_decoder_admission_refusal_is_terminal() {
 fn original_account_keeps_prior_usage_and_exact_layouts() {
     use crate::input;
     use crate::input::membership::Budget;
-    use crate::node;
 
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
     // `Bücher` encodes to nine ASCII bytes: growth requests 4 + 8 + 16.
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -297,7 +287,6 @@ fn original_account_keeps_prior_usage_and_exact_layouts() {
     allocation.items(7).unwrap();
     allocation.bytes(19).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

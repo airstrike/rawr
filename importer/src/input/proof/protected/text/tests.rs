@@ -96,25 +96,10 @@ fn expansion_uses_the_original_account_without_graph_decode_and_preserves_refusa
     let limits = Limits::standard();
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("all decoding already spent");
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("all hashing already spent");
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("all filesystem work already spent");
-    graph.exhaust_comparisons();
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     let result = replace(value, "", to, &mut budget);
     // The layout is one item of exactly `bytes` on the original account.
     assert_eq!(result.expect("expansion"), value.replace("", to));
-    assert_eq!(
-        graph.census_usage().expect("graph census").0,
-        node::MAX_DECODED_BYTES_PER_GRAPH,
-        "the output layout is owned by the original account alone"
-    );
     budget.check().expect("the account is not latched");
     // A genuine failure latches the original account: no further
     // replacement or formatting work runs, no formatting callback is
@@ -163,9 +148,6 @@ fn formatting_refusal_precedes_the_render_pass() {
     let limits = Limits::standard();
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("all decoding already spent");
     let visits = Cell::new(0);
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     let result = format(format_args!("{}", Counted(&visits)), &mut budget);
@@ -225,9 +207,6 @@ fn boxing_moves_exact_storage_without_another_charge() {
     limits.input_proof_bytes = PRIOR.bytes + bytes;
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes)
-        .expect("prior graph storage");
     let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
     budget
         .storage(1, bytes)
@@ -255,9 +234,6 @@ fn boxing_shrink_layout_has_exact_byte_floors_without_another_item() {
         limits.input_proof_bytes = PRIOR.bytes + capacity + bytes - byte_floor;
         let mut allocation = Allocation::for_proof(PRIOR, &limits);
         let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-            .expect("all decoding already spent");
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
         budget.storage(1, capacity).expect("original string layout");
         let result = boxed(value, &mut budget);

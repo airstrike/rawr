@@ -88,18 +88,6 @@ impl Retention {
             .ok_or(Error::Allocation)?;
         // Charge both original arrays before allocating, including duplicates
         // that will disappear from the exact union.
-        let bytes = count
-            .checked_mul(std::mem::size_of::<Entry>())
-            .and_then(|bytes| {
-                binding_count
-                    .checked_mul(std::mem::size_of::<(
-                        Entry,
-                        crate::store::bundle::BundleCommitment,
-                    )>())
-                    .and_then(|bindings| bytes.checked_add(bindings))
-            })
-            .ok_or(Error::Allocation)?;
-        self.graph.decode(bytes)?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(count)
@@ -161,12 +149,6 @@ impl Retention {
     }
 
     pub(crate) fn try_clone(&self) -> Result<Self, Error> {
-        self.graph.decode(
-            self.entries
-                .len()
-                .checked_mul(std::mem::size_of::<Entry>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(self.entries.len())
@@ -220,19 +202,12 @@ impl Retention {
                 return Err(Error::State("retention has an extra bundle commitment"))
             }
         };
-        fragment.graph.decode(
-            fragment
-                .entries
-                .len()
-                .checked_mul(std::mem::size_of::<Entry>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(fragment.entries.len())
             .map_err(|_| Error::Allocation)?;
         entries.extend_from_slice(&fragment.entries);
-        let bundles = Self::copy_bindings(&fragment.graph, &[], bundle)?;
+        let bundles = Self::copy_bindings(&[], bundle)?;
         Ok(Self {
             entries: entries.into_boxed_slice(),
             digest: fragment.digest,
@@ -335,11 +310,6 @@ impl Retention {
                 actual: retained,
             });
         }
-        self.graph.decode(
-            retained
-                .checked_mul(std::mem::size_of::<Entry>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(retained)
@@ -401,11 +371,10 @@ impl Retention {
         &self,
         extra: Option<(Entry, crate::store::bundle::BundleCommitment)>,
     ) -> Result<Box<[(Entry, crate::store::bundle::BundleCommitment)]>, Error> {
-        Self::copy_bindings(&self.graph, &self.bundles, extra)
+        Self::copy_bindings(&self.bundles, extra)
     }
 
     fn copy_bindings(
-        graph: &super::GraphBudget,
         existing: &[(Entry, crate::store::bundle::BundleCommitment)],
         extra: Option<(Entry, crate::store::bundle::BundleCommitment)>,
     ) -> Result<Box<[(Entry, crate::store::bundle::BundleCommitment)]>, Error> {
@@ -413,14 +382,6 @@ impl Retention {
             .len()
             .checked_add(usize::from(extra.is_some()))
             .ok_or(Error::Allocation)?;
-        graph.decode(
-            count
-                .checked_mul(std::mem::size_of::<(
-                    Entry,
-                    crate::store::bundle::BundleCommitment,
-                )>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut bundles = Vec::new();
         bundles
             .try_reserve_exact(count)
@@ -670,21 +631,6 @@ impl Fragment {
         self.entries.binary_search(expected).is_ok()
     }
 
-    pub(crate) fn charge_copy(&self) -> Result<(), Error> {
-        let bytes = self
-            .entries
-            .len()
-            .checked_mul(std::mem::size_of::<Entry>())
-            .and_then(|bytes| {
-                self.witnesses
-                    .len()
-                    .checked_mul(std::mem::size_of::<Witness>())
-                    .and_then(|witnesses| bytes.checked_add(witnesses))
-            })
-            .ok_or(Error::Allocation)?;
-        self.graph.decode(bytes)
-    }
-
     /// Check exact ancestry and original account without refreshing any facts.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn require_ancestor(&self, ancestor: &Self) -> Result<(), Error> {
@@ -746,11 +692,6 @@ impl Fragment {
                 actual: retained,
             });
         }
-        graph.decode(
-            retained
-                .checked_mul(std::mem::size_of::<(Entry, Witness)>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut pairs = Vec::new();
         pairs
             .try_reserve_exact(retained)
@@ -805,12 +746,6 @@ impl Fragment {
         }
         pairs.sort_unstable_by_key(|(entry, _)| *entry);
         pairs.dedup_by(|left, right| left.0 == right.0);
-        graph.decode(
-            pairs
-                .len()
-                .checked_mul(std::mem::size_of::<Entry>() + std::mem::size_of::<Witness>())
-                .ok_or(Error::Allocation)?,
-        )?;
         let mut entries = Vec::new();
         let mut witnesses = Vec::new();
         entries
@@ -861,7 +796,7 @@ impl Fragment {
                     actual: retained,
                 });
             }
-            reserve_pairs(&mut pairs, &mut admitted, retained, store.graph_budget())?;
+            reserve_pairs(&mut pairs, &mut admitted, retained)?;
             pairs.extend(
                 fragment
                     .entries
@@ -945,14 +880,8 @@ fn reserve_pairs(
     pairs: &mut Vec<(Entry, Witness)>,
     admitted: &mut usize,
     requested: usize,
-    graph: &super::GraphBudget,
 ) -> Result<(), Error> {
     if requested > *admitted {
-        graph.decode(
-            requested
-                .checked_mul(std::mem::size_of::<(Entry, Witness)>())
-                .ok_or(Error::Allocation)?,
-        )?;
         pairs
             .try_reserve_exact(requested.saturating_sub(pairs.len()))
             .map_err(|_| Error::Allocation)?;
@@ -995,7 +924,7 @@ impl ReadSetProof {
     ) -> Result<(), Error> {
         self.fragment.revalidate_scoped(store, scope)?;
         if let Some(snapshot) = &self.snapshot {
-            snapshot.revalidate(store.graph_budget())?;
+            snapshot.revalidate()?;
         }
         Ok(())
     }
@@ -1087,9 +1016,8 @@ impl Prepared {
                 "snapshot witness must bind before pin ownership",
             ));
         }
-        let store = self.context.open_store()?;
-        let freshness = snapshot.freshness(store.graph_budget())?;
-        freshness.revalidate(store.graph_budget())?;
+        let freshness = snapshot.freshness()?;
+        freshness.revalidate()?;
         self.proof.snapshot = Some(freshness);
         Ok(())
     }
@@ -1324,19 +1252,13 @@ mod tests {
 
     #[test]
     fn lineage_allocator_capacity_does_not_authorize_unadmitted_slots() {
-        let graph = super::super::GraphBudget::new();
         let mut pairs = Vec::with_capacity(8);
         let mut admitted = 0;
-        reserve_pairs(&mut pairs, &mut admitted, 1, &graph).unwrap();
+        reserve_pairs(&mut pairs, &mut admitted, 1).unwrap();
         assert_eq!(admitted, 1);
         assert!(pairs.capacity() >= 8);
-        // Allocator surplus never substitutes for the account: the two
-        // requested slots are charged in full.
-        let before = graph.census_usage().unwrap().0;
-        reserve_pairs(&mut pairs, &mut admitted, 2, &graph).unwrap();
+        reserve_pairs(&mut pairs, &mut admitted, 2).unwrap();
         assert_eq!(admitted, 2);
-        let bytes = std::mem::size_of::<(Entry, Witness)>() as u64;
-        assert_eq!(graph.census_usage().unwrap().0 - before, 2 * bytes);
     }
 
     struct LineageValue;

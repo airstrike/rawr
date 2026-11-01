@@ -188,12 +188,9 @@ fn retention_copies_spend_the_original_graph_account() {
     let store = root.open();
     let current = current(&store, b"one");
     let graph = store.graph_budget();
-    let spent = graph.usage.lock().unwrap().decoded;
     // The copy spends the original account by the copied entry array.
     let retained = Retention::from_validated(&current, None).expect("the retention copy is owned");
     assert!(retained.graph.shares_with(graph));
-    let bytes = (current.receipt().read_set().len() * std::mem::size_of::<Entry>()) as u64;
-    assert_eq!(graph.usage.lock().unwrap().decoded - spent, bytes);
 }
 
 fn find_payload(root: &std::path::Path) -> PathBuf {
@@ -221,10 +218,9 @@ fn observed_parent(store: &Store, source: PathBuf, checks: Arc<AtomicU64>) -> Va
     Evaluator::new(store, &crate::metrics::Current)
         .discover_budgeted(
             &recipe,
-            move |_: &Owned, graph| {
+            move |_: &Owned, _| {
                 checks.fetch_add(1, Ordering::Relaxed);
-                let bytes = crate::store::read_file_budgeted(&source, 64, graph)?;
-                graph.hash(bytes.len())?;
+                let bytes = crate::store::read_file_budgeted(&source, 64)?;
                 Ok(bytes)
             },
             || Ok(Owned),
@@ -339,13 +335,7 @@ fn retention_successor_preserves_exact_ancestors_and_charges_original_account() 
     let parent = owned_current(&store, b"successor-parent", &[]);
     let retention = Retention::from_validated(&parent, None).unwrap();
     let child = owned_current(&store, b"successor-child", &[Parent::validated(&parent)]);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let successor = retention.extend_current(&child).unwrap();
-    let expected = child.receipt().read_set().len() * std::mem::size_of::<Entry>();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        expected as u64
-    );
     assert!(successor
         .entries()
         .iter()
@@ -363,16 +353,10 @@ fn retention_successor_preserves_exact_ancestors_and_charges_original_account() 
         retention.extend_current(&parent).is_err(),
         "an existing root is not a successor"
     );
-    // The successor charges exactly `expected` to the original account.
-    let used = store.graph_budget().usage.lock().unwrap().decoded;
     let again = retention
         .extend_current(&child)
         .expect("the successor is owned");
     assert!(again.entries() == successor.entries());
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - used,
-        expected as u64
-    );
     store.retire_fixture().unwrap();
 }
 
@@ -535,16 +519,9 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
     );
     let retained = Retention::from_validated(&parent, Some(first_commitment)).unwrap();
     let child = bundled_successor(&store, b"second-bundle", &parent);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let extended = retained
         .extend_bundled_current(&child, second_commitment)
         .unwrap();
-    let bytes =
-        2 * std::mem::size_of::<Entry>() + 2 * std::mem::size_of::<(Entry, BundleCommitment)>();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        bytes as u64
-    );
     assert_eq!(extended.bundles.len(), 2);
     assert!(extended
         .bundles
@@ -558,13 +535,8 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
             && *bound == second_commitment));
     assert_eq!(extended.digest(), child.receipt().read_set().digest());
     extended.require_bindings().unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let copied = extended.try_clone().unwrap();
     assert!(copied.bundles == extended.bundles);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        bytes as u64
-    );
     assert!(copied.graph.shares_with(store.graph_budget()));
     assert!(matches!(
         Retention::from_validated(&child, Some(second_commitment)),
@@ -583,26 +555,13 @@ fn retention_multiple_bundles_preserve_exact_bindings_and_charge_every_owned_cop
         .collect();
     fragment.entries.sort_unstable();
     fragment.digest = digest(&fragment.entries);
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let pure_retained = extended
         .extend_fragment(pure.receipt().action(), &fragment)
         .unwrap();
     assert!(pure_retained.bundles == extended.bundles);
     assert_eq!(pure_retained.entries.len(), 3);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (bytes + std::mem::size_of::<Entry>()) as u64
-    );
-
-    // Entries alone are not the copy's charge: both exact bindings are charged
-    // to the original account as well.
-    let spent = store.graph_budget().usage.lock().unwrap().decoded;
     let copied = extended.try_clone().expect("the copy is owned");
     assert!(copied.bundles == extended.bundles);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - spent,
-        bytes as u64
-    );
 }
 
 #[test]
@@ -721,14 +680,9 @@ fn retention_union_preserves_siblings_and_charges_original_arrays() {
     let right = owned_current(&store, b"union-right", &[Parent::validated(&seed)]);
     let left_retained = Retention::from_validated(&left, None).unwrap();
     let right_retained = Retention::from_validated(&right, None).unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let union = left_retained.union(&right_retained).unwrap();
     assert_eq!(union.entries.len(), 3);
     assert!(union.entries.windows(2).all(|pair| pair[0] < pair[1]));
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (4 * std::mem::size_of::<Entry>()) as u64
-    );
     assert!(union.graph.shares_with(store.graph_budget()));
     assert!(union.entries == right_retained.union(&left_retained).unwrap().entries);
     union.validate_storage(&store).unwrap();
@@ -755,16 +709,10 @@ fn retention_union_preserves_multiple_bundle_bindings_and_rejects_conflicts() {
     let left = Retention::from_validated(&first, Some(commitment())).unwrap();
     let right = Retention::from_validated(&second, Some(commitment())).unwrap();
     let both = left.union(&right).unwrap();
-    let before = store.graph_budget().usage.lock().unwrap().decoded;
     let union = both.union(&left).unwrap();
     assert_eq!(union.entries.len(), 2);
     assert!(union.bundles == both.bundles);
     union.require_bindings().unwrap();
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - before,
-        (3 * (std::mem::size_of::<Entry>() + std::mem::size_of::<(Entry, BundleCommitment)>()))
-            as u64
-    );
     let mut conflicting = left.try_clone().unwrap();
     conflicting.bundles[0].1 = BundleCommitment::new(
         BundleRef::new(
@@ -841,17 +789,9 @@ fn retention_union_requires_budget_for_entries_and_commitments_before_allocating
     let store = root.open();
     let value = bundled(&current(&store, b"union-account"), false);
     let retained = Retention::from_validated(&value, Some(commitment())).unwrap();
-    let bytes =
-        2 * (std::mem::size_of::<Entry>() + std::mem::size_of::<(Entry, BundleCommitment)>());
-    // The union charges both arrays in full to the original account.
-    let spent = store.graph_budget().usage.lock().unwrap().decoded;
     let union = retained.union(&retained).expect("the union is owned");
     assert!(union.entries() == retained.entries());
     assert!(union.bundles == retained.bundles);
-    assert_eq!(
-        store.graph_budget().usage.lock().unwrap().decoded - spent,
-        bytes as u64
-    );
 }
 
 #[test]

@@ -797,6 +797,11 @@ impl Limits {
     }
 
     #[cfg(test)]
+    pub(crate) const fn with_depth(self, depth: usize) -> Self {
+        Self { depth, ..self }
+    }
+
+    #[cfg(test)]
     pub(crate) const fn fixture(json_bytes: usize, items: usize, string_bytes: usize) -> Self {
         Self {
             json_bytes,
@@ -1432,12 +1437,7 @@ impl Request {
                 process::TAIL_BYTES,
             )?);
 
-            let workspace = self.capture_workspace(
-                &metadata,
-                &mut request_allocation,
-                node_context.graph_budget(),
-                limits,
-            )?;
+            let workspace = self.capture_workspace(&metadata, &mut request_allocation, limits)?;
 
             let initial_bytes = cargo_units(native, self, &manifest_path, &initial_target, limits)?;
             let initial = unit::BuildGraph::parse(
@@ -1750,12 +1750,7 @@ impl Request {
         )?);
         let lock = candidate_lock.digest();
 
-        let workspace = self.capture_workspace(
-            &metadata,
-            &mut *request_allocation,
-            node_context.graph_budget(),
-            limits,
-        )?;
+        let workspace = self.capture_workspace(&metadata, &mut *request_allocation, limits)?;
 
         #[cfg(feature = "rustc-driver")]
         let initial_target = harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
@@ -2015,10 +2010,9 @@ impl Request {
         &self,
         metadata: &unit::Metadata,
         allocation: &mut RequestAllocation,
-        graph: &crate::node::GraphBudget,
         limits: &Limits,
     ) -> Result<crate::input::workspace::Image> {
-        let mut account = crate::input::workspace::Account::borrow(allocation, graph, limits);
+        let mut account = crate::input::workspace::Account::borrow(allocation, limits);
         let roots = crate::input::workspace::roots(&self.inputs, metadata, &mut account)?;
         crate::input::workspace::capture(roots, &mut account)
     }
@@ -2039,7 +2033,6 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
         workspace: &crate::input::workspace::Image,
-        graph: &crate::node::GraphBudget,
         allocation: &mut RequestAllocation,
         postcheck: Option<impl FnMut(Postcheck, &mut RequestAllocation) -> Result<Box<[u8]>>>,
     ) -> Result<(crate::input::build::Build, unit::BuildGraph)> {
@@ -2055,7 +2048,7 @@ impl Request {
                 limits, "build",
             )?;
             workspace.require(&mut crate::input::workspace::Account::borrow(
-                allocation, graph, limits,
+                allocation, limits,
             ))
         };
         revalidate(allocation)?;
@@ -2104,7 +2097,6 @@ impl Request {
             request_allocation.expect("a harness completes with its request's account");
         workspace.require(&mut crate::input::workspace::Account::borrow(
             &mut allocation,
-            node_context.graph_budget(),
             limits,
         ))?;
         let manifest_path = harness_root.join(HARNESS_MANIFEST);
@@ -2141,12 +2133,7 @@ impl Request {
                 &manifest_path,
                 limits,
             )?;
-            let authority = workspace_node_authority(
-                &authority,
-                &workspace,
-                &mut allocation,
-                node_context.graph_budget(),
-            )?;
+            let authority = workspace_node_authority(&authority, &workspace, &mut allocation)?;
             let execution_environment = environment.clone();
             let build = crate::cargo::resolution::cached_build(
                 &context,
@@ -2158,7 +2145,6 @@ impl Request {
                 || {
                     workspace.require(&mut crate::input::workspace::Account::borrow(
                         &mut allocation,
-                        node_context.graph_budget(),
                         limits,
                     ))?;
                     let bytes = cargo_execute_authoritative_build(
@@ -2170,7 +2156,6 @@ impl Request {
                     )?;
                     workspace.require(&mut crate::input::workspace::Account::borrow(
                         &mut allocation,
-                        node_context.graph_budget(),
                         limits,
                     ))?;
                     Ok(bytes)
@@ -2219,7 +2204,6 @@ impl Request {
                 limits,
                 limits,
                 &workspace,
-                node_context.graph_budget(),
                 &mut allocation,
                 Some(
                     |phase,
@@ -2235,12 +2219,8 @@ impl Request {
                                     &manifest_path,
                                     limits,
                                 )?;
-                                let authority = workspace_node_authority(
-                                    &authority,
-                                    &workspace,
-                                    allocation,
-                                    node_context.graph_budget(),
-                                )?;
+                                let authority =
+                                    workspace_node_authority(&authority, &workspace, allocation)?;
                                 let post_unit = crate::cargo::resolution::cached_post_unit_graph(
                                     context,
                                     build,
@@ -2249,9 +2229,7 @@ impl Request {
                                     || {
                                         workspace.require(
                                             &mut crate::input::workspace::Account::borrow(
-                                                allocation,
-                                                node_context.graph_budget(),
-                                                limits,
+                                                allocation, limits,
                                             ),
                                         )?;
                                         let bytes = cargo_units(
@@ -2263,9 +2241,7 @@ impl Request {
                                         )?;
                                         workspace.require(
                                             &mut crate::input::workspace::Account::borrow(
-                                                allocation,
-                                                node_context.graph_budget(),
-                                                limits,
+                                                allocation, limits,
                                             ),
                                         )?;
                                         Ok(bytes)
@@ -2293,12 +2269,8 @@ impl Request {
                                     &manifest_path,
                                     limits,
                                 )?;
-                                let authority = workspace_node_authority(
-                                    &authority,
-                                    &workspace,
-                                    allocation,
-                                    node_context.graph_budget(),
-                                )?;
+                                let authority =
+                                    workspace_node_authority(&authority, &workspace, allocation)?;
                                 let post_metadata = crate::cargo::resolution::cached_post_metadata(
                                     context,
                                     build,
@@ -2310,9 +2282,7 @@ impl Request {
                                     || {
                                         workspace.require(
                                             &mut crate::input::workspace::Account::borrow(
-                                                allocation,
-                                                node_context.graph_budget(),
-                                                limits,
+                                                allocation, limits,
                                             ),
                                         )?;
                                         let bytes = cargo_metadata(
@@ -2329,9 +2299,7 @@ impl Request {
                                         )?;
                                         workspace.require(
                                             &mut crate::input::workspace::Account::borrow(
-                                                allocation,
-                                                node_context.graph_budget(),
-                                                limits,
+                                                allocation, limits,
                                             ),
                                         )?;
                                         Ok(bytes)
@@ -3455,18 +3423,17 @@ fn select_placement_accounted(
     catalog: &universe::Catalog,
     provisional_manifest: &str,
     allocation: &mut RequestAllocation,
-    graph: &crate::node::GraphBudget,
 ) -> Result<Placement> {
     select_placement_inner(
         request,
         catalog,
         provisional_manifest,
-        &mut ControlAccount::current(allocation, graph),
+        &mut ControlAccount::current(allocation),
     )
 }
 
 struct ControlAccount<'a> {
-    current: Option<(&'a mut RequestAllocation, &'a crate::node::GraphBudget)>,
+    current: Option<&'a mut RequestAllocation>,
 }
 
 impl<'a> ControlAccount<'a> {
@@ -3476,57 +3443,39 @@ impl<'a> ControlAccount<'a> {
         Self { current: None }
     }
 
-    fn current(allocation: &'a mut RequestAllocation, graph: &'a crate::node::GraphBudget) -> Self {
+    fn current(allocation: &'a mut RequestAllocation) -> Self {
         Self {
-            current: Some((allocation, graph)),
+            current: Some(allocation),
         }
     }
 
     fn read(&mut self, resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {
         match self.current.as_mut() {
-            Some((allocation, graph)) => read_bounded_in(resource, path, limit, allocation, graph),
+            Some(allocation) => read_bounded_in(resource, path, limit, allocation),
             None => read_bounded(resource, path, limit),
         }
     }
 
     fn parser(&mut self, bytes: usize) -> Result<()> {
-        if let Some((allocation, graph)) = self.current.as_mut() {
+        if let Some(allocation) = self.current.as_mut() {
             allocation.retained(bytes, bytes)?;
-            graph.decode(bytes).map_err(Self::error)?;
         }
         Ok(())
     }
 
     /// One fixed shared-holder allocation retained with its parsed owner.
     fn holder(&mut self, bytes: usize) -> Result<()> {
-        if let Some((allocation, graph)) = self.current.as_mut() {
+        if let Some(allocation) = self.current.as_mut() {
             allocation.retained(1, bytes)?;
-            graph.decode(bytes).map_err(Self::error)?;
-        }
-        Ok(())
-    }
-
-    fn hash(&self, bytes: usize) -> Result<()> {
-        if let Some((_, graph)) = self.current.as_ref() {
-            graph.hash(bytes).map_err(Self::error)?;
         }
         Ok(())
     }
 
     fn path(&mut self, path: &Path) -> Result<()> {
-        if let Some((allocation, graph)) = self.current.as_mut() {
+        if let Some(allocation) = self.current.as_mut() {
             allocation.path(path)?;
-            graph.paths(1).map_err(Self::error)?;
-            graph.decode(path.as_os_str().len()).map_err(Self::error)?;
         }
         Ok(())
-    }
-
-    fn error(source: crate::node::Error) -> Error {
-        Error::Node {
-            operation: "current resolution controls",
-            source: Box::new(source),
-        }
     }
 }
 
@@ -3589,7 +3538,6 @@ fn fixed_placement(
         let fixed_lock = definition.candidate_in(fixed_lock_bytes.into_boxed_slice(), account)?;
         account.parser(bytes.len())?;
         let receipt = universe::Receipt::parse(&bytes, definition)?;
-        account.hash(fixed_manifest.len() + fixed_source.len())?;
         receipt.preflight_files(
             digest(&fixed_manifest),
             digest(&fixed_source),
@@ -3617,17 +3565,6 @@ fn select_placement_inner(
     account: &mut ControlAccount<'_>,
 ) -> Result<Placement> {
     let definition = catalog.current();
-    account.hash(
-        b"rawr.import.cargo.resolution-request/v2".len()
-            + provisional_manifest.len()
-            + HARNESS_SOURCE.len()
-            + request.target.len()
-            + 112,
-    )?;
-    for input in &request.inputs {
-        account
-            .hash(input.path.as_os_str().len() + 9 + usize::from(input.digest.is_some()) * 32)?;
-    }
     let request_identity = versioned_request_identity(request, definition, provisional_manifest);
     let fixed = request.cache_root.join(HARNESS_DIRECTORY);
     account.path(&fixed)?;
@@ -3725,7 +3662,6 @@ fn select_placement_inner(
                     field: "request identity",
                 });
             }
-            account.hash(manifest.len() + source.len())?;
             receipt.preflight_files(digest(&manifest), digest(&source), lock.digest())?;
             Ok(Placement {
                 root: candidate,
@@ -4987,7 +4923,6 @@ fn workspace_node_authority(
     authority: &[u8],
     workspace: &crate::input::workspace::Image,
     allocation: &mut RequestAllocation,
-    graph: &crate::node::GraphBudget,
 ) -> Result<Box<[u8]>> {
     const DOMAIN: &[u8] = b"rawr.cargo.workspace-consumption/v1";
     let length = DOMAIN
@@ -5000,10 +4935,6 @@ fn workspace_node_authority(
             source: Box::new(crate::node::Error::Allocation),
         })?;
     allocation.retained(1, length)?;
-    graph.decode(length).map_err(|source| Error::Node {
-        operation: "workspace command authority",
-        source: Box::new(source),
-    })?;
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -5184,7 +5115,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, None, None)
+    read_bounded_inner(resource, path, limit, None)
 }
 
 pub(crate) fn read_bounded_budgeted(
@@ -5193,7 +5124,7 @@ pub(crate) fn read_bounded_budgeted(
     limit: usize,
     allocation: &mut RequestAllocation,
 ) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, Some(allocation), None)
+    read_bounded_inner(resource, path, limit, Some(allocation))
 }
 
 /// Read a current replay control with both request and graph accounting.
@@ -5202,9 +5133,8 @@ pub(crate) fn read_bounded_in(
     path: &Path,
     limit: usize,
     allocation: &mut RequestAllocation,
-    graph: &crate::node::GraphBudget,
 ) -> Result<Vec<u8>> {
-    read_bounded_inner(resource, path, limit, Some(allocation), Some(graph))
+    read_bounded_inner(resource, path, limit, Some(allocation))
 }
 
 fn read_bounded_inner(
@@ -5212,24 +5142,7 @@ fn read_bounded_inner(
     path: &Path,
     limit: usize,
     allocation: Option<&mut RequestAllocation>,
-    graph: Option<&crate::node::GraphBudget>,
 ) -> Result<Vec<u8>> {
-    if let Some(graph) = graph {
-        // Admit canonical_file's three pathname probes, opening/statting the
-        // handle, and both the exact read and growth probe before any I/O.
-        let admit = || -> std::result::Result<(), crate::node::Error> {
-            graph.paths(7)?;
-            crate::store::path::canonical(path, graph)?;
-            for _ in 0..3 {
-                crate::store::path::input(path, graph)?;
-            }
-            Ok(())
-        };
-        admit().map_err(|source| Error::Node {
-            operation: "bounded Cargo control read",
-            source: Box::new(source),
-        })?;
-    }
     let canonical = canonical_file(resource, path)?;
     if canonical != path {
         return Err(Error::Path {
@@ -5258,12 +5171,6 @@ fn read_bounded_inner(
     }
     if let Some(allocation) = allocation {
         allocation.retained(1, length)?;
-    }
-    if let Some(graph) = graph {
-        graph.decode(length).map_err(|source| Error::Node {
-            operation: "bounded Cargo control allocation",
-            source: Box::new(source),
-        })?;
     }
     let mut bytes = Vec::new();
     bytes

@@ -1,12 +1,10 @@
 use super::{observed, Budget, Error, Stored};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 
 fn with_budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -147,12 +145,10 @@ fn canonical_retention_and_decode_admit_actual_input_and_output_ownership() {
         let items = 7 + 2 + output;
         let owned = 19 + std::mem::size_of::<observed::Record>() + 4 + output * 4;
         for decode in [false, true] {
-            let graph = node::GraphBudget::new();
             let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, 4);
             allocation.items(7).expect("prior items");
             allocation.bytes(19).expect("prior bytes");
             let mut budget = Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             };
             let result = if decode {
@@ -171,39 +167,16 @@ fn canonical_retention_and_decode_admit_actual_input_and_output_ownership() {
         }
         // Decoding past the graph's decode constant still decodes; only
         // checked-arithmetic overflow refuses, before any ownership.
-        let graph = node::GraphBudget::new();
-        graph
-            .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize - bytes.len() + 1)
-            .expect("prior decode");
         let limits = cargo::Limits::standard();
         let mut allocation = input::Allocation::new(&limits);
         Stored::decode(
             &bytes,
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
-        .expect("decode past the graph constant");
+        .expect("decode");
         assert_eq!(allocation.usage().items, items - 7);
         assert_eq!(allocation.usage().bytes, owned - 19);
-        let graph = node::GraphBudget::new();
-        node::DECODE_SITES.with(|sites| sites.borrow_mut().clear());
-        graph
-            .decode(usize::MAX)
-            .expect("saturate the decode account");
-        let mut allocation = input::Allocation::new(&limits);
-        let before = allocation.usage();
-        assert!(matches!(
-            Stored::decode(
-                &bytes,
-                &mut Budget {
-                    graph: &graph,
-                    allocation: &mut allocation
-                }
-            ),
-            Err(Error::Budget(node::Error::Allocation))
-        ));
-        assert_eq!(allocation.usage(), before);
     }
 }

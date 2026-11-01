@@ -114,7 +114,6 @@ impl<K: Value> Recipe<K> {
     }
 
     pub(crate) fn from_chain(chain: &Chain, inputs: &[u8], limit: usize) -> Result<Self, Error> {
-        chain.current_parent().read_set().charge_copy()?;
         chain
             .context()
             .direct_with_parents(inputs, limit, std::slice::from_ref(chain.current_parent()))
@@ -130,7 +129,6 @@ impl<K: Value> Recipe<K> {
         inputs: &[u8],
         limit: usize,
     ) -> Result<Self, Error> {
-        parent.fragment().charge_copy()?;
         Direct::capture_edges(
             context.identity(),
             inputs,
@@ -149,9 +147,6 @@ impl<K: Value> Recipe<K> {
         inputs: &[u8],
         limit: usize,
     ) -> Result<Self, Error> {
-        for parent in parents {
-            parent.read_set().charge_copy()?;
-        }
         let direct = Direct::capture_edges(context.identity(), inputs, limit, parents)?;
         Ok(Self {
             direct,

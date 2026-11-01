@@ -1,17 +1,15 @@
 use super::*;
+use crate::input;
 use crate::input::membership::manifest::{storage::slots, Stop};
 use crate::input::membership::observed::discovery::{
     After, Attempt, Filename, Identity, NativeError, Transcript,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{input, node};
 
 fn budget<T>(run: impl FnOnce(&mut Budget<'_>) -> T) -> T {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     run(&mut Budget {
-        graph: &graph,
         allocation: &mut allocation,
     })
 }
@@ -79,12 +77,10 @@ fn run(
 ) -> Result<serde_json::Value, Error<InputError>> {
     let image = image(records);
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut host = host::Host::from_image(
         &image,
         Budget {
-            graph: &graph,
             allocation: &mut allocation,
         },
     )
@@ -280,23 +276,14 @@ fn initialized_values_and_empty_argv_avoid_normal_reinitialization() {
 #[test]
 fn first_failure_precedes_later_loading() {
     let image = image(vec![present("/cli/a.toml"), file("/cli/a.toml", "a=1")]);
-    // With `overflow`, the graph path account is full, so the first path
-    // check is a genuine failure.
-    let run = |overflow: bool| {
+    let run = || {
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
-        if overflow {
-            graph
-                .paths(usize::MAX)
-                .expect("the next path check overflows");
-        }
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(7).expect("prior items");
         allocation.bytes(31).expect("prior bytes");
         let mut host = match host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         ) {
@@ -328,10 +315,7 @@ fn first_failure_precedes_later_loading() {
                 Err(Stop::Refused)
             ));
         }
-        let result = session.finish(result);
-        if overflow {
-            assert!(matches!(result, Err(Error::Host(InputError::Budget(_)))));
-        }
+        assert_eq!(session.finish(result).is_ok(), success);
         if success {
             host.finish().expect("consumed");
         } else {
@@ -340,7 +324,5 @@ fn first_failure_precedes_later_loading() {
         assert!(allocation.check().is_ok());
         success
     };
-    assert!(run(false));
-    // Only a genuine graph failure refuses, and it precedes later loading.
-    assert!(!run(true));
+    assert!(run());
 }

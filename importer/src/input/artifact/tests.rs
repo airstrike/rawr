@@ -94,15 +94,6 @@ fn current_consumer_borrows_all_fields_without_storage_hashing_or_native_work() 
     let package = String::from(PACKAGE);
     let execution_path = PathBuf::from(EXECUTION);
     let graph = node::GraphBudget::new();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .expect("prior decoding");
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .expect("prior hashing");
-    graph
-        .paths(node::MAX_PATH_CHECKS_PER_GRAPH)
-        .expect("prior native work");
     let mut allocation = account();
     let mut calls = 0;
     derived(

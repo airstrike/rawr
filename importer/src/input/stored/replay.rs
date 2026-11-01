@@ -97,7 +97,7 @@ impl Replayed<'_, '_> {
         ) -> Result<cargo::universe::Completion>,
     ) -> Result<(cargo::universe::Completion, Completed)> {
         self.budget.check()?;
-        let mut admit = |bytes| self.budget.hash(bytes);
+        let mut admit = |_| self.budget.check();
         let completion = complete(&self.projection, self.fingerprint, &mut admit)?;
         self.budget.check()?;
         let input = Completed {
@@ -287,31 +287,10 @@ mod tests {
     fn completion_refusal_cannot_return_retained_inputs() {
         let limits = cargo::Limits::standard();
         let graph = node::GraphBudget::new();
-        graph
-            .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-            .unwrap();
         let mut allocation =
             input::Allocation::for_proof(input::Usage { items: 0, bytes: 0 }, &limits);
         let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-        let replayed = Replayed {
-            budget: &mut budget,
-            projection: cargo::universe::BuildProjection::from_canonical(Box::default()),
-            schema: input::proof::SCHEMA,
-            entries: Box::default(),
-            fingerprint: input::fingerprint::Fingerprint::from_bytes([0; 32]),
-            native: input::native::Inputs::fixture([0; 32]),
-        };
-        let mut entered = false;
-        let result = replayed.finish(|_, _, admit| {
-            entered = true;
-            // One byte over the hashed target is admitted and recorded.
-            admit(1).expect("admitted");
-            // A genuine failure (checked-arithmetic overflow) is terminal.
-            admit(usize::MAX)?;
-            panic!("exhausted completion must return before minting authority")
-        });
-        assert!(entered);
-        assert!(matches!(result, Err(Error::Graph(node::Error::Allocation))));
+        budget.refuse();
         assert!(matches!(budget.check(), Err(Error::Refused)));
         let replayed = Replayed {
             budget: &mut budget,

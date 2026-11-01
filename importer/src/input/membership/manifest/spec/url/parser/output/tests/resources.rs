@@ -1,9 +1,9 @@
 use rawr_toml::document;
 
 use super::{exercise, Account, Output, Set};
+use crate::input;
 use crate::input::membership::manifest::{session, storage, Error, Stop};
 use crate::input::membership::Budget;
-use crate::{input, node};
 
 #[test]
 fn every_refusal_preserves_prior_usage_and_blocks_all_later_mutation() {
@@ -96,12 +96,10 @@ fn refused_multibyte_append_and_insert_roll_back_only_content() {
 }
 
 fn charged() -> (bool, input::Usage) {
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(13).unwrap();
     allocation.bytes(31).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);
@@ -127,12 +125,10 @@ fn copy_and_layout_complete_with_existing_content() {
         ("é", false, "xé", 0, 16, 35),
         ("é", true, "x%C3%A9", 1, 20, 43),
     ] {
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
         allocation.items(13).unwrap();
         allocation.bytes(31).unwrap();
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let mut session = session::Session::new(&mut budget);
@@ -194,20 +190,9 @@ fn truncation_and_clear_reuse_only_previously_admitted_capacity() {
 
 #[test]
 fn output_work_neither_spends_nor_resets_graph_accounts() {
-    let graph = node::GraphBudget::new();
-    graph.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
-    graph
-        .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    graph
-        .decode(node::MAX_DECODED_BYTES_PER_GRAPH as usize)
-        .unwrap();
-    for _ in 0..64 {
-        graph.comparison().unwrap();
-    }
+    for _ in 0..64 {}
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = session::Session::new(&mut budget);

@@ -385,34 +385,6 @@ fn target_generated_output_uses_host_compiled_script_without_erasing_execution_p
 }
 
 #[test]
-fn generated_source_comparison_overflow_latches_the_original_account() {
-    use super::super::account::{Account as _, Current};
-    let limits = Limits::standard();
-    let graph = node::GraphBudget::new();
-    graph
-        .decode(usize::try_from(node::MAX_DECODED_BYTES_PER_GRAPH).expect("test range"))
-        .expect("consume comparison work allowance");
-    let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
-    let mut current = Current(&mut budget);
-    // Comparison work past the decode constant is not refused.
-    current
-        .comparison(1)
-        .expect("comparison work past the decode constant");
-    // Checked-arithmetic overflow of the decode account is a genuine failure
-    // that stays terminal and latches the original input account.
-    let decoded = graph.census_usage().expect("graph census").0;
-    graph
-        .decode(usize::try_from(u64::MAX - decoded).expect("addressable remainder"))
-        .expect("saturate the decode account");
-    assert!(matches!(
-        current.comparison(1),
-        Err(Error::Graph(node::Error::Allocation))
-    ));
-    assert!(matches!(current.check(), Err(Error::Refused)));
-}
-
-#[test]
 fn unprotected_generated_source_is_not_promoted_into_protected_evidence() {
     let (evidence, _, _) = fixture();
     let protected = universe::MetadataProof::fixture_package(
@@ -474,19 +446,15 @@ fn unprotected_source_outside_every_package_root_is_not_refused() {
 fn cold_comparisons_use_original_work_budget_without_claiming_owned_bytes() {
     use super::super::account::{Account as _, Legacy};
     let limits = Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    Legacy(&mut allocation, &graph)
-        .comparison(1024)
+    Legacy(&mut allocation)
+        .check()
         .expect("borrowed comparison work");
     assert_eq!(
         allocation.usage(),
         PRIOR,
         "borrowed comparisons retain no memory"
     );
-    graph
-        .decode(usize::try_from(node::MAX_DECODED_BYTES_PER_GRAPH).expect("test range") - 1024)
-        .expect("same request work account is now exhausted");
     let (evidence, protected, _) = fixture();
     let entries = [Entry::File {
         role: Role::DependencySource,
@@ -495,40 +463,9 @@ fn cold_comparisons_use_original_work_budget_without_claiming_owned_bytes() {
         bytes: 1,
         digest: [1; 32],
     }];
-    // The full projector spends the same supplied work account, and the
-    // projection completes past the decode constant.
-    super::legacy_accounted(
-        &entries,
-        &evidence,
-        &protected,
-        TARGET,
-        &mut allocation,
-        &graph,
-    )
-    .expect("comparison work past the decode constant");
-    // Checked-arithmetic overflow of the work account is a genuine failure:
-    // the projector refuses before claiming any owned bytes and latches the
-    // supplied input account.
-    let decoded = graph.census_usage().expect("graph census").0;
-    graph
-        .decode(usize::try_from(u64::MAX - decoded).expect("addressable remainder"))
-        .expect("saturate the work account");
-    let mut fresh = Allocation::for_proof(PRIOR, &limits);
-    let error =
-        super::legacy_accounted(&entries, &evidence, &protected, TARGET, &mut fresh, &graph)
-            .expect_err("an overflowed work account refuses the full projector");
-    assert!(matches!(
-        error,
-        crate::Error::Input {
-            code: "protected-build-comparison-work",
-            ..
-        }
-    ));
-    assert_eq!(fresh.usage().bytes, PRIOR.bytes);
-    assert!(matches!(
-        fresh.check(),
-        Err(crate::Error::InputAccountRefused)
-    ));
+    // The full projector spends the same supplied work account.
+    super::legacy_accounted(&entries, &evidence, &protected, TARGET, &mut allocation)
+        .expect("the projector completes");
 }
 
 #[test]
@@ -681,44 +618,4 @@ fn deep_projection_uses_original_ownership_and_terminal_refusal() {
         Err(Error::Refused)
     ));
     assert_eq!(account.usage(), stopped);
-}
-
-#[test]
-fn hash_overflow_latches_the_original_account() {
-    let (evidence, protected, entries) = fixture();
-    let limits = Limits::standard();
-    let mut allocation = Allocation::for_proof(PRIOR, &limits);
-    let graph = node::GraphBudget::new();
-    graph
-        .hash(usize::try_from(node::MAX_HASHED_BYTES_PER_GRAPH).expect("test target hash range"))
-        .expect("consume original hash allowance");
-    // Hash work past the hash constant is not refused.
-    current(
-        &entries,
-        &evidence,
-        &protected,
-        TARGET,
-        &mut Budget::borrow(&limits, &mut allocation, &graph),
-    )
-    .expect("hash work past the hash constant");
-    // Checked-arithmetic overflow of the hash account is a genuine failure
-    // that stays terminal and latches the original input account.
-    let hashed = graph.census_usage().expect("graph census").2;
-    graph
-        .hash(usize::try_from(u64::MAX - hashed).expect("addressable remainder"))
-        .expect("saturate the hash account");
-    assert!(matches!(
-        current(
-            &entries,
-            &evidence,
-            &protected,
-            TARGET,
-            &mut Budget::borrow(&limits, &mut allocation, &graph),
-        ),
-        Err(Error::Graph(node::Error::Allocation))
-    ));
-    assert!(matches!(
-        observed(&entries, &evidence, &protected, &mut allocation),
-        Err(Error::Refused)
-    ));
 }

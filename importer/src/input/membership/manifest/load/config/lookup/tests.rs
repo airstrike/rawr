@@ -8,7 +8,7 @@ use crate::input::membership::manifest::{
     reference, scalar, schema::manifest::Original, value, Error, Source, Stop,
 };
 use crate::input::membership::{observed, stored, Budget};
-use crate::{cargo, input, node};
+use crate::{cargo, input};
 use std::{
     ffi::OsString,
     os::unix::ffi::{OsStrExt, OsStringExt},
@@ -85,10 +85,8 @@ fn optional_path_matches_pinned_value_protocol_and_selected_origin_resolution() 
             .map(|text| document::parse(text, 80, &mut reference::Account).unwrap());
         let credential_path = path(&row["credentials"]["definition"]);
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut budget = Budget {
-            graph: &graph,
             allocation: &mut allocation,
         };
         let environment_key = format!(
@@ -201,10 +199,8 @@ fn absent_record_is_terminal_even_when_a_configured_value_exists() {
     )
     .unwrap();
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let image = stored::Stored::from_records(&[], &mut budget).unwrap();
@@ -289,7 +285,6 @@ fn environment_string_floor_records_before_final_type_or_cli_selection_but_not_p
     ] {
         let document = document::parse(source, 80, &mut reference::Account).unwrap();
         let limits = cargo::Limits::standard();
-        let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let image = stored::Stored::from_records(
             &[observed::Record {
@@ -297,7 +292,6 @@ fn environment_string_floor_records_before_final_type_or_cli_selection_but_not_p
                 value: observed::Value::Environment(Some(vec![b'x'; 100])),
             }],
             &mut Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -308,7 +302,6 @@ fn environment_string_floor_records_before_final_type_or_cli_selection_but_not_p
         let mut host = host::Host::from_image(
             &image,
             Budget {
-                graph: &graph,
                 allocation: &mut allocation,
             },
         )
@@ -371,10 +364,8 @@ fn environment_string_floor_records_before_final_type_or_cli_selection_but_not_p
 #[test]
 fn recorded_files_through_merge_and_optional_path_keep_one_original_account() {
     let limits = cargo::Limits::standard();
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::new(&limits);
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut records = Vec::new();

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::node::{Error, GraphBudget};
+use crate::node::Error;
 
 // nightly-2026-07-11's small_c_string uses a fixed stack buffer below this
 // threshold. Its &[u8] CString constructor reserves exactly length + 1 above it.
@@ -19,16 +19,6 @@ const STACK_INPUT_BYTES: usize = 384;
 // bounds both.
 const CANONICAL_BUFFER_BYTES: usize = libc::PATH_MAX as usize;
 
-/// Admit one std pathname-to-CStr conversion before its filesystem operation.
-/// Descriptor-based operations and the raw directory reader do not use this seam.
-pub(crate) fn input(path: &Path, budget: &GraphBudget) -> Result<(), Error> {
-    let bytes = input_allocation(path)?;
-    if bytes != 0 {
-        budget.decode(bytes)?;
-    }
-    Ok(())
-}
-
 /// Allocation size for the pinned std pathname-to-CStr conversion.
 pub(crate) fn input_allocation(path: &Path) -> Result<usize, Error> {
     let length = path.as_os_str().as_encoded_bytes().len();
@@ -42,11 +32,4 @@ pub(crate) fn input_allocation(path: &Path) -> Result<usize, Error> {
 /// Additional libc and Rust output storage used by std canonicalize.
 pub(crate) const fn canonical_allocation() -> usize {
     std::mem::size_of::<PathBuf>() + CANONICAL_BUFFER_BYTES + (CANONICAL_BUFFER_BYTES - 1)
-}
-
-/// Admit the input, libc output, and copied Rust output before std canonicalize.
-/// Native normalization and mount spelling can make the output longer than input.
-pub(crate) fn canonical(path: &Path, budget: &GraphBudget) -> Result<(), Error> {
-    input(path, budget)?;
-    budget.decode(canonical_allocation())
 }

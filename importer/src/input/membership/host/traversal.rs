@@ -177,7 +177,6 @@ impl<'image> Cursor<'image> {
         path: &[u8],
     ) -> Result<Directory> {
         self.begin(host)?;
-        host.budget.graph.paths(1)?;
         let traversal::Event::Open {
             path: expected,
             result,
@@ -230,9 +229,6 @@ impl<'image> Cursor<'image> {
                     && matches!(directory.state, State::Unread | State::Reading) =>
             {
                 let kind = row.inspected.ok_or(Error::Unobserved)?;
-                if observed::stream::hint(row.raw_kind).is_none() {
-                    host.budget.graph.paths(1)?;
-                }
                 (
                     State::Reading,
                     Read::Entry {
@@ -311,7 +307,6 @@ impl<'image> Cursor<'image> {
         path: &[u8],
     ) -> Result<std::result::Result<Identity, i32>> {
         self.begin(host)?;
-        host.budget.graph.paths(1)?;
         let traversal::Event::Handle {
             path: expected,
             result,

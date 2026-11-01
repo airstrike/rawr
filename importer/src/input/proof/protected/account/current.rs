@@ -15,12 +15,6 @@ impl Account for Current<'_, '_> {
     fn check(&mut self) -> Result<()> {
         self.0.check()
     }
-    fn comparison(&mut self, bytes: usize) -> Result<()> {
-        self.0.decode(bytes)
-    }
-    fn hash_work(&mut self, bytes: usize) -> Result<()> {
-        self.0.hash(bytes)
-    }
     fn policy(&mut self, code: &'static str, _reason: impl fmt::Display) -> Error {
         Error::Encoding(code)
     }

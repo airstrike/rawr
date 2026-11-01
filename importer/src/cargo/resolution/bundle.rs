@@ -127,7 +127,7 @@ impl Inventory<'_> {
         if !self.graph.shares_with(graph) {
             return Err(node::Error::Codec("inventory graph differs"));
         }
-        retained::observe_hashes(graph, |hashes| {
+        retained::observe_hashes(|hashes| {
             self.stored.replay_resolution_content_completing(
                 root,
                 self.origin,
@@ -254,10 +254,6 @@ impl Stored {
     pub(crate) fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> stored::Result<Self> {
         let result = (|| {
             budget.check()?;
-            budget
-                .graph()
-                .decode(bytes.len())
-                .map_err(stored::Error::Graph)?;
             if bytes.len() != BYTES
                 || &bytes[..8] != MAGIC
                 || part::<4>(bytes, 8)? != SCHEMA.to_le_bytes()
@@ -384,11 +380,11 @@ impl Stored {
         budget: &mut Budget<'_>,
     ) -> stored::Result<(Paths, Vec<u8>, Inventory<'store>)> {
         let graph = budget.graph().clone();
-        let seal_path = bundle::path(&root, std::path::Path::new("seal"), &graph)
+        let seal_path =
+            bundle::path(&root, std::path::Path::new("seal")).map_err(stored::Error::Bundle)?;
+        let bytes = store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES)
             .map_err(stored::Error::Bundle)?;
-        let bytes = store::read_file_budgeted(&seal_path, node::MAX_CONTENT_BYTES, &graph)
-            .map_err(stored::Error::Bundle)?;
-        let inventory = retained::Stored::decode_resolution(&bytes, &root, self.reference, &graph)
+        let inventory = retained::Stored::decode_resolution(&bytes, &root, self.reference)
             .map_err(stored::Error::Bundle)?;
         if bytes.len() != self.seal_bytes || inventory.digest() != self.seal_digest {
             return Err(stored::Error::Encoding(
@@ -398,7 +394,7 @@ impl Stored {
         inventory
             .resolution_controls_scoped(&root, origin, &graph, node::read_set::Scope::Consumer)
             .map_err(stored::Error::Bundle)?;
-        let paths = Paths::observe(root, &graph).map_err(stored::Error::Bundle)?;
+        let paths = Paths::observe(root).map_err(stored::Error::Bundle)?;
         let bytes = self.record.read(&paths, budget)?;
         Ok((
             paths,

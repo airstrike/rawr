@@ -198,15 +198,13 @@ fn actual_manifest_tiers_borrow_dynamically_added_predecessors() {
 
 #[test]
 fn links_spend_the_original_remaining_budget() {
+    use crate::input;
     use crate::input::membership::Budget;
-    use crate::{input, node};
 
-    let graph = node::GraphBudget::new();
     let mut allocation = input::Allocation::with_limits(usize::MAX, usize::MAX, usize::MAX);
     allocation.items(9).unwrap();
     allocation.bytes(27).unwrap();
     let mut budget = Budget {
-        graph: &graph,
         allocation: &mut allocation,
     };
     let mut session = Session::new(&mut budget);
