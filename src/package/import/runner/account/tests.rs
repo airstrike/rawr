@@ -1066,12 +1066,17 @@ fn native_account_structural_array_records_exceedance_before_row_materialization
     let aggregate = native.usage();
     let array_bytes = std::mem::size_of::<host::runtime::StructuralAdapter>();
     // The output array crosses both exact targets before any row is processed:
-    // it is charged and recorded, not refused. The empty carrier then
-    // rejects the first row for its own reason.
-    assert!(matches!(
-        runner::authenticate_structural(&definitions, &carrier(), &[structural], &mut attempt),
-        Err(runner::Error::StructuralManifest)
-    ));
+    // it is charged and recorded, not refused. A row the empty carrier
+    // lacks is a rawr bug, so it panics after the charge.
+    let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ =
+            runner::authenticate_structural(&definitions, &carrier(), &[structural], &mut attempt);
+    }))
+    .expect_err("a structural row outside the manifest panics");
+    assert_eq!(
+        missing.downcast_ref::<&str>(),
+        Some(&"each structural adapter is in the runner's manifest")
+    );
     assert_eq!(attempt.usage(), (before.0 + 1, before.1 + array_bytes));
     let crossed = native.snapshot();
     assert_eq!(crossed.first_refusal, None);

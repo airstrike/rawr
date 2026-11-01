@@ -252,19 +252,19 @@ fn authenticate_events(
     for row in rows {
         if row.mapper == [0; 16] || !carrier.contains(&row.identity, &row.signature, row.arguments)
         {
-            return Err(Error::EventManifest);
+            panic!("each generated event conversion is in the runner's manifest");
         }
         let source = definitions
             .iter()
             .find(|definition| definition.root() == row.root)
-            .ok_or(Error::EventFacade)?;
+            .expect("each generated event conversion names installed bindings");
         let producer = source
             .items()
             .find(|item| {
                 item.imported_identity()
                     .is_some_and(|identity| identity.fingerprint() == row.selector)
             })
-            .ok_or(Error::EventSelector)?;
+            .expect("each generated event conversion names its source and target");
         let output_matches = match producer.signature().output().shape() {
             host::type_ref::Shape::Imported { identity, .. } => identity.as_bytes() == &row.source,
             host::type_ref::Shape::Registered { path, .. } => source.types().any(|ty| {
@@ -277,12 +277,12 @@ fn authenticate_events(
             _ => false,
         };
         if !output_matches {
-            return Err(Error::EventSelector);
+            panic!("each generated event conversion's source matches its bindings");
         }
         let target = definitions
             .iter()
             .find(|definition| definition.root() == row.target_root)
-            .ok_or(Error::EventFacade)?;
+            .expect("each generated event conversion names installed bindings");
         let target_type = target
             .types()
             .find(|ty| {
@@ -293,7 +293,7 @@ fn authenticate_events(
                     .eq(row.target_path.split("::"))
             })
             .filter(|ty| ty.parameters().len() == 1)
-            .ok_or(Error::EventSelector)?;
+            .expect("each generated event conversion names its source and target");
         let mut found = false;
         for ty in source.types().filter(|ty| {
             ty.identity()
@@ -321,7 +321,7 @@ fn authenticate_events(
                 .iter()
                 .any(|adapter: &host::runtime::event::Adapter| adapter.matches(&key))
             {
-                return Err(Error::EventDuplicate);
+                panic!("each generated event conversion is generated once");
             }
             adapters
                 .try_reserve_exact(1)
@@ -329,7 +329,7 @@ fn authenticate_events(
             adapters.push(host::runtime::event::Adapter::authenticated(key));
         }
         if !found {
-            return Err(Error::EventSelector);
+            panic!("each generated event conversion's source matches its bindings");
         }
     }
     Ok(adapters.into_boxed_slice())
@@ -528,8 +528,10 @@ pub fn admit_generated_applications(
     {
         return Err(Error::Surface(rawr_import::surface::Error::Canonical));
     }
-    super::admit_applications(&mut engine.host_registry, &applications)
-        .map_err(|error| Error::Application(error.to_string().into_boxed_str()))
+    super::admit_applications(&mut engine.host_registry, &applications).unwrap_or_else(|error| {
+        panic!("each generated application admits into the runner's bindings: {error}")
+    });
+    Ok(())
 }
 
 /// Admit structural bindings under the same account as the retained carrier.
@@ -591,15 +593,15 @@ fn authenticate_structural(
         .map_err(|_| Error::Allocation)?;
     for row in rows {
         if !carrier.contains(&row.identity, &row.signature, row.arguments) {
-            return Err(Error::StructuralManifest);
+            panic!("each structural adapter is in the runner's manifest");
         }
         let facade = definitions
             .iter()
             .find(|definition| definition.root() == row.root)
-            .ok_or(Error::StructuralFacade)?;
-        let (path, kind) = structural_path(facade, row)?;
+            .expect("each structural adapter names installed bindings");
+        let (path, kind) = structural_path(facade, row);
         if kind != row.kind {
-            return Err(Error::StructuralSelector);
+            panic!("each structural adapter's selector is of its kind");
         }
         let path_bytes = path.display_len().ok_or(Error::Allocation)?;
         allocation.retain_checked(Some(0), Some(path_bytes))?;
@@ -635,7 +637,7 @@ fn authenticate_structural(
             .iter()
             .any(|adapter: &host::runtime::StructuralAdapter| adapter.definition == definition)
         {
-            return Err(Error::StructuralDuplicate);
+            panic!("each structural adapter is generated once");
         }
         adapters.push(host::runtime::StructuralAdapter::transform(definition));
     }
@@ -701,7 +703,7 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
 fn structural_path<'facade>(
     facade: &'facade host::facade::Definition,
     row: &StructuralRow,
-) -> Result<(&'facade host::path::Path, StructuralKind), Error> {
+) -> (&'facade host::path::Path, StructuralKind) {
     let mut found: Option<(
         &host::path::Path,
         StructuralKind,
@@ -765,14 +767,14 @@ fn structural_path<'facade>(
                 // One type at two paths, as ratatui re-exports
                 // `ratatui_core::layout::Rect`: the first path stands.
                 Some((_, _, first)) if first.is_some() && first == identity => continue,
-                Some(_) => return Err(Error::StructuralDuplicate),
+                Some(_) => panic!("one structural adapter selector names one item"),
                 None => found = Some((definition.path_ref(), kind, identity)),
             }
         }
     }
     found
         .map(|(path, kind, _)| (path, kind))
-        .ok_or(Error::StructuralSelector)
+        .expect("each structural adapter's selector names an item")
 }
 
 fn build(
@@ -1093,7 +1095,9 @@ fn shape(shape: &facade::Shape) -> Result<host::type_def::Shape, Error> {
             constructible,
         });
     }
-    let variants = shape.variants().ok_or(Error::Shape)?;
+    let variants = shape
+        .variants()
+        .expect("a generated type that is not a struct is an enum");
     Ok(host::type_def::Shape::Enum(
         variants
             .iter()
@@ -1292,7 +1296,8 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
         }
         facade::Type::String => host::type_ref::Type::builtin(host::type_ref::Builtin::String),
         facade::Type::Primitive(name) => host::type_ref::Type::builtin(
-            host::type_ref::Builtin::primitive(name).ok_or(Error::Shape)?,
+            host::type_ref::Builtin::primitive(name)
+                .expect("a generated primitive type is one rawr knows"),
         ),
         facade::Type::Nominal {
             identity,
@@ -1313,7 +1318,9 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             // A script closure a crate value holds, as iced's `Map<W, F, A>`
             // from `Widget::map` does: the closure's type (T417).
             if identity == rawr_import::surface::identity::Definition::callable().as_bytes() {
-                let (output, inputs) = arguments.split_last().ok_or(Error::Shape)?;
+                let (output, inputs) = arguments
+                    .split_last()
+                    .expect("a callable type names its output");
                 let input = match inputs {
                     [] => host::type_ref::Type::unit(),
                     [single] => single.clone(),
@@ -1342,12 +1349,12 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
         facade::Type::Option(element) => host::type_ref::Type::option(ty(element)?),
         facade::Type::Range(element) => host::type_ref::Type::range(ty(element)?),
         // Only a relation's case names an impl's own parameter.
-        facade::Type::Variable(_) => return Err(Error::Shape),
+        facade::Type::Variable(_) => unreachable!("a generated signature names no impl parameter"),
         facade::Type::Result(ok, err) => host::type_ref::Type::result(ty(ok)?, ty(err)?),
         facade::Type::Array(element) => host::type_ref::Type::slice(ty(element)?),
         facade::Type::FixedArray { element, length } => host::type_ref::Type::array(
             ty(element)?,
-            usize::try_from(*length).map_err(|_| Error::Shape)?,
+            usize::try_from(*length).expect("an array length fits in usize"),
         ),
         facade::Type::Tuple(members) => {
             host::type_ref::Type::tuple(members.iter().map(ty).collect::<Result<Vec<_>, _>>()?)?
@@ -1419,37 +1426,7 @@ pub enum Error {
         #[source]
         source: Box<Error>,
     },
-    /// Admitting a generated application failed: a rawr bug.
-    #[error("internal error: rawr cannot admit a generated application: {0}. This is a rawr bug")]
-    Application(Box<str>),
-    /// The plan contains contradictory nominal shape evidence.
-    #[error("a generated type has no nominal shape")]
-    Shape,
     /// Bounded allocation of the bindings failed.
-    #[error("cannot allocate generated bindings")]
+    #[error("out of memory while loading the program's bindings")]
     Allocation,
-    /// A private event producer is absent from the generated manifest.
-    #[error("generated event producer is absent from its manifest")]
-    EventManifest,
-    /// A private event binding names bindings that are absent.
-    #[error("generated event names absent bindings")]
-    EventFacade,
-    /// A private event row disagrees with its source or target contract.
-    #[error("generated event source or target selector disagrees")]
-    EventSelector,
-    /// More than one producer claims the same private event binding.
-    #[error("generated event conversion is duplicated")]
-    EventDuplicate,
-    /// A structural row names no exact installed bindings.
-    #[error("generated structural adapter names no installed bindings")]
-    StructuralFacade,
-    /// A structural selector is absent, ambiguous, or has the wrong operation kind.
-    #[error("generated structural adapter does not match one exact selector")]
-    StructuralSelector,
-    /// A structural row is absent from the authenticated generated manifest.
-    #[error("generated structural adapter is absent from the authenticated manifest")]
-    StructuralManifest,
-    /// A generated structural adapter is duplicated.
-    #[error("generated structural adapter is duplicated")]
-    StructuralDuplicate,
 }

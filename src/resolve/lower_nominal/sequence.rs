@@ -1,7 +1,7 @@
 //! Checked native sequence construction, preserving the concrete Rust shape
 //! separately from the interpreter's normalized logical type witness.
 
-use super::{invariant, origin, Error, FnCallArgs, NativeCallContext, Op, Parser, Ty};
+use super::{invariant, origin, FnCallArgs, NativeCallContext, Op, Parser, Ty};
 use crate::host::runtime::type_ref::Type;
 use crate::{Dynamic, RawrResult, Span};
 use std::collections::BTreeSet;
@@ -16,18 +16,13 @@ impl Constructor {
     pub(super) fn checked(
         concrete: Option<&rawr_import::classify::representability::convert::Type>,
         target: Option<Type>,
-    ) -> Result<Self, Error> {
-        let key = concrete
-            .filter(|_| target.is_some())
-            .map(serde_json::to_vec)
-            .transpose()
-            .map_err(|_| Error::InvalidHostOperation {
-                item: "native sequence constructor".into(),
-                reason: "the checked concrete sequence shape could not be encoded".into(),
-                operation: Span::NONE,
-            })?
-            .map(Vec::into_boxed_slice);
-        Ok(Self { key, target })
+    ) -> Self {
+        let key = concrete.filter(|_| target.is_some()).map(|concrete| {
+            serde_json::to_vec(concrete)
+                .expect("a sequence's Rust type encodes as JSON")
+                .into_boxed_slice()
+        });
+        Self { key, target }
     }
 
     pub(super) fn dependencies(&self) -> BTreeSet<crate::host::facade::Dependency> {

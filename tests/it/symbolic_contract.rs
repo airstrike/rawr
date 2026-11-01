@@ -61,7 +61,7 @@ fn real_extracted_contract_is_snapshot_bound_positioned_and_symbolic() {
     assert_eq!(error.category(), package::Category::Resolution);
     assert_eq!(report.labels().len(), 1);
     assert!(!report.external_labels().is_empty());
-    assert!(error.to_string().contains("choose one of:"));
+    assert!(error.to_string().contains("name it by one of:"));
 
     let grammar = Fixture::new(
         r#"

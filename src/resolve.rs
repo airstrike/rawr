@@ -522,11 +522,12 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
                 LocatedError::primary(
                     shell.source,
                     Error::InvalidHostOperation {
-                        item: path.into(),
                         reason: format!(
-                            "invocation-scoped host types cannot appear in {role}; they are legal only in an exact host-authorized invocation formal"
+                            "`{path}` in {role} is not supported in Rawr yet; it is lent only \
+                             to the callback that receives it"
                         )
                         .into(),
+                        item: path.into(),
                         operation: type_span(ty),
                     },
                 )
@@ -536,7 +537,7 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
         match &shell.kind {
             item::Kind::Struct(item) => {
                 for field in &item.fields {
-                    if let Some(error) = reject(&field.ty, "a nominal field") {
+                    if let Some(error) = reject(&field.ty, "a struct field") {
                         return Err(error);
                     }
                 }
@@ -544,7 +545,7 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
             item::Kind::Enum(item) => {
                 for variant in &item.variants {
                     for payload in &variant.payload {
-                        if let Some(error) = reject(payload, "an enum payload") {
+                        if let Some(error) = reject(payload, "an enum variant") {
                             return Err(error);
                         }
                     }
@@ -552,14 +553,14 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
             }
             item::Kind::Function(function) => {
                 for parameter in &function.parameters {
-                    if let Some(error) = reject(&parameter.ty, "an ordinary function parameter") {
+                    if let Some(error) = reject(&parameter.ty, "a function's parameters") {
                         return Err(error);
                     }
                 }
                 if let Some(error) = function
                     .output
                     .as_ref()
-                    .and_then(|output| reject(output, "a function return"))
+                    .and_then(|output| reject(output, "a function's return type"))
                 {
                     return Err(error);
                 }
@@ -567,14 +568,14 @@ pub(crate) fn validate_invocation_storage(program: &Program) -> Result<(), Locat
             item::Kind::Impl(item) => {
                 for function in &item.functions {
                     for parameter in &function.parameters {
-                        if let Some(error) = reject(&parameter.ty, "a method parameter") {
+                        if let Some(error) = reject(&parameter.ty, "a method's parameters") {
                             return Err(error);
                         }
                     }
                     if let Some(error) = function
                         .output
                         .as_ref()
-                        .and_then(|output| reject(output, "a method return"))
+                        .and_then(|output| reject(output, "a method's return type"))
                     {
                         return Err(error);
                     }

@@ -308,9 +308,7 @@ mod tests {
                     Err(error) => error,
                 };
                 assert!(
-                    error
-                        .to_string()
-                        .contains("imported method applicability is unsupported"),
+                    error.to_string().contains("impls of the crate provide it"),
                     "{error}"
                 );
                 assert!(!error.to_string().contains("return-only overloads"));

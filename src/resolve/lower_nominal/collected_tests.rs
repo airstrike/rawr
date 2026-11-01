@@ -408,7 +408,7 @@ fn executable_use_collection_requires_and_retains_exact_structural_adapters() {
     };
     assert!(failure
         .to_string()
-        .contains("no authenticated generated structural adapter"));
+        .contains("constructing it is not supported in Rawr yet"));
     for (selector, kind) in [
         (&constructor, host::structural::Kind::Constructor),
         (&field, host::structural::Kind::Field { copy: true }),
@@ -713,6 +713,51 @@ fn profile_message_evidence_charges_its_box_before_payload_conversion() {
     assert!(failure.is_none());
 }
 
+/// A type a crate's generic item can't take yet is named as the program
+/// wrote it, and an unknown one is rustc's E0282, never a placeholder for
+/// rawr's own data (#523, D664).
+#[test]
+fn unsupported_type_arguments_name_the_program_type() {
+    let inference = super::Inference::default();
+    let cases = [
+        (
+            super::Ty::Int(super::Int::I128),
+            "i128",
+            "`i128` is not supported in Rawr yet as a crate's type argument",
+        ),
+        (
+            super::Ty::Unknown,
+            "_",
+            "type annotations needed: a crate's type argument is unknown (E0282)",
+        ),
+    ];
+    for (ty, item, reason) in cases {
+        let mut allocation = host::TestImportAllocation::new(4, 4096);
+        let (converted, failure) = with_import_context(&mut allocation, |context| {
+            super::imported_surface_type(
+                &inference,
+                &empty_models(),
+                &ty,
+                crate::Span::NONE,
+                context,
+            )
+        });
+        assert!(failure.is_none());
+        match converted {
+            Err(super::Error::InvalidHostOperation {
+                item: actual_item,
+                reason: actual_reason,
+                ..
+            }) => {
+                assert_eq!(actual_item, item);
+                assert_eq!(actual_reason, reason);
+                assert!(!actual_reason.contains('<'), "{actual_reason}");
+            }
+            other => panic!("{ty:?} converted as {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn executable_use_collection_retains_elided_imported_selections() {
     let mut engine = Engine::new();
@@ -763,7 +808,7 @@ fn cloning_an_imported_value_leaves_it_available() {
              pub fn run() -> Connection { let c = connect(); let moved = c; c }",
         )
         .unwrap_err();
-    assert!(error.to_string().contains("already moved"), "{error}");
+    assert!(error.to_string().contains("moved value"), "{error}");
 }
 
 /// palette's `Hsl<S = Srgb, T = f32>`, which `make` returns as
