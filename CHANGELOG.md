@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.40 (2026-10-31)
+
 - A function returning `impl Widget<..>` that takes no reference, or holds a `&'static str`, no longer gets E0106. rawr reads the written `impl Trait` under edition 2024 capture rules, as cargo does. (#462; part of #428)
 - `column![part().map(..)]` checks as it does under cargo. iced gives `Map` no `_boxed` of its own, so the call goes through the trait's method. (#424; part of #428)
 

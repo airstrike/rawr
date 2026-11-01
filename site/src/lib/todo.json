@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A function returning `impl Widget<..>` that takes no reference, or holds a `&'static str`, no longer gets E0106. rawr reads the written `impl Trait` under edition 2024 capture rules, as cargo does.","issues":[462],"refs":[428]},
-        {"text":"`column![part().map(..)]` checks as it does under cargo. iced gives `Map` no `_boxed` of its own, so the call goes through the trait's method.","issues":[424],"refs":[428]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.40",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"A function returning `impl Widget<..>` that takes no reference, or holds a `&'static str`, no longer gets E0106. rawr reads the written `impl Trait` under edition 2024 capture rules, as cargo does.","issues":[462],"refs":[428]},
+          {"text":"`column![part().map(..)]` checks as it does under cargo. iced gives `Map` no `_boxed` of its own, so the call goes through the trait's method.","issues":[424],"refs":[428]}
+        ]
+      },
       {
         "version": "0.3.39",
         "date": "2026-10-31",
@@ -940,7 +942,7 @@
     {"issue":421,"title":"Binding store unit tests fail under parallel test threads","state":"open","category":"Health"},
     {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","release":"0.3.30"},
     {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)","release":"0.3.37"},
-    {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"closed","category":"No glue (D593)"},
+    {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"closed","category":"No glue (D593)","release":"0.3.40"},
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)","release":"0.3.39"},
     {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
@@ -978,7 +980,7 @@
     {"issue":459,"title":"Type annotations don't apply a crate type's default parameters","state":"open","category":"Divergences from rustc"},
     {"issue":460,"title":"No deref coercion or Deref method lookup on crate types","state":"open","category":"Divergences from rustc"},
     {"issue":461,"title":"button(..).on_press(m) runs where rustc gives E0283","state":"open","category":"Divergences from rustc"},
-    {"issue":462,"title":"E0106 on an impl Widget return that rustc accepts","state":"closed","category":"Divergences from rustc"},
+    {"issue":462,"title":"E0106 on an impl Widget return that rustc accepts","state":"closed","category":"Divergences from rustc","release":"0.3.40"},
     {"issue":463,"title":"The universe runner covers only its seed program's calls","state":"open","category":"No glue (D593)"},
     {"issue":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open","category":"No glue (D593)"},
     {"issue":465,"title":"Build the play image's universe stage","state":"open","category":"No glue (D593)"},
