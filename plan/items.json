@@ -510,7 +510,7 @@
     {"t":"T507","issue":507,"title":"T507: The ?play universe runner spends its time budget before a snippet's main","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"play","row":"bot-prebuilt-bindings"},"decisions":[],"commit":"13794b3c8","release":"0.3.48"},
     {"t":"T508","issue":508,"title":"T508: Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":"1f271f2a3","release":"0.3.49"},
     {"t":"T509","issue":509,"title":"T509: Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T510","issue":510,"title":"T510: inspect answers for programs with Rust dependencies","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
+    {"t":"T510","issue":510,"title":"T510: inspect answers for programs with Rust dependencies","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":"c8349e513","release":null},
     {"t":"T511","issue":511,"title":"T511: inspect reads callers' frames","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
     {"t":"T512","issue":512,"title":"T512: inspect prints bindings by their declared type","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
     {"t":"T513","issue":513,"title":"T513: A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
@@ -531,6 +531,8 @@
     {"t":"T528","issue":528,"title":"T528: ?play shows the text an iced program printed beside its frame","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T529","issue":529,"title":"T529: ?play draws an iced frame at the program's own scale_factor","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T530","issue":530,"title":"T530: A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T531","issue":531,"title":"T531: A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T531","issue":531,"title":"T531: A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T532","issue":532,"title":"T532: inspect on a real iced app's state in update and view","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T533","issue":533,"title":"T533: inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

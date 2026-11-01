@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"`rawr mcp`'s `inspect` reads the values of a program with Rust dependencies, such as an iced app's `state` in `update` and `view`. A crate value prints through its own `Debug`, and a crate value without one names its type, as rustc does.","issues":[510]}
+    ]
   },
   "releases": [
     {
