@@ -681,18 +681,21 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
 /// `column!` through the trait's own `boxed`, as `Map`'s impl has
 /// parameters its type doesn't. A button behind `impl Widget<Part>` is
 /// mapped too: its impl of `Widget` is at any renderer, so `map` is called
-/// through the trait at the arguments `impl Widget<Part>` fixes (T428). The
-/// output is `cargo run`'s.
+/// through the trait at the arguments `impl Widget<Part>` fixes (T428). As
+/// iced's bezier_tool, the canvas comes from a module's method that borrows
+/// its state and the curves, behind `impl Framed<Curve>`, the extension
+/// trait `map` belongs to, and its program borrows both (T567). The output
+/// is `cargo run`'s.
 #[test]
 fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
     let (rawr, cargo) = both_printed("crossing-opaque", "opaque.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
-            "1 view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary value 0#1]"
+            "1 view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary curves 0 0#1]"
         ) && rawr.contains("4 message Part(Down)")
             && rawr.ends_with(
-                "last view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary value 1#1]"
+                "last view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary curves 0 0#1]"
             ),
         "{rawr}"
     );
