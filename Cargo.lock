@@ -3003,6 +3003,7 @@ dependencies = [
  "percent-encoding",
  "rawr-canonical",
  "rawr-directory",
+ "rawr-import",
  "rawr-location",
  "rawr-toml",
  "rawr-toml-edit",

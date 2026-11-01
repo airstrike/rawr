@@ -875,7 +875,7 @@ impl<'bytes> LockedReader<'bytes> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rustc-driver", feature = "test-fixtures"))]
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;

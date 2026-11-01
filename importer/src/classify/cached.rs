@@ -181,7 +181,6 @@ mod tests {
 
     static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
-    #[cfg(feature = "test-fixtures")]
     #[test]
     fn generic_facade_batch_reuses_owned_outputs_and_returns_current_receipts() {
         let root = std::env::temp_dir().join(format!(
@@ -347,7 +346,6 @@ mod tests {
         assert!(ClassifiedParts::decode(&trailing, &graph, &policy).is_err());
     }
 
-    #[cfg(feature = "test-fixtures")]
     #[test]
     fn identical_generic_contract_validates_from_the_shared_node_without_reclassification() {
         let root = std::env::temp_dir().join(format!(
@@ -404,7 +402,6 @@ mod tests {
         fs::remove_dir_all(root).expect("the generic fixture retires");
     }
 
-    #[cfg(feature = "test-fixtures")]
     #[test]
     fn canonical_edge_order_may_revisit_a_support_provenance() {
         let root = std::env::temp_dir().join(format!(

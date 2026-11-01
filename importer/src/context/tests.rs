@@ -15,7 +15,7 @@ impl Value for ValueFixture {
     const KIND: Kind = Kind::Api;
     // The current API schema: an action with another is one an older rawr
     // wrote, which the store evicts (#630).
-    const SCHEMA: u32 = <crate::api::cached::Product as crate::node::Value>::SCHEMA;
+    const SCHEMA: u32 = crate::api::SCHEMA;
 
     fn encode(&self, _limit: usize) -> Result<Box<[u8]>, crate::node::Error> {
         Ok(Box::default())

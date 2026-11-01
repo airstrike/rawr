@@ -1623,7 +1623,7 @@ impl<B> Demand<Sealed, B> {
     }
 
     /// Borrow the exact private adapter plans consumed by Phase 3 generation.
-    #[cfg(feature = "rustc-driver")]
+    #[cfg(any(test, feature = "rustc-driver"))]
     pub(crate) fn adapter_plans(&self) -> &[adapter::Plan] {
         &self.plans
     }
