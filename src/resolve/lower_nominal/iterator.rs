@@ -841,6 +841,9 @@ impl Parser<'_> {
             self.closure_hints = Vec::new();
             self.parse_fold_arguments(&accumulator, &item)
         } else {
+            // A crate function named as an argument is the closure that
+            // calls it, as for `Option::map` (T327): `.map(text)`.
+            self.script_callables = true;
             self.parse_call_arguments("iterator method arguments")
         };
         self.closure_hints = Vec::new();
