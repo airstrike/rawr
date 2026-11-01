@@ -93,7 +93,7 @@ impl crate::Profile for Plain {
     }
 }
 
-/// Demand the Rust path a failure missed. A member a trait provides arrives
+/// Demand every Rust path a failure missed. A member a trait provides arrives
 /// only when named: each method the source calls is demanded on the type
 /// at once, as a builder chain names several.
 fn demand_more(
@@ -102,14 +102,28 @@ fn demand_more(
     crate_demand: &mut Vec<Box<str>>,
     graph: &rawr::package::Graph,
 ) {
-    crate_demand.extend(crate::new_demand(error, request_demand).map(Box::from));
-    if let Some(owner) = error.rust_member_owner() {
-        crate_demand.extend(
-            graph
-                .rust_method_names()
-                .iter()
-                .map(|name| Box::from(format!("{owner}::{name}"))),
-        );
+    // Every miss of the failed pass, its own first (#662). A member called
+    // on a type that was missed too asks the crate's compiler which trait
+    // gives it: only worth asking when another member already makes the
+    // next round probe, since the type alone replays the tables it has.
+    let misses = error.rust_misses();
+    let missed_type = |owner: &str| misses.iter().any(|(path, ..)| *path == owner);
+    let probing = misses
+        .iter()
+        .any(|(_, _, owner)| owner.is_some_and(|owner| !missed_type(owner)));
+    for &(path, through_alias, owner) in &misses {
+        if owner.is_some_and(missed_type) && !probing {
+            continue;
+        }
+        crate_demand.extend(crate::demandable(path, through_alias, request_demand).map(Box::from));
+        if let Some(owner) = owner {
+            crate_demand.extend(
+                graph
+                    .rust_method_names()
+                    .iter()
+                    .map(|name| Box::from(format!("{owner}::{name}"))),
+            );
+        }
     }
     crate_demand.sort_unstable();
     crate_demand.dedup();

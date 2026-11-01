@@ -30,8 +30,9 @@ pub struct Error {
     kind: Kind,
     /// The Rust path a failure missed, whether it lies below a wholesale
     /// crate re-export, and whether it names a member of a type. An import
-    /// demanding it may resolve it.
-    rust_demand: Option<(Box<str>, bool, bool)>,
+    /// demanding it may resolve it. The failure's own miss comes first,
+    /// then what the same pass missed elsewhere (#662).
+    rust_demand: Vec<(Box<str>, bool, bool)>,
     /// The encoded imported call a failure needs a proof-backed application
     /// for. Proving it and compiling again may resolve it.
     #[cfg(feature = "rust-import")]
@@ -90,7 +91,7 @@ impl Error {
         Self {
             sources: sources.into_boxed_slice(),
             kind: Kind::Parse { source, error },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -109,7 +110,7 @@ impl Error {
                 message,
                 span,
             },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -128,7 +129,7 @@ impl Error {
                 source,
                 primary,
             },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -147,7 +148,7 @@ impl Error {
                 primary,
                 secondary,
             },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -157,7 +158,7 @@ impl Error {
         Self {
             sources: Box::default(),
             kind: Kind::Diagnostic(source),
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -174,7 +175,7 @@ impl Error {
                 secondary: failure.secondary.map(crate::package::source::Id::index),
                 error: failure.error,
             },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -188,7 +189,7 @@ impl Error {
         Self {
             sources,
             kind: Kind::Compilation { evidence, error },
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -199,7 +200,7 @@ impl Error {
         Self {
             sources: Box::default(),
             kind: Kind::Import(error),
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -224,7 +225,7 @@ impl Error {
         Self {
             sources: Box::default(),
             kind: Kind::ImportDiagnostic(report),
-            rust_demand: None,
+            rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
         }
@@ -251,8 +252,39 @@ impl Error {
         through_alias: bool,
         member: bool,
     ) -> Self {
-        self.rust_demand = Some((path.into(), through_alias, member));
+        self.rust_demand
+            .insert(0, (path.into(), through_alias, member));
         self
+    }
+
+    /// Keep `misses`, what the same pass missed besides this failure's own
+    /// miss, each as [`Self::with_rust_demand`] takes it (#662).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn with_rust_misses(mut self, misses: Vec<(String, bool, bool)>) -> Self {
+        for (path, through_alias, member) in misses {
+            if !self.rust_demand.iter().any(|(known, ..)| **known == *path) {
+                self.rust_demand.push((path.into(), through_alias, member));
+            }
+        }
+        self
+    }
+
+    /// Every Rust path the failed pass missed, its own first: the path,
+    /// whether it lies below a wholesale crate re-export, and the type whose
+    /// member it names, as [`Self::rust_demand`], [`Self::rust_miss`] and
+    /// [`Self::rust_member_owner`] give the first (#662).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rust_misses(&self) -> Vec<(&str, bool, Option<&str>)> {
+        self.rust_demand
+            .iter()
+            .map(|(path, through_alias, member)| {
+                let owner = member
+                    .then(|| path.rsplit_once("::").map(|(owner, _)| owner))
+                    .flatten();
+                (&**path, *through_alias, owner)
+            })
+            .collect()
     }
 
     /// The Rust path this failure missed below a wholesale crate
@@ -261,7 +293,7 @@ impl Error {
     #[must_use]
     pub fn rust_demand(&self) -> Option<&str> {
         self.rust_demand
-            .as_ref()
+            .first()
             .filter(|(_, through_alias, _)| *through_alias)
             .map(|(path, _, _)| &**path)
     }
@@ -273,7 +305,7 @@ impl Error {
     #[doc(hidden)]
     #[must_use]
     pub fn rust_miss(&self) -> Option<&str> {
-        self.rust_demand.as_ref().map(|(path, _, _)| &**path)
+        self.rust_demand.first().map(|(path, _, _)| &**path)
     }
 
     /// The type whose member this failure missed (`a::Type` of
@@ -283,7 +315,7 @@ impl Error {
     #[must_use]
     pub fn rust_member_owner(&self) -> Option<&str> {
         self.rust_demand
-            .as_ref()
+            .first()
             .filter(|(_, _, member)| *member)
             .and_then(|(path, _, _)| path.rsplit_once("::"))
             .map(|(owner, _)| owner)

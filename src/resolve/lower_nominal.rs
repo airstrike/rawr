@@ -124,6 +124,9 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
     let mut offset = 0;
+    // A body that misses an item Rawr doesn't know doesn't stop the pass:
+    // the next bodies' misses are asked for with it (#662).
+    let mut missed = None;
 
     for shell in program.items.iter() {
         let item::Kind::Function(definition) = &shell.kind else {
@@ -146,30 +149,44 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
                 .unwrap_or_else(|| program.source.text_at(shell.source)),
             &definition.body,
         );
-        let mut parser = Parser::for_function(
-            engine,
-            &body_source,
-            models.for_source(shell.source),
-            definition,
-            shell
-                .key
-                .clone()
-                .expect("resolved functions retain stable item keys"),
-            offset,
-            0,
-            Some(ImportedContext {
-                native: None,
-                allocation,
-                failure: &mut allocation_failure,
-                source: shell.source,
-                uses: &mut uses,
-                dependencies: &mut dependencies,
-            }),
-        );
-        parser.symbolic_only = true;
-        let lowered = parser.parse_function_body(definition);
-        drop(parser);
-        let lowered = imported_result(lowered, &mut allocation_failure, shell.source)?;
+        let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
+            let mut parser = Parser::for_function(
+                engine,
+                &body_source,
+                models.for_source(shell.source),
+                definition,
+                shell
+                    .key
+                    .clone()
+                    .expect("resolved functions retain stable item keys"),
+                offset,
+                0,
+                Some(ImportedContext {
+                    native: None,
+                    allocation: &mut *allocation,
+                    failure,
+                    source: shell.source,
+                    uses: &mut uses,
+                    dependencies: &mut dependencies,
+                }),
+            );
+            parser.symbolic_only = true;
+            parser.recover_misses = recover;
+            let lowered = parser.parse_function_body(definition);
+            (lowered, std::mem::take(&mut parser.recovered))
+        };
+        let (lowered, _) = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let Some(lowered) = body(
+            lowered,
+            more,
+            &mut allocation_failure,
+            shell.source,
+            &mut missed,
+        )?
+        else {
+            continue;
+        };
         for operation in &lowered.ops {
             dependencies.extend(operation.dependencies());
         }
@@ -190,32 +207,43 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
                 .unwrap_or_else(|| program.source.text_at(definition.source())),
             definition.body(),
         );
-        let mut parser = Parser::for_method(
-            engine,
-            &body_source,
-            models.for_source(definition.source()),
-            definition,
-            offset,
-            0,
-            Some(ImportedContext {
-                native: None,
-                allocation,
-                failure: &mut allocation_failure,
-                source: definition.source(),
-                uses: &mut uses,
-                dependencies: &mut dependencies,
-            }),
-        )
-        .map_err(|error| {
-            super::ImportedFailure::Lowering(LoweringFailure::original(
-                definition.source(),
-                error.into(),
-            ))
-        })?;
-        parser.symbolic_only = true;
-        let lowered = parser.parse_method_body(definition);
-        drop(parser);
-        let lowered = imported_result(lowered, &mut allocation_failure, definition.source())?;
+        let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
+            let mut parser = match Parser::for_method(
+                engine,
+                &body_source,
+                models.for_source(definition.source()),
+                definition,
+                offset,
+                0,
+                Some(ImportedContext {
+                    native: None,
+                    allocation: &mut *allocation,
+                    failure,
+                    source: definition.source(),
+                    uses: &mut uses,
+                    dependencies: &mut dependencies,
+                }),
+            ) {
+                Ok(parser) => parser,
+                Err(error) => return (Err(error), Vec::new()),
+            };
+            parser.symbolic_only = true;
+            parser.recover_misses = recover;
+            let lowered = parser.parse_method_body(definition);
+            (lowered, std::mem::take(&mut parser.recovered))
+        };
+        let (lowered, _) = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let Some(lowered) = body(
+            lowered,
+            more,
+            &mut allocation_failure,
+            definition.source(),
+            &mut missed,
+        )?
+        else {
+            continue;
+        };
         for operation in &lowered.ops {
             dependencies.extend(operation.dependencies());
         }
@@ -227,25 +255,40 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         .iter()
         .find(|script| script.source == program.source.entry())
         .expect("resolved package programs retain their entry script");
-    let mut parser = Parser::new_with_offset(
-        engine,
-        &script.text,
-        models.for_source(script.source),
-        offset,
-        0,
-        Some(ImportedContext {
-            native: None,
-            allocation,
-            failure: &mut allocation_failure,
-            source: script.source,
-            uses: &mut uses,
-            dependencies: &mut dependencies,
-        }),
-    );
-    parser.symbolic_only = true;
-    let lowered = parser.parse();
-    drop(parser);
-    let lowered = imported_result(lowered, &mut allocation_failure, script.source)?;
+    let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
+        let mut parser = Parser::new_with_offset(
+            engine,
+            &script.text,
+            models.for_source(script.source),
+            offset,
+            0,
+            Some(ImportedContext {
+                native: None,
+                allocation: &mut *allocation,
+                failure,
+                source: script.source,
+                uses: &mut uses,
+                dependencies: &mut dependencies,
+            }),
+        );
+        parser.symbolic_only = true;
+        parser.recover_misses = recover;
+        let lowered = parser.parse();
+        (lowered, std::mem::take(&mut parser.recovered))
+    };
+    let (lowered, _) = lower(false, &mut allocation_failure);
+    let (lowered, more) = again(lowered, || lower(true, &mut None));
+    let lowered = body(
+        lowered,
+        more,
+        &mut allocation_failure,
+        script.source,
+        &mut missed,
+    )?;
+    if let Some(missed) = missed {
+        return Err(super::ImportedFailure::Lowering(missed));
+    }
+    let lowered = lowered.expect("a failed script body is missed");
     for operation in &lowered.ops {
         dependencies.extend(operation.dependencies());
     }
@@ -355,6 +398,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
             let mut uses = Vec::new();
             let mut dependencies = BTreeSet::new();
             let mut allocation_failure = None;
+            let recovered;
             let (source, result) = match next {
                 Pending::Function(index) => {
                     let shell = &program.items[index];
@@ -369,39 +413,47 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             .unwrap_or_else(|| program.source.text_at(shell.source)),
                         &definition.body,
                     );
-                    let mut parser = Parser::for_function(
-                        engine,
-                        &body_source,
-                        models.for_source(shell.source),
-                        definition,
-                        shell
-                            .key
-                            .clone()
-                            .expect("resolved functions retain stable item keys"),
-                        0,
-                        0,
-                        Some(ImportedContext {
-                            native: None,
-                            allocation,
-                            failure: &mut allocation_failure,
-                            source: shell.source,
-                            uses: &mut uses,
-                            dependencies: &mut dependencies,
-                        }),
-                    );
-                    parser.symbolic_only = true;
                     let output = definition
                         .output
                         .as_ref()
                         .expect("an opaque function declares its output");
-                    let result = parser.opaque_expected(output).and_then(|expected| {
-                        parser.return_ty = Some(expected.clone());
-                        parser.revealing = Some(expected.clone());
-                        parser.parse_function_body(definition)?;
-                        parser.fix_opaque(output, &expected)?;
-                        let hidden = parser.inference.resolve(&expected);
-                        named_output(output, &hidden, &parser.models)
-                    });
+                    let mut lower =
+                        |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
+                            let mut parser = Parser::for_function(
+                                engine,
+                                &body_source,
+                                models.for_source(shell.source),
+                                definition,
+                                shell
+                                    .key
+                                    .clone()
+                                    .expect("resolved functions retain stable item keys"),
+                                0,
+                                0,
+                                Some(ImportedContext {
+                                    native: None,
+                                    allocation: &mut *allocation,
+                                    failure,
+                                    source: shell.source,
+                                    uses: &mut uses,
+                                    dependencies: &mut dependencies,
+                                }),
+                            );
+                            parser.symbolic_only = true;
+                            parser.recover_misses = recover;
+                            let result = parser.opaque_expected(output).and_then(|expected| {
+                                parser.return_ty = Some(expected.clone());
+                                parser.revealing = Some(expected.clone());
+                                parser.parse_function_body(definition)?;
+                                parser.fix_opaque(output, &expected)?;
+                                let hidden = parser.inference.resolve(&expected);
+                                named_output(output, &hidden, &parser.models)
+                            });
+                            (result, std::mem::take(&mut parser.recovered))
+                        };
+                    let (result, _) = lower(false, &mut allocation_failure);
+                    let (result, more) = again(result, || lower(true, &mut None));
+                    recovered = more;
                     (shell.source, result)
                 }
                 Pending::Method(index) => {
@@ -412,37 +464,47 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             .unwrap_or_else(|| program.source.text_at(definition.source())),
                         definition.body(),
                     );
-                    let result = Parser::for_method(
-                        engine,
-                        &body_source,
-                        models.for_source(definition.source()),
-                        definition,
-                        0,
-                        0,
-                        Some(ImportedContext {
-                            native: None,
-                            allocation,
-                            failure: &mut allocation_failure,
-                            source: definition.source(),
-                            uses: &mut uses,
-                            dependencies: &mut dependencies,
-                        }),
-                    )
-                    .and_then(|mut parser| {
-                        parser.symbolic_only = true;
-                        let output = definition.output();
-                        let expected = parser.opaque_expected(output)?;
-                        parser.return_ty = Some(expected.clone());
-                        parser.revealing = Some(expected.clone());
-                        parser.parse_method_body(definition)?;
-                        parser.fix_opaque(output, &expected)?;
-                        let hidden = parser.inference.resolve(&expected);
-                        named_output(output, &hidden, &parser.models)
-                    });
+                    let mut lower =
+                        |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
+                            let mut parser = match Parser::for_method(
+                                engine,
+                                &body_source,
+                                models.for_source(definition.source()),
+                                definition,
+                                0,
+                                0,
+                                Some(ImportedContext {
+                                    native: None,
+                                    allocation: &mut *allocation,
+                                    failure,
+                                    source: definition.source(),
+                                    uses: &mut uses,
+                                    dependencies: &mut dependencies,
+                                }),
+                            ) {
+                                Ok(parser) => parser,
+                                Err(error) => return (Err(error), Vec::new()),
+                            };
+                            parser.symbolic_only = true;
+                            parser.recover_misses = recover;
+                            let output = definition.output();
+                            let result = parser.opaque_expected(output).and_then(|expected| {
+                                parser.return_ty = Some(expected.clone());
+                                parser.revealing = Some(expected.clone());
+                                parser.parse_method_body(definition)?;
+                                parser.fix_opaque(output, &expected)?;
+                                let hidden = parser.inference.resolve(&expected);
+                                named_output(output, &hidden, &parser.models)
+                            });
+                            (result, std::mem::take(&mut parser.recovered))
+                        };
+                    let (result, _) = lower(false, &mut allocation_failure);
+                    let (result, more) = again(result, || lower(true, &mut None));
+                    recovered = more;
                     (definition.source(), result)
                 }
             };
-            match imported_result(result, &mut allocation_failure, source) {
+            match recovered_result(result, recovered, &mut allocation_failure, source) {
                 Ok(output) => revealed.push((next, output)),
                 Err(super::ImportedFailure::Surface(error)) => {
                     return Err(super::ImportedFailure::Surface(error));
@@ -456,9 +518,16 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                 Err(super::ImportedFailure::Lowering(failure)) => {
                     waiting.push(next);
                     if failure.names_unknown() {
-                        first_unknown.get_or_insert(failure);
+                        // Every body's miss is asked for at once (#662).
+                        match &mut first_unknown {
+                            Some(first) => LoweringFailure::also(first, failure),
+                            None => first_unknown = Some(failure),
+                        }
                     } else {
-                        first_failure.get_or_insert(failure);
+                        match &mut first_failure {
+                            Some(first) => LoweringFailure::also(first, failure),
+                            None => first_failure = Some(failure),
+                        }
                     }
                 }
             }
@@ -467,9 +536,14 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         // reveal to wait for.
         if revealed.is_empty() && added.is_empty() {
             return Err(super::ImportedFailure::Lowering(
-                first_unknown
-                    .or(first_failure)
-                    .expect("an unrevealed round keeps its failure"),
+                match (first_unknown, first_failure) {
+                    (Some(mut unknown), Some(failure)) => {
+                        unknown.also(failure);
+                        Some(unknown)
+                    }
+                    (unknown, failure) => unknown.or(failure),
+                }
+                .expect("an unrevealed round keeps its failure"),
             ));
         }
         for (next, output) in revealed {
@@ -1346,6 +1420,84 @@ pub(crate) struct ImportedOutput {
     /// The script's impls of dependencies' traits, by the script path of
     /// the type each is for (D594).
     pub(crate) impls: Box<[(Box<str>, rawr_import::surface::instance::ScriptImpl)]>,
+}
+
+/// A body's lowering in a pass that goes on past misses (#662), as
+/// `recovered_result` and then `missing` take it.
+#[cfg(feature = "rust-import")]
+fn body<T>(
+    lowered: Result<T, Error>,
+    more: Vec<Error>,
+    allocation_failure: &mut Option<rawr_import::surface::Error>,
+    source: crate::program::source::Id,
+    missed: &mut Option<LoweringFailure>,
+) -> Result<Option<T>, super::ImportedFailure> {
+    missing(
+        recovered_result(lowered, more, allocation_failure, source),
+        missed,
+    )
+}
+
+/// A body's first lowering is its result. One that missed an item Rawr
+/// doesn't know is lowered once more, going on past each miss
+/// (`recover_miss`), for what else it misses (#662). Only the first
+/// lowering decides: going on past a miss would also take a candidate
+/// that the first lowering tried and set aside.
+#[cfg(feature = "rust-import")]
+fn again<T>(
+    lowered: Result<T, Error>,
+    recover: impl FnOnce() -> (Result<T, Error>, Vec<Error>),
+) -> (Result<T, Error>, Vec<Error>) {
+    match lowered {
+        Err(error) if LoweringFailure::miss_of(&error).is_some() => {
+            let (second, mut more) = recover();
+            more.extend(second.err());
+            more.retain(|other| *other != error);
+            (Err(error), more)
+        }
+        lowered => (lowered, Vec::new()),
+    }
+}
+
+/// A body's lowering, with what a second lowering of it missed besides
+/// (`again`) kept beside its failure.
+#[cfg(feature = "rust-import")]
+fn recovered_result<T>(
+    lowered: Result<T, Error>,
+    more: Vec<Error>,
+    allocation_failure: &mut Option<rawr_import::surface::Error>,
+    source: crate::program::source::Id,
+) -> Result<T, super::ImportedFailure> {
+    match imported_result(lowered, allocation_failure, source) {
+        Err(super::ImportedFailure::Lowering(mut failure)) => {
+            failure.keep(more);
+            Err(super::ImportedFailure::Lowering(failure))
+        }
+        result => result,
+    }
+}
+
+/// A body's result in a pass that goes on past misses (#662): `None` for a
+/// body that failed once an earlier body missed an item Rawr doesn't know,
+/// whose miss is kept with that one when it names one too. The first
+/// failure is the pass's error, as when the pass stopped at it.
+#[cfg(feature = "rust-import")]
+fn missing<T>(
+    result: Result<T, super::ImportedFailure>,
+    missed: &mut Option<LoweringFailure>,
+) -> Result<Option<T>, super::ImportedFailure> {
+    match (result, missed.as_mut()) {
+        (Ok(value), _) => Ok(Some(value)),
+        (Err(super::ImportedFailure::Lowering(failure)), Some(first)) => {
+            first.also(failure);
+            Ok(None)
+        }
+        (Err(super::ImportedFailure::Lowering(failure)), None) if failure.missed() => {
+            *missed = Some(failure);
+            Ok(None)
+        }
+        (Err(failure), _) => Err(failure),
+    }
 }
 
 #[cfg(feature = "rust-import")]
@@ -11003,6 +11155,17 @@ struct Parser<'a> {
     expression_paths: Vec<(Span, Box<[u32]>)>,
     normalize_private_calls: bool,
     symbolic_only: bool,
+    /// In a pass that asks the crates for every miss at once (#662): a
+    /// method an imported type lacks is kept in `recovered`, and the body
+    /// goes on to its next miss (`recover_miss`).
+    #[cfg(feature = "rust-import")]
+    recover_misses: bool,
+    #[cfg(feature = "rust-import")]
+    recovered: Vec<Error>,
+    /// Where a recovered call of a type Rawr doesn't know starts, with the
+    /// type: the members the body calls on it are that type's misses too.
+    #[cfg(feature = "rust-import")]
+    recovered_types: Vec<(Position, ImmutableString)>,
     /// While revealing an opaque return type (`reveal`): the declared
     /// output with an inference variable for each `impl Trait`, which the
     /// body's tail and `return`s are checked against in its place.
@@ -11413,6 +11576,12 @@ impl<'a> Parser<'a> {
             expression_paths: Vec::new(),
             normalize_private_calls: true,
             symbolic_only: false,
+            #[cfg(feature = "rust-import")]
+            recover_misses: false,
+            #[cfg(feature = "rust-import")]
+            recovered: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            recovered_types: Vec::new(),
             #[cfg(feature = "rust-import")]
             revealing: None,
             loops: Vec::new(),
@@ -19740,7 +19909,8 @@ impl<'a> Parser<'a> {
                 && (self.pending_arguments.is_some()
                     || matches!(self.peek(), Token::LeftParen | Token::Unit))
             {
-                return self.parse_applied_method(
+                let start = receiver.span.start();
+                let applied = self.parse_applied_method(
                     receiver,
                     &definition,
                     member,
@@ -19748,6 +19918,7 @@ impl<'a> Parser<'a> {
                     member_span,
                     Some(error),
                 );
+                return self.recover_miss(applied, start);
             }
             return Err(error);
         };
@@ -20152,6 +20323,64 @@ impl<'a> Parser<'a> {
             .into(),
             operation: at,
         })
+    }
+
+    /// A call of something Rawr doesn't know, as a method an imported type
+    /// has no member for, in a pass that asks the crates for every miss at
+    /// once (#662): the miss is kept, the
+    /// arguments the call did not read are passed over, and the call reads
+    /// as `!`, which any place takes, so the body goes on to its next miss.
+    /// The pass fails with the first miss it kept. Any other result is as
+    /// it was.
+    #[cfg(feature = "rust-import")]
+    fn recover_miss(
+        &mut self,
+        result: Result<ParsedExpr, Error>,
+        start: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let Err(error) = result else {
+            return result;
+        };
+        let missed = match &error {
+            Error::UnknownMember { .. }
+            | Error::UnknownType { .. }
+            | Error::UnknownImport { .. } => true,
+            Error::ImportedApplicationRequired { miss, .. } => miss.is_some(),
+            _ => false,
+        };
+        if !self.recover_misses || !missed || self.pending_arguments.is_some() {
+            return Err(error);
+        }
+        let mut end = self.position();
+        if matches!(self.peek(), Token::Unit) {
+            end = self.next().1;
+        } else if matches!(self.peek(), Token::LeftParen) {
+            let mut depth = 0usize;
+            loop {
+                match self.next() {
+                    (
+                        Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart,
+                        _,
+                    ) => {
+                        depth += 1;
+                    }
+                    (Token::RightBrace | Token::RightParen | Token::RightBracket, position) => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            end = position;
+                            break;
+                        }
+                    }
+                    (Token::EOF, _) => return Err(error),
+                    _ => {}
+                }
+            }
+        }
+        if let Error::UnknownType { name, .. } = &error {
+            self.recovered_types.push((start, name.clone()));
+        }
+        self.recovered.push(error);
+        Ok(self.operator_expr(origin::Fragment::from("()"), Ty::Never, span(start, end)))
     }
 
     /// `value.method(..)` of an imported type that only a proof-backed
@@ -33516,6 +33745,33 @@ impl<'a> Parser<'a> {
                     self.expect_member_name()?
                 }
             };
+            // A member of a call a recovered miss stands for (`recover_miss`)
+            // is that miss's too: `!` again. A member of the call of a type
+            // Rawr doesn't know (`Column::with_children(..).spacing(10)`) is
+            // asked of that type; any other names nothing more to ask.
+            #[cfg(feature = "rust-import")]
+            if self.recover_misses
+                && !self.recovered.is_empty()
+                && matches!(self.inference.resolve(&value.ty), Ty::Never)
+            {
+                let start = value.span.start();
+                let owner = self
+                    .recovered_types
+                    .iter()
+                    .find(|(at, _)| *at == start)
+                    .map(|(_, owner)| owner.clone());
+                let known = owner.is_some();
+                let absorbed = Error::UnknownMember {
+                    owner: owner.unwrap_or_else(|| "!".into()),
+                    member,
+                    reference: member_span,
+                };
+                value = self.recover_miss(Err(absorbed), start)?;
+                if !known {
+                    self.recovered.pop();
+                }
+                continue;
+            }
             // A method call borrows its place; a field is a place below it.
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 self.call_on_place(&value);
@@ -44408,6 +44664,11 @@ impl<'a> Parser<'a> {
                 };
                 #[cfg(feature = "rust-import")]
                 let error = self.native_miss(native, error);
+                // A crate's path call, as a macro's `$crate::core::Widget::
+                // _boxed(x)`: the pass goes on to the body's next miss.
+                #[cfg(feature = "rust-import")]
+                return self.recover_miss(Err(error), member_span.start());
+                #[cfg(not(feature = "rust-import"))]
                 return Err(error);
             };
             let item_owner = self.models.item_owner(&path).cloned();
@@ -44736,6 +44997,11 @@ impl<'a> Parser<'a> {
             };
             #[cfg(feature = "rust-import")]
             let error = self.native_miss(native, error);
+            // A crate's path call, as a macro's `$crate::core::Widget::
+            // _boxed(x)`: the pass goes on to the body's next miss.
+            #[cfg(feature = "rust-import")]
+            return self.recover_miss(Err(error), owner_span.start());
+            #[cfg(not(feature = "rust-import"))]
             return Err(error);
         };
 
