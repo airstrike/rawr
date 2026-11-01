@@ -35,10 +35,12 @@ on:
   #     - ".dockerignore"
   #     - ".github/workflows/release.yml"
 
-# One release at a time. A queued one waits rather than cancelling a deploy.
+# One release or site deploy (site.yml) at a time. `queue: max` keeps every
+# waiting run in order, so a queued one never cancels another.
 concurrency:
   group: release-play
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -83,7 +85,9 @@ jobs:
         with:
           name: web
           path: target/web
-          retention-days: 7
+          # site.yml deploys this rawr-web again with the image until the
+          # next release replaces both.
+          retention-days: 90
 
   image:
     runs-on: ubuntu-latest
@@ -208,18 +212,13 @@ jobs:
           name: web
           path: play/deploy/cloudflare/public/web
 
-      # wrangler has no flag for the container image, so the job's own copy
-      # of wrangler.jsonc names it. PLAY_VERSION tells the bot to restart.
+      # The job's own copy of wrangler.jsonc names the image and its tag as
+      # PLAY_VERSION, which tells the bot to restart.
       - name: Point wrangler.jsonc at the image
         working-directory: play/deploy/cloudflare
         env:
           IMAGE: ${{ steps.image.outputs.ref }}
-          SHA: ${{ steps.image.outputs.sha }}
-        run: |
-          sed -i -E "s|\"image\": \"[^\"]*\"|\"image\": \"$IMAGE\"|" wrangler.jsonc
-          sed -i -E "s|\"PLAY_VERSION\": \"[^\"]*\"|\"PLAY_VERSION\": \"$SHA\"|" wrangler.jsonc
-          grep -F -e "$IMAGE" wrangler.jsonc
-          grep -F -e "\"PLAY_VERSION\": \"$SHA\"" wrangler.jsonc
+        run: ./pin-image.sh "$IMAGE"
 
       # PLAY_SMOKE_TOKEN lets the smoke test skip /play/run's per-IP limit.
       - name: Test, deploy and check the site

@@ -299,15 +299,35 @@ cache, so a later run recompiles only the workspace crates. The job adds
 builds the site and runs the Worker's and the site's tests, so a broken site
 stops the release before an image is built or pushed.
 
-The job pushes the image as `rawr-play:<commit>`. It writes that image and
-`PLAY_VERSION` into its own copy of `wrangler.jsonc` and runs `deploy.sh`.
-It never commits, so the committed `wrangler.jsonc` keeps the last image
-`release.sh` pushed. A local `npm run release:worker` would deploy that older
-image, so release from one place at a time. The job never sees the Discord
-token, which stays among the Worker's secrets.
+The job pushes the image as `rawr-play:<commit>`. `pin-image.sh` writes that
+image and `PLAY_VERSION` into the job's own copy of `wrangler.jsonc`, and the
+job runs `deploy.sh`. It never commits, so the committed `wrangler.jsonc`
+keeps the last image `release.sh` pushed. `npm run release:worker` runs
+`pin-image.sh` with no image, which reads the image Cloudflare runs, so it
+never deploys that older one. The job never sees the Discord token, which
+stays among the Worker's secrets.
 
 The job waits for the `web` job's rawr-web artifact before it deploys, so
-the deploy runs on the same runner as the image build.
+the deploy runs on the same runner as the image build. The artifact is kept
+90 days for the site's deploys.
+
+### Deploy the site between releases
+
+`.github/workflows/site.yml` runs on every push to main that changes `plan/`
+or `site/`, so `/todo`, the changelog and the docs go live within minutes of
+a plan or docs commit. It builds no image. `pin-image.sh` points
+`wrangler.jsonc` at the image Cloudflare runs, and the job downloads the
+`web` artifact of the release run at that image's commit into `public/web`,
+since a deploy replaces every asset. Then it runs `deploy.sh`: the build,
+the Worker's and the site's tests, the deploy, the wait for the bot and the
+site's snippets. The container keeps its image, so its rollout is a no-op.
+
+It shares the release's concurrency group, `release-play`, with
+`queue: max`. A deploy never runs beside a release, and a waiting run never
+cancels another. The site job reads the running image only once its turn
+comes, so a release that ran before it is never rolled back. A release made
+from a Mac uploads no `web` artifact, so the site job fails until the next
+release from GitHub.
 
 The repository needs two secrets and one variable, under Settings → Secrets
 and variables → Actions:

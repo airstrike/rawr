@@ -1,0 +1,99 @@
+# Deploy the site and the Worker when a push to main changes them, with the
+# ?play image Cloudflare already runs. /todo, the changelog and the docs are
+# static pages of the site, so a plan commit or a docs change goes live
+# within minutes instead of at the next release. Nothing is built but the
+# site: the container keeps its image, and the Worker's assets keep the
+# rawr-web that the release which built that image uploaded.
+# It shares the release's concurrency group, queued, so a deploy never runs
+# beside a release, and it reads the running image only once its turn comes.
+# It needs the same secrets and variable as release.yml.
+name: Deploy the site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "plan/**"
+      - "site/**"
+      - ".github/workflows/site.yml"
+
+# The release's group. `queue: max` keeps every waiting run in order, so a
+# push never cancels a waiting release and a release never cancels a push.
+concurrency:
+  group: release-play
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+  # The rawr-web artifact of the release that built the running image.
+  actions: read
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: play/deploy/cloudflare
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install the site's dependencies
+        working-directory: site
+        run: npm ci --no-audit --no-fund
+
+      # The lock file is not committed yet, so this is `npm install`, not `npm ci`.
+      - name: Install the Worker's dependencies
+        run: npm install --no-audit --no-fund
+
+      # Read here, inside the group, so a release that ran just before is seen.
+      - name: Point wrangler.jsonc at the running image
+        id: image
+        run: |
+          tag="$(./pin-image.sh)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Cloudflare runs rawr-play:$tag"
+
+      # A deploy replaces every asset, so /web must hold the rawr-web that is
+      # live now: the `web` artifact of the release run at the image's commit.
+      - name: Fetch that release's rawr-web
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=web&per_page=100" \
+            --jq "[.artifacts[] | select(.expired | not) | select(.workflow_run.head_sha | startswith(\"$TAG\"))][0].workflow_run.id // empty")"
+          if [ -z "$run" ]; then
+            echo "no unexpired rawr-web artifact from a release of $TAG; run the release workflow" >&2
+            exit 1
+          fi
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name web --dir public/web
+          ls -l public/web
+
+      # deploy.sh builds the site, runs the Worker's and the site's tests,
+      # deploys, waits for the bot to report the pinned image and runs the
+      # site's snippets.
+      - name: Test, deploy and check the site
+        env:
+          PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}
+        run: ./deploy.sh
+
+      - name: Show the logs
+        if: failure()
+        working-directory: .
+        run: |
+          for log in target/logs/*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log"
+            cat "$log"
+            echo "::endgroup::"
+          done

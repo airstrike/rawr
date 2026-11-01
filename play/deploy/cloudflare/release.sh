@@ -25,6 +25,10 @@ fi
 cd "$here"
 if [ "${1:-}" != "--worker" ]; then
   ./push-image.sh
+else
+  # Keep the image Cloudflare runs, which a GitHub release may have advanced
+  # past the committed wrangler.jsonc.
+  ./pin-image.sh >/dev/null
 fi
 ./deploy.sh
 want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
