@@ -5,10 +5,12 @@
 // ..)` takes a range of floats as the `RangeInclusive<f64>` its value's
 // `f64` makes it, and `slider(0.0..=1.0, ..)` one of `f32`; and a style's
 // `background: Some(Color { .. }.into())` converts the crate's `Color` into
-// its `Background` through `From`.
+// its `Background` through `From`. `Id::from` of a literal takes the
+// `From<&'static str>` impl and of a `String` the `From<String>` one, as
+// rustc picks them by the argument's type.
 
 use events::controls::slider;
-use events::conversions::{frame, Style};
+use events::conversions::{frame, Id, Style};
 use events::widgets::{column, Widget};
 use events::Color;
 
@@ -50,6 +52,8 @@ impl Conversions {
             frame(label).padding([10, 20]).on_press(Message::Confirm),
             frame("one").padding(4),
             frame("floats").padding([1.5, 2.5]),
+            frame(Id::from("literal").name()),
+            frame(Id::from(format!("task-{}", 1)).name()),
             slider(1.0..=30.0, self.timeout, Message::Timeout),
             slider(0.0..=1.0, self.level, move |level| Message::Level(level)),
             frame("dim").style(|_theme| Style {

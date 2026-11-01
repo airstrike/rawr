@@ -50,6 +50,30 @@ impl From<[f32; 2]> for Padding {
     }
 }
 
+/// A widget's name, as iced's `widget::Id`, from a `&'static str` or a
+/// `String`: rustc picks the impl by the argument's type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Id(String);
+
+impl From<&'static str> for Id {
+    fn from(name: &'static str) -> Self {
+        Id(format!("static-{name}"))
+    }
+}
+
+impl From<String> for Id {
+    fn from(name: String) -> Self {
+        Id(format!("owned-{name}"))
+    }
+}
+
+impl Id {
+    /// The name, with the impl that made it.
+    pub fn name(&self) -> String {
+        self.0.clone()
+    }
+}
+
 /// What a frame is filled with, as iced's `Background`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Background {

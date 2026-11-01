@@ -606,6 +606,8 @@ fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
 /// `RangeInclusive<T>` at the `f64` or `f32` its value gives `T`, and
 /// `Some(color.into())` where a field takes `Option<Background>` converts
 /// through `Background`'s `From<Color>`, which the program never names.
+/// iced's todos: `Id::from` has a `From<&'static str>` and a `From<String>`
+/// impl, both Rawr's string, and the argument's type picks one (T580).
 /// The output is `cargo run`'s.
 #[test]
 fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
@@ -613,6 +615,7 @@ fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("[pair 10x20 None/0] [one 4x4 None/0] [floats 1.5x2.5 None/0]")
+            && rawr.contains("[static-literal 0x0 None/0] [owned-task-1 0x0 None/0]")
             && rawr.contains("2 message Timeout(30.0)")
             && rawr.contains("1.0..=30.0@30.0/None 0.0..=1.0@0.5/None")
             && rawr.contains("[dim 0x0 Some(Color(Color { r: 9, g: 0, b: 0 }))/0]"),

@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 28;
+const SCHEMA: u32 = 29;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -3271,7 +3271,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         .try_reserve_exact(source.inputs().len())
         .map_err(|_| super::Error::Allocation)?;
     for input in source.inputs() {
-        inputs.push(ty(input, source.parameters())?);
+        inputs.push(input_ty(input, source.parameters())?);
     }
     Ok(Signature {
         parameters,
@@ -3418,7 +3418,7 @@ fn callable_signature(
             representability::convert::Type::Option(inner) if let Some(call) = made(inner) => {
                 Type::Option(Box::new(closure(call)?))
             }
-            input => ty(input, all)?,
+            input => input_ty(input, all)?,
         });
     }
     Ok(Signature {
@@ -3521,6 +3521,23 @@ fn defaults(
         );
     }
     Ok(output.into_boxed_slice())
+}
+
+/// An item's input. A `&str` or `&'static str` is a shared reference to
+/// the string, as rustc sees it, so it stays apart from a `String` input:
+/// iced's `Id::from` has both, and the argument picks one.
+fn input_ty(
+    source: &representability::convert::Type,
+    parameters: &[representability::signature::Parameter],
+) -> Result<Type, super::Error> {
+    use representability::convert::{Builtin, Type as Source};
+    Ok(match source {
+        Source::Builtin(Builtin::Str | Builtin::StaticStr) => Type::Reference {
+            mutable: false,
+            target: Box::new(Type::String),
+        },
+        source => ty(source, parameters)?,
+    })
 }
 
 fn ty(

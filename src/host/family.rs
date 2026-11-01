@@ -15,20 +15,28 @@ pub(crate) enum Admission {
     Pending(Pending),
 }
 
-/// Two distinct imported method definitions can require contextual lookup.
-/// Repeated selectors, ordinary host items and non-methods keep the ordinary
-/// facade rules, including malformed duplicate declaration errors.
+/// Two distinct imported callable definitions of one kind can require
+/// contextual lookup: two impls' methods, or two impls' associated
+/// functions, as `From<A>::from` and `From<B>::from` when Rawr's types of
+/// `A` and `B` are one. Repeated selectors, ordinary host items and
+/// non-callables keep the ordinary facade rules, including malformed
+/// duplicate declaration errors.
 pub(crate) fn distinct(left: &host::item::Definition, right: &host::item::Definition) -> bool {
+    left.kind() == right.kind()
+        && matches!((callable(left), callable(right)), (Some(left), Some(right)) if left != right)
+}
+
+/// The definition an imported method or function stands for.
+fn callable(
+    definition: &host::item::Definition,
+) -> Option<&rawr_import::surface::identity::Definition> {
     use rawr_import::surface::identity::Selector;
-    matches!(
-        (left.kind(), left.imported_identity(), right.kind(), right.imported_identity()),
-        (
-            host::item::Kind::Method,
-            Some(Selector::Method { item: left, .. }),
-            host::item::Kind::Method,
-            Some(Selector::Method { item: right, .. }),
-        ) if left != right
-    )
+    match (definition.kind(), definition.imported_identity()) {
+        (host::item::Kind::Method, Some(Selector::Method { item, .. }))
+        | (host::item::Kind::AssociatedFunction, Some(Selector::AssociatedFunction { item }))
+        | (host::item::Kind::Function, Some(Selector::Function { item })) => Some(item),
+        _ => None,
+    }
 }
 
 impl Pending {
@@ -180,7 +188,7 @@ mod tests {
         let mut allocation = host::TestImportAllocation::default();
         let cloned = registry.clone_for_import(&mut allocation).unwrap();
         let expected = allocation.usage();
-        let family = cloned.pending_method("fixture::Alias::choose").unwrap();
+        let family = cloned.pending_family("fixture::Alias::choose").unwrap();
         assert_eq!(family.len(), 2);
         assert_eq!(
             family
@@ -313,6 +321,53 @@ mod tests {
                 );
                 assert!(!error.to_string().contains("return-only overloads"));
             }
+        }
+    }
+
+    /// Two impls' `from` whose inputs are one type in Rawr, as two `From`
+    /// impls of types Rawr doesn't tell apart: the facade keeps them, and
+    /// only a call of `from` is reported, at the call.
+    #[test]
+    fn a_family_of_associated_functions_is_reported_only_where_it_is_called() {
+        let from = |id: u8| {
+            let mut signature = host::signature::Builder::new();
+            signature.parameter(host::type_ref::Type::builtin(host::type_ref::Builtin::I64));
+            signature.output(host::type_ref::Type::registered("Marker").unwrap());
+            host::item::Definition::associated_function("Marker::from", signature.finish())
+                .unwrap()
+                .imported(identity::Selector::AssociatedFunction {
+                    item: identity::Definition::authenticated([id; 32]),
+                })
+        };
+        let mut allocation = host::TestImportAllocation::default();
+        let mut builder = host::facade::Builder::new_imported(
+            "fixture",
+            host::facade::Abi::new(1).unwrap(),
+            &mut allocation,
+        )
+        .unwrap();
+        builder.type_::<()>("Marker", &[], &[]).unwrap();
+        builder.imported_item(from(1)).unwrap();
+        builder.imported_item(from(2)).unwrap();
+        let (ordinary, families) = builder.finish_imported(&mut allocation).unwrap();
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].len(), 2);
+        let mut engine = crate::Engine::new();
+        engine.register_host_facade(ordinary).unwrap();
+        engine.host_registry.defer_imported(families).unwrap();
+        engine
+            .compile_executable("fn unused(value: fixture::Marker) { 1; }")
+            .unwrap();
+        for source in [
+            "fn used() -> fixture::Marker { fixture::Marker::from(1) }",
+            "use fixture::Marker;\nfn used() -> Marker { Marker::from(1) }",
+        ] {
+            let error = match engine.compile_executable(source) {
+                Ok(_) => panic!("Rawr can't pick one of the impls: {source}"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("impls of the crate provide it"), "{error}");
+            assert!(!error.contains("return-only overloads"), "{error}");
         }
     }
 }

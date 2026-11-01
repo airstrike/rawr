@@ -2831,6 +2831,25 @@ impl Types {
         Self::convert_charged(ty, parameters)
     }
 
+    /// An item's input. A `&str` or `&'static str` is a shared reference to
+    /// the string, as rustc sees it, so it stays apart from a `String`
+    /// input: iced's `Id::from` has both, and the argument picks one.
+    fn convert_input(
+        &self,
+        ty: &representability::convert::Type,
+        parameters: &[representability::signature::Parameter],
+        allocation: &mut rawr_import::contract::Allocation,
+    ) -> Result<host::type_ref::Type, Error> {
+        let converted = self.convert(ty, parameters, allocation)?;
+        Ok(match ty {
+            representability::convert::Type::Builtin(
+                representability::convert::Builtin::Str
+                | representability::convert::Builtin::StaticStr,
+            ) => host::type_ref::Type::reference(false, converted),
+            _ => converted,
+        })
+    }
+
     fn convert_charged(
         ty: &representability::convert::Type,
         parameters: &[representability::signature::Parameter],
@@ -3034,7 +3053,7 @@ fn signature_with(
         builder.try_parameter(receiver)?;
     }
     for input in signature.inputs() {
-        builder.try_parameter(types.convert(input, signature.parameters(), allocation)?)?;
+        builder.try_parameter(types.convert_input(input, signature.parameters(), allocation)?)?;
     }
     builder.output(types.convert(signature.output(), signature.parameters(), allocation)?);
     if let Some(instance) = fixed_instance(types, signature, allocation)? {
@@ -3232,7 +3251,11 @@ fn callable_signature(
         } else if let Some(call) = optional {
             builder.try_parameter(host::type_ref::Type::option(closure(call, allocation)?))?;
         } else {
-            builder.try_parameter(convert(input, allocation)?)?;
+            builder.try_parameter(types.convert_input(
+                input,
+                signature.parameters(),
+                allocation,
+            )?)?;
         }
     }
     builder.output(convert(signature.output(), allocation)?);
