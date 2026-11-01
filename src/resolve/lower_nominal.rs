@@ -603,6 +603,11 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
         Ty::Int(kind) => builtin(kind.name(), Vec::new()),
         Ty::Float(Float::Var(_)) => builtin("f64", Vec::new()),
         Ty::Float(kind) => builtin(kind.name(), Vec::new()),
+        // std's types Rawr knows by name, as iced's `Never` is std's
+        // `Infallible`, a message no widget sends.
+        Ty::ParseError(error) => builtin(error.name(), Vec::new()),
+        Ty::Ordering => builtin("Ordering", Vec::new()),
+        Ty::Time(time) => builtin(time.name(), Vec::new()),
         Ty::Option(element) => builtin("Option", vec![named(element)?]),
         Ty::Result(ok, err) => builtin("Result", vec![named(ok)?, named(err)?]),
         Ty::Array {
@@ -1909,6 +1914,12 @@ fn imported_surface_type(
             definition: rawr_import::surface::identity::Definition::instant(),
             arguments: Box::default(),
         },
+        // std's `Infallible`, iced's `Never`: the message of a view that
+        // sends none, as `impl Widget<Never>` fixes it.
+        Ty::ParseError(ParseError::Infallible) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::infallible(),
+            arguments: Box::default(),
+        },
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference { mutable: false, .. }
@@ -2178,6 +2189,10 @@ fn instance_surface_type(
         },
         Ty::Time(Time::Instant) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::instant(),
+            arguments: Box::default(),
+        },
+        Ty::ParseError(ParseError::Infallible) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::infallible(),
             arguments: Box::default(),
         },
         // A script closure a crate value holds, as `Map<W, F, A>` does: the
@@ -37785,6 +37800,21 @@ impl<'a> Parser<'a> {
     }
 
     /// The crate type `name` names, `Self` in an impl naming its owner.
+    /// The type the path's one segment `owner` names when it is a generic
+    /// parameter this body reads as a type: none of its own generics, nor
+    /// a type of that name.
+    fn parameter_type(&self, segments: &[(ImmutableString, Span)], owner: &str) -> Option<Ty> {
+        if segments.len() != 1
+            || self.generics.contains_key(owner)
+            || self.models.get(owner).is_some()
+        {
+            return None;
+        }
+        self.trait_parameters
+            .get(owner)
+            .map(|ty| self.inference.resolve(ty))
+    }
+
     fn named_model(&self, name: &str) -> Option<Nominal> {
         if let Some(model) = self.models.get(name) {
             return Some(model.clone());
@@ -43988,6 +44018,29 @@ impl<'a> Parser<'a> {
                 self.named_model(&owner)
                     .filter(|_| owner.as_str() == "Self")
             });
+        // `C::NAME` and `C::new(..)` where the generic parameter `C` is the
+        // type this body takes it at: an instance compiled for one
+        // instantiation (D629), or a trait's default body in an impl. The
+        // item is that type's, as rustc resolves it through the bound.
+        let qualified_model = match self.parameter_type(&segments, &owner) {
+            Some(Ty::Script(id, _)) if qualified_model.is_none() => {
+                Some(self.models.definition(id).clone())
+            }
+            Some(ty) if qualified_model.is_none() => {
+                let Some(definition) = owner_id(&ty)
+                    .and_then(|id| self.models.method(id, &member))
+                    .cloned()
+                else {
+                    return Err(Error::UnknownMember {
+                        owner: ty.name(&self.models).to_string().into(),
+                        member,
+                        reference: member_span,
+                    });
+                };
+                return self.parse_owner_function(ty, definition, owner_span, member, member_span);
+            }
+            _ => qualified_model,
+        };
 
         // `iced::Color::from(value)` through the crate's `impl From<T> for
         // iced::Color`, when the facade has no `from` of its own.
@@ -44555,111 +44608,13 @@ impl<'a> Parser<'a> {
             .method(model.definition().id(), &member)
             .cloned()
         {
-            // `Type::method` as a value: `fn(&Type, ..) -> Output`, or
-            // `fn(&mut Type, ..)` for a `&mut self` method.
-            if let Some(mode) = definition.receiver()
-                && !definition.constant()
-                && !matches!(self.peek(), Token::LeftParen | Token::Unit)
-            {
-                let receiver = match mode {
-                    receiver::Mode::Owned => model.ty(),
-                    mode => Ty::Reference {
-                        mutable: mode == receiver::Mode::Mutable,
-                        target: Box::new(model.ty()),
-                    },
-                };
-                // A generic method's parameters take its turbofish, or are
-                // inferred where the value is used, as in Rust.
-                let substitution = self.instantiate_generics(
-                    definition.generics(),
-                    span(owner_span.start(), member_span.end()),
-                )?;
-                let inputs = std::iter::once(receiver)
-                    .chain(definition.parameters().iter().map(|parameter| {
-                        instantiate(&Ty::from_resolved(&parameter.ty), &substitution)
-                    }))
-                    .collect();
-                return self.method_value(member, inputs, owner_span, member_span);
-            }
-            // `Type::method(receiver, ..)`: the method called on its first
-            // argument, as Rust's path call is.
-            if definition.receiver().is_some()
-                && matches!(self.peek(), Token::LeftParen)
-                && let Some(tokens) = self.path_method_call(&member, member_span, None)
-            {
-                self.pending_turbofish = None;
-                self.splice_tokens(tokens);
-                return self.parse_primary();
-            }
-            if definition.receiver().is_some() {
-                return Err(Error::InvalidMethodCall {
-                    owner: definition.owner_name().into(),
-                    method: definition.name().into(),
-                    reason: "receiver methods must be called on a value".into(),
-                    call: span(owner_span.start(), member_span.end()),
-                });
-            }
-            // `Type::NAME`: an associated const is its value.
-            let (mut arguments, end) = if definition.constant() {
-                (Vec::new(), text_end(member_span.start(), &member))
-            } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
-                let expression = span(owner_span.start(), member_span.end());
-                if definition.generics().is_empty()
-                    && method_copied(&definition, &self.models).is_empty()
-                {
-                    return self.associated_value(&definition, expression);
-                }
-                return self.symbolic_associated(&definition, false, expression);
-            } else {
-                self.parse_borrowing_arguments("associated function arguments")?
-            };
-            let substitution =
-                self.method_substitution(&definition, None, span(owner_span.start(), end))?;
-            self.require_arguments(
-                &definition,
-                &mut arguments,
-                span(owner_span.start(), end),
-                &substitution,
-            )?;
-            self.lend_arguments(&definition, &mut arguments, &substitution, None);
-            // A generic associated function compiled per instantiation is
-            // its instance for the types this call gives it (D629).
-            #[cfg(feature = "rust-import")]
-            let definition = self.bind_method_instance(
+            return self.parse_owner_function(
+                model.ty(),
                 definition,
-                &substitution,
-                span(owner_span.start(), end),
-            )?;
-            let witnesses = self.witness_arguments(
-                definition.generics(),
-                &substitution,
-                span(owner_span.start(), end),
+                owner_span,
+                member,
+                member_span,
             );
-            let copied = method_copied(&definition, &self.models);
-            let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
-            self.move_copied_in(&mut arguments, &copied);
-            let source = origin::Fragment::call(
-                method_name(definition.id()),
-                arguments
-                    .iter()
-                    .map(ParsedExpr::rendered_source)
-                    .chain(witnesses),
-            );
-            let source = self.copied_call(source, &places)?;
-            let summary = self.method_summary(&definition);
-            let kept = instantiate(&Ty::from_resolved(definition.output()), &substitution);
-            let kept = self.inference.resolve(&kept);
-            self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
-            return Ok(ParsedExpr {
-                prelude: origin::Fragment::default(),
-                source,
-                ty: instantiate(&Ty::from_resolved(definition.output()), &substitution),
-                span: span(owner_span.start(), end),
-                lvalue: None,
-                outcome: crate::host::usage::Outcome::Conservative,
-                evaluation: crate::host::usage::Evaluation::Required,
-            }
-            .retain_origin());
         }
 
         // `Type::to_string` through a hand-written `Display`.
@@ -44882,6 +44837,122 @@ impl<'a> Parser<'a> {
             prelude: origin::Fragment::default(),
             source: origin::Fragment::call(&helper, args.iter().map(ParsedExpr::rendered_source)),
             ty: enum_ty,
+            span: span(owner_span.start(), end),
+            lvalue: None,
+            outcome: crate::host::usage::Outcome::Conservative,
+            evaluation: crate::host::usage::Evaluation::Required,
+        }
+        .retain_origin())
+    }
+
+    /// `Type::function(..)`, `Type::method` as a value or `Type::NAME`, of
+    /// the function `definition` of an impl for `owner_ty`: a script type's,
+    /// or a crate type's that a script impl gives a function.
+    fn parse_owner_function(
+        &mut self,
+        owner_ty: Ty,
+        definition: method::Definition,
+        owner_span: Span,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        // `Type::method` as a value: `fn(&Type, ..) -> Output`, or
+        // `fn(&mut Type, ..)` for a `&mut self` method.
+        if let Some(mode) = definition.receiver()
+            && !definition.constant()
+            && !matches!(self.peek(), Token::LeftParen | Token::Unit)
+        {
+            let receiver = match mode {
+                receiver::Mode::Owned => owner_ty.clone(),
+                mode => Ty::Reference {
+                    mutable: mode == receiver::Mode::Mutable,
+                    target: Box::new(owner_ty.clone()),
+                },
+            };
+            // A generic method's parameters take its turbofish, or are
+            // inferred where the value is used, as in Rust.
+            let substitution = self.instantiate_generics(
+                definition.generics(),
+                span(owner_span.start(), member_span.end()),
+            )?;
+            let inputs =
+                std::iter::once(receiver)
+                    .chain(definition.parameters().iter().map(|parameter| {
+                        instantiate(&Ty::from_resolved(&parameter.ty), &substitution)
+                    }))
+                    .collect();
+            return self.method_value(member, inputs, owner_span, member_span);
+        }
+        // `Type::method(receiver, ..)`: the method called on its first
+        // argument, as Rust's path call is.
+        if definition.receiver().is_some()
+            && matches!(self.peek(), Token::LeftParen)
+            && let Some(tokens) = self.path_method_call(&member, member_span, None)
+        {
+            self.pending_turbofish = None;
+            self.splice_tokens(tokens);
+            return self.parse_primary();
+        }
+        if definition.receiver().is_some() {
+            return Err(Error::InvalidMethodCall {
+                owner: definition.owner_name().into(),
+                method: definition.name().into(),
+                reason: "receiver methods must be called on a value".into(),
+                call: span(owner_span.start(), member_span.end()),
+            });
+        }
+        // `Type::NAME`: an associated const is its value.
+        let (mut arguments, end) = if definition.constant() {
+            (Vec::new(), text_end(member_span.start(), &member))
+        } else if !matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            let expression = span(owner_span.start(), member_span.end());
+            if definition.generics().is_empty()
+                && method_copied(&definition, &self.models).is_empty()
+            {
+                return self.associated_value(&definition, expression);
+            }
+            return self.symbolic_associated(&definition, false, expression);
+        } else {
+            self.parse_borrowing_arguments("associated function arguments")?
+        };
+        let substitution =
+            self.method_substitution(&definition, None, span(owner_span.start(), end))?;
+        self.require_arguments(
+            &definition,
+            &mut arguments,
+            span(owner_span.start(), end),
+            &substitution,
+        )?;
+        self.lend_arguments(&definition, &mut arguments, &substitution, None);
+        // A generic associated function compiled per instantiation is
+        // its instance for the types this call gives it (D629).
+        #[cfg(feature = "rust-import")]
+        let definition =
+            self.bind_method_instance(definition, &substitution, span(owner_span.start(), end))?;
+        let witnesses = self.witness_arguments(
+            definition.generics(),
+            &substitution,
+            span(owner_span.start(), end),
+        );
+        let copied = method_copied(&definition, &self.models);
+        let places = self.mutable_arguments(&arguments, copied.iter().copied())?;
+        self.move_copied_in(&mut arguments, &copied);
+        let source = origin::Fragment::call(
+            method_name(definition.id()),
+            arguments
+                .iter()
+                .map(ParsedExpr::rendered_source)
+                .chain(witnesses),
+        );
+        let source = self.copied_call(source, &places)?;
+        let summary = self.method_summary(&definition);
+        let kept = instantiate(&Ty::from_resolved(definition.output()), &substitution);
+        let kept = self.inference.resolve(&kept);
+        self.kept_by_call(span(owner_span.start(), end), &kept, None, &summary);
+        Ok(ParsedExpr {
+            prelude: origin::Fragment::default(),
+            source,
+            ty: instantiate(&Ty::from_resolved(definition.output()), &substitution),
             span: span(owner_span.start(), end),
             lvalue: None,
             outcome: crate::host::usage::Outcome::Conservative,

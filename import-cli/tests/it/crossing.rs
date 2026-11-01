@@ -710,6 +710,42 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
 
+/// iced's color_palette (#607): `impl<C: Space + Copy> Picker<C>`'s `fn
+/// view(&self, color: C) -> impl Widget<C>` names the impl's parameter in
+/// a crate's trait, so it is compiled once per space it is used at, a
+/// script type or a crate's. Each instance reads `C::RANGES`, `C::LABEL`
+/// and `C::new` as that type's impl of the bound's trait gives them, as
+/// rustc resolves them. The output is `cargo run`'s.
+#[test]
+fn an_associated_item_of_a_generic_parameters_bound_is_its_instances_types() {
+    let (rawr, cargo) = both_printed("crossing-ranges", "ranges.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("map pad 0 HSL 0..=360@16 [Increment] 1.0 1.0@16")
+            && rawr.contains("4 message Lab(Hsl { hue: 25.0,")
+            && rawr.ends_with("[0.75, 0.0, 0.0] [0.0, 0.0, 0.0] [25.0, 0.0, 0.0]@16"),
+        "{rawr}"
+    );
+}
+
+/// iced's geometry (#599): `fn view(..) -> impl Widget<Never>`, iced's
+/// `Never` being std's `Infallible`, whose body nests containers around a
+/// column. The type the body reveals names `Infallible` as the boxed
+/// children's message, and the runner writes it and passes it to the
+/// crate's generic items. The output is `cargo run`'s.
+#[test]
+fn a_view_that_sends_no_message_names_infallible_in_its_revealed_type() {
+    let (rawr, cargo) = both_printed("crossing-never", "never.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 pad 0 pad 0 pad 20 rainbow@16 \
+             'In this example we draw a custom widget Rainbow'"
+        ),
+        "{rawr}"
+    );
+}
+
 /// iced's clock: a crate type compared with a number, `rotation < 180.0`,
 /// through `PartialOrd<f32>`, whose impl writes only `partial_cmp`, so `<`
 /// is std's provided `lt`. The type is also `PartialOrd` with itself, and
