@@ -15,6 +15,7 @@ const FACADE_DOMAIN: &[u8] = b"rawr.identity.facade-value/v1";
 const FUTURE_DOMAIN: &[u8] = b"rawr.identity.future/v1";
 const DURATION_DOMAIN: &[u8] = b"rawr.identity.duration/v1";
 const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
+const INFALLIBLE_DOMAIN: &[u8] = b"rawr.identity.infallible/v1";
 const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
@@ -278,6 +279,15 @@ impl Definition {
         Self(Framed::new(INSTANT_DOMAIN).finish())
     }
 
+    /// Rust's `std::convert::Infallible`, which iced re-exports as `Never`:
+    /// a type argument no value has, as the message of a view that sends
+    /// none (`impl Widget<Never>`). It lives in `core`, which no crate's
+    /// facade declares.
+    #[must_use]
+    pub fn infallible() -> Self {
+        Self(Framed::new(INFALLIBLE_DOMAIN).finish())
+    }
+
     /// A script value where a generic item is instantiated at a script type
     /// (D513.2): the runner builds the item at `rawr::Value`, and each value
     /// that comes back is checked against the script type it stands for.
@@ -298,12 +308,13 @@ impl Definition {
 
     /// Whether these bytes name a type rawr declares for a Rust value no
     /// imported crate declares: a future, a duration, an instant, an
-    /// inclusive range or a script value.
+    /// inclusive range, `Infallible` or a script value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         *bytes == Self::future().0
             || *bytes == Self::duration().0
             || *bytes == Self::instant().0
+            || *bytes == Self::infallible().0
             || *bytes == Self::range_inclusive().0
             || *bytes == Self::value().0
     }

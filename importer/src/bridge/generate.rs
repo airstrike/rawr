@@ -12018,10 +12018,14 @@ fn is_duration(ty: &convert::Type) -> bool {
     std_time(ty).is_some()
 }
 
-/// The Rust path of std's `Duration` or `Instant`, when `ty` is one.
+/// The Rust path of std's `Duration` or `Instant`, when `ty` is one, or of
+/// `Infallible`, which no value crosses as.
 fn std_time(ty: &convert::Type) -> Option<&'static str> {
     use crate::surface::identity::Definition;
     match ty {
+        convert::Type::Nominal { definition, .. } if *definition == Definition::infallible() => {
+            Some("std::convert::Infallible")
+        }
         convert::Type::Nominal { definition, .. } if *definition == Definition::duration() => {
             Some("std::time::Duration")
         }

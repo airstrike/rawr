@@ -3058,8 +3058,22 @@ fn resolve_methods(
                 crate::item::Kind::AssociatedFunction
             };
             let key = crate::item::Key::associated(owner.key(), name, kind);
+            // An impl's parameter this method's signature names inside a
+            // crate's type, as `impl<C> Picker<C>`'s `fn view(&self) ->
+            // impl Widget<C>` does, touches a crate's types for this method
+            // as a function's own parameter does (D629).
+            let mut generics = item.generics.clone();
+            for generic in &mut generics {
+                generic.host = generic.host
+                    || function
+                        .parameters
+                        .iter()
+                        .map(|parameter| &parameter.ty)
+                        .chain(function.output.as_ref())
+                        .any(|ty| names_in_host_type(ty, &generic.name.text, false, host));
+            }
             let definition = method::Definition::new(id, key, owner, function, shell.source)
-                .in_generic_impl(&item.generics, owner_arguments(&item.owner));
+                .in_generic_impl(&generics, owner_arguments(&item.owner));
             function.body.lowering = item::Lowering::NominalMethod(id);
             methods.push(definition);
         }
