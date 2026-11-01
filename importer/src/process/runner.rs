@@ -25,7 +25,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const WORK_PROGRESS_LIMIT: u8 = 16;
 const WORK_PROGRESS_BYTES: usize = 32 + 16 + 3;
 
-mod accounting;
 mod resident;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,7 +166,6 @@ struct Inner<B> {
     started: bool,
     observed: bool,
     hot_sequence: u64,
-    accounting: accounting::Pending,
 }
 
 impl Lifecycle {
@@ -440,7 +438,6 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
             started: false,
             observed: false,
             hot_sequence: 0,
-            accounting: accounting::Pending::default(),
         };
         let authentication = guarded(&mut inner, |inner| receive_guarded(inner, IO_TIMEOUT))?;
         if !authenticates(&authentication, &capability, &carrier) {
@@ -838,7 +835,6 @@ impl<B> Candidate<Admitted, B> {
             | crate::protocol::Tag::Snapshot
             | crate::protocol::Tag::SnapshotOutcome
             | crate::protocol::Tag::WorkProgress
-            | crate::protocol::Tag::Account
             | crate::protocol::Tag::ExportState
             | crate::protocol::Tag::StateExported
             | crate::protocol::Tag::SeedState
@@ -1443,13 +1439,6 @@ fn work_request<B>(
                         progress.observe(frame.payload())?;
                         continue;
                     }
-                    if inner
-                        .accounting
-                        .consume(inner.child.id(), inner.epoch.get(), &frame)
-                    {
-                        continue;
-                    }
-                    inner.accounting.finish(inner.child.id(), inner.epoch.get());
                     return Ok(frame);
                 }
                 // The read itself blocks up to `POLL_INTERVAL`; a header just
@@ -1480,9 +1469,6 @@ fn guarded<B, T>(
         return Err(exited_peer(inner, &source).unwrap_or(Error::ProtocolIo(source)));
     }
     let result = body(inner);
-    // Missing evidence never changes the original product result, including a
-    // failure before the child can send its terminal reply.
-    inner.accounting.finish(inner.child.id(), inner.epoch.get());
     let restored = inner
         .stream
         .set_read_timeout(Some(IO_TIMEOUT))
@@ -1532,13 +1518,6 @@ fn receive_guarded<B>(
             return Err(Error::WorkFrameTimeout);
         }
         if let Some(frame) = decoder.receive_step(&mut inner.stream)? {
-            if inner
-                .accounting
-                .consume(inner.child.id(), inner.epoch.get(), &frame)
-            {
-                continue;
-            }
-            inner.accounting.finish(inner.child.id(), inner.epoch.get());
             return Ok(frame);
         }
     }
@@ -1547,9 +1526,6 @@ fn receive_guarded<B>(
 fn send_guarded<B>(inner: &mut Inner<B>, frame: &crate::protocol::Frame) -> Result<(), Error> {
     let deadline = Instant::now() + IO_TIMEOUT;
     let mut encoder = crate::protocol::Encoder::frame(frame)?;
-    inner
-        .accounting
-        .begin(inner.child.id(), inner.epoch.get(), frame);
     loop {
         if Instant::now() >= deadline {
             return Err(Error::WorkFrameTimeout);

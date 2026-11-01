@@ -7,15 +7,13 @@ use rawr_import::surface::facade::{self, ItemKind};
 
 /// One generated runtime's metadata binding scope in its engine's native account.
 ///
-/// Authentication borrows the already-decoded carrier. Temporary adapters and
-/// the copies retained by runtime bindings are charged separately; only the
-/// latter contribution is transferred to the completed runtime registry.
+/// Authentication borrows the already-decoded carrier. The scope moves to the
+/// completed runtime registry, which keeps the decoded metadata alive.
 #[doc(hidden)]
 pub struct Runtime<'engine> {
     native: &'engine account::Native,
     structural: Option<Box<[host::runtime::StructuralAdapter]>>,
     events: Option<Box<[host::runtime::event::Adapter]>>,
-    scratch: account::Attempt,
     allocation: account::Attempt,
 }
 
@@ -29,22 +27,10 @@ impl crate::Engine {
         let allocation = native
             .attempt()
             .map_err(|_| host::runtime::Error::ImportedAllocation)?;
-        let mut scratch = native
-            .attempt()
-            .map_err(|_| host::runtime::Error::ImportedAllocation)?;
-        use host::ImportAllocation as _;
-        scratch
-            .retain_checked(
-                Some(1),
-                std::mem::size_of::<Runtime<'_>>()
-                    .checked_sub(2 * std::mem::size_of::<account::Attempt>()),
-            )
-            .map_err(|_| host::runtime::Error::ImportedAllocation)?;
         Ok(Runtime {
             native,
             structural: None,
             events: None,
-            scratch,
             allocation,
         })
     }
@@ -62,11 +48,13 @@ impl Runtime<'_> {
                 "structural runtime rows already authenticated",
             ));
         }
-        let before = self.scratch.usage();
-        let adapters =
-            authenticate_structural(definitions, self.native.carrier(), rows, &mut self.scratch)
-                .map_err(runtime_error)?;
-        self.retain_copies(before)?;
+        let adapters = authenticate_structural(
+            definitions,
+            self.native.carrier(),
+            rows,
+            &mut self.allocation,
+        )
+        .map_err(runtime_error)?;
         self.structural = Some(adapters);
         Ok(())
     }
@@ -82,11 +70,13 @@ impl Runtime<'_> {
                 "event runtime rows already authenticated",
             ));
         }
-        let before = self.scratch.usage();
-        let adapters =
-            authenticate_events(definitions, self.native.carrier(), rows, &mut self.scratch)
-                .map_err(runtime_error)?;
-        self.retain_copies(before)?;
+        let adapters = authenticate_events(
+            definitions,
+            self.native.carrier(),
+            rows,
+            &mut self.allocation,
+        )
+        .map_err(runtime_error)?;
         self.events = Some(adapters);
         Ok(())
     }
@@ -103,7 +93,7 @@ impl Runtime<'_> {
         self.events.as_deref().unwrap_or_default()
     }
 
-    /// Retire authentication scratch and move native proof charges to the registry.
+    /// Move this scope to the registry once both row kinds are authenticated.
     pub fn finish(
         self,
         registry: host::runtime::Registry,
@@ -113,26 +103,7 @@ impl Runtime<'_> {
                 "generated runtime authentication is incomplete",
             ));
         }
-        let Self {
-            structural,
-            events,
-            scratch,
-            allocation,
-            ..
-        } = self;
-        // Retire the actual proof arrays before releasing their scratch charges.
-        drop(structural);
-        drop(events);
-        drop(scratch);
-        registry.retain_imported(allocation.finish())
-    }
-
-    fn retain_copies(&mut self, before: (usize, usize)) -> Result<(), host::runtime::Error> {
-        let after = self.scratch.usage();
-        use host::ImportAllocation as _;
-        self.allocation
-            .retain_checked(after.0.checked_sub(before.0), after.1.checked_sub(before.1))
-            .map_err(|_| host::runtime::Error::ImportedAllocation)
+        registry.retain_imported(self.allocation.finish())
     }
 }
 
@@ -226,7 +197,7 @@ pub fn authenticate_generated_events(
     rows: &[EventRow],
 ) -> Result<Box<[host::runtime::event::Adapter]>, Error> {
     let carrier = rawr_import::runner::manifest::Carrier::transform(manifest)?;
-    let mut allocation = account::Attempt::standard()?;
+    let mut allocation = account::Attempt::fresh();
     authenticate_events(definitions, &carrier, rows, &mut allocation)
 }
 
@@ -398,7 +369,7 @@ pub fn install(
     bytes: &[u8],
 ) -> Result<Box<[host::facade::Definition]>, Error> {
     let plan = facade::Plan::decode(bytes)?;
-    let mut allocation = account::Attempt::standard()?;
+    let mut allocation = account::Attempt::fresh();
     install_decoded(engine, &plan, &mut allocation)
 }
 
@@ -498,7 +469,7 @@ pub fn admit_generated_structural(
     rows: &[StructuralRow],
 ) -> Result<(), Error> {
     let adapters = authenticate_generated_structural(definitions, manifest, rows)?;
-    let mut allocation = account::Attempt::standard()?;
+    let mut allocation = account::Attempt::fresh();
     for adapter in adapters.iter() {
         engine
             .host_registry
@@ -558,7 +529,7 @@ pub fn authenticate_generated_structural(
     rows: &[StructuralRow],
 ) -> Result<Box<[host::runtime::StructuralAdapter]>, Error> {
     let carrier = rawr_import::runner::manifest::Carrier::transform(manifest)?;
-    let mut allocation = account::Attempt::standard()?;
+    let mut allocation = account::Attempt::fresh();
     authenticate_structural(definitions, &carrier, rows, &mut allocation)
 }
 

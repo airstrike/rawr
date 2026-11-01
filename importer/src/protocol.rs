@@ -2,16 +2,13 @@
 
 use std::io::{Read, Write};
 
-/// Fixed observations of actual retained child accounts on the existing socket.
-pub mod account;
-
 /// Candidate-bound evidence for the distinct resident compile exchange.
 pub mod resident;
 
 pub const FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const DIAGNOSTIC_BYTES: usize = 16 * 1024 * 1024;
 pub const STREAM_TAIL_BYTES: usize = 1024 * 1024;
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 const HEADER_BYTES: usize = 4;
 const PREFIX_BYTES: usize = 5;
 
@@ -68,7 +65,6 @@ pub enum Tag {
     ResidentResource = 42,
     RefreshPoll = 43,
     RefreshStatus = 44,
-    Account = 45,
     /// The live runner's key; it answers `StateExported`.
     ExportState = 46,
     /// The key, then 1 and the carried State bytes, or 0 when none.
@@ -464,7 +460,6 @@ impl TryFrom<u8> for Tag {
             42 => Self::ResidentResource,
             43 => Self::RefreshPoll,
             44 => Self::RefreshStatus,
-            45 => Self::Account,
             46 => Self::ExportState,
             47 => Self::StateExported,
             48 => Self::SeedState,

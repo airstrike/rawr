@@ -231,22 +231,6 @@ impl Recorder {
 }
 
 impl Sink for Inner {
-    fn native(
-        &self,
-        runner_pid: u32,
-        epoch: u64,
-        observation: crate::protocol::account::Observation,
-    ) {
-        lock(&self.state)
-            .accounting
-            .record_native(runner_pid, epoch, observation, self.limit);
-    }
-
-    fn native_fault(&self, runner_pid: u32, epoch: u64, cause: super::accounting::NativeFault) {
-        lock(&self.state)
-            .accounting
-            .record_native_fault(runner_pid, epoch, cause);
-    }
     fn scalar_overflow(&self, scalar: super::accounting::Scalar) {
         lock(&self.state).accounting.scalar_overflow(scalar);
     }
@@ -319,18 +303,6 @@ impl Sink for Inner {
 }
 
 impl Sink for Recorder {
-    fn native(
-        &self,
-        runner_pid: u32,
-        epoch: u64,
-        observation: crate::protocol::account::Observation,
-    ) {
-        self.inner.native(runner_pid, epoch, observation);
-    }
-
-    fn native_fault(&self, runner_pid: u32, epoch: u64, cause: super::accounting::NativeFault) {
-        self.inner.native_fault(runner_pid, epoch, cause);
-    }
     fn scalar_overflow(&self, scalar: super::accounting::Scalar) {
         self.inner.scalar_overflow(scalar);
     }

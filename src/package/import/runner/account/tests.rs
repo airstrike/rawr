@@ -1,7 +1,4 @@
-use super::{
-    baseline_bytes, lock, shared_bytes, Attempt, Axis, Cause, Native, Observation,
-    ObservationState, Receipt,
-};
+use super::{Attempt, Axis, Native, Receipt, Refusal};
 use crate::{host, host::ImportAllocation as _, package::import::runner, Engine};
 use rawr_import::{runner::manifest::Carrier, surface::identity};
 use std::sync::{Arc, Barrier};
@@ -39,224 +36,83 @@ pub(crate) fn carrier_bytes(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
 }
 
 #[test]
-fn native_account_seeds_decoded_metadata_and_fixed_ownership() {
-    let carrier = carrier();
-    let (items, bytes) = carrier.retained_usage();
-    let native = Native::transform(carrier).unwrap();
-    assert_eq!(
-        native.usage(),
-        (items + 2, bytes + baseline_bytes() + shared_bytes(),)
-    );
-}
-
-#[test]
-fn native_account_overlapping_receipts_add_and_dropped_attempt_releases_its_charge() {
-    let native = Native::transform(carrier()).unwrap();
-    let baseline = native.usage();
-    let mut live = native.attempt().unwrap();
-    live.retain_checked(Some(4), Some(40)).unwrap();
-    let live = live.finish();
-    let mut pending = native.attempt().unwrap();
-    pending.retain_checked(Some(6), Some(60)).unwrap();
-    let full = native.usage();
-    assert_eq!(full.0, baseline.0 + live.usage().0 + pending.usage().0);
-    assert_eq!(full.1, baseline.1 + live.usage().1 + pending.usage().1);
-    drop(pending);
-    assert_eq!(
-        native.usage(),
-        (baseline.0 + live.usage().0, baseline.1 + live.usage().1)
-    );
-    drop(live);
-    assert_eq!(native.usage(), baseline);
-    assert_eq!(native.snapshot().first_refusal, None);
-}
-
-#[test]
-fn native_account_overflow_and_missing_counts_do_not_partially_charge() {
-    let native = Native::transform(carrier()).unwrap();
-    let mut attempt = native.attempt().unwrap();
-    let before = native.usage();
-    for (items, bytes) in [
-        (None, Some(1)),
-        (Some(1), None),
-        (Some(usize::MAX), Some(0)),
-        (Some(1), Some(usize::MAX)),
-    ] {
-        assert!(attempt.retain_checked(items, bytes).is_err());
-        assert_eq!(native.usage(), before);
-    }
-}
-
-#[test]
-fn observed_native_decode_charges_only_its_fixed_slot_and_keeps_the_same_account() {
-    let ordinary = Native::decode(&carrier_bytes(&[])).unwrap();
-    let (native, observation) = Native::decode_observed(&carrier_bytes(&[]));
-    let native = native.unwrap();
-    let snapshot = observation.snapshot().unwrap();
-    assert_eq!(snapshot, native.snapshot());
-    assert_eq!(
-        snapshot.current,
-        [
-            ordinary.usage().0 + 1,
-            ordinary.usage().1 + std::mem::size_of::<Observation>()
-        ]
-    );
-    assert_eq!(snapshot.peak, snapshot.current);
-    assert_eq!(snapshot.first_refusal, None);
-    drop(observation);
-    assert_eq!(native.usage(), ordinary.usage());
-    assert_eq!(native.snapshot().peak, snapshot.peak);
-    let retained = native.snapshot();
-    let engine = Engine::new().retain_imported_native(native).unwrap();
-    assert_eq!(engine.imported_native_snapshot(), Some(retained));
-    assert!(Engine::new().imported_native_snapshot().is_none());
-}
-
-#[test]
-fn reconstructed_native_shares_original_account_without_a_baseline_chain() {
-    let (native, initial_observation) = Native::decode_observed(&carrier_bytes(&[]));
-    let native = native.unwrap();
+fn reconstructed_native_shares_the_latch_without_a_baseline_chain() {
+    let native = Native::decode(&carrier_bytes(&[])).unwrap();
     let baseline = Arc::downgrade(&native.inner);
-    let initial = native.snapshot();
     let receipt = native.attempt().unwrap().finish();
-    let live = native.snapshot();
     let engine = Engine::new().retain_imported_native(native).unwrap();
-    let (replacement, observation) = engine.reconstruct_imported_native(&carrier_bytes(&[]));
-    let replacement = replacement.unwrap();
-    let (carrier_items, retained_bytes) = replacement.carrier().retained_usage();
-    let contribution = [carrier_items + 1, retained_bytes + baseline_bytes()];
-    let overlapping = replacement.snapshot();
-    assert_eq!(overlapping.limits, initial.limits);
-    assert_eq!(
-        overlapping.current,
-        [
-            live.current[0] + contribution[0] + 1,
-            live.current[1] + contribution[1] + std::mem::size_of::<Observation>(),
-        ]
-    );
-    assert_eq!(initial_observation.snapshot(), observation.snapshot());
+    let replacement = engine
+        .reconstruct_imported_native(&carrier_bytes(&[]))
+        .unwrap();
     drop(engine);
+    // The live receipt keeps the original metadata; the replacement doesn't.
     assert!(baseline.upgrade().is_some());
     drop(receipt);
     assert!(baseline.upgrade().is_none());
-    drop(initial_observation);
-    assert_eq!(replacement.snapshot().current, initial.current);
     let replacement_baseline = Arc::downgrade(&replacement.inner);
     let engine = Engine::new().retain_imported_native(replacement).unwrap();
-    let (next, next_observation) = engine.reconstruct_imported_native(&carrier_bytes(&[]));
-    let next = next.unwrap();
+    let next = engine
+        .reconstruct_imported_native(&carrier_bytes(&[]))
+        .unwrap();
     drop(engine);
     assert!(replacement_baseline.upgrade().is_none());
-    drop(observation);
-    assert_eq!(next.snapshot().current, initial.current);
-    drop(next);
-    assert_eq!(
-        next_observation.snapshot().unwrap().current,
-        [2, shared_bytes() + std::mem::size_of::<Observation>(),]
-    );
+    // A refusal in the newest compiler latches the whole chain's account.
+    let mut attempt = next.attempt().unwrap();
+    assert!(attempt.retain_checked(None, Some(1)).is_err());
+    assert_eq!(next.first_refusal(), Some(Refusal { axis: Axis::Items }));
 }
 
 #[test]
 fn reconstructed_native_preserves_decode_error_and_requires_original_ownership() {
     let engine = Engine::new();
-    let (replacement, observation) = engine.reconstruct_imported_native(&carrier_bytes(&[]));
-    assert!(matches!(replacement, Err(runner::Error::NativeOwner)));
-    assert!(observation.snapshot().is_none());
+    assert!(matches!(
+        engine.reconstruct_imported_native(&carrier_bytes(&[])),
+        Err(runner::Error::NativeOwner)
+    ));
 
-    let native = Native::transform(carrier()).unwrap();
-    let before = native.snapshot();
+    let native = Native::transform(carrier());
     let engine = engine.retain_imported_native(native).unwrap();
-    let (replacement, observation) = engine.reconstruct_imported_native(b"invalid manifest");
-    assert!(matches!(replacement, Err(runner::Error::Manifest(_))));
-    assert_eq!(observation.snapshot(), Some(before));
-    assert_eq!(engine.imported_native_snapshot(), Some(before));
-}
-
-#[test]
-fn observation_does_not_retain_native_owners_and_releases_only_its_slot() {
-    let (native, observation) = Native::decode_observed(&carrier_bytes(&[]));
-    let native = native.unwrap();
-    let baseline = Arc::downgrade(&native.inner);
-    let before = observation.snapshot().unwrap();
-    let account = match &observation.state {
-        ObservationState::Retained(allocation) => {
-            assert!(allocation.baseline.is_none());
-            Arc::clone(&allocation.account)
-        }
-        _ => panic!("successful observation must retain the original account"),
-    };
-    drop(native);
-    assert!(baseline.upgrade().is_none());
-    let after = observation.snapshot().unwrap();
-    assert_eq!(after.peak, before.peak);
+    assert!(matches!(
+        engine.reconstruct_imported_native(b"invalid manifest"),
+        Err(runner::Error::Manifest(_))
+    ));
     assert_eq!(
-        after.current,
-        [2, shared_bytes() + std::mem::size_of::<Observation>()]
+        engine.imported_native.as_ref().unwrap().first_refusal(),
+        None
     );
-    drop(observation);
-    let state = lock(&account);
-    assert_eq!((state.items, state.bytes), (1, shared_bytes()));
-    assert_eq!(state.peak, before.peak);
 }
 
 #[test]
-fn native_refusal_observation_preserves_original_check_order_and_error() {
+fn native_refusal_names_the_first_unrepresentable_axis() {
     let cases = [
-        (None, None, Axis::Items, Cause::MissingAmount),
-        (Some(usize::MAX), None, Axis::Bytes, Cause::MissingAmount),
-        (
-            Some(usize::MAX),
-            Some(usize::MAX),
-            Axis::Items,
-            Cause::OwnedOverflow,
-        ),
-        (Some(0), Some(usize::MAX), Axis::Bytes, Cause::OwnedOverflow),
+        (None, None, Axis::Items),
+        (None, Some(1), Axis::Items),
+        (Some(usize::MAX), None, Axis::Bytes),
     ];
-    for (items, bytes, axis, cause) in cases {
-        let native = Native::transform(carrier()).unwrap();
+    for (items, bytes, axis) in cases {
+        let native = Native::transform(carrier());
         let mut attempt = native.attempt().unwrap();
-        let before = native.snapshot();
         assert!(matches!(
             attempt.retain_checked(items, bytes),
             Err(rawr_import::surface::Error::Allocation)
         ));
-        let after = native.snapshot();
-        assert_eq!(after.current, before.current);
-        assert_eq!(after.peak, before.peak);
-        let refusal = after.first_refusal.unwrap();
-        assert_eq!((refusal.axis, refusal.cause), (axis, cause));
-        assert_eq!(refusal.current, before.current);
-        assert_eq!(refusal.requested, None);
+        assert_eq!(native.first_refusal(), Some(Refusal { axis }));
     }
-    for axis in [Axis::Items, Axis::Bytes] {
-        let native = Native::transform(carrier()).unwrap();
-        let mut attempt = native.attempt().unwrap();
-        let before = native.snapshot();
-        let (items, bytes) = match axis {
-            Axis::Items => (usize::MAX - attempt.items, 0),
-            Axis::Bytes => (0, usize::MAX - attempt.bytes),
-        };
-        assert!(matches!(
-            attempt.retain_checked(Some(items), Some(bytes)),
-            Err(rawr_import::surface::Error::Allocation)
-        ));
-        let after = native.snapshot();
-        assert_eq!(after.current, before.current);
-        let refusal = after.first_refusal.unwrap();
-        assert_eq!(
-            (refusal.axis, refusal.cause),
-            (axis, Cause::AggregateOverflow)
-        );
-        assert_eq!(refusal.requested, None);
+    // Any representable amount is accepted: nothing is counted against it.
+    let native = Native::transform(carrier());
+    let mut attempt = native.attempt().unwrap();
+    for _ in 0..3 {
+        attempt
+            .retain_checked(Some(usize::MAX), Some(usize::MAX))
+            .unwrap();
     }
+    assert_eq!(native.first_refusal(), None);
 }
 
 #[test]
 fn native_account_baseline_survives_native_until_last_receipt() {
-    let native = Native::transform(carrier()).unwrap();
+    let native = Native::transform(carrier());
     let attempt = native.attempt().unwrap();
-    let account = Arc::clone(&attempt.account);
-    let full = native.usage();
     let baseline = Arc::downgrade(&native.inner);
     let receipt = attempt.finish();
     assert_eq!(
@@ -264,49 +120,45 @@ fn native_account_baseline_survives_native_until_last_receipt() {
         std::mem::size_of::<Attempt>()
     );
     drop(native);
-    {
-        let state = lock(&account);
-        assert_eq!((state.items, state.bytes), full);
-    }
     assert!(baseline.upgrade().is_some());
     drop(receipt);
     assert!(baseline.upgrade().is_none());
-    let state = lock(&account);
-    assert_eq!((state.items, state.bytes), (1, shared_bytes()));
 }
 
 #[test]
-fn native_account_simultaneous_scopes_charge_one_aggregate() {
-    let native = Native::transform(carrier()).unwrap();
-    let baseline = native.usage();
+fn native_account_simultaneous_scopes_share_one_latch() {
+    let native = Native::transform(carrier());
+    let baseline = native.owners();
     let barrier = Barrier::new(3);
     std::thread::scope(|scope| {
-        let spawn = || {
-            scope.spawn(|| {
+        let spawn = |refuse: bool| {
+            let (native, barrier) = (&native, &barrier);
+            scope.spawn(move || {
                 let attempt = native.attempt();
                 barrier.wait();
-                barrier.wait();
-                attempt.is_ok()
+                if refuse {
+                    let mut attempt = attempt.unwrap();
+                    assert!(attempt.retain_checked(Some(1), None).is_err());
+                    barrier.wait();
+                    true
+                } else {
+                    barrier.wait();
+                    let mut attempt = attempt.unwrap();
+                    attempt.retain_checked(Some(1), Some(1)).is_err()
+                }
             })
         };
-        let first = spawn();
-        let second = spawn();
+        let first = spawn(true);
+        let second = spawn(false);
         barrier.wait();
-        // Both scopes are charged to the one aggregate.
-        assert_eq!(
-            native.usage(),
-            (
-                baseline.0 + 2,
-                baseline.1 + 2 * std::mem::size_of::<Attempt>()
-            )
-        );
-        assert_eq!(native.snapshot().first_refusal, None);
+        // Both scopes hold the one decoded baseline.
+        assert_eq!(native.owners(), baseline + 2);
         barrier.wait();
         assert!(first.join().unwrap());
-        assert!(second.join().unwrap());
+        assert!(second.join().unwrap(), "the latch refuses the other scope");
     });
-    assert_eq!(native.usage(), baseline);
-    assert_eq!(native.snapshot().first_refusal, None);
+    assert_eq!(native.owners(), baseline);
+    assert_eq!(native.first_refusal(), Some(Refusal { axis: Axis::Bytes }));
 }
 
 fn plan() -> Box<[u8]> {
@@ -316,7 +168,7 @@ fn plan() -> Box<[u8]> {
 #[test]
 fn retained_install_authenticates_structural_and_event_rows() {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
-    let mut native = Native::transform(carrier).unwrap();
+    let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
     let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
     let row = runner::StructuralRow::new(
@@ -363,7 +215,7 @@ fn runtime_fixture() -> (
     runner::EventRow,
 ) {
     let carrier = carrier_entries(&[([31; 32], [32; 32], 0), ([41; 32], [42; 32], 0)]);
-    let mut native = Native::transform(carrier).unwrap();
+    let mut native = Native::transform(carrier);
     let mut engine = Engine::new();
     let definitions = runner::install_retained(&mut engine, &plan(), &mut native).unwrap();
     engine.imported_native = Some(native);
@@ -459,12 +311,12 @@ fn runtime_scope_binds_authenticated_rows_and_refuses_a_duplicate_binding() {
 #[test]
 fn native_account_runtime_cannot_finish_incomplete_authentication() {
     let mut engine = Engine::new();
-    engine.imported_native = Some(Native::transform(carrier()).unwrap());
+    engine.imported_native = Some(Native::transform(carrier()));
     let native = engine.imported_native.as_ref().unwrap();
-    let before = native.usage();
+    let before = native.owners();
     let scope = engine.begin_imported_runtime().unwrap();
     assert!(scope.finish(host::runtime::Registry::new()).is_err());
-    assert_eq!(native.usage(), before);
+    assert_eq!(native.owners(), before);
 }
 
 #[test]
@@ -485,29 +337,24 @@ fn structural_row_outside_the_manifest_panics() {
 }
 
 /// A checked-arithmetic refusal is terminal for the shared account. A
-/// later small charge on the same scope, a fresh attempt, an observation and
-/// a reconstruction sharing the account are all refused without charging, and
-/// the first cause stays; cleanup (dropping scopes) still releases usage.
+/// later charge on any scope, a fresh attempt and a reconstruction sharing
+/// the account are all refused, and the first cause stays; cleanup (dropping
+/// scopes) still releases the decoded metadata.
 #[test]
 fn arithmetic_refusal_suppresses_every_later_admission_and_keeps_the_first_cause() {
-    let native = Native::transform(carrier()).unwrap();
+    let native = Native::transform(carrier());
+    let baseline = native.owners();
     let mut first = native.attempt().unwrap();
     let mut second = native.attempt().unwrap();
-    let before = native.snapshot();
-    assert_eq!(before.first_refusal, None);
+    assert_eq!(native.first_refusal(), None);
     // A genuine cause: the producer could not represent the item amount.
     assert!(matches!(
         first.retain_checked(None, Some(1)),
         Err(rawr_import::surface::Error::Allocation)
     ));
-    let refused = native.snapshot();
-    let cause = refused.first_refusal.unwrap();
-    assert_eq!(
-        (cause.axis, cause.cause),
-        (Axis::Items, Cause::MissingAmount)
-    );
-    assert_eq!(refused.current, before.current);
-    // Small, representable charges are refused on both scopes and charge nothing.
+    let cause = Refusal { axis: Axis::Items };
+    assert_eq!(native.first_refusal(), Some(cause));
+    // Representable charges are refused on both scopes.
     for attempt in [&mut first, &mut second] {
         assert!(matches!(
             attempt.retain_checked(Some(1), Some(1)),
@@ -516,7 +363,7 @@ fn arithmetic_refusal_suppresses_every_later_admission_and_keeps_the_first_cause
     }
     // A later arithmetic failure on another axis does not replace the cause.
     assert!(matches!(
-        second.retain_checked(Some(0), Some(usize::MAX)),
+        second.retain_checked(Some(0), None),
         Err(rawr_import::surface::Error::Allocation)
     ));
     // A fresh attempt and a reconstruction sharing the account are refused.
@@ -524,58 +371,39 @@ fn arithmetic_refusal_suppresses_every_later_admission_and_keeps_the_first_cause
         native.attempt(),
         Err(rawr_import::surface::Error::Allocation)
     ));
-    let (reconstructed, observation) = native.reconstruct_observed(&carrier_bytes(&[]));
-    assert!(reconstructed.is_err());
-    assert_eq!(
-        observation.snapshot().unwrap().first_refusal,
-        Some(cause),
-        "the refused reconstruction reports the first cause"
-    );
-    let after = native.snapshot();
-    assert_eq!(after.current, before.current, "nothing was charged");
-    assert_eq!(after.peak, before.peak);
-    assert_eq!(after.first_refusal, Some(cause), "the first cause stays");
-    // Cleanup only: dropping the scopes still releases their contributions.
-    let scope = std::mem::size_of::<Attempt>();
+    assert!(matches!(
+        native.reconstruct(&carrier_bytes(&[])),
+        Err(runner::Error::Surface(
+            rawr_import::surface::Error::Allocation
+        ))
+    ));
+    assert_eq!(native.first_refusal(), Some(cause), "the first cause stays");
+    // Cleanup only: dropping the scopes still releases the metadata they held.
     drop(first);
     drop(second);
-    assert_eq!(
-        native.snapshot().current,
-        [before.current[0] - 2, before.current[1] - 2 * scope]
-    );
-    assert_eq!(native.snapshot().first_refusal, Some(cause));
+    assert_eq!(native.owners(), baseline);
+    assert_eq!(native.first_refusal(), Some(cause));
 }
 
 #[test]
-fn native_account_runtime_scope_charges_and_types_only_arithmetic_refusal() {
-    // The runtime scope charges its retained runtime and releases it on drop.
+fn native_account_runtime_scope_types_only_arithmetic_refusal() {
     let mut engine = Engine::new();
-    engine.imported_native = Some(Native::transform(carrier()).unwrap());
+    engine.imported_native = Some(Native::transform(carrier()));
     let native = engine.imported_native.as_ref().unwrap();
-    let before = native.usage();
+    let before = native.owners();
     let scope = engine.begin_imported_runtime().unwrap();
-    assert_eq!(
-        native.usage(),
-        (
-            before.0 + 3,
-            before.1 + std::mem::size_of::<runner::Runtime<'_>>()
-        )
-    );
-    assert_eq!(native.snapshot().first_refusal, None);
+    assert_eq!(native.owners(), before + 1);
     drop(scope);
-    assert_eq!(native.usage(), before);
+    assert_eq!(native.owners(), before);
 
-    // Only a checked-arithmetic failure refuses, and that refusal is typed.
-    lock(&lock(&native.inner.allocation).account).items = usize::MAX;
+    // Once a producer's arithmetic refuses, a runtime scope is refused, typed.
+    let mut attempt = native.attempt().unwrap();
+    assert!(attempt.retain_checked(Some(1), None).is_err());
+    drop(attempt);
     assert!(matches!(
         engine.begin_imported_runtime(),
         Err(host::runtime::Error::ImportedAllocation)
     ));
-    lock(&lock(&native.inner.allocation).account).items = before.0;
-    assert_eq!(native.usage(), before);
-    let refusal = native.snapshot().first_refusal.unwrap();
-    assert_eq!(
-        (refusal.axis, refusal.cause),
-        (Axis::Items, Cause::AggregateOverflow)
-    );
+    assert_eq!(native.owners(), before);
+    assert_eq!(native.first_refusal(), Some(Refusal { axis: Axis::Bytes }));
 }

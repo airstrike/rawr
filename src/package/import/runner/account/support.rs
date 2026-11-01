@@ -24,12 +24,11 @@ pub(crate) struct Completed {
 }
 
 impl Pending {
-    pub(crate) fn transform(mut allocation: Attempt) -> Result<Self, Error> {
-        allocation.retain_checked(Some(1), Some(retained_bytes()))?;
-        Ok(Self {
+    pub(crate) fn transform(allocation: Attempt) -> Self {
+        Self {
             allocation,
             owner: Owner(Arc::new(OnceLock::new())),
-        })
+        }
     }
 
     pub(crate) fn finish(self) -> Completed {
@@ -59,15 +58,6 @@ impl ImportAllocation for Pending {
     fn support_owner(&self) -> Option<Owner> {
         Some(self.owner.clone())
     }
-}
-
-const fn retained_bytes() -> usize {
-    // The immutable model and executable each retain one handle. Include the
-    // entire write-once payload and the same two-counter Arc convention used
-    // by the original account; the existing Attempt charge stays conservative.
-    2 * std::mem::size_of::<Owner>()
-        + std::mem::size_of::<OnceLock<Receipt>>()
-        + 2 * std::mem::size_of::<usize>()
 }
 
 #[cfg(test)]

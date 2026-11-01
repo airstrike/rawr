@@ -269,6 +269,7 @@ impl Inventory {
         &self.digest
     }
 
+    #[cfg(test)]
     pub(crate) fn retained_usage(&self) -> (usize, usize) {
         (
             self.rows + 1,

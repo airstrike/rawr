@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::NodeKind;
-use crate::protocol::account;
 
 /// A closed byte/item quantity, observed at its actual producer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -210,45 +209,7 @@ pub struct ScalarRow {
 #[serde(rename_all = "kebab-case")]
 pub enum Fault {
     ScalarOverflow(Scalar),
-    Native {
-        runner_pid: u32,
-        epoch: u64,
-        cause: NativeFault,
-    },
 }
-
-/// Required telemetry faults affect evidence completeness, never product outcome.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NativeFault {
-    Missing,
-    Malformed,
-    Mismatched,
-    Duplicate,
-    Identity,
-    Capacity,
-    Overflow,
-    Inconsistent,
-}
-
-/// One original native account observed through an authenticated runner lifetime.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct NativeRow {
-    pub runner_pid: u32,
-    pub epoch: u64,
-    pub observations: u64,
-    /// Bit N records an observed required command whose protocol tag is N.
-    pub commands: u64,
-    /// Maximum simultaneous distinct accounts seen with this row (zero if unreached).
-    pub simultaneous: u8,
-    /// Last accepted current usage, cumulative peak, and immutable first refusal.
-    /// None records an explicitly unreached account, rather than measured zero.
-    pub snapshot: Option<account::Snapshot>,
-}
-
-/// Fixed original-account slots, including explicit unreached runner lifetimes.
-pub const NATIVE_ACCOUNTS: usize = 32;
 
 /// Closed scalar evidence carried in the existing recorder snapshot and capsule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -259,7 +220,6 @@ pub struct Evidence {
         deserialize_with = "deserialize_scalars"
     )]
     pub scalars: [ScalarRow; SCALARS.len()],
-    pub native: [Option<NativeRow>; NATIVE_ACCOUNTS],
     /// A fault freezes this evidence at the last representable observation.
     pub fault: Option<Fault>,
 }
@@ -271,7 +231,6 @@ impl Default for Evidence {
                 scalar,
                 observed: None,
             }),
-            native: [None; NATIVE_ACCOUNTS],
             fault: None,
         }
     }
@@ -296,180 +255,7 @@ impl Evidence {
         {
             return false;
         }
-        let mut empty = false;
-        for (index, row) in self.native.iter().enumerate() {
-            let Some(row) = row else {
-                empty = true;
-                continue;
-            };
-            if empty
-                || !row.valid()
-                || self.native[..index]
-                    .iter()
-                    .flatten()
-                    .any(|previous| previous.key() == row.key())
-            {
-                return false;
-            }
-            if row
-                .snapshot
-                .is_some_and(|snapshot| snapshot.account.is_none())
-                && !matches!(self.fault, Some(Fault::Native { runner_pid, epoch, cause: NativeFault::Identity }) if runner_pid == row.runner_pid && epoch == row.epoch)
-            {
-                return false;
-            }
-        }
         true
-    }
-
-    /// Check that this runner lifetime reported each required command, including
-    /// truthful unreached reports. This checks telemetry coverage, not resource fit.
-    pub fn native_covers(&self, runner_pid: u32, epoch: u64, required: &[account::Tag]) -> bool {
-        if !self.valid() || self.fault.is_some() || runner_pid == 0 || epoch == 0 {
-            return false;
-        }
-        let mut seen = false;
-        let mut commands = 0;
-        for row in self
-            .native
-            .iter()
-            .flatten()
-            .filter(|row| row.runner_pid == runner_pid && row.epoch == epoch)
-        {
-            seen = true;
-            commands |= row.commands;
-        }
-        seen && required
-            .iter()
-            .all(|tag| account::required(*tag) && commands & command(*tag) != 0)
-    }
-
-    // Only the recorder that tests and fixtures install calls these.
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn record_native_fault(&mut self, runner_pid: u32, epoch: u64, cause: NativeFault) {
-        self.fault.get_or_insert(Fault::Native {
-            runner_pid,
-            epoch,
-            cause,
-        });
-    }
-
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn record_native(
-        &mut self,
-        runner_pid: u32,
-        epoch: u64,
-        observation: account::Observation,
-        limit: u64,
-    ) {
-        if self.fault.is_some() {
-            return;
-        }
-        if runner_pid == 0 || epoch == 0 {
-            self.record_native_fault(runner_pid, epoch, NativeFault::Identity);
-            return;
-        }
-        if observation.validate().is_err() {
-            self.record_native_fault(runner_pid, epoch, NativeFault::Malformed);
-            return;
-        }
-        let simultaneous = observation.accounts.iter().flatten().count() as u8;
-        let mut updated = self.native;
-        let result = if simultaneous == 0 {
-            Self::native_row(
-                &mut updated,
-                runner_pid,
-                epoch,
-                observation.request.tag(),
-                None,
-                0,
-                limit,
-            )
-        } else {
-            observation
-                .accounts
-                .into_iter()
-                .flatten()
-                .try_for_each(|snapshot| {
-                    Self::native_row(
-                        &mut updated,
-                        runner_pid,
-                        epoch,
-                        observation.request.tag(),
-                        Some(snapshot),
-                        simultaneous,
-                        limit,
-                    )
-                })
-        };
-        match result {
-            Ok(()) => self.native = updated,
-            Err(cause) => self.record_native_fault(runner_pid, epoch, cause),
-        }
-        if self.fault.is_none()
-            && observation
-                .accounts
-                .iter()
-                .flatten()
-                .any(|snapshot| snapshot.account.is_none())
-        {
-            self.record_native_fault(runner_pid, epoch, NativeFault::Identity);
-        }
-    }
-
-    #[cfg(any(test, feature = "test-fixtures"))]
-    fn native_row(
-        rows: &mut [Option<NativeRow>; NATIVE_ACCOUNTS],
-        runner_pid: u32,
-        epoch: u64,
-        tag: account::Tag,
-        snapshot: Option<account::Snapshot>,
-        simultaneous: u8,
-        limit: u64,
-    ) -> Result<(), NativeFault> {
-        let key = (
-            runner_pid,
-            epoch,
-            snapshot.and_then(|snapshot| snapshot.account),
-        );
-        let index = rows
-            .iter()
-            .position(|row| row.as_ref().is_some_and(|row| row.key() == key))
-            .or_else(|| rows.iter().position(Option::is_none))
-            .ok_or(NativeFault::Capacity)?;
-        let mut row = rows[index].unwrap_or(NativeRow {
-            runner_pid,
-            epoch,
-            observations: 0,
-            commands: 0,
-            simultaneous: 0,
-            snapshot: None,
-        });
-        row.observations = row
-            .observations
-            .checked_add(1)
-            .filter(|count| *count <= limit)
-            .ok_or(NativeFault::Overflow)?;
-        row.commands |= command(tag);
-        row.simultaneous = row.simultaneous.max(simultaneous);
-        if let Some(mut next) = snapshot {
-            if let Some(previous) = row.snapshot {
-                if previous.limits != next.limits
-                    || previous.first_refusal.is_some()
-                        && next.first_refusal.is_some()
-                        && previous.first_refusal != next.first_refusal
-                {
-                    return Err(NativeFault::Inconsistent);
-                }
-                for (peak, previous) in next.peak.iter_mut().zip(previous.peak) {
-                    *peak = (*peak).max(previous);
-                }
-                next.first_refusal = previous.first_refusal.or(next.first_refusal);
-            }
-            row.snapshot = Some(next);
-        }
-        rows[index] = Some(row);
-        Ok(())
     }
 
     #[cfg(any(test, feature = "test-fixtures"))]
@@ -522,38 +308,6 @@ impl Range {
                 >= u128::from(self.total)
             && (self.count != 1 || self.min == self.max && self.total == self.min)
     }
-}
-
-impl NativeRow {
-    fn key(&self) -> (u32, u64, Option<std::num::NonZeroU64>) {
-        (
-            self.runner_pid,
-            self.epoch,
-            self.snapshot.and_then(|snapshot| snapshot.account),
-        )
-    }
-
-    fn valid(&self) -> bool {
-        let commands = (1_u8..=45)
-            .filter_map(|tag| account::Tag::try_from(tag).ok())
-            .filter(|tag| account::required(*tag))
-            .fold(0, |bits, tag| bits | command(tag));
-        self.runner_pid != 0
-            && self.epoch != 0
-            && self.observations > 0
-            && self.commands != 0
-            && self.commands & !commands == 0
-            && match self.snapshot {
-                None => self.simultaneous == 0,
-                Some(snapshot) => {
-                    (1..=2).contains(&self.simultaneous) && snapshot.validate().is_ok()
-                }
-            }
-    }
-}
-
-fn command(tag: account::Tag) -> u64 {
-    1_u64 << tag as u8
 }
 
 fn serialize_scalars<S>(

@@ -52,13 +52,6 @@ pub enum Error {
 }
 
 impl Engine {
-    /// Read original native allocation facts without granting reuse authority.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn imported_native_snapshot(&self) -> Option<account::Snapshot> {
-        self.imported_native.as_ref().map(account::Native::snapshot)
-    }
-
     /// Move generated native metadata ownership into the completed compiler.
     /// All later executable authorities retain it through this same engine.
     /// This transform alone does not prove artifact admission or a live owner.
@@ -84,7 +77,7 @@ impl Engine {
         snapshot: &package::snapshot::Snapshot,
     ) -> Result<Outcome, Error> {
         let native = self.imported_native.as_ref().ok_or(Error::Unowned)?;
-        let mut attempt = account::support::Pending::transform(native.attempt()?)?;
+        let mut attempt = account::support::Pending::transform(native.attempt()?);
         let output = captured::Output::transform_plain(self, snapshot, &mut attempt);
         let output = match output {
             Ok(output) => output,

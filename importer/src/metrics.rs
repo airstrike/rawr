@@ -91,16 +91,6 @@ pub trait Sink: Send + Sync {
     fn scalar(&self, _scalar: accounting::Scalar, _value: u64) {}
     /// Retain conversion failure as evidence without changing the product result.
     fn scalar_overflow(&self, _scalar: accounting::Scalar) {}
-    /// Observe fixed actual native-account state from the same authenticated runner.
-    fn native(
-        &self,
-        _runner_pid: u32,
-        _epoch: u64,
-        _observation: crate::protocol::account::Observation,
-    ) {
-    }
-    /// Record incomplete native telemetry without replacing the product result.
-    fn native_fault(&self, _runner_pid: u32, _epoch: u64, _cause: accounting::NativeFault) {}
     fn scope_opened(&self);
     fn scope_joined(&self);
 }
@@ -129,18 +119,6 @@ impl Sink for Noop {
 pub struct Current;
 
 impl Sink for Current {
-    fn native(
-        &self,
-        runner_pid: u32,
-        epoch: u64,
-        observation: crate::protocol::account::Observation,
-    ) {
-        record_native(runner_pid, epoch, observation);
-    }
-
-    fn native_fault(&self, runner_pid: u32, epoch: u64, cause: accounting::NativeFault) {
-        record_native_fault(runner_pid, epoch, cause);
-    }
     fn node(&self, kind: NodeKind, event: NodeEvent) {
         record_node(kind, event);
     }
@@ -269,22 +247,6 @@ pub fn record_scalar_wide(scalar: accounting::Scalar, value: u128) {
         Ok(value) => sink.scalar(scalar, value),
         Err(_) => sink.scalar_overflow(scalar),
     });
-}
-
-/// Record actual fixed native-account facts from one authenticated runner lifetime.
-#[doc(hidden)]
-pub fn record_native(
-    runner_pid: u32,
-    epoch: u64,
-    observation: crate::protocol::account::Observation,
-) {
-    with_sink(|sink, _| sink.native(runner_pid, epoch, observation));
-}
-
-/// Latch missing or invalid required telemetry as incomplete evidence only.
-#[doc(hidden)]
-pub fn record_native_fault(runner_pid: u32, epoch: u64, cause: accounting::NativeFault) {
-    with_sink(|sink, _| sink.native_fault(runner_pid, epoch, cause));
 }
 
 /// Observe one current linear transform as a miss and, on success, publication.
