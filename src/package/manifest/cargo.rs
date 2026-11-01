@@ -197,4 +197,86 @@ console_log = "1.0"
             None
         );
     }
+
+    /// Cargo accepts a Git dependency at a branch, a tag, a short rev or its
+    /// default branch, and pins the commit in `Cargo.lock`.
+    #[test]
+    fn git_dependencies_keep_the_reference_cargo_accepts() {
+        use super::super::rust::GitReference;
+        use super::super::rust::Source;
+
+        let text = r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+by-branch = { git = "https://example.invalid/a", branch = "main" }
+by-tag = { git = "https://example.invalid/b", tag = "v1.0.0" }
+by-rev = { git = "https://example.invalid/c", rev = "23f0211" }
+by-default = { git = "https://example.invalid/d" }
+"#;
+        let cargo = Cargo::parse(
+            PathBuf::from("/app/Cargo.toml"),
+            text.to_owned(),
+            Path::new("/app"),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let sources = cargo
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.alias.as_str(), &dependency.source))
+            .collect::<Vec<_>>();
+        let git = |url: &str, reference| Source::Git {
+            url: url.to_owned(),
+            reference,
+        };
+        assert_eq!(
+            sources,
+            [
+                (
+                    "by_branch",
+                    &git(
+                        "https://example.invalid/a",
+                        GitReference::Branch("main".into())
+                    )
+                ),
+                (
+                    "by_default",
+                    &git("https://example.invalid/d", GitReference::DefaultBranch)
+                ),
+                (
+                    "by_rev",
+                    &git(
+                        "https://example.invalid/c",
+                        GitReference::Rev("23f0211".into())
+                    )
+                ),
+                (
+                    "by_tag",
+                    &git(
+                        "https://example.invalid/b",
+                        GitReference::Tag("v1.0.0".into())
+                    )
+                ),
+            ]
+        );
+
+        let ambiguous = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+            dep = { git = \"https://example.invalid/a\", branch = \"main\", rev = \"abc\" }\n";
+        let error = Cargo::parse(
+            PathBuf::from("/app/Cargo.toml"),
+            ambiguous.to_owned(),
+            Path::new("/app"),
+            false,
+        )
+        .expect_err("Cargo allows one of branch, tag and rev");
+        assert!(
+            error.message.contains("specification is ambiguous"),
+            "{}",
+            error.message
+        );
+    }
 }

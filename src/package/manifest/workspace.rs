@@ -126,18 +126,13 @@ fn metadata(manifest: &Path) -> Result<(PathBuf, Inherited), String> {
         let key = dependency["rename"].as_str().unwrap_or(name);
         let source = if let Some(path) = dependency["path"].as_str() {
             Source::Path(PathBuf::from(path))
-        } else if let Some(git) = dependency["source"]
+        } else if let Some((url, reference)) = dependency["source"]
             .as_str()
-            .and_then(|source| source.strip_prefix("git+"))
+            .and_then(super::rust::GitReference::parse_source)
         {
-            let (url, query) = git.split_once('?').unwrap_or((git, ""));
-            let rev = query
-                .split('&')
-                .find_map(|pair| pair.strip_prefix("rev="))
-                .ok_or_else(|| format!("Rust dependency `{key}` with `git` also requires `rev`"))?;
             Source::Git {
                 url: url.to_owned(),
-                rev: rev.to_owned(),
+                reference,
             }
         } else {
             Source::Registry {

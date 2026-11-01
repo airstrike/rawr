@@ -1377,12 +1377,12 @@ impl Request {
                 {
                     config::Dependency::registry(alias, &format!("={}", package.version()), limits)?
                 }
-                unit::PackageSource::Git { cargo_id, oid } => {
-                    let url = cargo_id
-                        .strip_prefix("git+")
-                        .and_then(|rest| rest.split(['?', '#']).next())
+                unit::PackageSource::Git { cargo_id, .. } => {
+                    // The same source id as the project's, so the project's
+                    // `Cargo.lock` pins the same commit.
+                    let (url, reference) = config::GitReference::parse_source(cargo_id)
                         .expect("Cargo names each git source `git+<url>`");
-                    config::Dependency::git(alias, url, oid, limits)?
+                    config::Dependency::git(alias, url, reference, limits)?
                 }
                 unit::PackageSource::Registry { cargo_id, .. } => {
                     return Err(Error::Request {
@@ -3082,10 +3082,13 @@ impl Builder {
             "an intrinsic acquisition carries no program demand"
         );
         let limits = &self.limits;
-        let project_root = canonical_directory("project root", &self.project_root)?;
+        // Cargo follows a symlinked project; rawr works in the directory it
+        // names. The cache may be spelled through either path.
+        let project_root = resolved_directory("project root", &self.project_root)?;
         let expected_cache = project_root.join("target/rawr/cache");
         let requested_cache = lexical_absolute(&self.cache_root)?;
-        if requested_cache != expected_cache {
+        let spelled_cache = lexical_absolute(&self.project_root)?.join("target/rawr/cache");
+        if requested_cache != expected_cache && requested_cache != spelled_cache {
             return Err(Error::Path {
                 field: "project cache root",
                 path: self.cache_root,
@@ -4513,14 +4516,17 @@ fn render_manifest_accounted(
                 allocation.string(manifest)?;
                 specification.insert("version", Value::from(manifest.as_ref()));
             }
-            config::Source::Git { url, rev } => {
-                allocation.items(2)?;
+            config::Source::Git { url, reference } => {
+                allocation.items(1)?;
                 allocation.string("git")?;
                 allocation.string(url)?;
-                allocation.string("rev")?;
-                allocation.string(rev)?;
                 specification.insert("git", Value::from(url.as_ref()));
-                specification.insert("rev", Value::from(rev.as_ref()));
+                if let Some((key, name)) = reference.key_value() {
+                    allocation.items(1)?;
+                    allocation.string(key)?;
+                    allocation.string(name)?;
+                    specification.insert(key, Value::from(name));
+                }
             }
         }
         allocation.items(1)?;
@@ -5306,6 +5312,12 @@ fn canonical_authority(path: &Path, allocation: &mut RequestAllocation) -> Resul
         allocation.path(path)?;
         path.to_path_buf()
     };
+    // Cargo follows symlinks to the manifest; rawr reads the file they name.
+    let manifest = fs::canonicalize(&manifest).map_err(|source| Error::Io {
+        operation: "canonicalize file",
+        path: manifest,
+        source,
+    })?;
     canonical_file("Cargo authority manifest", &manifest)
 }
 
@@ -5714,6 +5726,24 @@ pub(crate) fn canonical_directory(field: &'static str, path: &Path) -> Result<Pa
     Ok(canonical)
 }
 
+/// The directory a user-given path names, its symlinks resolved as Cargo
+/// follows them. Rawr then works only in canonical paths below it.
+pub(crate) fn resolved_directory(field: &'static str, path: &Path) -> Result<PathBuf> {
+    let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
+        operation: "canonicalize directory",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !canonical.is_dir() {
+        return Err(Error::Path {
+            field,
+            path: canonical,
+            reason: "expected a directory".into(),
+        });
+    }
+    Ok(canonical)
+}
+
 pub(crate) fn canonical_file(field: &'static str, path: &Path) -> Result<PathBuf> {
     let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
         operation: "inspect file",
@@ -5893,6 +5923,42 @@ mod universe_placement_tests {
             root.join(AUTHORITATIVE_TARGET_DIRECTORY)
         );
         assert_ne!(versioned_target_directory(root), root.join("target"));
+    }
+
+    /// Cargo builds a project reached through a symlink; rawr works in the
+    /// directory the symlink names, its cache spelled through either path.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_project_root_resolves_to_the_directory_it_names() {
+        crate::store::isolate_for_tests();
+        let project = Project::new("symlinked");
+        let link = project.0.with_extension("link");
+        std::os::unix::fs::symlink(&project.0, &link).expect("project symlink exists");
+        let limits = Limits::standard();
+        let dependency = fs::canonicalize(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/catalog-api"),
+        )
+        .expect("catalog fixture canonicalizes");
+        let build = |cache: PathBuf| {
+            Request::builder(&link, &cache, &limits)
+                .expect("request builder seals")
+                .environment(config::Environment::capture().expect("environment captures"))
+                .policy(crate::extract::Policy::manifest(&limits).seal())
+                .expect("policy fits")
+                .dependency(
+                    config::Dependency::path("catalog", &dependency, &limits)
+                        .and_then(|dependency| dependency.package("catalog-api"))
+                        .expect("catalog dependency seals"),
+                )
+                .expect("dependency fits")
+                .build()
+        };
+        for cache in [link.join("target/rawr/cache"), project.cache()] {
+            let request = build(cache).expect("a symlinked project seals");
+            assert_eq!(request.project_root, project.0);
+            assert_eq!(request.cache_root, project.cache());
+        }
+        drop(fs::remove_file(&link));
     }
 
     #[derive(serde::Serialize)]

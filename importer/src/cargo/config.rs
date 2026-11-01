@@ -12,10 +12,7 @@ use semver::VersionReq;
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use super::{
-    canonical_directory, canonical_file, digest, normalized_absolute, Digest, Limits,
-    RequestAllocation,
-};
+use super::{canonical_file, digest, normalized_absolute, Digest, Limits, RequestAllocation};
 use crate::process::ToolPaths;
 use crate::{Error, Result};
 
@@ -121,8 +118,60 @@ pub(crate) enum Source {
     },
     Git {
         url: Box<str>,
-        rev: Box<str>,
+        reference: GitReference,
     },
+}
+
+/// What a Git dependency names in its repository, as its manifest spells it.
+/// Cargo pins the commit each one resolves to in `Cargo.lock`, so rawr
+/// declares the same reference and Cargo's lock decides the commit.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum GitReference {
+    /// `branch = "..."`.
+    Branch(Box<str>),
+    /// `tag = "..."`.
+    Tag(Box<str>),
+    /// `rev = "..."`: a commit hash, short or full, or another reference.
+    Rev(Box<str>),
+    /// No `branch`, `tag` or `rev`: the repository's default branch.
+    DefaultBranch,
+}
+
+impl GitReference {
+    /// The manifest key and value that declare this reference.
+    #[must_use]
+    pub fn key_value(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Self::Branch(name) => Some(("branch", name)),
+            Self::Tag(name) => Some(("tag", name)),
+            Self::Rev(name) => Some(("rev", name)),
+            Self::DefaultBranch => None,
+        }
+    }
+
+    /// Split a Cargo Git source id, `git+<url>[?<kind>=<name>][#<commit>]`,
+    /// into its URL and reference, as `cargo metadata` prints it.
+    #[must_use]
+    pub fn parse_source(source: &str) -> Option<(&str, Self)> {
+        let location = source.strip_prefix("git+")?;
+        let location = location
+            .split_once('#')
+            .map_or(location, |(location, _)| location);
+        let Some((url, query)) = location.split_once('?') else {
+            return Some((location, Self::DefaultBranch));
+        };
+        let mut reference = Self::DefaultBranch;
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=')?;
+            reference = match key {
+                "branch" => Self::Branch(value.into()),
+                "tag" => Self::Tag(value.into()),
+                "rev" => Self::Rev(value.into()),
+                _ => continue,
+            };
+        }
+        Some((url, reference))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -275,29 +324,22 @@ impl Dependency {
         })
     }
 
-    /// Begin an exact full-revision Git dependency specification.
-    pub fn git(alias: &str, url: &str, revision: &str, limits: &Limits) -> Result<Self> {
-        let valid = revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit());
-        if !valid {
-            return Err(Error::Request {
-                reason: format!(
-                    "the git revision `{revision}` of dependency `{alias}` is not a full \
-                     40-digit commit hash, which rawr needs to pin the dependency"
-                )
-                .into_boxed_str(),
-            });
-        }
+    /// Begin a Git dependency specification. Cargo locks the commit its
+    /// reference resolves to, in the project's `Cargo.lock`.
+    pub fn git(alias: &str, url: &str, reference: GitReference, limits: &Limits) -> Result<Self> {
         let mut allocation = RequestAllocation::new(limits);
         allocation.items(1)?;
         allocation.string(alias)?;
         allocation.string(url)?;
-        allocation.string(revision)?;
+        if let Some((_, name)) = reference.key_value() {
+            allocation.string(name)?;
+        }
         Ok(Self {
             alias: validated_library_alias(alias)?,
             package: None,
             source: Source::Git {
                 url: url.into(),
-                rev: revision.to_ascii_lowercase().into_boxed_str(),
+                reference,
             },
             features: Box::default(),
             default_features: true,
@@ -393,7 +435,7 @@ impl Dependency {
                     project_root.join(path)
                 };
                 allocation.path(&path)?;
-                Source::Path(canonical_directory("dependency", &path)?)
+                Source::Path(super::resolved_directory("dependency", &path)?)
             }
             source => source,
         };
@@ -625,7 +667,7 @@ impl Environment {
             self.value("HOME")
                 .map(|home| PathBuf::from(home).join(".cargo"))
         };
-        path.map(|path| normalized_absolute("Cargo home", &path))
+        path.map(|path| normalized_absolute("Cargo home", &path).map(resolved))
             .transpose()
     }
 
@@ -652,12 +694,18 @@ impl Environment {
             });
         }
         let path = normalized_absolute("Cargo home", &path)?;
-        Ok(Some(if source == "HOME" {
+        Ok(Some(resolved(if source == "HOME" {
             path.join(".cargo")
         } else {
             path
-        }))
+        })))
     }
+}
+
+/// The directory a Cargo home names, its symlinks resolved as Cargo follows
+/// them. One that doesn't exist yet keeps its spelling.
+fn resolved(path: PathBuf) -> PathBuf {
+    fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn insert_environment(
@@ -807,13 +855,13 @@ impl Selected {
                 (
                     Source::Git {
                         url: left_url,
-                        rev: left_rev,
+                        reference: left_reference,
                     },
                     Source::Git {
                         url: right_url,
-                        rev: right_rev,
+                        reference: right_reference,
                     },
-                ) => left_url == right_url && left_rev == right_rev,
+                ) => left_url == right_url && left_reference == right_reference,
                 (Source::Path(_), Source::Registry { .. } | Source::Git { .. })
                 | (Source::Registry { .. }, Source::Path(_) | Source::Git { .. })
                 | (Source::Git { .. }, Source::Path(_) | Source::Registry { .. }) => false,
@@ -954,7 +1002,7 @@ impl Provenance {
         if let Some(cargo_home) = environment.cargo_home()? {
             let home_start = candidates.len();
             append_pair_candidates(&mut candidates, &cargo_home, allocation)?;
-            reject_pair_conflict(&candidates[home_start..])?;
+            prefer_extensionless(&mut candidates, home_start);
         }
         candidates.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         candidates.dedup_by(|left, right| left.path == right.path);
@@ -1257,7 +1305,7 @@ fn append_hierarchy_candidates(
         let pair_start = candidates.len();
         append_candidate(candidates, directory, ".cargo/config.toml", allocation)?;
         append_candidate(candidates, directory, ".cargo/config", allocation)?;
-        reject_pair_conflict(&candidates[pair_start..])?;
+        prefer_extensionless(candidates, pair_start);
     }
     Ok(candidates.len())
 }
@@ -1306,21 +1354,19 @@ fn parse_config(path: &Path, bytes: &[u8]) -> Result<DocumentMut> {
         .map_err(|error| unparsable(&error))
 }
 
-fn reject_pair_conflict(candidates: &[Candidate]) -> Result<()> {
-    if candidates
+/// When one directory has both `config.toml` and `config` (the pair pushed
+/// from `start`), Cargo warns and reads only `config`. Drop `config.toml` so
+/// rawr reads what Cargo reads; `config`'s own state still notices if it
+/// disappears and `config.toml` takes over.
+fn prefer_extensionless(candidates: &mut Vec<Candidate>, start: usize) {
+    let pair = &candidates[start..];
+    debug_assert!(pair.len() == 2 && pair[0].path.extension().is_some());
+    if pair
         .iter()
         .all(|candidate| matches!(&candidate.state, State::Present(_)))
     {
-        let directory = candidates[0].path.parent().unwrap_or(Path::new(""));
-        return Err(Error::Request {
-            reason: format!(
-                "both `config` and `config.toml` exist in `{}`; remove one",
-                directory.display()
-            )
-            .into_boxed_str(),
-        });
+        candidates.remove(start);
     }
-    Ok(())
 }
 
 fn candidate_state(path: &Path, limit: usize) -> Result<State> {
@@ -1877,6 +1923,125 @@ mod tests {
                 && matches!(candidate.state, State::Absent)
         }));
         fs::remove_dir_all(fixture).expect("fixture is removed");
+    }
+
+    /// A canonical, empty fixture root that removes itself.
+    struct Root(std::path::PathBuf);
+
+    impl Root {
+        fn new(label: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "rawr-config-{label}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir_all(&root).expect("fixture root is created");
+            Self(fs::canonicalize(root).expect("fixture root canonicalizes"))
+        }
+    }
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn discover_in(project: &Path, cargo_home: &Path) -> crate::Result<Provenance> {
+        let environment = Environment::from_pairs([(
+            "CARGO_HOME",
+            cargo_home.to_str().expect("fixture path is Unicode"),
+        )])
+        .expect("Cargo home seals");
+        Provenance::discover(
+            project,
+            None,
+            environment,
+            "aarch64-apple-darwin",
+            "dev",
+            crate::process::parallelism::Proof::discover().expect("parallelism discovers"),
+            &Limits::standard(),
+        )
+    }
+
+    /// With both `config` and `config.toml` in one directory, Cargo warns
+    /// and reads `config`. Rawr reads the same file and still notices when
+    /// `config` goes away.
+    #[test]
+    fn config_beside_config_toml_reads_config_as_cargo_does() {
+        let root = Root::new("pair");
+        let project = root.0.join("project");
+        let cargo_home = root.0.join("cargo-home");
+        fs::create_dir_all(project.join(".cargo")).expect("project config directory");
+        fs::create_dir_all(&cargo_home).expect("Cargo home");
+        for directory in [project.join(".cargo"), cargo_home.clone()] {
+            fs::write(directory.join("config.toml"), "[build]\nrustc='bin/toml'\n")
+                .expect("config.toml writes");
+            fs::write(directory.join("config"), "[build]\nrustc='bin/legacy'\n")
+                .expect("config writes");
+        }
+
+        let provenance =
+            discover_in(&project, &cargo_home).expect("Cargo accepts config beside config.toml");
+        assert_eq!(
+            provenance.compiler(&project).configured(),
+            Some(project.join("bin/legacy").as_path())
+        );
+        for directory in [project.join(".cargo"), cargo_home.clone()] {
+            assert!(provenance.candidates.iter().any(|candidate| {
+                candidate.path == directory.join("config")
+                    && matches!(candidate.state, State::Present(_))
+            }));
+            assert!(!provenance
+                .candidates
+                .iter()
+                .any(|candidate| candidate.path == directory.join("config.toml")));
+        }
+        provenance
+            .revalidate(&Limits::standard(), "test")
+            .expect("unchanged configs stay fresh");
+
+        fs::remove_file(project.join(".cargo/config")).expect("config is removed");
+        assert!(matches!(
+            provenance.revalidate(&Limits::standard(), "test"),
+            Err(Error::ResolutionDrift {
+                field: "Cargo config provenance",
+                ..
+            })
+        ));
+        let provenance =
+            discover_in(&project, &cargo_home).expect("config.toml alone is read again");
+        assert_eq!(
+            provenance.compiler(&project).configured(),
+            Some(project.join("bin/toml").as_path())
+        );
+    }
+
+    /// Cargo follows a symlinked Cargo home; rawr reads the configs in the
+    /// directory it names.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_cargo_home_reads_the_directory_it_names() {
+        let root = Root::new("home-link");
+        let project = root.0.join("project");
+        let cargo_home = root.0.join("cargo-home");
+        let link = root.0.join("cargo-home-link");
+        fs::create_dir_all(&project).expect("project");
+        fs::create_dir_all(&cargo_home).expect("Cargo home");
+        std::os::unix::fs::symlink(&cargo_home, &link).expect("Cargo home symlink");
+        fs::write(cargo_home.join("config.toml"), "[net]\noffline = true\n")
+            .expect("home config writes");
+
+        let provenance =
+            discover_in(&project, &link).expect("Cargo accepts a symlinked Cargo home");
+        assert_eq!(
+            provenance.cargo_home().expect("Cargo home resolves"),
+            Some(cargo_home.clone())
+        );
+        assert!(provenance.candidates.iter().any(|candidate| {
+            candidate.path == cargo_home.join("config.toml")
+                && matches!(candidate.state, State::Present(_))
+        }));
     }
 
     #[test]

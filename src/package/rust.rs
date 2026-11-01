@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use rawr_import::cargo::config::{Dependency, Environment};
+use rawr_import::cargo::config::{Dependency, Environment, GitReference as Reference};
 use rawr_import::cargo::{Limits, Request};
 use rawr_import::extract::Policy;
 
 use super::graph::Graph;
-use super::manifest::rust::{Config, Source};
+use super::manifest::rust::{Config, GitReference, Source};
 
 impl Graph {
     /// The importer limits profile: `Limits::standard()`. Every owner,
@@ -402,9 +402,11 @@ fn app_manifest(cargo: &super::manifest::cargo::Cargo, library: &Path) -> String
         match &dependency.source {
             Source::Path(path) => fields.push(format!("path = {:?}", path.display().to_string())),
             Source::Registry { version } => fields.push(format!("version = {version:?}")),
-            Source::Git { url, rev } => {
+            Source::Git { url, reference } => {
                 fields.push(format!("git = {url:?}"));
-                fields.push(format!("rev = {rev:?}"));
+                if let Some((key, name)) = reference.key_value() {
+                    fields.push(format!("{key} = {name:?}"));
+                }
             }
             // Only a runner's snapshot keeps an unresolved inheritance.
             Source::Workspace => fields.push("workspace = true".to_owned()),
@@ -828,7 +830,15 @@ fn dependencies(config: &Config, limits: &Limits) -> rawr_import::Result<Vec<Dep
             Source::Registry { version } => {
                 Dependency::registry(&configured.alias, version, limits)?
             }
-            Source::Git { url, rev } => Dependency::git(&configured.alias, url, rev, limits)?,
+            Source::Git { url, reference } => {
+                let reference = match reference {
+                    GitReference::Branch(name) => Reference::Branch(name.as_str().into()),
+                    GitReference::Tag(name) => Reference::Tag(name.as_str().into()),
+                    GitReference::Rev(name) => Reference::Rev(name.as_str().into()),
+                    GitReference::DefaultBranch => Reference::DefaultBranch,
+                };
+                Dependency::git(&configured.alias, url, reference, limits)?
+            }
             Source::Workspace => {
                 return Err(rawr_import::Error::Request {
                     reason: format!(

@@ -3563,9 +3563,9 @@ fn validate_declaration(
                 });
             }
         }
-        Source::Git { url, rev } => {
+        Source::Git { url, reference } => {
             if value_string(declaration, "source")
-                .is_none_or(|source| !git_source_matches(source, url, rev))
+                .is_none_or(|source| !git_source_matches(source, url, reference))
             {
                 return Err(Error::ResolutionDrift {
                     command: "metadata",
@@ -3614,14 +3614,14 @@ fn validate_package(dependency: &Selected, package: &Value) -> Result<()> {
                 });
             }
         }
-        Source::Git { url, rev } => {
+        Source::Git { url, reference } => {
             let Some(source) = value_string(package, "source") else {
                 return Err(Error::ResolutionDrift {
                     command: "metadata",
                     field: "selected Git package source",
                 });
             };
-            if !git_source_matches(source, url, rev) {
+            if !git_source_matches(source, url, reference) {
                 return Err(Error::ResolutionDrift {
                     command: "metadata",
                     field: "selected Git package revision",
@@ -5070,24 +5070,15 @@ impl Visitor<'_> for JsonStringSeed<'_> {
     }
 }
 
-fn git_source_matches(source: &str, expected_url: &str, expected_rev: &str) -> bool {
-    let Some(source) = source.strip_prefix("git+") else {
-        return false;
-    };
-    let (location, precise) = source
-        .split_once('#')
-        .map_or((source, None), |(location, precise)| {
-            (location, Some(precise))
-        });
-    let Some(marker) = location.rfind("?rev=") else {
-        return false;
-    };
-    let url = &location[..marker];
-    let requested = &location[marker + "?rev=".len()..];
-    let requested = requested.split('&').next().unwrap_or(requested);
-    url == expected_url
-        && requested.eq_ignore_ascii_case(expected_rev)
-        && precise.is_none_or(|precise| precise.eq_ignore_ascii_case(expected_rev))
+/// Whether Cargo's Git source id names the requested repository and
+/// reference. The commit after `#` is Cargo's to choose and lock.
+fn git_source_matches(
+    source: &str,
+    expected_url: &str,
+    expected_reference: &config::GitReference,
+) -> bool {
+    config::GitReference::parse_source(source)
+        .is_some_and(|(url, reference)| url == expected_url && &reference == expected_reference)
 }
 
 fn canonical_metadata_bytes_budgeted(
@@ -8348,15 +8339,58 @@ mod tests {
     fn git_source_id_requires_prefix_url_and_exact_requested_revision() {
         let revision = "23f021145eff7dfd420e8f3739b742e902568678";
         let source = format!("git+https://example.invalid/repo?rev={revision}#{revision}");
+        let rev = super::config::GitReference::Rev(revision.into());
         assert!(git_source_matches(
             &source,
             "https://example.invalid/repo",
-            revision
+            &rev
         ));
         assert!(!git_source_matches(
             source.strip_prefix("git+").expect("prefix exists"),
             "https://example.invalid/repo",
-            revision
+            &rev
+        ));
+    }
+
+    /// A branch, a tag, a short rev or no reference at all match the source id
+    /// Cargo prints for them, whichever commit Cargo locked after `#`.
+    #[test]
+    fn git_source_id_matches_each_reference_cargo_accepts() {
+        let url = "https://example.invalid/repo";
+        let locked = "23f021145eff7dfd420e8f3739b742e902568678";
+        for (source, reference) in [
+            (
+                format!("git+{url}?branch=main#{locked}"),
+                super::config::GitReference::Branch("main".into()),
+            ),
+            (
+                format!("git+{url}?tag=v1.0.0#{locked}"),
+                super::config::GitReference::Tag("v1.0.0".into()),
+            ),
+            (
+                format!("git+{url}?rev=23f0211#{locked}"),
+                super::config::GitReference::Rev("23f0211".into()),
+            ),
+            (
+                format!("git+{url}#{locked}"),
+                super::config::GitReference::DefaultBranch,
+            ),
+            (
+                format!("git+{url}?branch=main"),
+                super::config::GitReference::Branch("main".into()),
+            ),
+        ] {
+            assert!(git_source_matches(&source, url, &reference), "{source}");
+        }
+        assert!(!git_source_matches(
+            &format!("git+{url}?branch=main#{locked}"),
+            url,
+            &super::config::GitReference::Tag("main".into()),
+        ));
+        assert!(!git_source_matches(
+            &format!("git+{url}?branch=main#{locked}"),
+            url,
+            &super::config::GitReference::DefaultBranch,
         ));
     }
 
