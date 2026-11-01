@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The ?play image builds its universe runner, and a tokio snippet runs in the deployed image within the bot's time and memory limits.","issues":[465]},
+        {"text":"A runner starts much faster. Rawr's runtime dependencies compile optimized, a runner embeds only the bindings it installs, and installing them no longer scans every type for each type. ?play snippets now run within their time budget.","issues":[507]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.47",
@@ -1041,7 +1047,7 @@
     {"issue":462,"title":"E0106 on an impl Widget return that rustc accepts","state":"closed","category":"Divergences from rustc","release":"0.3.40"},
     {"issue":463,"title":"The universe runner covers only its seed program's calls","state":"open","category":"No glue (D593)"},
     {"issue":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open","category":"No glue (D593)"},
-    {"issue":465,"title":"Build the play image's universe stage","state":"open","category":"No glue (D593)"},
+    {"issue":465,"title":"Build the play image's universe stage","state":"closed","category":"No glue (D593)"},
     {"issue":466,"title":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
     {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open","category":"Shared dependency cache (D607)"},
@@ -1083,14 +1089,18 @@
     {"issue":504,"title":"Judge a crate alias the only name of its type per root crate","state":"closed","category":"No glue (D593)","release":"0.3.45"},
     {"issue":505,"title":"Generated runners name the trait in primitive From calls","state":"closed","category":"No glue (D593)","release":"0.3.45"},
     {"issue":506,"title":"Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)"},
-    {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"open","category":"No glue (D593)"},
+    {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed","category":"No glue (D593)"},
     {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"open","category":"Divergences from rustc"},
     {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
     {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"open","category":"Health"},
     {"issue":511,"title":"inspect reads callers' frames","state":"open","category":"Health"},
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
-    {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"}
+    {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
+    {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)"},
+    {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
+    {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
+    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -1589,11 +1599,13 @@
           "start": 53,
           "size": 5,
           "state": "now",
-          "note": "Tokio runs; the image stage and iced frames remain",
+          "note": "The universe runner ships and tokio runs; iced frames and a shared engine remain",
           "issues": [
             {"number":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"open"},
             {"number":436,"title":"?play and the playground run async programs on generated bindings","state":"closed"},
-            {"number":465,"title":"Build the play image's universe stage","state":"open"}
+            {"number":465,"title":"Build the play image's universe stage","state":"closed"},
+            {"number":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed"},
+            {"number":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open"}
           ]
         },
         {
