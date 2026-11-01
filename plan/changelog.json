@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A first `rawr check` or `rawr run` of a program with Rust dependencies reuses the facts it already extracted for each later round of demand, with no second nightly build or extraction process. Cold counter goes from 2 extraction processes to 1, and download_progress from 6 to 5.","issues":[660]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.82",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A first `rawr check` or `rawr run` of a program with Rust dependencies reuses the facts it already extracted for each later round of demand, with no second nightly build or extraction process. Cold counter goes from 2 extraction processes to 1, and download_progress from 6 to 5.","issues":[660]}
+      ]
+    },
     {
       "version": "0.3.81",
       "date": "2026-11-01",
