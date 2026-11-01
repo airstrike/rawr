@@ -2,10 +2,12 @@
 // iced's bezier_tool and game_of_life: a canvas whose program sends its
 // own messages, and `.map(Message::Curve)` turns them into the program's.
 // The crate's `map` names its callable's type in its output, `Map<Self, F,
-// Message>`.
+// Message>`, and `column!` boxes that `Map` beside the controls, through
+// the impl of `Widget` for `Map<W, F, A>`, whose parameters its type takes
+// in another order than the impl declares them.
 
 use events::canvas::{self, Bounds, Event, Geometry, Pen};
-use events::widgets::{center, Framed, Widget};
+use events::widgets::{center, column, text, Framed, Widget};
 use events::Theme;
 
 #[derive(Default)]
@@ -52,7 +54,8 @@ impl Editor {
         let bezier = canvas::canvas(Bezier {
             curves: self.curves,
         });
-        center(bezier.map(Message::Curve))
+        let controls = center(text(format!("{} curves", self.curves)));
+        column![bezier.map(Message::Curve), controls]
     }
 }
 

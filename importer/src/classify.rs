@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 65;
+const CLASSIFIER_VERSION: u32 = 66;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5178,30 +5178,37 @@ impl<P: api::Phase> Context<'_, P> {
                     named_parameters(ty, implementation.id(), &mut nested);
                 }
             }
-            let mut own = parameters.iter();
+            // The type's arguments may name the impl's parameters in another
+            // order than it declares them, as iced's `impl<W, A, B, F, Theme,
+            // Renderer> Widget<B, Theme, Renderer> for Map<W, F, A>` does,
+            // or name one twice. Then the bridge reaches the type at the
+            // impl's own instance, which names each parameter where it
+            // stands, as it does an impl that fixes an argument.
+            let mut named = Vec::new();
             let mut fixed = false;
             for argument in arguments {
                 match argument {
-                    model::Argument::Type(model::Type::Parameter { owner, index }) => loop {
-                        let Some(parameter) = own.next() else {
-                            return Err(reject::Kind::GenericImplementation.into());
-                        };
+                    model::Argument::Type(model::Type::Parameter { owner, index })
                         if owner == implementation.id()
-                            && *index == parameter.index()
-                            && matches!(parameter.kind(), model::ParameterKind::Type { .. })
-                        {
-                            break;
+                            && parameters.iter().any(|parameter| {
+                                parameter.index() == *index
+                                    && matches!(parameter.kind(), model::ParameterKind::Type { .. })
+                            }) =>
+                    {
+                        if named.last().is_some_and(|last| last >= index) {
+                            fixed = true;
                         }
-                        if !nested.contains(&parameter.index()) {
-                            infer(parameter)?;
-                        }
-                    },
+                        named.push(*index);
+                    }
+                    model::Argument::Type(model::Type::Parameter { .. }) => {
+                        return Err(reject::Kind::GenericImplementation.into());
+                    }
                     model::Argument::Type(_) => fixed = true,
                     _ => return Err(reject::Kind::GenericImplementation.into()),
                 }
             }
-            for parameter in own {
-                if !nested.contains(&parameter.index()) {
+            for parameter in &parameters {
+                if !named.contains(&parameter.index()) && !nested.contains(&parameter.index()) {
                     infer(parameter)?;
                 }
             }
@@ -5232,6 +5239,36 @@ impl<P: api::Phase> Context<'_, P> {
             };
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
+            // A method's receiver gives each parameter its type names, as a
+            // `Map<W, F, A>` gives `F: Fn(A) -> B`: such a parameter is the
+            // type the receiver holds, never a closure the call makes, so
+            // its `Fn` bound, which rustc checks, takes no script function.
+            let inherited = if matches!(signature.receiver(), model::Receiver::None) {
+                inherited
+            } else {
+                let held = |index: &u32| named.contains(index) || nested.contains(index);
+                model::Generics::new(
+                    inherited.parameters().cloned().collect(),
+                    inherited
+                        .predicates()
+                        .filter(|predicate| {
+                            !matches!(
+                                predicate,
+                                model::Predicate::Bound {
+                                    ty: model::Type::Parameter { owner, index },
+                                    bound: model::Bound::Trait { trait_id, .. },
+                                } if owner == implementation.id()
+                                    && held(index)
+                                    && matches!(
+                                        self.definition_name(trait_id),
+                                        Some("Fn" | "FnMut" | "FnOnce")
+                                    )
+                            )
+                        })
+                        .cloned()
+                        .collect(),
+                )
+            };
             let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
                 return Err(reject::Kind::GenericImplementation.into());
             };
