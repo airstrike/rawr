@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.67 (2026-11-01)
+
 - An imported struct whose public field borrows a slice of numbers or a `&str` is built with a struct literal, as iced's `canvas::LineDash { segments: &[3.0, 6.0], offset: 0 }` is. (#595)
 - A blanket impl's associated functions run on each type that meets its bounds, and the argument picks the conversion, as palette's `Hsl::from_color(rgb)` does. (#594)
 - A number's `.into()` reaches the target crate type's `From` as rustc infers it, so `size: 14.0.into()` becomes iced's `Pixels`. clock and the_matrix pass `rawr check`. (#426)
