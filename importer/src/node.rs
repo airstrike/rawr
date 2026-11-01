@@ -1216,8 +1216,29 @@ impl<T> Check<T> {
             Ok(None) => Ok(Self::Stale),
             Err(Error::CandidateCorrupt(proof)) => Ok(Self::Damaged(Some(*proof))),
             Err(Error::Corrupt { .. }) => Ok(Self::Damaged(None)),
-            Err(error) if terminal_replay_failure(&error) => Err(error),
-            Err(_) => Ok(Self::Stale),
+            Err(error) if stale(&error) => Ok(Self::Stale),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Whether a stored entry's replay failed only because it is stale: its
+/// inputs changed, or another version of rawr wrote it. Damage and
+/// failures that stop the build are not stale.
+pub(crate) fn stale(error: &Error) -> bool {
+    !matches!(error, Error::CandidateCorrupt(_) | Error::Corrupt { .. })
+        && !terminal_replay_failure(error)
+}
+
+impl Error {
+    /// Whether this failure is an entry that went stale after it was read,
+    /// so the run starts again and rebuilds it rather than failing (#609).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        match self {
+            Self::StaleReadSet { .. } => true,
+            Self::Importer(error) => error.is_stale(),
+            _ => false,
         }
     }
 }

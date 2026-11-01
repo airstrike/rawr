@@ -417,6 +417,15 @@ pub enum Error {
     Node(#[source] Box<node::Error>),
 }
 
+impl Error {
+    /// Whether a cache entry this check read went stale before it was used
+    /// (`crate::Error::is_stale`).
+    #[must_use]
+    pub fn is_stale(&self) -> bool {
+        matches!(self, Self::Node(error) if error.is_stale())
+    }
+}
+
 #[cfg(all(test, feature = "test-fixtures"))]
 mod tests {
     use std::fs;

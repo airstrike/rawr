@@ -570,7 +570,18 @@ impl Witness {
     }
 
     fn revalidate(&self, budget: &super::GraphBudget, scope: Scope) -> Result<Entry, Error> {
-        let current = self.current.revalidate(budget, scope)?;
+        // An entry whose inputs changed since this consumer read it is stale
+        // for the consumer, as a lookup finds it stale: its next evaluation
+        // misses and rebuilds it (#609). Damage and failures keep their error.
+        let current = match self.current.revalidate(budget, scope) {
+            Ok(current) => current,
+            Err(error) if super::stale(&error) => {
+                return Err(Error::StaleReadSet {
+                    action: self.expected.action,
+                })
+            }
+            Err(error) => return Err(error),
+        };
         if current != self.expected {
             return Err(Error::StaleReadSet {
                 action: self.expected.action,

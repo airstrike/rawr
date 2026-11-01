@@ -2735,7 +2735,7 @@ fn final_read_set_revalidates_external_facts_without_mutating_the_store() {
         b"changed-discovered-fact".to_vec().into_boxed_slice();
     assert!(matches!(
         evaluator.revalidate_read_set(&proof),
-        Err(Error::Codec("fixture external fact changed"))
+        Err(Error::StaleReadSet { action }) if action == validated.receipt().action()
     ));
     assert_eq!(snapshot(store.root()), before);
     fs::remove_dir_all(root).expect("the final-read-set fixture retires");
@@ -4913,4 +4913,37 @@ fn fresh_build_keeps_failures_the_program_causes() {
         error.to_string(),
         "`/project/src/main.rs` changed during the build; run it again"
     );
+}
+
+/// A store whose executions were deleted rebuilds them: the lost entries
+/// are forgotten, never an error on every later check (#584).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn store_missing_its_executions_rebuilds_them() {
+    let (root, store, runners) =
+        store_growth_runners("store-lost-executions", &[b"store-lost-executions"]);
+    drop(runners);
+    fs::remove_dir_all(store.root().join("executions")).unwrap();
+    drop(store);
+    // The next run opens the store again.
+    let context = fixture_context(&root);
+    let store = context.open_store().expect("a damaged store opens empty");
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let rebuild = |name: &'static [u8]| {
+        let recipe = context.discover::<BundleValue>(name, 4_096).unwrap();
+        let current = store.clone();
+        evaluator.discover_bundled(
+            &recipe,
+            move |candidate| candidate.validate_published(&current),
+            bundled_fixture,
+        )
+    };
+    rebuild(b"store-lost-executions").expect("the lost entry is rebuilt");
+    rebuild(b"store-lost-executions-other").expect("an unrelated entry publishes");
+    store
+        .fixture_physical_inventory()
+        .expect("the rebuilt store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
 }
