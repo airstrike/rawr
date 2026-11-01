@@ -898,7 +898,9 @@ impl<'store> Evaluator<'store> {
                 || {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                    let bytes = execute()?.into_encoded(recipe.output_limit)?;
+                    let bytes = execute()
+                        .map_err(Error::fresh)?
+                        .into_encoded(recipe.output_limit)?;
                     if bytes.len() > recipe.output_limit {
                         return Err(Error::Limit {
                             resource: "node content bytes",
@@ -1014,7 +1016,9 @@ impl<'store> Evaluator<'store> {
                     let transform = execute.take().ok_or(Error::State(
                         "direct node executor was consumed before the final miss",
                     ))?;
-                    let bytes = transform()?.into_encoded(recipe.output_limit)?;
+                    let bytes = transform()
+                        .map_err(Error::fresh)?
+                        .into_encoded(recipe.output_limit)?;
                     if bytes.len() > recipe.output_limit {
                         return Err(Error::Limit {
                             resource: "node content bytes",
@@ -1120,7 +1124,7 @@ impl<'store> Evaluator<'store> {
                             let transform = execute.take().ok_or(Error::State(
                                 "discoverable node executor was consumed before the final miss",
                             ))?;
-                            let value = transform()?;
+                            let value = transform().map_err(Error::fresh)?;
                             let discovered_inputs =
                                 validate(&value, budget, read_set::Scope::Consumer)?;
                             let complete = recipe.complete(&discovered_inputs)?;
@@ -1288,7 +1292,8 @@ impl<'store> Evaluator<'store> {
                         let transform = execute.take().ok_or(Error::State(
                             "bundled node executor was consumed before the final miss",
                         ))?;
-                        let (value, bundle, discovered_inputs) = transform(attempt)?.into_parts();
+                        let (value, bundle, discovered_inputs) =
+                            transform(attempt).map_err(Error::fresh)?.into_parts();
                         let complete = recipe.complete(&discovered_inputs)?;
                         let bytes = value.encode(recipe.output_limit)?;
                         if bytes.len() > recipe.output_limit {
@@ -1402,21 +1407,23 @@ impl<'store> Evaluator<'store> {
                 continue;
             }
             budget.deep()?;
-            let current = match self.replay_discovered(recipe, validate, action) {
-                Ok(Some(current)) => current,
-                Err(Error::CandidateCorrupt(proof)) => {
+            // An ordinary input change rebuilds silently under the progress
+            // bar; only damaged entries earn a line.
+            let current = match Check::of(self.replay_discovered(recipe, validate, action))? {
+                Check::Hit(current) => current,
+                Check::Damaged(Some(proof)) => {
                     note_damaged(K::KIND);
                     rejected = true;
-                    rejected_actions[slot] = Some((action, *proof));
+                    rejected_actions[slot] = Some((action, proof));
                     continue;
                 }
-                Err(error) if terminal_replay_failure(&error) => return Err(error),
-                miss => {
-                    // An ordinary input change rebuilds silently under the
-                    // progress bar; only damaged entries earn a line.
-                    if matches!(miss, Err(Error::Corrupt { .. })) {
-                        note_damaged(K::KIND);
-                    }
+                Check::Damaged(None) => {
+                    note_damaged(K::KIND);
+                    stale.push(action);
+                    rejected = true;
+                    continue;
+                }
+                Check::Stale => {
                     stale.push(action);
                     rejected = true;
                     continue;
@@ -1535,6 +1542,32 @@ fn note_damaged(kind: Kind) {
         kind,
         &format!("rawr: ignoring a damaged cache entry ({kind}); rebuilding it"),
     );
+}
+
+/// What the cache check found for one stored entry: its value, or an entry
+/// to rebuild. A stale one, whose inputs changed or which another version
+/// of rawr wrote, rebuilds silently, and a damaged one with a note. A
+/// failure that stops the build is the `Err` beside it, never one of these,
+/// so the same error from a fresh build is a failure, or a rawr bug (#522).
+pub(crate) enum Check<T> {
+    Hit(T),
+    Stale,
+    /// With the proof of the candidate's own corruption, when there is one.
+    Damaged(Option<Corruption>),
+}
+
+impl<T> Check<T> {
+    /// The check of one entry from its replay.
+    fn of(replay: Result<Option<T>, Error>) -> Result<Self, Error> {
+        match replay {
+            Ok(Some(hit)) => Ok(Self::Hit(hit)),
+            Ok(None) => Ok(Self::Stale),
+            Err(Error::CandidateCorrupt(proof)) => Ok(Self::Damaged(Some(*proof))),
+            Err(Error::Corrupt { .. }) => Ok(Self::Damaged(None)),
+            Err(error) if terminal_replay_failure(&error) => Err(error),
+            Err(_) => Ok(Self::Stale),
+        }
+    }
 }
 
 // Candidate absence, stale inputs and malformed historical evidence may miss.
@@ -1656,6 +1689,27 @@ impl From<Corruption> for Error {
 impl From<crate::Error> for Error {
     fn from(error: crate::Error) -> Self {
         Self::Importer(Box::new(error))
+    }
+}
+
+impl Error {
+    /// A fresh build's failure as it leaves its transform. The cache check
+    /// reads the same errors as an entry to rebuild ([`Check`]), but a fresh
+    /// build has no entry: one that only a rawr bug can cause panics here,
+    /// naming its invariant (#522, D664).
+    pub(crate) fn fresh(self) -> Self {
+        if let Some(invariant) = self.invariant() {
+            panic!("{invariant}");
+        }
+        self
+    }
+
+    /// The invariant this failure breaks, when only a rawr bug can cause it.
+    pub(crate) fn invariant(&self) -> Option<String> {
+        match self {
+            Self::Importer(error) => error.invariant(),
+            _ => None,
+        }
     }
 }
 
