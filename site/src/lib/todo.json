@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.74",
+  "version": "0.3.75",
   "examples": {
     "running": 22,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr's store evicts executions an older rawr wrote when it opens or makes room, with the pins that name them, and keeps each project's four newest unpinned runners and extraction builds. Running and pinned ones are never evicted.","issues":[577]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.75",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"rawr's store evicts executions an older rawr wrote when it opens or makes room, with the pins that name them, and keeps each project's four newest unpinned runners and extraction builds. Running and pinned ones are never evicted.","issues":[577]}
+        ]
+      },
       {
         "version": "0.3.74",
         "date": "2026-11-01",
@@ -1390,7 +1392,7 @@
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health"},
-    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.75"},
     {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
     {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","release":"0.3.63"},
     {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","release":"0.3.63"},

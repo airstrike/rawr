@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"rawr's store evicts executions an older rawr wrote when it opens or makes room, with the pins that name them, and keeps each project's four newest unpinned runners and extraction builds. Running and pinned ones are never evicted.","issues":[577]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.75",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"rawr's store evicts executions an older rawr wrote when it opens or makes room, with the pins that name them, and keeps each project's four newest unpinned runners and extraction builds. Running and pinned ones are never evicted.","issues":[577]}
+      ]
+    },
     {
       "version": "0.3.74",
       "date": "2026-11-01",
