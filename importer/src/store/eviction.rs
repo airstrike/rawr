@@ -279,9 +279,64 @@ fn forget_lost(
     lost: &[Registered],
     budget: &mut recovery::Budget,
 ) -> Result<bool, Error> {
+    forget(
+        publication,
+        store,
+        lost,
+        "typed store physical inventory lost a registered allocation",
+        budget,
+    )?;
+    Ok(true)
+}
+
+/// Retire the entry already at an action that a fresh build publishes,
+/// which the build's miss recheck found stale or damaged, with the pins
+/// that hold it (#614).
+pub(super) fn retire_replaced(
+    publication: &lease::Publication<'_>,
+    store: &Path,
+    kind: Kind,
+    schema: u32,
+    action: ActionKey,
+    budget: &mut recovery::Budget,
+) -> Result<(), Error> {
+    let key = Digest::from_bytes(action.as_bytes());
+    let Some(registered) = accounting::registrations_recovery(store, budget)?
+        .iter()
+        .copied()
+        .find(|registered| {
+            let allocation = registered.allocation();
+            allocation.class == Class::Action
+                && allocation.kind == kind
+                && allocation.schema == schema
+                && allocation.key == key
+        })
+    else {
+        return Ok(());
+    };
+    forget(
+        publication,
+        store,
+        &[registered],
+        "a running program holds a stale cache entry that a fresh build replaces",
+        budget,
+    )
+}
+
+/// Retire each allocation's seal unit (an action with its bundle, or a
+/// content with every action that names it) and the pins that hold them.
+/// Directories already gone are skipped. A running program's pin on one
+/// refuses with `held`.
+fn forget(
+    publication: &lease::Publication<'_>,
+    store: &Path,
+    allocations: &[Registered],
+    held: &'static str,
+    budget: &mut recovery::Budget,
+) -> Result<(), Error> {
     let registrations = accounting::registrations_recovery(store, budget)?;
     let mut released = BTreeSet::new();
-    for lost in lost.iter().copied() {
+    for lost in allocations.iter().copied() {
         released.insert(lost.reference());
         let allocation = lost.allocation();
         for action in registrations.iter().copied().filter(|action| {
@@ -316,9 +371,7 @@ fn forget_lost(
         budget,
     )? {
         // A running program holds one; its pin keeps it until it ends.
-        return Err(Error::CleanupRequired(
-            "typed store physical inventory lost a registered allocation",
-        ));
+        return Err(Error::CleanupRequired(held));
     }
     let mut selected = registrations
         .iter()
@@ -328,8 +381,7 @@ fn forget_lost(
     selected.sort_unstable_by_key(|registered| registered.reference());
     accounting::begin_eviction(publication, store, &selected, budget)?;
     retire_allocations(publication, store, &selected, true, budget)?;
-    accounting::finish_eviction(publication, store, budget)?;
-    Ok(true)
+    accounting::finish_eviction(publication, store, budget)
 }
 
 fn recover_unrooted(store: &Path, budget: &mut recovery::Budget) -> Result<bool, Error> {

@@ -793,18 +793,22 @@ impl<'store> Evaluator<'store> {
                                     actual: bytes.len(),
                                 });
                             }
-                            if self
-                                .replay_discovered_scoped_exact(
-                                    recipe,
-                                    &validate,
-                                    complete.action(),
-                                )?
-                                .is_some()
-                            {
-                                return Ok(crate::store::Reserved::Reuse((
-                                    complete.action(),
-                                    false,
-                                )));
+                            // An older entry at this action that no longer
+                            // checks is replaced when this one publishes (#614).
+                            match self.replay_discovered_scoped_exact(
+                                recipe,
+                                &validate,
+                                complete.action(),
+                            ) {
+                                Ok(Some(_)) => {
+                                    return Ok(crate::store::Reserved::Reuse((
+                                        complete.action(),
+                                        false,
+                                    )));
+                                }
+                                Ok(None) => {}
+                                Err(error) if rebuilds(&error) => {}
+                                Err(error) => return Err(error),
                             }
                             Ok(crate::store::Reserved::Publish {
                                 result: (complete.action(), true),
@@ -1228,6 +1232,12 @@ impl<T> Check<T> {
 pub(crate) fn stale(error: &Error) -> bool {
     !matches!(error, Error::CandidateCorrupt(_) | Error::Corrupt { .. })
         && !terminal_replay_failure(error)
+}
+
+/// Whether a stored entry's replay failed because it is to be rebuilt:
+/// stale or damaged, as [`Check::of`] reads it.
+fn rebuilds(error: &Error) -> bool {
+    !terminal_replay_failure(error)
 }
 
 impl Error {

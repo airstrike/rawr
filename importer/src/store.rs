@@ -603,6 +603,22 @@ impl Store {
     ) -> Result<Box<[accounting::Record]>, Error> {
         let digest = content_digest::<K>(bytes);
         let envelope = Envelope::direct(recipe, digest, bytes.len())?.encode()?;
+        // Every caller publishes after a miss recheck under the action's or
+        // execution's lease, so an entry already at this action is one that
+        // check found stale or damaged: it is retired and replaced (#614).
+        if bundle.is_none()
+            && entry::existing_directory(&self.root, &action_relative(K::KIND, recipe.action()))?
+                .is_some()
+        {
+            eviction::retire_replaced(
+                publication,
+                &self.root,
+                K::KIND,
+                K::SCHEMA,
+                recipe.action(),
+                &mut recovery::Budget::new(),
+            )?;
+        }
         accounting::plan(
             publication,
             &self.root,
