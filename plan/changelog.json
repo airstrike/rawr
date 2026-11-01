@@ -5,7 +5,10 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]}
+      {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]},
+      {"text":"A runner executable over 256 MiB builds. rawr hashes executables and other build outputs as streams, with no size limit.","issues":[518]},
+      {"text":"A symlinked `.cargo` directory or Cargo config file is followed, as Cargo follows it. Editing the target or pointing the link elsewhere triggers a rebuild.","issues":[520]},
+      {"text":"A Git dependency with a `version` is accepted, and Cargo checks the version against the Git package.","issues":[521]}
     ]
   },
   "releases": [

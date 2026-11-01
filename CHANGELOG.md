@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached. (#526)
+- A runner executable over 256 MiB builds. rawr hashes executables and other build outputs as streams, with no size limit. (#518)
+- A symlinked `.cargo` directory or Cargo config file is followed, as Cargo follows it. Editing the target or pointing the link elsewhere triggers a rebuild. (#520)
+- A Git dependency with a `version` is accepted, and Cargo checks the version against the Git package. (#521)
 
 ## 0.3.50 (2026-11-01)
 

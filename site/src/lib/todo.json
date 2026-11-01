@@ -8,7 +8,10 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]}
+        {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]},
+        {"text":"A runner executable over 256 MiB builds. rawr hashes executables and other build outputs as streams, with no size limit.","issues":[518]},
+        {"text":"A symlinked `.cargo` directory or Cargo config file is followed, as Cargo follows it. Editing the target or pointing the link elsewhere triggers a rebuild.","issues":[520]},
+        {"text":"A Git dependency with a `version` is accepted, and Cargo checks the version against the Git package.","issues":[521]}
       ]
     },
     "releases": [
@@ -1123,10 +1126,10 @@
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
-    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"open","category":"Divergences from rustc"},
+    {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"closed","category":"Divergences from rustc"},
     {"issue":519,"title":"rawr refuses a dependency from a registry other than crates.io","state":"open","category":"Divergences from rustc"},
-    {"issue":520,"title":"A symlinked .cargo directory or config file is refused","state":"open","category":"Divergences from rustc"},
-    {"issue":521,"title":"A Git dependency with a version is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":520,"title":"A symlinked .cargo directory or config file is refused","state":"closed","category":"Divergences from rustc"},
+    {"issue":521,"title":"A Git dependency with a version is refused","state":"closed","category":"Divergences from rustc"},
     {"issue":522,"title":"Separate the importer's cache-rebuild signals from its failures","state":"open","category":"Importer"},
     {"issue":523,"title":"Errors about generated data still name rawr's internals","state":"open","category":"Divergences from rustc"},
     {"issue":524,"title":"Three rawr lib tests fail on main","state":"closed","category":"Health"},
@@ -1135,7 +1138,8 @@
     {"issue":527,"title":"?play answers an animated iced app with a GIF that plays once and holds its last frame","state":"open","category":"No glue (D593)"},
     {"issue":528,"title":"?play shows the text an iced program printed beside its frame","state":"open","category":"No glue (D593)"},
     {"issue":529,"title":"?play draws an iced frame at the program's own scale_factor","state":"open","category":"No glue (D593)"},
-    {"issue":530,"title":"A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)"}
+    {"issue":530,"title":"A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)"},
+    {"issue":531,"title":"A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
