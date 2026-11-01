@@ -1274,7 +1274,7 @@
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","release":"0.3.59"},
     {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)"},
-    {"issue":569,"title":"websocket: a generic crate function passed as a value is refused","state":"open","category":"No glue (D593)"},
+    {"issue":569,"title":"A generic crate function passed as a value is refused","state":"open","category":"No glue (D593)"},
     {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"open","category":"Divergences from rustc"},
     {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
     {"issue":572,"title":"A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc"},
@@ -1293,8 +1293,10 @@
     {"issue":585,"title":"Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"open","category":"No glue (D593)"},
     {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)"},
-    {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"open","category":"No glue (D593)"},
-    {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"}
+    {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)"},
+    {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"},
+    {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"open","category":"No glue (D593)"},
+    {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

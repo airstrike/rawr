@@ -569,7 +569,7 @@
     {"t":"T566","issue":566,"title":"T566: iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b30eef56b","release":"0.3.60"},
     {"t":"T567","issue":567,"title":"T567: bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"ac82b77da","release":"0.3.59"},
     {"t":"T568","issue":568,"title":"T568: download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T569","issue":569,"title":"T569: websocket: a generic crate function passed as a value is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T569","issue":569,"title":"T569: A generic crate function passed as a value is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T570","issue":570,"title":"T570: gallery: E0599 boxed on an inferred type","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T571","issue":571,"title":"T571: The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T572","issue":572,"title":"T572: A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -588,7 +588,9 @@
     {"t":"T585","issue":585,"title":"T585: Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.60"},
     {"t":"T586","issue":586,"title":"T586: Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T587","issue":587,"title":"T587: Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D662"],"commit":null,"release":null},
-    {"t":"T588","issue":588,"title":"T588: Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T589","issue":589,"title":"T589: Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.61"}
+    {"t":"T588","issue":588,"title":"T588: Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"17fb887dc","release":null},
+    {"t":"T589","issue":589,"title":"T589: Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.61"},
+    {"t":"T590","issue":590,"title":"T590: qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T591","issue":591,"title":"T591: solar_system: pick_list's V can't be a reference to a crate type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
