@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr's store evicts executions an older rawr wrote when it opens or makes room, with the pins that name them, and keeps each project's four newest unpinned runners and extraction builds. Running and pinned ones are never evicted.","issues":[577]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.74",
@@ -1385,7 +1390,7 @@
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health"},
-    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)"},
     {"issue":579,"title":"palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","release":"0.3.63"},
     {"issue":580,"title":"An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","release":"0.3.63"},
@@ -1436,7 +1441,9 @@
     {"issue":625,"title":"rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":626,"title":"An Option of a crate opaque value crosses to a crate consumer","state":"open","category":"No glue (D593)"},
     {"issue":627,"title":"A view returning a borrowing crate opaque widget names a hidden opaque type in the runner","state":"open","category":"No glue (D593)"},
-    {"issue":628,"title":"palette's Rgb::from_color(Lab) has no form","state":"open","category":"No glue (D593)"}
+    {"issue":628,"title":"palette's Rgb::from_color(Lab) has no form","state":"open","category":"No glue (D593)"},
+    {"issue":629,"title":"A toolchain cache test expects the old revalidation error","state":"open","category":"Health"},
+    {"issue":630,"title":"Non-execution store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {

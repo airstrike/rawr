@@ -577,7 +577,7 @@
     {"t":"T574","issue":574,"title":"T574: Check the engine under Miri's Stacked Borrows","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T575","issue":575,"title":"T575: Say why a caller frame has no bindings to read","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T576","issue":576,"title":"T576: imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"5bb146122","release":null},
-    {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":null,"release":null},
+    {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":"66a63445c","release":null},
     {"t":"T578","issue":578,"title":"T578: Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T579","issue":579,"title":"T579: palette's inherent new_srgb functions land on the wrong owner type","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0ba98b676","release":"0.3.63"},
     {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0ba98b676","release":"0.3.63"},
@@ -628,6 +628,8 @@
     {"t":"T625","issue":625,"title":"T625: rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T626","issue":626,"title":"T626: An Option of a crate opaque value crosses to a crate consumer","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T627","issue":627,"title":"T627: A view returning a borrowing crate opaque widget names a hidden opaque type in the runner","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T628","issue":628,"title":"T628: palette's Rgb::from_color(Lab) has no form","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T628","issue":628,"title":"T628: palette's Rgb::from_color(Lab) has no form","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T629","issue":629,"title":"T629: A toolchain cache test expects the old revalidation error","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T630","issue":630,"title":"T630: Non-execution store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
