@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"The importer no longer counts request items and bytes that nothing read. About 1,600 lines of accounting are gone, with no change in behaviour.","issues":[547]},
-      {"text":"A closure passed to a method of iced's opaque `application(..)` program without annotations, as in `.subscription(|state| ..)` or `.scale_factor(|_| 2.0)`, takes its input from the program's `State` as rustc reads it. It used to stop with E0609 \"no field on type `_`\".","issues":[550]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.58",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"The importer no longer counts request items and bytes that nothing read. About 1,600 lines of accounting are gone, with no change in behaviour.","issues":[547]},
+        {"text":"A closure passed to a method of iced's opaque `application(..)` program without annotations, as in `.subscription(|state| ..)` or `.scale_factor(|_| 2.0)`, takes its input from the program's `State` as rustc reads it. It used to stop with E0609 \"no field on type `_`\".","issues":[550]}
+      ]
+    },
     {
       "version": "0.3.57",
       "date": "2026-11-01",
