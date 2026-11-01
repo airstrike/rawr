@@ -1,6 +1,6 @@
 [package]
 name = "rawr-play"
-version = "0.3.53"
+version = "0.3.54"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false
