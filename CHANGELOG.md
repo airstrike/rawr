@@ -5,6 +5,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- The work plan at rawr.airstrike.fyi/todo, its changelog and the docs update on each push to main, not only at a release. (#496)
+- The /todo chart puts milestones at the top level, each with the epics that have work in it. (#501)
+- CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image. (#492)
+- The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour. (#450)
 
 ## 0.3.46 (2026-10-31)
 

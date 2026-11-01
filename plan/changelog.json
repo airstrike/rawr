@@ -4,7 +4,12 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The work plan at rawr.airstrike.fyi/todo, its changelog and the docs update on each push to main, not only at a release.","issues":[496]},
+      {"text":"The /todo chart puts milestones at the top level, each with the epics that have work in it.","issues":[501]},
+      {"text":"CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image.","issues":[492]},
+      {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]}
+    ]
   },
   "releases": [
     {
