@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The store also evicts API, generic, overlay and bindings entries an older rawr wrote, when it opens and when it makes room.","issues":[630]},
+        {"text":"rawr check no longer reports that the Cargo configuration changed during the build when CARGO_INCREMENTAL is exported.","issues":[625]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.75",
@@ -1440,12 +1446,14 @@
     {"issue":622,"title":"A path dependency builds twice when the program has native modules","state":"open","category":"No glue (D593)"},
     {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"closed","category":"Divergences from rustc","release":"0.3.74"},
     {"issue":624,"title":"A closure passed to a method taking impl FnOnce(&mut Self) gets its input from the receiver","state":"open","category":"No glue (D593)"},
-    {"issue":625,"title":"rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":625,"title":"rawr check with CARGO_INCREMENTAL set reports the Cargo configuration changed","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":626,"title":"An Option of a crate opaque value crosses to a crate consumer","state":"open","category":"No glue (D593)"},
     {"issue":627,"title":"A view returning a borrowing crate opaque widget names a hidden opaque type in the runner","state":"open","category":"No glue (D593)"},
     {"issue":628,"title":"palette's Rgb::from_color(Lab) has no form","state":"open","category":"No glue (D593)"},
-    {"issue":629,"title":"A toolchain cache test expects the old revalidation error","state":"open","category":"Health"},
-    {"issue":630,"title":"Non-execution store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":629,"title":"A toolchain cache test expects the old revalidation error","state":"closed","category":"Health"},
+    {"issue":630,"title":"Non-execution store entries from an older rawr aren't evicted by version","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {

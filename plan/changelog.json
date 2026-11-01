@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The store also evicts API, generic, overlay and bindings entries an older rawr wrote, when it opens and when it makes room.","issues":[630]},
+      {"text":"rawr check no longer reports that the Cargo configuration changed during the build when CARGO_INCREMENTAL is exported.","issues":[625]}
+    ]
   },
   "releases": [
     {

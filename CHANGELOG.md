@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- The store also evicts API, generic, overlay and bindings entries an older rawr wrote, when it opens and when it makes room. (#630)
+- rawr check no longer reports that the Cargo configuration changed during the build when CARGO_INCREMENTAL is exported. (#625)
 
 ## 0.3.75 (2026-11-01)
 
