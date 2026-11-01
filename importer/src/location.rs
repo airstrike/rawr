@@ -2,11 +2,12 @@
 //!
 //! Cargo keeps a project's build output in the project's target directory, and
 //! so does Rawr: the typed store (extraction results, indexes, runner
-//! executions, leases, pins, ledgers), the shared dependency build directory,
-//! the generated runner sources and file digests live in `<target>/rawr`,
-//! or in `<target>/rawr/members/<path>` for a workspace member.
-//! `cargo clean` removes them. Only what is keyed by the Rawr install alone
-//! (its embedded host sources) stays under `$CARGO_HOME/rawr`.
+//! executions, leases, pins, ledgers), the generated runner sources and file
+//! digests live in `<target>/rawr`, or in `<target>/rawr/members/<path>`
+//! for a workspace member. `cargo clean` removes them. What is shared per
+//! machine stays in rawr's home (`$CARGO_HOME/rawr` or `RAWR_HOME`): the
+//! embedded host sources, the runtime, the bindings, and the pinned
+//! nightly's check build directory (D700), which `rawr cache clean` reaches.
 
 use std::fs;
 use std::path::{Path, PathBuf};

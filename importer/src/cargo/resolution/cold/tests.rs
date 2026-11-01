@@ -301,12 +301,7 @@ fn expected_reply(
         Command::Build => (
             {
                 if bound {
-                    let build = crate::location::rawr_directory(
-                        &request.project_root,
-                        request.config.environment(),
-                    )
-                    .join("build");
-                    let shared = crate::deps::directory(&build).unwrap();
+                    let shared = crate::deps::nightly_directory(&super::home(request).unwrap());
                     prefix.extend(super::shared_arguments(&shared));
                 }
                 process::CargoAction::AuthoritativeBuild(request.parallelism)
