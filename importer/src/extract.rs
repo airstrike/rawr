@@ -831,8 +831,6 @@ impl Publication {
             dag.request.as_bytes(),
             &policy.cache_identity()?,
             &dag.build,
-            &dag.post_unit,
-            &dag.post_metadata,
             &crate::metrics::Current,
             |stored| materialize_document(stored, document, invocations, &policy, &context, limits),
         )

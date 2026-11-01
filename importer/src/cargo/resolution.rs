@@ -50,7 +50,7 @@ mod watched;
 #[cfg(feature = "rustc-driver")]
 mod remembered;
 
-const OUTPUT_SCHEMA: u32 = 1;
+const OUTPUT_SCHEMA: u32 = 2;
 const RECIPE_SCHEMA: u32 = 1;
 const HEADER_BYTES: usize = 72;
 const LOCKED_OUTPUT_SCHEMA: u32 = 2;
@@ -407,7 +407,7 @@ struct Evidence {
 }
 
 /// Cache one exact locked metadata command while leaving its established
-/// semantic parser and post-build revalidation unchanged.
+/// semantic parser unchanged.
 pub(crate) fn cached_locked(
     context: &Context,
     authority: &[u8],
@@ -499,53 +499,6 @@ pub(crate) fn cached_unit_graph(
     )?;
     node::Evaluator::new(&context.open_store()?, sink)
         .native(&recipe, || UnitGraph::capture(execute()?, &limits))
-}
-
-/// Reuse the exact post-build unit graph under the authoritative build tree.
-#[cfg(feature = "rustc-driver")]
-pub(crate) fn cached_post_unit_graph(
-    context: &Context,
-    parent: &node::Validated<build::Product>,
-    authority: &[u8],
-    sink: &dyn metrics::Sink,
-    execute: impl FnOnce() -> crate::Result<Box<[u8]>>,
-) -> Result<node::Validated<UnitGraph>, node::Error> {
-    let limits = context.limits();
-    let parent = Parent::validated(parent);
-    let recipe = context.direct_with_parents::<UnitGraph>(
-        authority,
-        limits.node_output_bytes(),
-        &[parent],
-    )?;
-    node::Evaluator::new(&context.open_store()?, sink)
-        .native(&recipe, || UnitGraph::capture(execute()?, &limits))
-}
-
-/// Reuse the exact post-build locked metadata under the authoritative build
-/// tree while retaining the existing manifest and lock evidence codec.
-#[cfg(feature = "rustc-driver")]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the post-build metadata node binds one parent and its three path authorities"
-)]
-pub(crate) fn cached_post_metadata(
-    context: &Context,
-    parent: &node::Validated<build::Product>,
-    authority: &[u8],
-    manifest: &Path,
-    lock: &Path,
-    target: &Path,
-    sink: &dyn metrics::Sink,
-    execute: impl FnOnce() -> crate::Result<Box<[u8]>>,
-) -> Result<node::Validated<Locked>, node::Error> {
-    let limits = context.limits();
-    let parent = Parent::validated(parent);
-    let fixed = locked_recipe(authority, manifest, lock, target)?;
-    let recipe =
-        context.direct_with_parents::<Locked>(&fixed, limits.node_input_bytes(), &[parent])?;
-    node::Evaluator::new(&context.open_store()?, sink).native(&recipe, || {
-        Locked::capture(execute()?, manifest, lock, &limits)
-    })
 }
 
 impl Locked {
@@ -1716,27 +1669,6 @@ mod tests {
                     fs::read(protocol.join("sidecar.json")).expect("the restored sidecar reads"),
                     b"sidecar\n"
                 );
-                let post_unit = cached_post_unit_graph(
-                    &context,
-                    &build,
-                    b"fresh-process-post-build-unit/v1",
-                    counts.as_ref(),
-                    || execute_leaf_unit_graph(&context, &toolchain, &manifest, &target),
-                )
-                .expect("the post-build unit graph validates");
-                let post_metadata = cached_post_metadata(
-                    &context,
-                    &build,
-                    b"fresh-process-post-build-metadata/v1",
-                    &manifest,
-                    &lock,
-                    &target,
-                    counts.as_ref(),
-                    || execute_leaf_metadata(&context, &toolchain, &manifest, &target),
-                )
-                .expect("the post-build metadata validates");
-                assert_eq!(post_unit.value().raw(), unit.value().raw());
-                assert_eq!(post_metadata.value().raw(), metadata.value().raw());
                 if mode == "api-chain"
                     || mode == "facade-chain"
                     || mode == "profile-chain"
@@ -1749,8 +1681,6 @@ mod tests {
                             .cache_identity()
                             .expect("fixture policy identity"),
                         &build,
-                        &post_unit,
-                        &post_metadata,
                         counts.as_ref(),
                         |stored| {
                             let limits = super::super::Limits::standard();
@@ -2059,10 +1989,10 @@ mod tests {
         let first_elapsed = run_worker(&root, &first_report, "build-chain");
         let first = parse_report(&first_report);
         assert_eq!(first.get("toolchain_hits"), Some(&1));
-        assert_eq!(first.get("resolution_misses"), Some(&4));
+        assert_eq!(first.get("resolution_misses"), Some(&2));
         assert_eq!(first.get("native_misses"), Some(&1));
         assert_eq!(first.get("native_published"), Some(&1));
-        assert_eq!(first.get("cargo"), Some(&5));
+        assert_eq!(first.get("cargo"), Some(&3));
         assert!(first
             .get("processes")
             .is_some_and(|processes| *processes >= 3));
@@ -2073,7 +2003,7 @@ mod tests {
         let second_elapsed = run_worker(&root, &second_report, "build-chain");
         let second = parse_report(&second_report);
         assert_eq!(second.get("toolchain_hits"), Some(&1));
-        assert_eq!(second.get("resolution_hits"), Some(&4));
+        assert_eq!(second.get("resolution_hits"), Some(&2));
         assert_eq!(second.get("native_hits"), Some(&1));
         assert_eq!(second.get("resolution_misses"), Some(&0));
         assert_eq!(second.get("native_misses"), Some(&0));
@@ -2089,7 +2019,7 @@ mod tests {
         assert_eq!(snapshot(&root.join("project/target/rawr/store")), sealed);
         let saved = first_elapsed.saturating_sub(second_elapsed);
         eprintln!(
-            "BUILD_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=5 first_processes={} second_cargo=0 second_processes=0",
+            "BUILD_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=3 first_processes={} second_cargo=0 second_processes=0",
             first_elapsed.as_millis(),
             second_elapsed.as_millis(),
             saved.as_millis(),
@@ -2114,12 +2044,12 @@ mod tests {
 
         let first_elapsed = run_worker(&root, &first_report, "api-chain");
         let first = parse_report(&first_report);
-        assert_eq!(first.get("resolution_misses"), Some(&4));
+        assert_eq!(first.get("resolution_misses"), Some(&2));
         assert_eq!(first.get("native_misses"), Some(&1));
         assert_eq!(first.get("api_hits"), Some(&0));
         assert_eq!(first.get("api_misses"), Some(&1));
         assert_eq!(first.get("api_published"), Some(&1));
-        assert_eq!(first.get("cargo"), Some(&5));
+        assert_eq!(first.get("cargo"), Some(&3));
         assert!(first
             .get("processes")
             .is_some_and(|processes| *processes >= 3));
@@ -2129,7 +2059,7 @@ mod tests {
 
         let second_elapsed = run_worker(&root, &second_report, "api-chain");
         let second = parse_report(&second_report);
-        assert_eq!(second.get("resolution_hits"), Some(&4));
+        assert_eq!(second.get("resolution_hits"), Some(&2));
         assert_eq!(second.get("native_hits"), Some(&1));
         assert_eq!(second.get("api_hits"), Some(&1));
         assert_eq!(second.get("resolution_misses"), Some(&0));
@@ -2147,7 +2077,7 @@ mod tests {
         assert_eq!(snapshot(&root.join("project/target/rawr/store")), sealed);
         let saved = first_elapsed.saturating_sub(second_elapsed);
         eprintln!(
-            "API_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=5 first_processes={} first_api_transforms=1 second_cargo=0 second_processes=0 second_api_transforms=0",
+            "API_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=3 first_processes={} first_api_transforms=1 second_cargo=0 second_processes=0 second_api_transforms=0",
             first_elapsed.as_millis(),
             second_elapsed.as_millis(),
             saved.as_millis(),
@@ -2176,14 +2106,14 @@ mod tests {
         assert_eq!(first.get("api_published"), Some(&1));
         assert_eq!(first.get("facade_misses"), Some(&1));
         assert_eq!(first.get("facade_published"), Some(&1));
-        assert_eq!(first.get("cargo"), Some(&5));
+        assert_eq!(first.get("cargo"), Some(&3));
         let sealed = snapshot(&root.join("project/target/rawr/store"));
         fs::remove_dir_all(root.join("project/target")).expect("cold target retires");
         fs::remove_dir_all(root.join("project/protocol")).expect("cold protocol retires");
 
         let second_elapsed = run_worker(&root, &second_report, "facade-chain");
         let second = parse_report(&second_report);
-        assert_eq!(second.get("resolution_hits"), Some(&4));
+        assert_eq!(second.get("resolution_hits"), Some(&2));
         assert_eq!(second.get("native_hits"), Some(&1));
         assert_eq!(second.get("api_hits"), Some(&1));
         assert_eq!(second.get("facade_hits"), Some(&1));
@@ -2196,7 +2126,7 @@ mod tests {
         assert_eq!(snapshot(&root.join("project/target/rawr/store")), sealed);
         let saved = first_elapsed.saturating_sub(second_elapsed);
         eprintln!(
-            "FACADE_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=5 first_processes={} first_api=1 first_facade=1 second_cargo=0 second_processes=0 second_api=0 second_facade=0",
+            "FACADE_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=3 first_processes={} first_api=1 first_facade=1 second_cargo=0 second_processes=0 second_api=0 second_facade=0",
             first_elapsed.as_millis(),
             second_elapsed.as_millis(),
             saved.as_millis(),
@@ -2226,14 +2156,14 @@ mod tests {
         assert_eq!(first.get("profile_published"), Some(&1));
         assert_eq!(first.get("profile_proof_misses"), Some(&2));
         assert_eq!(first.get("profile_proof_published"), Some(&2));
-        assert_eq!(first.get("cargo"), Some(&5));
+        assert_eq!(first.get("cargo"), Some(&3));
         let sealed = snapshot(&root.join("project/target/rawr/store"));
         fs::remove_dir_all(root.join("project/target")).expect("cold target retires");
         fs::remove_dir_all(root.join("project/protocol")).expect("cold protocol retires");
 
         let second_elapsed = run_worker(&root, &second_report, "profile-chain");
         let second = parse_report(&second_report);
-        assert_eq!(second.get("resolution_hits"), Some(&4));
+        assert_eq!(second.get("resolution_hits"), Some(&2));
         assert_eq!(second.get("native_hits"), Some(&1));
         assert_eq!(second.get("api_hits"), Some(&1));
         assert_eq!(second.get("profile_hits"), Some(&1));
@@ -2245,7 +2175,7 @@ mod tests {
         assert_eq!(snapshot(&root.join("project/target/rawr/store")), sealed);
         let saved = first_elapsed.saturating_sub(second_elapsed);
         eprintln!(
-            "PROFILE_PROOF_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=5 first_processes={} first_api=1 first_profile=1 first_demand=1 first_generated=1 second_cargo=0 second_processes=0 second_api=0 second_profile=0 second_demand=0 second_generated=0",
+            "PROFILE_PROOF_CHAIN first_ms={} second_ms={} saved_ms={} first_cargo=3 first_processes={} first_api=1 first_profile=1 first_demand=1 first_generated=1 second_cargo=0 second_processes=0 second_api=0 second_profile=0 second_demand=0 second_generated=0",
             first_elapsed.as_millis(),
             second_elapsed.as_millis(),
             saved.as_millis(),
@@ -2294,7 +2224,7 @@ mod tests {
             assert_eq!(first.get(key), Some(&1), "cold `{key}` must execute once");
         }
         assert_eq!(first.get("profile_proof_misses"), Some(&2));
-        assert_eq!(first.get("cargo"), Some(&5));
+        assert_eq!(first.get("cargo"), Some(&3));
         assert_eq!(first.get("cargo_runner"), Some(&1));
         assert_eq!(first.get("runner_process"), Some(&1));
         assert_eq!(first.get("admitted"), Some(&1));
@@ -2306,7 +2236,7 @@ mod tests {
 
         let second_elapsed = run_worker(&root, &second_report, "runner-chain");
         let second = parse_report(&second_report);
-        assert_eq!(second.get("resolution_hits"), Some(&4));
+        assert_eq!(second.get("resolution_hits"), Some(&2));
         assert_eq!(second.get("native_hits"), Some(&1));
         assert_eq!(second.get("profile_proof_hits"), Some(&2));
         for key in [

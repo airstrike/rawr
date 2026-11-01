@@ -8,7 +8,7 @@ use crate::runner::artifact::retained;
 use crate::store::{self, bundle};
 
 const MAGIC: &[u8; 8] = b"RAWRRES1";
-const SCHEMA: u32 = 3;
+const SCHEMA: u32 = 4;
 const BYTES: usize = 156;
 
 /// Historical bundle commitments, without a current node receipt.

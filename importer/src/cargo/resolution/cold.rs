@@ -126,7 +126,7 @@ impl Request {
     }
 
     /// Consume a prepared Layout harness into ordinary Build observations with
-    /// both exact postchecks and the unchanged allocation lineage.
+    /// the unchanged allocation lineage.
     pub(in crate::cargo) fn build_harness_in(
         &self,
         cached: &cargo::CachedToolchain,
@@ -147,7 +147,6 @@ impl Request {
         let (build, initial) = self.check_build(
             &bytes,
             environment,
-            &harness.metadata,
             harness.initial,
             &harness.cargo_allocation,
             &harness.toolchain,
@@ -159,11 +158,6 @@ impl Request {
             limits,
             cargo_limits,
             &harness.workspace,
-            // The harness files and workspace manifests were revalidated
-            // around the build and the inputs are captured after it: Cargo's
-            // metadata and unit graph are functions of those, so asking Cargo
-            // for them again only reproduced the bytes it gave before.
-            None::<fn(cargo::Postcheck) -> Result<Box<[u8]>>>,
         )?;
         harness.initial = initial;
         Ok(cargo::Built { harness, build })
@@ -481,7 +475,7 @@ impl Request {
             &self.target,
         );
         drop(selected_units);
-        let documents = cargo::Documents::bind(metadata_bytes, bytes, &metadata, &initial)?;
+        let documents = cargo::Documents::new(metadata_bytes, bytes);
         let mut extraction_plan = crate::extract::plan::Plan::prepare_in(
             layout,
             &initial,

@@ -76,10 +76,6 @@ pub(crate) enum CargoAction {
     RunnerBuild(parallelism::Proof),
     PackagePath,
     PackageGit,
-    #[cfg(feature = "rustc-driver")]
-    PublicationMetadata,
-    #[cfg(feature = "rustc-driver")]
-    PublicationUnitBuild(parallelism::Proof),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -501,10 +497,6 @@ impl CommandKind {
                 CargoAction::PackagePath | CargoAction::PackageGit => {
                     crate::metrics::ProcessKind::PackageList
                 }
-                #[cfg(feature = "rustc-driver")]
-                CargoAction::PublicationMetadata | CargoAction::PublicationUnitBuild(_) => {
-                    crate::metrics::ProcessKind::CargoResolution
-                }
             },
             Self::Preflight(preflight) => match preflight.0 {
                 PreflightKind::Which(_) => crate::metrics::ProcessKind::RustupWhich,
@@ -542,16 +534,11 @@ impl CommandKind {
 impl CargoAction {
     const fn subcommand(self) -> &'static str {
         match self {
-            #[cfg(feature = "rustc-driver")]
-            Self::Metadata | Self::PublicationMetadata => "metadata",
-            #[cfg(not(feature = "rustc-driver"))]
             Self::Metadata => "metadata",
             // The nightly build feeds extraction, which reads only metadata,
             // so it checks the dependencies (D609.2). The project's runner is
             // built.
             Self::UnitBuild(_) | Self::AuthoritativeBuild(_) => "check",
-            #[cfg(feature = "rustc-driver")]
-            Self::PublicationUnitBuild(_) => "check",
             Self::RunnerBuild(_) => "build",
             Self::PackagePath | Self::PackageGit => "package",
         }
@@ -562,11 +549,7 @@ impl CargoAction {
             Self::UnitBuild(proof) | Self::AuthoritativeBuild(proof) | Self::RunnerBuild(proof) => {
                 Some(proof)
             }
-            #[cfg(feature = "rustc-driver")]
-            Self::PublicationUnitBuild(proof) => Some(proof),
             Self::Metadata | Self::PackagePath | Self::PackageGit => None,
-            #[cfg(feature = "rustc-driver")]
-            Self::PublicationMetadata => None,
         }
     }
 }
@@ -1170,8 +1153,6 @@ fn execute<O: Observation>(
     let stderr = bounded_bytes("child stderr", stderr_limit, stderr?)?;
     match command.kind {
         CommandKind::Cargo(CargoAction::UnitBuild(_)) => crate::progress::plan(&stdout),
-        #[cfg(feature = "rustc-driver")]
-        CommandKind::Cargo(CargoAction::PublicationUnitBuild(_)) => crate::progress::plan(&stdout),
         CommandKind::Cargo(CargoAction::RunnerBuild(_)) => crate::progress::stage(4),
         _ => {}
     }

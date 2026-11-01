@@ -2,7 +2,8 @@
 //!
 //! This is deliberately not a Cargo workspace selector. Every owner/ancestor
 //! candidate and recursively named workspace is observed, including unrelated
-//! malformed manifests. Cargo's actual successful postcheck supplies semantics.
+//! malformed manifests. Cargo's own metadata and Build supply semantics; this
+//! image only proves that the manifests they read did not change.
 
 use std::fs::{self, File};
 use std::io::Read as _;

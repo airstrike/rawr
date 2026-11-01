@@ -12,8 +12,6 @@ pub(crate) enum Operation {
     Toolchain,
     Harness,
     Build,
-    UnitGraph,
-    Metadata,
     Probe,
     Package,
     Publication,
