@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 69;
+const CLASSIFIER_VERSION: u32 = 70;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1051,6 +1051,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(returned) = returned else {
                 return Err(representability::reject::Kind::CallableProtocol.into());
             };
+            // A script function that returns a future or a sipper, as a
+            // closure that does (`single_callable`, #545).
+            if self.future_bounded(generics, returned) {
+                return Err(representability::reject::Kind::FutureClosure.into());
+            }
             // An output borrows only at a lifetime its own bound declares,
             // which an input takes.
             let borrows = type_has_late_lifetime(returned);
@@ -1238,6 +1243,15 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         if !output {
             return Err(representability::reject::Kind::CallableProtocol.into());
+        }
+        // A closure that returns a future or a sipper, as `sipper(|sender|
+        // async move { .. })` takes: the script's `async` block has no Rust
+        // type the runner can write (#545).
+        if returned
+            .as_ref()
+            .is_some_and(|returned| self.future_bounded(generics, returned))
+        {
+            return Err(representability::reject::Kind::FutureClosure.into());
         }
         let class = match (class, static_owned) {
             ("Fn", false) => crate::surface::callable::Class::Borrowed(
@@ -7544,6 +7558,27 @@ impl<P: api::Phase> Context<'_, P> {
         item
     }
 
+    /// Whether `ty` is a type parameter `generics` bounds by `Future`, or by
+    /// a trait of the `sipper` crate, as a closure's `Fut` is in `F:
+    /// FnOnce(Sender<P>) -> Fut, Fut: Future<Output = O>`.
+    fn future_bounded(&self, generics: &model::Generics, ty: &model::Type) -> bool {
+        let model::Type::Parameter { index, .. } = ty else {
+            return false;
+        };
+        generics.predicates().any(|predicate| {
+            matches!(predicate, model::Predicate::Bound {
+                ty: model::Type::Parameter { index: bounded, .. },
+                bound: model::Bound::Trait {
+                    trait_id,
+                    polarity: model::Polarity::Positive,
+                    ..
+                },
+            } if *bounded == *index
+                && (self.is_core_trait(trait_id, "Future")
+                    || trait_id.unit().crate_name() == "sipper"))
+        })
+    }
+
     fn is_core_trait(&self, id: &api::identity::Definition, name: &str) -> bool {
         id.unit().authority().sysroot().is_some()
             && id.unit().crate_name() == "core"
@@ -10148,6 +10183,39 @@ mod tests {
             "{:?}",
             outcome("scope")
         );
+    }
+
+    /// A closure that returns a future, as `sipper(|sender| async move {
+    /// .. })` takes, has no Rust type the runner can write for the script's
+    /// `async` block. The item is refused with that reason, which a script's
+    /// call of it reports, and never reaches the generator (#545). A closure
+    /// that returns a value is made.
+    #[test]
+    fn a_closure_that_returns_a_future_is_refused_in_rust_terms() {
+        use super::representability::reject;
+        let contract = crate::test_fixture::future_closure_functions()
+            .classify(&Policy::standard(), &crate::cargo::Limits::standard())
+            .expect("the future closure graph classifies");
+        let outcome = |name: &str| {
+            contract
+                .outcomes()
+                .find(|outcome| outcome.name() == name)
+                .unwrap_or_else(|| panic!("`{name}` is classified"))
+                .representability()
+                .clone()
+        };
+        let Representability::Rejected(reason) = outcome("sip") else {
+            panic!("`sip` is refused: {:?}", outcome("sip"));
+        };
+        assert_eq!(reason.kind(), reject::Kind::FutureClosure);
+        assert_eq!(
+            reason.kind().describe(),
+            "it takes a closure that returns a future"
+        );
+        let Representability::FunctionItem(ready) = outcome("ready") else {
+            panic!("`ready` is a function item: {:?}", outcome("ready"));
+        };
+        assert!(ready.call().is_some(), "{ready:?}");
     }
 
     #[test]

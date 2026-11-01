@@ -14712,9 +14712,11 @@ mod tests {
         );
         assert!(take.contains("let mut values = [];"), "{take}");
         assert!(take.contains("callable.call(&mut values)"), "{take}");
-        // A closure that gives a native value Rust can't name can't be
-        // made. One it can name goes through the arena (D551.6), as the
-        // erasure fixture's `WindowConfig::new(app)` runs end to end.
+        // A closure that gives a native value Rust can't name, as a
+        // sipper or a future, never reaches the generator: the classifier
+        // refuses it (`FutureClosure`, #545), so here it is a rawr bug. One
+        // it can name goes through the arena (D551.6), as the erasure
+        // fixture's `WindowConfig::new(app)` runs end to end.
         let native = Call::new(
             0,
             Box::default(),
