@@ -77,6 +77,9 @@ pub enum Category {
     /// A call with more or fewer arguments than its callee takes, as
     /// rustc's E0061, or E0057 for a closure.
     ArgumentCount,
+    /// An `==` or `!=` whose left operand's type has no `PartialEq` impl
+    /// for the right operand's, as rustc's E0277.
+    CannotCompare,
 }
 
 impl fmt::Display for Category {
@@ -117,6 +120,7 @@ impl fmt::Display for Category {
             Self::AsyncMain => formatter.write_str("async main"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
+            Self::CannotCompare => formatter.write_str("can't compare"),
         }
     }
 }
@@ -540,6 +544,19 @@ pub enum Error {
         /// that is in the call's file.
         definition: Option<Span>,
     },
+    /// `lhs == rhs` (or `!=`) where no `PartialEq<rhs>` impl holds for
+    /// `lhs`, which rustc refuses (E0277).
+    CannotCompare {
+        /// The left type of the comparison no impl covers, as rustc names it.
+        lhs: ImmutableString,
+        /// The right type.
+        rhs: ImmutableString,
+        /// The operands' own types, when the comparison that fails is one
+        /// an impl of theirs requires (`&&str == &str` needs `&str == str`).
+        required: Option<(ImmutableString, ImmutableString)>,
+        /// The operator.
+        at: Span,
+    },
 }
 
 impl Error {
@@ -602,6 +619,7 @@ impl Error {
             Self::AsyncMain { .. } => Category::AsyncMain,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
+            Self::CannotCompare { .. } => Category::CannotCompare,
         }
     }
 
@@ -644,6 +662,7 @@ impl Error {
             Self::AsyncMain { .. } => "main",
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
+            Self::CannotCompare { lhs, .. } => lhs.as_str(),
         }
     }
 
@@ -684,7 +703,9 @@ impl Error {
             Self::AsyncMain { at } => *at,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
-            Self::Syntax { at, .. } | Self::UnlabeledJumpInWhileCondition { at, .. } => *at,
+            Self::Syntax { at, .. }
+            | Self::UnlabeledJumpInWhileCondition { at, .. }
+            | Self::CannotCompare { at, .. } => *at,
         }
     }
 
@@ -731,7 +752,8 @@ impl Error {
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
-            | Self::TypeAnnotationsNeeded { .. } => None,
+            | Self::TypeAnnotationsNeeded { .. }
+            | Self::CannotCompare { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -1016,7 +1038,21 @@ impl fmt::Display for Written<'_> {
                 },
                 callee.code()
             ),
+            Error::CannotCompare { lhs, rhs, at, .. } => write!(
+                formatter,
+                "{} at {at} (E0277)",
+                CannotCompare(lhs, rhs)
+            ),
         }
+    }
+}
+
+/// rustc's E0277 message for an `==` no `PartialEq` impl covers.
+pub(crate) struct CannotCompare<'a>(pub(crate) &'a str, pub(crate) &'a str);
+
+impl fmt::Display for CannotCompare<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "can't compare `{}` with `{}`", self.0, self.1)
     }
 }
 

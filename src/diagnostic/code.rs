@@ -114,6 +114,7 @@ codes!(Resolve;
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
+    (RESOLVE_CANNOT_COMPARE, "E0277", "An `==` or `!=` whose left operand's type has no `PartialEq` impl for the right operand's, as rustc reports it."),
     (RESOLVE_CLOSURE_ARGUMENT_COUNT, "E0057", "A call with more or fewer arguments than its closure takes, as rustc reports it."),
     (RESOLVE_MODULE_GRAPH, "RAWR-RESOLVE-MODULE-GRAPH", "Invalid static file-module graph."),
     (RESOLVE_PACKAGE_CYCLE, "RAWR-RESOLVE-PACKAGE-CYCLE", "Cyclic local package dependency."),

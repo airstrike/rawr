@@ -21,10 +21,7 @@ fn main() {
     for name in names.options() {
         println!("name {name} {}", name.len());
     }
-    let serif = names
-        .options()
-        .iter()
-        .position(|name| name.as_str() == "Serif");
+    let serif = names.options().iter().position(|name| name == "Serif");
     println!("serif at {serif:?}");
 
     let families = Choices::new(vec![Family::new("Quartz", 400), Family::new("Basalt", 700)]);

@@ -510,6 +510,9 @@ fn primary_label(
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
+        resolve::Error::CannotCompare { lhs, rhs, .. } => {
+            Some(format!("no implementation for `{lhs} == {rhs}`").into())
+        }
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
@@ -599,6 +602,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
+        resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
         resolve::Category::ArgumentCount => match error {
             resolve::Error::ArgumentCount {
                 callee: resolve::Callee::Closure,
@@ -645,6 +649,19 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::MissingCapability {
             owner, capability, ..
         } => builder.help(format!("derive `{capability}` for `{owner}`")),
+        resolve::Error::CannotCompare {
+            lhs, rhs, required, ..
+        } => {
+            let builder = builder.help(format!(
+                "the trait `PartialEq<{rhs}>` is not implemented for `{lhs}`"
+            ));
+            match required {
+                Some((lhs, rhs)) => builder.note(format!(
+                    "required for `{lhs}` to implement `PartialEq<{rhs}>`"
+                )),
+                None => builder,
+            }
+        }
         resolve::Error::ArgumentCount {
             expected, found, ..
         } => builder.help(match (found < expected, expected.abs_diff(*found)) {
@@ -852,6 +869,9 @@ fn resolution_message(error: &resolve::Error) -> String {
             found: *found,
         }
         .to_string(),
+        resolve::Error::CannotCompare { lhs, rhs, .. } => {
+            resolve::CannotCompare(lhs, rhs).to_string()
+        }
     }
 }
 
