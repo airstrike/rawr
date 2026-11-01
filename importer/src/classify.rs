@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 84;
+const CLASSIFIER_VERSION: u32 = 85;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
