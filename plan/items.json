@@ -478,10 +478,10 @@
     {"t":"T475","issue":475,"title":"T475: The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T476","issue":476,"title":"T476: The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"504143388","release":"0.3.42"},
     {"t":"T477","issue":477,"title":"T477: bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T478","issue":478,"title":"T478: pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T478","issue":478,"title":"T478: pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"de8051e15","release":null},
     {"t":"T479","issue":479,"title":"T479: Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T480","issue":480,"title":"T480: Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.41"},
-    {"t":"T481","issue":481,"title":"T481: Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T481","issue":481,"title":"T481: Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"de8051e15","release":null},
     {"t":"T482","issue":482,"title":"T482: A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T483","issue":483,"title":"T483: The remaining importer error variants use rawr's internal names","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T484","issue":484,"title":"T484: An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -502,6 +502,7 @@
     {"t":"T499","issue":499,"title":"T499: A crate type reached only through a path dependency can't be named by the runner","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T500","issue":500,"title":"T500: Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T501","issue":501,"title":"T501: Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"6e21333a1","release":null},
-    {"t":"T502","issue":502,"title":"T502: game_of_life: Point minus Point is not typed as iced's Vector","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T502","issue":502,"title":"T502: game_of_life: Point minus Point is not typed as iced's Vector","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T503","issue":503,"title":"T503: Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

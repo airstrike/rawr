@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- Programs whose dependencies use zerocopy's derives, like pick_list and custom_widget, no longer stop at "owned trait implementation is absent". The importer reads signed integer constants in impl headers, and an implementation it still can't read is set aside instead of breaking its crate. (#478)
+- rawr no longer reports its own inventory invariants as the program's error. A broken invariant is a rawr bug that names itself, and a damaged stored entry is rebuilt. (#481)
 
 ## 0.3.43 (2026-10-31)
 
