@@ -562,6 +562,30 @@ impl Builder {
         Ok(ImportedTypeAttestation { selector, rows })
     }
 
+    /// Bind every imported type of this facade, at each of its paths, to
+    /// one native value attestor, in one pass over the types. A generated
+    /// runner attests all of them alike; binding each identity alone
+    /// scanned every type once per identity.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    pub fn bind_imported_type_attestations(
+        &mut self,
+        attestor: impl Fn(&Dynamic, &Instantiation<'_>) -> Option<Attested> + SendSync + 'static,
+    ) -> Result<&mut Self, Error> {
+        let attestor: Shared<dyn TypeAttestor> = Shared::new(attestor);
+        for ty in self.definition.types() {
+            if ty.identity().imported().is_none() {
+                continue;
+            }
+            let path = ImmutableString::from(ty.path());
+            if self.attestations.contains_key(path.as_str()) {
+                return Err(Error::DuplicateTypeAttestation { ty: path });
+            }
+            self.attestations.insert(path, attestor.clone());
+        }
+        Ok(self)
+    }
+
     /// Bind one exact qualified facade item to a native callback.
     ///
     /// Where a path names both a macro and a function, this binds the

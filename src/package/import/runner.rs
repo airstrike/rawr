@@ -788,12 +788,14 @@ fn build(
         .map(facade::TypeDefinition::path)
         .collect::<Vec<_>>();
     // An alias's associated functions, as `widget::Text::new`, sit under
-    // the alias, which is no module.
-    let owner_paths = type_paths
+    // the alias, which is no module. Sorted, so each prefix of each path is
+    // a search, not a scan of every type.
+    let mut owner_paths = type_paths
         .iter()
         .copied()
         .chain(facade.type_aliases().map(facade::TypeAlias::path))
         .collect::<Vec<_>>();
+    owner_paths.sort_unstable();
     let mut modules = Vec::<Box<str>>::new();
     for path in type_paths
         .iter()
@@ -1353,10 +1355,11 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
     })
 }
 
+/// The modules above `path`, up to the first type. `types` is sorted.
 fn collect_modules(path: &str, types: &[&str], modules: &mut Vec<Box<str>>) -> Result<(), Error> {
     for (separator, _) in path.match_indices("::") {
         let candidate = &path[..separator];
-        if types.contains(&candidate) {
+        if types.binary_search(&candidate).is_ok() {
             break;
         }
         match modules.binary_search_by(|module| module.as_ref().cmp(candidate)) {
@@ -1367,7 +1370,7 @@ fn collect_modules(path: &str, types: &[&str], modules: &mut Vec<Box<str>>) -> R
             }
         }
     }
-    if types.contains(&path)
+    if types.binary_search(&path).is_ok()
         && let Ok(index) = modules.binary_search_by(|module| module.as_ref().cmp(path))
     {
         modules.remove(index);

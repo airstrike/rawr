@@ -780,11 +780,12 @@ impl Registry {
     #[cfg(feature = "rust-import")]
     pub(crate) fn defer_imported(&mut self, families: Vec<family::Pending>) -> Result<(), Error> {
         for family in &families {
+            // Families stay sorted by path, so a prior one is found by search.
             if self.item_slice(family.path()).is_some()
                 || self
                     .families
-                    .iter()
-                    .any(|prior| prior.path() == family.path())
+                    .binary_search_by(|prior| prior.path().cmp(family.path()))
+                    .is_ok()
             {
                 return Err(Error::DuplicateFacadeOverloadInputs {
                     item: family.path().to_string().into(),
@@ -1012,10 +1013,7 @@ impl Registry {
                     });
                 }
             }
-            if let Some(existing) = self
-                .types
-                .iter()
-                .find(|existing| existing.identity() == incoming.identity())
+            if let Some(existing) = self.type_with_identity(incoming.identity())
                 && !existing.same_identity_contract(incoming)
             {
                 return Err(Error::ConflictingHostIdentity {
@@ -1247,56 +1245,62 @@ impl Registry {
             .map(|index| self.facades[index].fingerprint())
     }
 
+    /// The first registered type, in path order, with `identity`. An
+    /// imported identity is looked up in the imported index; scanning every
+    /// type for each incoming one was quadratic in a facade's types.
+    fn type_with_identity(&self, identity: &type_def::Identity) -> Option<&type_def::Definition> {
+        #[cfg(feature = "rust-import")]
+        if let Some(imported) = identity.imported() {
+            let first = self
+                .imported
+                .partition_point(|entry| entry.identity < *imported);
+            return self.imported[first..]
+                .iter()
+                .take_while(|entry| entry.identity == *imported)
+                .map(|entry| self.imported_aliases[entry.aliases.start])
+                .min()
+                .map(|index| &self.types[index]);
+        }
+        self.types
+            .iter()
+            .find(|existing| existing.identity() == identity)
+    }
+
     #[cfg(feature = "rust-import")]
     fn rebuild_imported_index(&mut self) {
+        // One sort of every imported type's (identity, facade, type index)
+        // gives one run per identity and facade, its aliases in type order.
+        // Inserting each type in place shifted every later range: quadratic
+        // in the types, and run at each facade's install.
+        let mut keyed = self
+            .types
+            .iter()
+            .enumerate()
+            .filter_map(|(type_index, definition)| {
+                let identity = definition.identity().imported()?;
+                let root = definition.path_ref().segments().first()?;
+                let facade = self
+                    .facades
+                    .binary_search_by(|candidate| candidate.root().cmp(root))
+                    .expect("imported types retain their owner root");
+                Some((identity, facade, type_index))
+            })
+            .collect::<Vec<_>>();
+        keyed.sort_unstable();
         self.imported.clear();
         self.imported_aliases.clear();
-        for (type_index, definition) in self.types.iter().enumerate() {
-            let Some(identity) = definition.identity().imported().cloned() else {
-                continue;
-            };
-            let Some(root) = definition.path_ref().segments().first() else {
-                continue;
-            };
-            let facade = self
-                .facades
-                .binary_search_by(|candidate| candidate.root().cmp(root))
-                .expect("imported types retain their owner root");
-            let key = self.imported.binary_search_by(|candidate| {
-                candidate
-                    .identity
-                    .cmp(&identity)
-                    .then_with(|| candidate.facade.cmp(&facade))
-            });
-            match key {
-                Ok(index) => {
-                    let insertion = self.imported[index].aliases.end;
-                    self.imported_aliases.insert(insertion, type_index);
-                    self.imported[index].aliases.end += 1;
-                    for following in &mut self.imported[index + 1..] {
-                        following.aliases.start += 1;
-                        following.aliases.end += 1;
-                    }
+        for (identity, facade, type_index) in keyed {
+            let alias = self.imported_aliases.len();
+            self.imported_aliases.push(type_index);
+            match self.imported.last_mut() {
+                Some(last) if last.identity == *identity && last.facade == facade => {
+                    last.aliases.end = alias + 1;
                 }
-                Err(index) => {
-                    let insertion = self
-                        .imported
-                        .get(index)
-                        .map_or(self.imported_aliases.len(), |entry| entry.aliases.start);
-                    self.imported_aliases.insert(insertion, type_index);
-                    for following in &mut self.imported[index..] {
-                        following.aliases.start += 1;
-                        following.aliases.end += 1;
-                    }
-                    self.imported.insert(
-                        index,
-                        ImportedIndex {
-                            identity,
-                            facade,
-                            aliases: insertion..insertion + 1,
-                        },
-                    );
-                }
+                _ => self.imported.push(ImportedIndex {
+                    identity: *identity,
+                    facade,
+                    aliases: alias..alias + 1,
+                }),
             }
         }
     }
