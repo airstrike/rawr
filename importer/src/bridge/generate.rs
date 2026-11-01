@@ -545,6 +545,15 @@ macro_rules! insert_native {
 /// none, so a target without `Clone` fails where it is read and not where
 /// the runner compiles.
 #[allow(unused_macros)]
+/// A copy of a borrowed std value Rawr's std holds (`crossing::Std`): its
+/// owned form, as `&Path` gives a `PathBuf`.
+#[allow(unused_macros)]
+macro_rules! std_copy {
+    ($target:expr) => {{
+        Ok::<_, Error>(::std::borrow::ToOwned::to_owned($target))
+    }};
+}
+
 macro_rules! guard_copy {
     ($target:expr) => {{
         #[allow(unused_imports)]
@@ -1652,6 +1661,12 @@ fn materialize_checked(
 fn take_primitive<T: 'static>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     (**value).take().try_cast_result::<T>().map_err(|_| Error::TypeMismatch)
+}
+
+#[allow(dead_code)]
+fn take_std<T: __rawr_internal::crossing::Std>(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<T, Error> {
+    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
+    T::take((**value).take()).ok_or(Error::TypeMismatch)
 }
 
 #[allow(dead_code)]
@@ -6382,6 +6397,10 @@ fn plain_value(ty: &convert::Type) -> bool {
         }
         convert::Type::Result(ok, err) => plain_value(ok) && plain_value(err),
         convert::Type::Tuple(members) => members.iter().all(plain_value),
+        // One of std's types Rawr's std holds as its own, as `PathBuf`.
+        convert::Type::Nominal { definition, .. } => {
+            crate::surface::identity::Definition::std_clone(definition.as_bytes())
+        }
         _ => false,
     }
 }
@@ -8970,6 +8989,7 @@ fn render_scoped_guard(
         return Ok(());
     };
     let target = substituted(signature.output(), signature, substitutions)?;
+    let copy = copy_macro(&target);
     let mut method = format!("receiver.{}", plan.name()).into_bytes();
     render_item_turbofish(
         signature,
@@ -9002,7 +9022,7 @@ fn render_scoped_guard(
             output,
             "    if let Some(scoped) = scoped_value(arguments, 0) {{
         return {reach}
-            let output = guard_copy!(&*guard)?;
+            let output = {copy}!(&*guard)?;
             {give}
         {close};
     }}"
@@ -9027,7 +9047,7 @@ fn render_scoped_guard(
                 Access::Update(apply) => {{
                     return with_arena(|arena| {{
                         {reach}
-                            let output = guard_copy!(&*guard)?;
+                            let output = {copy}!(&*guard)?;
                             let value = {{
                                 #[allow(unused_variables)]
                                 let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
@@ -9052,7 +9072,7 @@ fn render_scoped_guard(
                 let arguments = &mut Arguments {{ values: values.as_mut_slice(), arena }};
                 {reach}
                     if arguments.values.is_empty() {{
-                        let output = guard_copy!(&*guard)?;
+                        let output = {copy}!(&*guard)?;
                         {give}
                     }} else {{
                         {take}
@@ -9103,6 +9123,7 @@ fn render_guard(
         "arguments.arena.shared"
     };
     let target = substituted(signature.output(), signature, substitutions)?;
+    let copy = copy_macro(&target);
     // `arena.shared::<Receiver, _>(handle, |receiver| { let mut guard =
     // receiver.method(..); ` through `access`, whose closure takes `taking`.
     let call = |access: &str,
@@ -9206,7 +9227,7 @@ fn render_guard(
             output.write_all(b"    let output = ").map_err(encoding)?;
             call(borrow, "receiver", "receiver", output)?;
             output
-                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
             render_give(&target, "output", output)
         }
@@ -9215,7 +9236,10 @@ fn render_guard(
             output.write_all(b"    let output = ").map_err(encoding)?;
             call(borrow, "receiver", "receiver", output)?;
             output
-                .write_all(b"guard.map(|target| guard_copy!(&*target)).transpose() })??;\n")
+                .write_all(
+                    format!("guard.map(|target| {copy}!(&*target)).transpose() }})??;\n")
+                        .as_bytes(),
+                )
                 .map_err(encoding)?;
             render_give(&target, "output", output)
         }
@@ -9257,7 +9281,7 @@ fn render_guard(
             output
                 .write_all(
                     b"
-                        let output = guard_copy!(&*guard)?;
+                        let output = {copy}!(&*guard)?;
                         let value = {
                             #[allow(unused_variables)]
                             let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
@@ -9299,7 +9323,7 @@ fn render_guard(
                 .map_err(encoding)?;
             call_again(borrow, "receiver.clone()", "receiver", output)?;
             output
-                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
             indented(&give, "            ", output)?;
             output
@@ -9356,7 +9380,7 @@ fn render_guard(
             output
                 .write_all(
                     b"
-                        let output = guard_copy!(&*guard)?;
+                        let output = {copy}!(&*guard)?;
                         let value = {
                             #[allow(unused_variables)]
                             let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
@@ -9395,7 +9419,7 @@ fn render_guard(
                 .map_err(encoding)?;
             call(borrow, "receiver.clone()", "receiver", output)?;
             output
-                .write_all(b"guard_copy!(&*guard) })??;\n")
+                .write_all(format!("{copy}!(&*guard) }})??;\n").as_bytes())
                 .map_err(encoding)?;
             indented(&give, "            ", output)?;
             output
@@ -11198,6 +11222,20 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // A shared borrow of one of std's types Rawr's std holds: the value
+    // itself, lent for the call.
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && let Some(rust) = std_value(lent)
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_lent = <{rust} as __rawr_internal::crossing::Std>::lend((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()).ok_or(Error::TypeMismatch)?;\n    let argument_{local} = &*argument_{local}_lent;"
+        )
+        .map_err(request::unwritable);
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -11780,6 +11818,13 @@ fn render_take(
             .map_err(request::unwritable);
         }
         convert::Type::Builtin(convert::Builtin::F32) => "take_f32",
+        ty if let Some(rust) = std_value(ty) => {
+            return writeln!(
+                output,
+                "    let argument_{local} = take_std::<{rust}>(arguments, {index})?;"
+            )
+            .map_err(request::unwritable);
+        }
         ty if is_duration(ty) || is_facade_value(ty) => "take_primitive",
         ty if is_value(ty) => "take_value",
         // A script value where native generic code takes a Rust type: the
@@ -11877,6 +11922,10 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        ty if std_value(ty).is_some() => writeln!(
+            output,
+            "    Ok(__rawr_internal::crossing::Std::give({value}))"
+        ),
         ty if is_duration(ty) || is_facade_value(ty) => {
             writeln!(output, "    Ok(Dynamic::from({value}))")
         }
@@ -12078,6 +12127,10 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<ImmutableString>().map(|value| value.to_string()).map_err(|_| Error::TypeMismatch)"
         ),
+        ty if let Some(rust) = std_value(ty) => write!(
+            output,
+            "<{rust} as __rawr_internal::crossing::Std>::take({value}).ok_or(Error::TypeMismatch)"
+        ),
         ty if let Some(time) = std_time(ty) => cast(output, time),
         ty if is_facade_value(ty) => {
             let rust = concrete_type(ty).ok_or_else(|| request::drift("a host value's Rust type"))?;
@@ -12259,6 +12312,10 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+        ty if std_value(ty).is_some() => write!(
+            output,
+            "Ok::<Dynamic, Error>(__rawr_internal::crossing::Std::give({value}))"
+        ),
         ty if is_duration(ty) || is_facade_value(ty) => {
             write!(output, "Ok::<Dynamic, Error>(Dynamic::from({value}))")
         }
@@ -12434,7 +12491,41 @@ fn holds_native(ty: &convert::Type) -> bool {
 /// Whether `ty` is std's `Duration` or `Instant`, which cross by value as
 /// Rawr's own.
 fn is_duration(ty: &convert::Type) -> bool {
-    std_time(ty).is_some()
+    std_time(ty).is_some() || std_value(ty).is_some()
+}
+
+/// The macro that copies a borrowed output of type `target`, or the
+/// `Some` it holds: a std value's owned form (`std_copy`), or the target's
+/// `Clone` (`guard_copy`).
+fn copy_macro(target: &convert::Type) -> &'static str {
+    let target = match target {
+        convert::Type::Option(element) => element,
+        target => target,
+    };
+    match target {
+        convert::Type::Nominal { definition, .. }
+            if crate::surface::identity::Definition::std_clone(definition.as_bytes()) =>
+        {
+            "std_copy"
+        }
+        _ => "guard_copy",
+    }
+}
+
+/// The Rust path of one of std's types Rawr's std holds as its Rust value
+/// (`identity::STD_TYPES`), when `ty` is one: native code takes, gives and
+/// borrows the value itself (`crossing::Std`).
+fn std_value(ty: &convert::Type) -> Option<String> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if arguments.is_empty() => {
+            crate::surface::identity::Definition::std_path(definition.as_bytes())
+                .map(|path| format!("std::{path}"))
+        }
+        _ => None,
+    }
 }
 
 /// The Rust path of std's `Duration` or `Instant`, when `ty` is one, or of
@@ -13017,7 +13108,7 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
             if matches!(**ty, convert::Type::Nominal { .. })
                 && !is_value(ty)
                 && !is_facade_value(ty)
-                && std_time(ty).is_none()
+                && !is_duration(ty)
                 && !carries_lifetime(ty) =>
         {
             Some(ty)
@@ -14333,6 +14424,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
                 concrete_type(output)?
             )
         }
+        ty if let Some(rust) = std_value(ty) => rust,
         ty if let Some(time) = std_time(ty) => time.to_owned(),
         convert::Type::Nominal {
             definition,

@@ -190,8 +190,37 @@ pub(crate) fn is_hidden(path: &str) -> bool {
 /// `text` with each path through a crate's hidden segment written from
 /// that crate's own root, as rustc names an item of a crate the program
 /// does not name: `iced::__rawr_crate_iced_core_83b4d3c3e0fc96fe::text::Span`
-/// is `iced_core::text::Span`.
+/// is `iced_core::text::Span`. A type of Rawr's std is std's own, at its
+/// `std` path: `rawr_std::io::Error` is `std::io::Error`.
 pub(crate) fn public(text: &str) -> std::borrow::Cow<'_, str> {
+    match std_root(text) {
+        std::borrow::Cow::Borrowed(text) => hidden(text),
+        std::borrow::Cow::Owned(text) => std::borrow::Cow::Owned(hidden(&text).into_owned()),
+    }
+}
+
+/// `text` with each path from Rawr's std root written from `std`.
+fn std_root(text: &str) -> std::borrow::Cow<'_, str> {
+    const ROOT: &str = "rawr_std::";
+    if !text.contains(ROOT) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(ROOT) {
+        let starts = rest[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == ':'));
+        output.push_str(&rest[..at]);
+        output.push_str(if starts { "std::" } else { ROOT });
+        rest = &rest[at + ROOT.len()..];
+    }
+    output.push_str(rest);
+    std::borrow::Cow::Owned(output)
+}
+
+fn hidden(text: &str) -> std::borrow::Cow<'_, str> {
     if !is_hidden(text) {
         return std::borrow::Cow::Borrowed(text);
     }
@@ -229,6 +258,15 @@ pub(crate) fn public(text: &str) -> std::borrow::Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_std_type_reads_from_std() {
+        assert_eq!(
+            super::public("Result<_, rawr_std::io::Error> and &rawr_std::path::PathBuf"),
+            "Result<_, std::io::Error> and &std::path::PathBuf"
+        );
+        assert_eq!(super::public("my_rawr_std::X"), "my_rawr_std::X");
+    }
+
     #[test]
     fn a_hidden_crate_path_reads_from_its_crate() {
         assert_eq!(

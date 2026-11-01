@@ -22107,6 +22107,18 @@ impl<'a> Parser<'a> {
             Ty::Option(inner) | Ty::Array { element: inner, .. } => self.plain_value(&inner),
             Ty::Result(ok, err) => self.plain_value(&ok) && self.plain_value(&err),
             Ty::Tuple(members) => members.iter().all(|member| self.plain_value(member)),
+            // One of std's types Rawr's std holds as its own, as `PathBuf`.
+            Ty::Host { proof, .. } => {
+                proof
+                    .definition
+                    .path()
+                    .strip_prefix(crate::std_facade::ROOT)
+                    .is_some_and(|rest| rest.starts_with("::"))
+                    && proof
+                        .definition
+                        .capabilities()
+                        .contains(capability::Kind::Clone)
+            }
             _ => false,
         }
     }
@@ -33948,13 +33960,13 @@ impl<'a> Parser<'a> {
                     }
                     continue;
                 }
-                // An imported crate type's `.into()`: the target the use
-                // site needs, through that type's `From` of it, as rustc
-                // infers `Some(color.into())` a `Background` where the
-                // field is an `Option<Background>`.
+                // An imported crate type's or std type's `.into()`: the
+                // target the use site needs, through that type's `From` of
+                // it, as rustc infers `Some(color.into())` a `Background`
+                // where the field is an `Option<Background>`, or an
+                // `io::Error` a crate error through its `#[from]`.
                 #[cfg(feature = "rust-import")]
-                if let Ty::Host { proof, .. } = &source
-                    && proof.definition.identity().imported().is_some()
+                if let Ty::Host { .. } = &source
                     && self.host_witnesses.is_empty()
                     && self.projected_host_types(&source).is_empty()
                 {
@@ -38851,6 +38863,64 @@ impl<'a> Parser<'a> {
             source.push_text(format!(" }} else {{ {drops}return "));
             let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
             let converted = origin::Fragment::call(method_name(conversion.id()), [error]);
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `?` into a host error converts through its `From`, as a crate's
+        // `#[from] std::io::Error` writes it: `Err(e)?` returns
+        // `Err(F::from(e))`.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && !matches!(*error, Ty::Infer(_))
+            && matches!(*returned, Ty::Host { .. })
+            && !self.unifies(&returned, &error)
+        {
+            let host = HostInto {
+                forms: Vec::new(),
+                owner: None,
+                receiver: value.span,
+            };
+            let Some(helper) = self.host_into_helper(&host, &error, &returned, value.span)? else {
+                // An imported error whose `from` the program never named:
+                // its member, which the importer brings once it is demanded.
+                #[cfg(feature = "rust-import")]
+                if let Some(owner) = self.imported_public_path(&returned) {
+                    return Err(Error::UnknownMember {
+                        owner,
+                        member: "from".into(),
+                        reference: value.span,
+                    });
+                }
+                return Err(Error::TypeMismatch {
+                    expected: self.inference.resolve(&output).name(&self.models),
+                    actual: format!(
+                        "Result<_, {}> (`?` returns the error early, converted by `From`)",
+                        error.name(&self.models)
+                    )
+                    .into(),
+                    expression,
+                });
+            };
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let mut value = value;
+            self.move_out_value(&mut value)?;
+            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(format!(" }} else {{ {drops}return "));
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let converted = origin::Fragment::call(&helper, [error]);
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
             source.push_text("; } }");

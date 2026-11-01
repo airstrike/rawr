@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 86;
+const CLASSIFIER_VERSION: u32 = 87;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4046,7 +4046,10 @@ fn field_type_nameable(
             definition,
             arguments,
         } => {
-            nominal.contains(definition)
+            // Or a type Rawr declares itself, as std's `PathBuf` and
+            // `Duration` are.
+            (nominal.contains(definition)
+                || crate::surface::identity::Definition::is_projected(definition.as_bytes()))
                 && arguments
                     .iter()
                     .all(|argument| field_type_nameable(argument, nominal))
@@ -6145,13 +6148,14 @@ impl<P: api::Phase> Context<'_, P> {
             // lent.
             representability::convert::Type::Nominal { definition, .. } => {
                 !mutable
-                    || ![
+                    || !([
                         Definition::value(),
                         Definition::duration(),
                         Definition::instant(),
                         Definition::infallible(),
                     ]
                     .contains(definition)
+                        || Definition::std_path(definition.as_bytes()).is_some())
             }
             _ => false,
         };
@@ -10314,13 +10318,22 @@ fn is_string(definition: &model::Definition) -> bool {
         && definition.display_path().last() == Some("String")
 }
 
-/// The identity std's `time::Duration` (in `core`) or `time::Instant` (in
-/// `std`) crosses as: each is Rawr's own type, passed by value.
+/// The identity std's `time::Duration` (in `core`), `time::Instant` (in
+/// `std`) or one of the types Rawr's std holds as their Rust values
+/// (`identity::STD_TYPES`) crosses as: each is Rawr's own type, which is
+/// std's.
 fn std_time(
     id: &api::identity::Definition,
     definition: &model::Definition,
 ) -> Option<crate::surface::identity::Definition> {
     id.unit().authority().sysroot()?;
+    if matches!(id.unit().crate_name(), "std" | "core" | "alloc")
+        && let Some(std) = crate::surface::identity::Definition::std_definition(
+            &definition.display_path().collect::<Vec<_>>(),
+        )
+    {
+        return Some(std);
+    }
     let path = |expected: [&str; 3]| definition.display_path().eq(expected);
     match id.unit().crate_name() {
         "core" if path(["core", "time", "Duration"]) => {

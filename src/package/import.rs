@@ -3034,6 +3034,14 @@ impl Types {
                         Self::convert_charged(output, parameters)?,
                     ));
                 }
+                // std's `PathBuf`, `io::Error` and the others Rawr's std
+                // holds as their Rust values: Rawr's std's own type.
+                if let Some(path) =
+                    rawr_import::surface::identity::Definition::std_path(definition.as_bytes())
+                {
+                    let std = crate::std_facade::definition().export_type(path)?;
+                    return Ok(host::type_ref::Type::external(std, converted)?);
+                }
                 if *definition == rawr_import::surface::identity::Definition::duration()
                     && converted.is_empty()
                 {

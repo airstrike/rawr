@@ -1,11 +1,11 @@
 //! std's `io::Error` and `io::ErrorKind` for Rawr code
 //! (`resolve::std_reexport` sends `std::io` here). An error is Rust's own
-//! `std::io::Error`, shared so a Rawr value can be copied. `stdin()` reads
+//! `std::io::Error`, which a crate's code takes and borrows as it is. `stdin()` reads
 //! the process's stdin through Rust's own, and `stdout()` flushes Rust's
 //! own. Nothing here reads or writes a file.
 
 use std::io::ErrorKind;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::host::{self, facade, item, signature, type_ref};
 use crate::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
@@ -38,19 +38,66 @@ struct Read;
 struct BufRead;
 struct Write;
 
-/// Rust's `std::io::Error`, which is not `Clone`, behind an `Arc`.
+/// Rust's `std::io::Error`, which is not `Clone`. A Rawr value is a handle
+/// to the error's one place, so copies of the value share it. Native code
+/// borrows the error itself, and takes it out of its place when the program
+/// moves it, which leaves no handle that is read again.
 #[derive(Clone)]
-pub(crate) struct Error(Arc<std::io::Error>);
+pub(crate) struct Error(Arc<Mutex<Option<Arc<std::io::Error>>>>);
+
+impl Error {
+    fn new(error: std::io::Error) -> Self {
+        Self(Arc::new(Mutex::new(Some(Arc::new(error)))))
+    }
+
+    /// The error, lent: the program never reads a value it moved.
+    fn get(&self) -> Arc<std::io::Error> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| panic!("rawr: a moved `std::io::Error` was read"))
+    }
+}
+
+#[cfg(feature = "sync")]
+impl crate::crossing::Std for std::io::Error {
+    type Lent = Arc<Self>;
+
+    fn give(self) -> Dynamic {
+        made(self)
+    }
+
+    /// The error, moved out of its place. No borrow of it outlives the
+    /// move, so it is the only one.
+    fn take(value: Dynamic) -> Option<Self> {
+        let error = value
+            .try_cast::<Error>()?
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()?;
+        Some(
+            Arc::try_unwrap(error).unwrap_or_else(|_| {
+                panic!("rawr: a `std::io::Error` was moved while it was borrowed")
+            }),
+        )
+    }
+
+    fn lend(value: Dynamic) -> Option<Arc<Self>> {
+        value.try_cast::<Error>().map(|error| error.get())
+    }
+}
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&*self.0, formatter)
+        std::fmt::Debug::fmt(&*self.get(), formatter)
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&*self.0, formatter)
+        std::fmt::Display::fmt(&*self.get(), formatter)
     }
 }
 
@@ -98,6 +145,13 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         KIND,
         &[],
         &[Debug, Clone, Copy, PartialEq, Eq, Hash, Send, Static],
+    )?;
+    // std's `io::Result<T>`, which is `Result<T, io::Error>`.
+    builder.type_alias(
+        "io::Result",
+        Box::new(["T".into()]),
+        Box::default(),
+        Type::result(Type::parameter("T")?, Type::registered(ERROR)?),
     )?;
     for name in KINDS {
         builder.item(item::Definition::associated_value(
@@ -262,7 +316,7 @@ fn read<T: Clone + 'static>(value: &Dynamic, expected: &str) -> Result<T, Box<Ev
 
 /// A Rawr `std::io::Error` holding `error`.
 pub(crate) fn made(error: std::io::Error) -> Dynamic {
-    Dynamic::from(Error(Arc::new(error)))
+    Dynamic::from(Error::new(error))
 }
 
 /// Bind the types' items in the std facade.
@@ -303,7 +357,9 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
         )?)))
     });
     bind("io::Error::kind", |args| {
-        Ok(Dynamic::from(read::<Error>(args[0], "io::Error")?.0.kind()))
+        Ok(Dynamic::from(
+            read::<Error>(args[0], "io::Error")?.get().kind(),
+        ))
     });
     bind("io::Error::to_string", |args| {
         Ok(Dynamic::from(ImmutableString::from(

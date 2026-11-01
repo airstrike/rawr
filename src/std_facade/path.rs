@@ -58,6 +58,14 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         )?)?;
         Ok::<_, host::Error>(())
     };
+    // `Path::new(s)` borrows its text as a path, which Rawr holds as the
+    // `PathBuf` it names: `Path` is `PathBuf` here, so its `new` is a form
+    // of `PathBuf::new` that takes the text.
+    function(
+        format!("{PATH}::new"),
+        vec![string()],
+        Type::reference(false, path()?),
+    )?;
     for (owner, made) in [(PATH, path()?), (OS, os()?)] {
         function(format!("{owner}::new"), vec![], made.clone())?;
         function(format!("{owner}::default"), vec![], made.clone())?;
@@ -160,7 +168,10 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
             .bind(format!("{}::{path}", super::ROOT), callback)
             .unwrap_or_else(|_| panic!("the std bindings must retain {path}"));
     };
-    bind("path::PathBuf::new", |_| Ok(Dynamic::from(PathBuf::new())));
+    bind("path::PathBuf::new", |args| match args {
+        [] => Ok(Dynamic::from(PathBuf::new())),
+        [text, ..] => Ok(Dynamic::from(path_like(text)?)),
+    });
     bind("path::PathBuf::default", |_| {
         Ok(Dynamic::from(PathBuf::new()))
     });

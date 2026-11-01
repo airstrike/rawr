@@ -728,6 +728,14 @@ impl Type {
             Shape::Option(inner) | Shape::Array { element: inner, .. } => inner.plain_value(),
             Shape::Result(ok, err) => ok.plain_value() && err.plain_value(),
             Shape::Tuple(members) => members.iter().all(Self::plain_value),
+            // One of std's types Rawr's std holds as its own, as `PathBuf`.
+            Shape::External { export, .. } => {
+                export.facade_root().to_string() == crate::std_facade::ROOT
+                    && export
+                        .contract()
+                        .capabilities()
+                        .contains(crate::capability::Kind::Clone)
+            }
             _ => false,
         }
     }

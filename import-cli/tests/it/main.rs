@@ -13,6 +13,7 @@ mod panes;
 mod plain;
 mod scope;
 mod shapes;
+mod std_types;
 mod support;
 mod swap;
 mod tokio;

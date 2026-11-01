@@ -10036,6 +10036,59 @@ main();
     );
 }
 
+/// std's `PathBuf` and `io::Error` behave as rustc's (D683.3): `Path::new`
+/// borrows text as a path, `join` and `display` give what rustc gives,
+/// `io::Result<T>` is std's alias, and `?` passes an `io::Error` on, whose
+/// `kind` is the operating system's.
+#[test]
+fn language_std_path_and_io_error_behave_as_rustcs() {
+    assert_eq!(
+        printed_with(
+            r#"
+use std::io;
+use std::path::{Path, PathBuf};
+
+fn read(path: &Path) -> io::Result<String> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(text)
+}
+
+fn size(path: &Path) -> Result<usize, io::Error> {
+    Ok(read(path)?.len())
+}
+
+fn first(path: &Path) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::InvalidData, format!("bad {}", path.display())))
+}
+
+fn main() {
+    let root = Path::new("data");
+    let joined = root.join("notes").join("a.txt");
+    println!("{} {:?}", joined.display(), joined.extension());
+    println!("{:?} {:?}", joined.parent(), Path::new("x.rs").file_stem());
+    let mut owned: PathBuf = root.to_path_buf();
+    owned.push("b");
+    println!("{}", owned.display());
+    let error = size(Path::new("no/such/file")).unwrap_err();
+    println!("{:?} {}", error.kind(), error.kind() == io::ErrorKind::NotFound);
+    let invalid = first(&joined).unwrap_err();
+    println!("{} | {:?}", invalid, invalid.kind());
+    let other = io::Error::other("plain");
+    println!("{other} {:?}", other.kind());
+}
+main();
+"#,
+            crate::Access::all(),
+        ),
+        "data/notes/a.txt Some(\"txt\")\n\
+         Some(\"data/notes\") Some(\"x\")\n\
+         data/b\n\
+         NotFound true\n\
+         bad data/notes/a.txt | InvalidData\n\
+         plain Other\n"
+    );
+}
+
 /// A CLI tool's std (D531): `env::args()` is an iterator of the process's
 /// arguments, `fs::read_to_string` gives an `io::Result`, a reader appends
 /// to the `&mut String` it borrows, and `str` trims by a pattern. rustc
