@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.43",
+  "version": "0.3.44",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Programs whose dependencies use zerocopy's derives, like pick_list and custom_widget, no longer stop at \"owned trait implementation is absent\". The importer reads signed integer constants in impl headers, and an implementation it still can't read is set aside instead of breaking its crate.","issues":[478]},
-        {"text":"rawr no longer reports its own inventory invariants as the program's error. A broken invariant is a rawr bug that names itself, and a damaged stored entry is rebuilt.","issues":[481]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.44",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"Programs whose dependencies use zerocopy's derives, like pick_list and custom_widget, no longer stop at \"owned trait implementation is absent\". The importer reads signed integer constants in impl headers, and an implementation it still can't read is set aside instead of breaking its crate.","issues":[478]},
+          {"text":"rawr no longer reports its own inventory invariants as the program's error. A broken invariant is a rawr bug that names itself, and a damaged stored entry is rebuilt.","issues":[481]}
+        ]
+      },
       {
         "version": "0.3.43",
         "date": "2026-10-31",
@@ -1025,10 +1027,10 @@
     {"issue":475,"title":"The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)"},
     {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","release":"0.3.42"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)"},
-    {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"closed","category":"No glue (D593)"},
+    {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"closed","category":"No glue (D593)","release":"0.3.44"},
     {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":480,"title":"Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"closed","category":"Importer","release":"0.3.41"},
-    {"issue":481,"title":"Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer"},
+    {"issue":481,"title":"Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer","release":"0.3.44"},
     {"issue":482,"title":"A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer"},
     {"issue":483,"title":"The remaining importer error variants use rawr's internal names","state":"open","category":"Importer"},
     {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
