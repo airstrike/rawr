@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate struct or variant whose public field is an array of known length, like iced's `SolidVertex2D { position: [f32; 2], color }`, can be built with a literal. When a public field's type still can't be held, the error names that field and its type instead of blaming private fields.","issues":[608]},
+        {"text":"`iced::run((), view)` works: the crate's update for `()` is accepted, and a view of `&()` can return widgets that borrow string literals, held once each with no copy.","issues":[616]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.71",
@@ -1393,7 +1399,7 @@
     {"issue":605,"title":"Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc"},
     {"issue":606,"title":"Two rawr integration tests fail on main","state":"closed","category":"Health"},
     {"issue":607,"title":"color_palette: an associated constant through a generic parameter","state":"closed","category":"No glue (D593)","release":"0.3.70"},
-    {"issue":608,"title":"The struct-literal error blames private fields when a public field's type isn't supported","state":"open","category":"Divergences from rustc"},
+    {"issue":608,"title":"The struct-literal error blames private fields when a public field's type isn't supported","state":"closed","category":"Divergences from rustc"},
     {"issue":609,"title":"invalid stored baseline reaches the user instead of a rebuild","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.68"},
     {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"open","category":"No glue (D593)"},
     {"issue":611,"title":"rawr accepts Rgb { .., ..Rgb::default() } where rustc gives E0283","state":"open","category":"Divergences from rustc"},
@@ -1401,14 +1407,15 @@
     {"issue":613,"title":"Stale entries after rawr check's prepare loop and in rawr run's runner build still fail","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":614,"title":"A stale stored node at the same action as a fresh build fails on publish","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.69"},
     {"issue":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":616,"title":"A view of unit state, iced::run((), view), panics the generator","state":"open","category":"No glue (D593)"},
+    {"issue":616,"title":"A view of unit state, iced::run((), view), panics the generator","state":"closed","category":"No glue (D593)"},
     {"issue":617,"title":"A struct update ..T::default() on a crate type panics","state":"open","category":"No glue (D593)"},
     {"issue":618,"title":"A program trait's associated function on a crate type, called by the type's name, is refused","state":"open","category":"Divergences from rustc"},
     {"issue":619,"title":"A derived Default with a crate-type field fails at runtime","state":"open","category":"No glue (D593)"},
     {"issue":620,"title":"An empty match on Infallible is refused","state":"open","category":"Divergences from rustc"},
     {"issue":621,"title":"A closure input that is a std trait's associated type of a type parameter","state":"open","category":"No glue (D593)"},
     {"issue":622,"title":"A path dependency builds twice when the program has native modules","state":"open","category":"No glue (D593)"},
-    {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"open","category":"Divergences from rustc"}
+    {"issue":623,"title":"gallery: iced's opaque(..) leaves Theme and Renderer as _ in an Option<impl Widget> output","state":"open","category":"Divergences from rustc"},
+    {"issue":624,"title":"A closure passed to a method taking impl FnOnce(&mut Self) gets its input from the receiver","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
