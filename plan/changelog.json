@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"rawr accepts Cargo setups it used to refuse: a `CARGO_PROFILE_*` variable for another profile, `config` beside `config.toml` (rawr reads `config`, as Cargo does), a Git dependency at a branch, a tag, a short rev or its default branch, pinned by `Cargo.lock`, and a symlinked project or Cargo home.","issues":[485]},
-      {"text":"A type error names a crate type by a real path, preferring the one the program imports. iced's `Vector` used to print as `iced::<semantic imported type><f32>`. Inferred types print as `_`, the never type as `!`, and function types leave out `-> ()`, as rustc does.","issues":[508]},
-      {"text":"Build errors name your files, Cargo.toml, Cargo.lock, the Cargo configuration and environment variables in Cargo's words, instead of rawr's internal stages. A failure only a rawr bug can cause says so.","issues":[483]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.49",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"rawr accepts Cargo setups it used to refuse: a `CARGO_PROFILE_*` variable for another profile, `config` beside `config.toml` (rawr reads `config`, as Cargo does), a Git dependency at a branch, a tag, a short rev or its default branch, pinned by `Cargo.lock`, and a symlinked project or Cargo home.","issues":[485]},
+        {"text":"A type error names a crate type by a real path, preferring the one the program imports. iced's `Vector` used to print as `iced::<semantic imported type><f32>`. Inferred types print as `_`, the never type as `!`, and function types leave out `-> ()`, as rustc does.","issues":[508]},
+        {"text":"Build errors name your files, Cargo.toml, Cargo.lock, the Cargo configuration and environment variables in Cargo's words, instead of rawr's internal stages. A failure only a rawr bug can cause says so.","issues":[483]}
+      ]
+    },
     {
       "version": "0.3.48",
       "date": "2026-11-01",

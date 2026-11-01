@@ -1,19 +1,21 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.48",
+  "version": "0.3.49",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr accepts Cargo setups it used to refuse: a `CARGO_PROFILE_*` variable for another profile, `config` beside `config.toml` (rawr reads `config`, as Cargo does), a Git dependency at a branch, a tag, a short rev or its default branch, pinned by `Cargo.lock`, and a symlinked project or Cargo home.","issues":[485]},
-        {"text":"A type error names a crate type by a real path, preferring the one the program imports. iced's `Vector` used to print as `iced::<semantic imported type><f32>`. Inferred types print as `_`, the never type as `!`, and function types leave out `-> ()`, as rustc does.","issues":[508]},
-        {"text":"Build errors name your files, Cargo.toml, Cargo.lock, the Cargo configuration and environment variables in Cargo's words, instead of rawr's internal stages. A failure only a rawr bug can cause says so.","issues":[483]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.49",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"rawr accepts Cargo setups it used to refuse: a `CARGO_PROFILE_*` variable for another profile, `config` beside `config.toml` (rawr reads `config`, as Cargo does), a Git dependency at a branch, a tag, a short rev or its default branch, pinned by `Cargo.lock`, and a symlinked project or Cargo home.","issues":[485]},
+          {"text":"A type error names a crate type by a real path, preferring the one the program imports. iced's `Vector` used to print as `iced::<semantic imported type><f32>`. Inferred types print as `_`, the never type as `!`, and function types leave out `-> ()`, as rustc does.","issues":[508]},
+          {"text":"Build errors name your files, Cargo.toml, Cargo.lock, the Cargo configuration and environment variables in Cargo's words, instead of rawr's internal stages. A failure only a rawr bug can cause says so.","issues":[483]}
+        ]
+      },
       {
         "version": "0.3.48",
         "date": "2026-11-01",
@@ -1074,9 +1076,9 @@
     {"issue":480,"title":"Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"closed","category":"Importer","release":"0.3.41"},
     {"issue":481,"title":"Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer","release":"0.3.44"},
     {"issue":482,"title":"A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer"},
-    {"issue":483,"title":"The remaining importer error variants use rawr's internal names","state":"closed","category":"Importer"},
+    {"issue":483,"title":"The remaining importer error variants use rawr's internal names","state":"closed","category":"Importer","release":"0.3.49"},
     {"issue":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"closed","category":"Divergences from rustc"},
+    {"issue":485,"title":"rawr refuses Cargo setups Cargo accepts","state":"closed","category":"Divergences from rustc","release":"0.3.49"},
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health"},
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
@@ -1099,7 +1101,7 @@
     {"issue":505,"title":"Generated runners name the trait in primitive From calls","state":"closed","category":"No glue (D593)","release":"0.3.45"},
     {"issue":506,"title":"Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)"},
     {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed","category":"No glue (D593)","release":"0.3.48"},
-    {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"closed","category":"Divergences from rustc"},
+    {"issue":508,"title":"Print an imported type with several export paths by a path, not '<semantic imported type>'","state":"closed","category":"Divergences from rustc","release":"0.3.49"},
     {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
     {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"open","category":"Health"},
     {"issue":511,"title":"inspect reads callers' frames","state":"open","category":"Health"},
