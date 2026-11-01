@@ -2673,11 +2673,14 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
         // runs there (D513.7 b). `F: Fn(..) -> R + 'static`, as Freya's
         // `AppComponent` holds, may call it again, and so may
         // `F: FnMut(..) -> R + 'static`, as Freya's `EventHandler` holds.
+        // A closure that takes a `&mut` borrow, as iced's `Path::new(impl
+        // FnOnce(&mut Builder))` gives one, is described by its crossing,
+        // as it is for a generic type's `Cache::draw`.
         Some(
             rawr_import::surface::callable::Class::Once(_)
             | rawr_import::surface::callable::Class::Shared(_)
             | rawr_import::surface::callable::Class::Mutable(_),
-        ) => plan.call().is_some(),
+        ) => plan.call().is_some() || !plan.crossings().is_empty(),
         Some(_) => false,
     };
     kinds && writes_declared(plan.signature(), plan.call(), plan.crossings())
