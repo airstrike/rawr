@@ -3,13 +3,20 @@
   "updated": "2026-11-01",
   "version": "0.3.66",
   "examples": {
-    "running": 19,
+    "running": 21,
     "total": 56,
-    "note": "19 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc and qr_code); the rest stop at recorded gaps"
+    "note": "21 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc, qr_code, clock and the_matrix); the rest stop at recorded gaps"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"An imported struct whose public field borrows a slice of numbers or a `&str` is built with a struct literal, as iced's `canvas::LineDash { segments: &[3.0, 6.0], offset: 0 }` is.","issues":[595]},
+        {"text":"A blanket impl's associated functions run on each type that meets its bounds, and the argument picks the conversion, as palette's `Hsl::from_color(rgb)` does.","issues":[594]},
+        {"text":"A number's `.into()` reaches the target crate type's `From` as rustc infers it, so `size: 14.0.into()` becomes iced's `Pixels`. clock and the_matrix pass `rawr check`.","issues":[426]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.66",
@@ -1170,7 +1177,7 @@
     {"issue":423,"title":"rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":424,"title":"bezier_tool: no method map on a Canvas behind impl Widget","state":"closed","category":"No glue (D593)","release":"0.3.40"},
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)","release":"0.3.39"},
-    {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
+    {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"closed","category":"No glue (D593)"},
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
     {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"closed","category":"Divergences from rustc","release":"0.3.42"},
     {"issue":429,"title":"A tuple struct's constructor named through its module has no binding","state":"open","category":"No glue (D593)"},
@@ -1338,8 +1345,8 @@
     {"issue":591,"title":"solar_system: pick_list's V can't be a reference to a crate type","state":"closed","category":"No glue (D593)","release":"0.3.64"},
     {"issue":592,"title":"color_palette: an impl header names a crate type without its declared parameter","state":"closed","category":"No glue (D593)","release":"0.3.64"},
     {"issue":593,"title":"serde's derives on program types","state":"open","category":"No glue (D593)"},
-    {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"open","category":"No glue (D593)"},
-    {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"open","category":"Divergences from rustc"},
+    {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"closed","category":"No glue (D593)"},
+    {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"closed","category":"Divergences from rustc"},
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
     {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"open","category":"No glue (D593)"},
     {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
@@ -1350,7 +1357,12 @@
     {"issue":603,"title":"Evaluate #[cfg_attr(..)] on items, fields and variants","state":"open","category":"Divergences from rustc"},
     {"issue":604,"title":"Report a helper attribute no derive in scope declares","state":"open","category":"Divergences from rustc"},
     {"issue":605,"title":"Honour #[path] on mod and #[cfg] on variants and tuple fields","state":"open","category":"Divergences from rustc"},
-    {"issue":606,"title":"Two rawr integration tests fail on main","state":"closed","category":"Health"}
+    {"issue":606,"title":"Two rawr integration tests fail on main","state":"closed","category":"Health"},
+    {"issue":607,"title":"color_palette: an associated constant through a generic parameter","state":"open","category":"No glue (D593)"},
+    {"issue":608,"title":"The struct-literal error blames private fields when a public field's type isn't supported","state":"open","category":"Divergences from rustc"},
+    {"issue":609,"title":"invalid stored baseline reaches the user instead of a rebuild","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":610,"title":"loading_spinners: a crate static of a crate type, LazyLock deref, and a method that keeps a borrow","state":"open","category":"No glue (D593)"},
+    {"issue":611,"title":"rawr accepts Rgb { .., ..Rgb::default() } where rustc gives E0283","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
