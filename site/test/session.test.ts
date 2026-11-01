@@ -107,14 +107,21 @@ test("the server answers with text or a refusal", async () => {
   assert.equal(page.session.state.status, "slow down");
 });
 
-test("the server answers an iced program with its frame as a PNG", async () => {
+test("the server answers an iced program with its text and its frame", async () => {
   const page = standIn({ code: "iced::run(update, view)" });
-  page.respond(() => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } }));
+  const result = {
+    kind: "text",
+    status: 0,
+    output: [{ stream: "stdout", text: "counting\n" }],
+    frame: { type: "image/gif", data: "R0lGODlh" },
+  };
+  page.respond(() => Response.json(result));
   page.session.choose("server");
   await new Promise((done) => setTimeout(done, 0));
   const output = page.session.state.output;
-  assert.equal(output.kind, "image");
-  assert.match(output.kind === "image" ? output.url : "", /^blob:/);
+  assert.equal(output.kind, "term");
+  assert.equal(output.kind === "term" ? output.image : "", "data:image/gif;base64,R0lGODlh");
+  assert.deepEqual(output.kind === "term" ? output.chunks : [], result.output);
   assert.equal(page.session.state.status, "0 ms");
 });
 

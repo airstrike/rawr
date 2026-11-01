@@ -1,6 +1,7 @@
 //! `rawr-play-bot`: run `?play` code blocks posted to Discord. A program
-//! replies with its output, an iced program with its first settled frame
-//! attached as a PNG, and one that doesn't compile with its error.
+//! replies with its output, an iced program also with what it drew attached
+//! (a PNG, or a GIF when it animated), and one that doesn't compile with its
+//! error.
 //!
 //! Each snippet runs in its own `rawr-play` process (beside this binary, or
 //! `PLAY_RENDERER`), so a run past `PLAY_TIMEOUT_MS` is killed and one
@@ -34,7 +35,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rawr_play::channels::{self, Channels, Parents, Store};
-use rawr_play::message::{self, Done, RateLimit, Reply};
+use rawr_play::message::{self, RateLimit, Reply};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
@@ -83,7 +84,7 @@ impl Drop for Answering<'_> {
 /// A run's result: the output or message, or its error text, how it
 /// ended, how long.
 struct Ran {
-    result: Result<Done, String>,
+    result: Result<rawr_play::Output, String>,
     outcome: Outcome,
     millis: u128,
 }
@@ -142,7 +143,10 @@ impl Renderer {
     }
 
     /// Run one snippet.
-    async fn spawn(&self, request: &message::Request) -> (Result<Done, String>, Outcome) {
+    async fn spawn(
+        &self,
+        request: &message::Request,
+    ) -> (Result<rawr_play::Output, String>, Outcome) {
         let mut command = tokio::process::Command::new(&self.path);
         command
             .args(message::args(self.time, self.memory_mb))
@@ -192,7 +196,7 @@ impl Renderer {
                 let outcome = stats::classify(success, !output.stdout.is_empty(), &stderr);
                 let result = message::outcome(success, &output.stdout, &stderr);
                 let outcome = match &result {
-                    Ok(Done::Text(output)) => stats::classify_output(output),
+                    Ok(output) => stats::classify_output(output),
                     _ => outcome,
                 };
                 (result, outcome)
@@ -398,9 +402,12 @@ impl EventHandler for Handler {
             self.send(&context, event.channel_id, event.id, reply).await;
             return;
         };
-        let edit = match reply {
-            Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
-            Reply::Image(png) => EditMessage::new().content("").new_attachment(frame(png)),
+        let edit = EditMessage::new()
+            .content(reply.text)
+            .remove_all_attachments();
+        let edit = match reply.frame {
+            Some(image) => edit.new_attachment(frame(image)),
+            None => edit,
         };
         match event
             .channel_id
@@ -714,9 +721,10 @@ impl Handler {
     /// Post `reply` in `channel` as a reply to `request`, and remember it.
     async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: Reply) {
         let builder = CreateMessage::new().reference_message((channel, request));
-        let builder = match reply {
-            Reply::Text(text) => builder.content(text),
-            Reply::Image(png) => builder.add_file(frame(png)),
+        let builder = builder.content(reply.text);
+        let builder = match reply.frame {
+            Some(image) => builder.add_file(frame(image)),
+            None => builder,
         };
         match channel.send_message(&context.http, builder).await {
             Ok(sent) => self.remember(request, sent.id),
@@ -742,33 +750,33 @@ impl Handler {
         guild: Option<GuildId>,
     ) -> Reply {
         match request {
-            Err(error) => Reply::Text(message::error_text(&error)),
+            Err(error) => Reply::text(message::error_text(&error)),
             Ok(request) => self.run(&request, guild).await,
         }
     }
 
     async fn run(&self, request: &message::Request, guild: Option<GuildId>) -> Reply {
         let Some(ran) = self.shared.renderer.run(request, false).await else {
-            return Reply::Text(message::error_text("the run pool is busy"));
+            return Reply::text(message::error_text("the run pool is busy"));
         };
         self.shared.record(ran.outcome, ran.millis, guild);
         match ran.result {
-            Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
-            Ok(Done::Image(png)) => Reply::Image(png),
-            Err(text) => Reply::Text(message::error_text(&text)),
+            Ok(output) => Reply::output(output),
+            Err(text) => Reply::text(message::error_text(&text)),
         }
     }
 }
 
-/// An iced program's frame as a Discord attachment.
-fn frame(png: Vec<u8>) -> CreateAttachment {
-    CreateAttachment::bytes(png, "play.png")
+/// What an iced program drew, a PNG or a GIF, as a Discord attachment.
+fn frame(image: Vec<u8>) -> CreateAttachment {
+    let name = Reply::frame_name(&image);
+    CreateAttachment::bytes(image, name)
 }
 
 /// Serve `POST /render` (the playground, through the Worker) and `GET
 /// /health` on `port`: a program's output as JSON
-/// (`rawr_play::Output::to_json`) or an iced program's frame as
-/// `image/png` on success; the error text as 422 otherwise.
+/// (`rawr_play::Output::to_json`, with what an iced program drew) on
+/// success; the error text as 422 otherwise.
 async fn serve(shared: Arc<Shared>, port: u16) {
     use http_body_util::{BodyExt, Full, Limited};
     use hyper::body::{Bytes, Incoming};
@@ -835,8 +843,7 @@ async fn serve(shared: Arc<Shared>, port: u16) {
                                 reply(StatusCode::OK, "application/json", body.into_bytes())
                             };
                             match ran.result {
-                                Ok(Done::Text(output)) => json(output.to_json()),
-                                Ok(Done::Image(png)) => reply(StatusCode::OK, "image/png", png),
+                                Ok(output) => json(output.to_json()),
                                 Err(error) => text(StatusCode::UNPROCESSABLE_ENTITY, error),
                             }
                         }

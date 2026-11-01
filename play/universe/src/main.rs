@@ -6,7 +6,7 @@
 //! program's `Counter` and `Message` whatever their names.
 
 use iced::widget::{button, column, text, Widget};
-use iced::Center;
+use iced::{window, Center, Subscription};
 use std::time::Duration;
 
 #[derive(Default)]
@@ -41,11 +41,37 @@ impl Counter {
         .padding(20)
         .align_x(Center)
     }
+
+    fn scale_factor(&self) -> f32 {
+        2.0
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.value < 5 {
+            window::frames().map(|_| Message::Increment)
+        } else {
+            Subscription::none()
+        }
+    }
 }
 
 /// An iced program's `main`, as iced's counter writes it.
 pub fn run() -> iced::Result {
     iced::run(Counter::update, Counter::view)
+}
+
+/// The counter drawn at the scale it asks for (#529).
+pub fn scaled() -> iced::Result {
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .scale_factor(Counter::scale_factor)
+        .run()
+}
+
+/// The counter counting to five, a frame at a time, and settling (#527).
+pub fn animated() -> iced::Result {
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .subscription(Counter::subscription)
+        .run()
 }
 
 #[tokio::main]

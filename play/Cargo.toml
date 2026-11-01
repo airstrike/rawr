@@ -20,7 +20,8 @@ rawr = { path = "..", features = ["sync"] }
 rawr-snippet = { path = "snippet" }
 # Already in the bot through serenity; plain HTTP to the channel config store.
 reqwest = { version = "0.12", default-features = false, optional = true }
-# A plain program's output, as JSON.
+# A program's output, as JSON, with the frame an iced program drew in base64.
+base64 = "0.22"
 serde_json = "1"
 # The playground render port (already in the bot through reqwest).
 http-body-util = { version = "0.1", optional = true }
@@ -44,3 +45,7 @@ path = "src/bin/rawr-play.rs"
 name = "rawr-play-bot"
 path = "src/bin/rawr-play-bot.rs"
 required-features = ["bot"]
+
+[dev-dependencies]
+# The universe tests read the frames of an animated program's GIF.
+gif = "0.14"

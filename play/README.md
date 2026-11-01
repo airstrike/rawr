@@ -1,7 +1,8 @@
 # rawr-play
 
 Run a Rawr snippet. A program runs and returns its output as text, and an
-iced program the PNG of its first settled frame.
+iced program also what it drew: a PNG of its settled frame, or a GIF when it
+animated.
 One long-running bot links `rawr` as a library and starts one `rawr-play`
 process per snippet. It runs no rustc and no importer per request. It needs
 no GPU and no fonts, so it runs on any Linux VM or container.
@@ -43,11 +44,21 @@ that names none starts a server of its own for that one snippet.
 
 iced has no window in the universe. Its `[patch]` puts ?play's shell
 (`play/universe/shell`) in place of iced_winit, the crate iced's `run`
-hands a program to. The shell runs the program in iced_test's emulator,
-drawn with tiny-skia, until its boot and the tasks the boot started have
-finished. It writes that frame as a PNG to the file `PLAY_FRAME` names and
-returns, as iced's `run` returns when its window closes. A run that wrote a
-frame and exited with status 0 answers with the PNG.
+hands a program to. The shell runs the program headless, as iced_test's
+emulator does, drawn with tiny-skia at the program's own `scale_factor`,
+until its boot and the tasks the boot started have finished. Then it keeps
+drawing a frame every 50 ms, as iced_winit would redraw: each redraw goes to
+the program's subscriptions (`window::frames()`), and a widget's redraw
+request is honoured. It stops once nothing is left to change the program:
+no update, no pending task, no redraw request, and no subscription that
+changed the frame in the last second. It also stops at 100 frames, at 6 MiB
+of GIF, or before the deadline `PLAY_DEADLINE` names (the snippet's time
+budget). A program whose frame never changed is written as a PNG, and one
+that changed as a GIF of each change, with no loop extension, so it plays
+once and holds its last frame. Either goes to the file `PLAY_FRAME` names,
+and `run` returns, as iced's `run` returns when its window closes. A run
+that wrote a frame and exited with status 0 answers with its text and the
+frame.
 
 A universe runner names a script type by its index in the program's
 definition order (`__RawrScript0`, ..), never by its name, so a snippet
@@ -70,12 +81,14 @@ cargo run -p rawr-play -- hello.rs -o target/play/hello.json
 echo '1 + 2' | cargo run -p rawr-play -- - -o -
 ```
 
-An iced program writes the PNG of its first settled frame. A program
-writes one JSON object:
+A program writes one JSON object:
 
 ```json
 {"kind":"text","status":0,"output":[{"stream":"stdout","text":"total: 27\n"}],"truncated":false,"limit":false}
 ```
+
+An iced program's object also has `"frame":{"type":"image/png","data":".."}`:
+what it drew, in base64, a PNG or (`image/gif`) a GIF.
 
 `output` holds the program's stdout and stderr in the order it wrote them.
 Each entry is one run of text from one stream. `status` is 0. It is 1 when

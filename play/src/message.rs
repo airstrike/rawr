@@ -86,60 +86,79 @@ fn code_block(content: &str) -> Option<String> {
 /// Discord's attachment limit for a bot, in bytes.
 pub const MAX_ATTACHMENT: usize = 8 * 1024 * 1024;
 
-/// What a finished `rawr-play` process gave.
+/// What the bot sends back: text, already fenced and within
+/// [`MAX_REPLY`], and what an iced program drew, attached.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Done {
-    /// The program's output.
-    Text(Output),
-    /// The PNG of an iced program's first settled frame.
-    Image(Vec<u8>),
+pub struct Reply {
+    /// The message's text; empty when a frame says it all.
+    pub text: String,
+    /// The image to attach: a PNG or a GIF.
+    pub frame: Option<Vec<u8>>,
 }
 
-/// What the bot sends back.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Reply {
-    /// This text, already fenced and within [`MAX_REPLY`].
-    Text(String),
-    /// This PNG, attached.
-    Image(Vec<u8>),
-}
+impl Reply {
+    /// A reply of text alone.
+    #[must_use]
+    pub fn text(text: String) -> Self {
+        Self { text, frame: None }
+    }
 
-/// The reply to a finished `rawr-play` process: the output fenced or the
-/// frame attached, its error text fenced on a clean failure, and a short
-/// notice when it was killed (out of memory under `--memory-mb`, or a
-/// crash).
-#[must_use]
-pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> Reply {
-    match outcome(success, stdout, stderr) {
-        Ok(Done::Text(output)) => Reply::Text(output_text(&output)),
-        Ok(Done::Image(png)) => Reply::Image(png),
-        Err(text) => Reply::Text(error_text(&text)),
+    /// The reply to a program's output: its text fenced, beside what it
+    /// drew. A program that drew, ended well and printed nothing has no
+    /// text.
+    #[must_use]
+    pub fn output(output: Output) -> Self {
+        let quiet = output.text().trim_end().is_empty() && output.status == 0;
+        let text = if output.frame.is_some() && quiet && output.note.is_none() {
+            String::new()
+        } else {
+            output_text(&output)
+        };
+        Self {
+            text,
+            frame: output.frame,
+        }
+    }
+
+    /// The attachment's file name: `play.png` or `play.gif`.
+    #[must_use]
+    pub fn frame_name(frame: &[u8]) -> String {
+        format!("play.{}", crate::plain::image_kind(frame).unwrap_or("png"))
     }
 }
 
-/// Whether `bytes` are a PNG.
+/// The reply to a finished `rawr-play` process: the output fenced beside
+/// any frame it drew, its error text fenced on a clean failure, and a
+/// short notice when it was killed (out of memory under `--memory-mb`, or
+/// a crash).
 #[must_use]
-pub fn is_png(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+pub fn reply(success: bool, stdout: &[u8], stderr: &str) -> Reply {
+    match outcome(success, stdout, stderr) {
+        Ok(output) => Reply::output(output),
+        Err(text) => Reply::text(error_text(&text)),
+    }
 }
 
 /// The result of a finished `rawr-play` process, or its error text
 /// unfenced (as [`reply`] reads it; the playground shows it as is). A
-/// result starting with `{` is a program's output, and a PNG is an iced
-/// program's frame.
-pub fn outcome(success: bool, stdout: &[u8], stderr: &str) -> Result<Done, String> {
+/// result starting with `{` is a program's output, with what an iced
+/// program drew.
+pub fn outcome(success: bool, stdout: &[u8], stderr: &str) -> Result<Output, String> {
     if success && stdout.first() == Some(&b'{') {
-        return Output::from_json(stdout).map(Done::Text);
-    }
-    if success && is_png(stdout) {
-        if stdout.len() > MAX_ATTACHMENT {
+        let output = Output::from_json(stdout)?;
+        if let Some(frame) = &output.frame
+            && frame.len() > MAX_ATTACHMENT
+        {
             return Err(format!(
-                "the window's frame is {} MiB as a PNG, over Discord's {} MiB",
-                stdout.len().div_ceil(1024 * 1024),
+                "the window's frame is {} MiB as a {}, over Discord's {} MiB",
+                frame.len().div_ceil(1024 * 1024),
+                crate::plain::image_kind(frame)
+                    .unwrap_or("png")
+                    .to_uppercase(),
                 MAX_ATTACHMENT / (1024 * 1024)
             ));
         }
-        return Ok(Done::Image(stdout.to_vec()));
+        return Ok(output);
     }
     let stderr = stderr.trim();
     if success || stderr.is_empty() || stderr.contains("memory allocation") {
@@ -311,22 +330,34 @@ mod tests {
 
     /// The text of a reply that is text.
     fn reply_text(reply: Reply) -> String {
-        match reply {
-            Reply::Text(text) => text,
-            Reply::Image(_) => panic!("an image reply"),
-        }
+        assert!(reply.frame.is_none(), "an image reply");
+        reply.text
     }
 
     #[test]
-    fn message_reply_for_a_frame_attaches_it() {
+    fn message_reply_for_a_frame_attaches_it_beside_the_text() {
         let png = b"\x89PNG\r\n\x1a\n rest".to_vec();
-        assert_eq!(reply(true, &png, ""), Reply::Image(png));
-        let big = [
-            b"\x89PNG\r\n\x1a\n".as_slice(),
-            &vec![0; super::MAX_ATTACHMENT],
-        ]
-        .concat();
-        assert!(reply_text(reply(true, &big, "")).contains("over Discord's 8 MiB"));
+        let mut output = crate::Output {
+            frame: Some(png.clone()),
+            ..crate::Output::default()
+        };
+        let json = output.to_json();
+        assert_eq!(
+            reply(true, json.as_bytes(), ""),
+            Reply {
+                text: String::new(),
+                frame: Some(png.clone())
+            }
+        );
+        output.write(crate::plain::Stream::Stdout, "counted 3\n");
+        let sent = reply(true, output.to_json().as_bytes(), "");
+        assert_eq!(sent.text, "```text\ncounted 3\n```");
+        assert_eq!(sent.frame.as_deref(), Some(png.as_slice()));
+        assert_eq!(Reply::frame_name(&png), "play.png");
+        assert_eq!(Reply::frame_name(b"GIF89a rest"), "play.gif");
+        output.frame = Some([b"GIF89a".as_slice(), &vec![0; super::MAX_ATTACHMENT]].concat());
+        assert!(reply_text(reply(true, output.to_json().as_bytes(), ""))
+            .contains("is 9 MiB as a GIF, over Discord's 8 MiB"));
     }
 
     #[test]

@@ -13,9 +13,10 @@
 //! starts a server for itself.
 //!
 //! The universe's iced has no window: its shell (`play/universe/shell`,
-//! patched in for iced_winit) runs an iced program in iced_test's emulator
-//! until its boot settles and writes that frame as a PNG to the file
-//! `PLAY_FRAME` names. A run that wrote one gives that image.
+//! patched in for iced_winit) runs an iced program headless until it
+//! settles, and writes its frame as a PNG, or a GIF when it animated, to
+//! the file `PLAY_FRAME` names, before the deadline `PLAY_DEADLINE` gives.
+//! A run that wrote one gives that image beside the text it printed.
 
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::plain::{Output, Stream};
-use crate::{Limits, Outcome, PlayError};
+use crate::{Limits, PlayError};
 
 /// The variable naming the universe's root: the directory `rawr-import`
 /// built the runner from, whose `Cargo.toml` every snippet is compiled
@@ -35,8 +36,11 @@ pub const RUNNER: &str = "PLAY_UNIVERSE_RUNNER";
 /// The variable naming the socket of a running [`Server`].
 pub const SOCKET: &str = "PLAY_UNIVERSE_SOCKET";
 /// The variable the universe's iced shell reads: the file it writes an
-/// iced program's settled frame to.
+/// iced program's frame to.
 const FRAME: &str = "PLAY_FRAME";
+/// The variable naming the run's deadline for the shell, in milliseconds
+/// since the Unix epoch, so it writes its frame before the run is stopped.
+const DEADLINE: &str = "PLAY_DEADLINE";
 
 /// The prebuilt runner, the root it was built from, and the socket of a
 /// server already running it, if one is.
@@ -72,8 +76,8 @@ impl Universe {
     }
 
     /// Run `source` on the named server, or on one started for this run:
-    /// the frame an iced program settled on, or the text a program wrote.
-    pub fn run(&self, source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+    /// the text a program wrote, and the frame an iced program drew.
+    pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
         match &self.socket {
             Some(socket) => run_on(socket, source, limits),
             None => self.serve()?.run(source, limits),
@@ -135,7 +139,7 @@ impl Server {
     }
 
     /// Run `source` on it, as [`Universe::run`] does.
-    pub fn run(&self, source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+    pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
         run_on(&self.socket, source, limits)
     }
 }
@@ -185,11 +189,19 @@ impl Served {
 }
 
 /// Run `source` on the server at `socket`.
-fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Outcome, PlayError> {
+fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayError> {
     let frame = Frame::new();
+    // The run's deadline counts from its fork, a little after this.
+    let deadline = std::time::SystemTime::now() + limits.time;
+    let deadline = deadline
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
     let request = rawr::play::Request {
         source: program(source),
-        env: vec![(FRAME.into(), frame.0.clone().into())],
+        env: vec![
+            (FRAME.into(), frame.0.clone().into()),
+            (DEADLINE.into(), deadline.to_string().into()),
+        ],
         time: limits.time,
         memory: limits.memory,
     };
@@ -209,10 +221,10 @@ fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Outcome, PlayE
     }
     output.status = ran.status;
     output.limit = ran.limit;
-    match std::fs::read(&frame.0) {
-        Ok(png) if output.status == 0 && !png.is_empty() => Ok(Outcome::Image(png)),
-        _ => Ok(Outcome::Text(output)),
-    }
+    output.frame = std::fs::read(&frame.0)
+        .ok()
+        .filter(|image| output.status == 0 && crate::plain::image_kind(image).is_some());
+    Ok(output)
 }
 
 /// The file one run's frame is written to, removed when dropped.
@@ -222,7 +234,7 @@ impl Frame {
     fn new() -> Self {
         static RUNS: AtomicU64 = AtomicU64::new(0);
         let run = RUNS.fetch_add(1, Ordering::Relaxed);
-        let name = format!("rawr-play-{}-{run}.png", std::process::id());
+        let name = format!("rawr-play-{}-{run}.frame", std::process::id());
         let path = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&path);
         Self(path)

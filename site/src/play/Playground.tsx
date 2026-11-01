@@ -195,11 +195,9 @@ function OutputView({ output }: { output: Output }) {
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
-    case "image":
-      return <img src={output.url} alt="The program's first frame" />;
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
-      return (
+      const term = (
         <pre className="term">
           {output.chunks.map((chunk, i) => (
             <span key={i} className={chunk.stream === "stderr" ? "err" : undefined}>{chunk.text}</span>
@@ -208,6 +206,14 @@ function OutputView({ output }: { output: Output }) {
           {output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
           {output.note && <span className="note">{"\n" + output.note + "\n"}</span>}
         </pre>
+      );
+      if (!output.image) return term;
+      // An iced program's frame, and its text when it printed or failed.
+      return (
+        <div className="drawn">
+          <img src={output.image} alt="What the program drew" />
+          {(!empty || output.status !== 0 || output.note) && term}
+        </div>
       );
     }
   }
