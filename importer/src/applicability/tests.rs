@@ -451,7 +451,28 @@ fn a_capture_keeps_signed_constants_and_lists_unread_implementations_as_unsuppor
         signed, 2,
         "both `Field<{{ id(..) }}>` implementations keep their bodies"
     );
-    assert_eq!(acquired.entries(|_| Some([9; 32])).len(), 3);
+    let entries = acquired.entries(|_| Some([9; 32]));
+    assert_eq!(entries.len(), 3);
+    // facts_e implements `Assoc`, which facts_d re-exports from facts_b.
+    // Its entry reads that trait's members from facts_b, and nothing else
+    // of facts_b, whose own entry holds the rest.
+    let entry = entries
+        .iter()
+        .find(|entry| entry.crate_name() == "facts_e")
+        .expect("facts_e has an entry");
+    let mut from_b = entry
+        .facts()
+        .definitions
+        .iter()
+        .filter(|definition| definition.id().unit().crate_name() == "facts_b")
+        .map(|definition| definition.display_path().collect::<Vec<_>>().join("::"))
+        .collect::<Vec<_>>();
+    from_b.sort_unstable();
+    assert_eq!(
+        from_b,
+        ["Assoc::Output", "Assoc::associated"],
+        "facts_e's entry holds the members of `Assoc` it implements"
+    );
 }
 
 #[test]

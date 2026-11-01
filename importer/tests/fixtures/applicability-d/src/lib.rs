@@ -16,15 +16,19 @@ const fn id(name: &str) -> i128 {
     -(name.len() as i128)
 }
 
+const fn letter(offset: u8) -> char {
+    (b'a' + offset) as char
+}
+
 impl Named for Field<{ id("value") }> {}
 
 impl Named for Field<{ id("carrier") }> {}
 
 impl Named for Carrier where Field<{ id("carrier") }>: Named {}
 
-impl Named for Glyph<{ 'b' }> {}
+impl Named for Glyph<{ letter(1) }> {}
 
-impl Glyph<{ 'a' }> {
+impl Glyph<{ letter(0) }> {
     pub fn glyph() -> char {
         'a'
     }

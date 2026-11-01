@@ -330,27 +330,22 @@ impl Acquired {
                     unit.crate_name()
                 )
             });
-            // A crate's facts read declarations of its whole dependency
-            // closure, which its key covers too: an implementation of a
-            // trait a dependency re-exports from its own dependency names
-            // that crate's declarations. Its own implementations are its
-            // alone.
-            let mut closure = BTreeSet::from([unit]);
-            let mut pending = vec![partition];
-            while let Some(current) = pending.pop() {
-                for dependency in &current.dependencies {
-                    if closure.insert(dependency)
-                        && let Ok(next) = self
-                            .facts
-                            .partitions
-                            .binary_search_by(|partition| partition.unit.cmp(dependency))
-                    {
-                        pending.push(&self.facts.partitions[next]);
-                    }
-                }
-            }
-            let readable =
-                |owner: &identity::Unit| !owned.contains(owner) || closure.contains(owner);
+            // A crate's facts read its dependencies' declarations, which
+            // its key covers too, and the trait members its implementations
+            // declare, which may come from a crate a dependency re-exports.
+            // Its own implementations are its alone.
+            let declarations = partition
+                .associated
+                .iter()
+                .filter_map(|link| link.declaration.as_ref())
+                .collect::<BTreeSet<_>>();
+            let readable = |definition: &identity::Definition| {
+                let owner = definition.unit();
+                owner == unit
+                    || !owned.contains(owner)
+                    || partition.dependencies.binary_search(owner).is_ok()
+                    || declarations.contains(definition)
+            };
             let ours = |owner: &identity::Unit| owner == unit || !owned.contains(owner);
             let crate_name = unit.crate_name();
             let mut exports = self
@@ -377,7 +372,7 @@ impl Acquired {
                         .facts
                         .definitions
                         .iter()
-                        .filter(|definition| readable(definition.id().unit()))
+                        .filter(|definition| readable(definition.id()))
                         .cloned()
                         .collect(),
                     implementations: self
