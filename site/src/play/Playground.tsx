@@ -195,6 +195,8 @@ function OutputView({ output }: { output: Output }) {
       );
     case "error":
       return <pre className="error">{output.text}</pre>;
+    case "image":
+      return <img src={output.url} alt="The program's first frame" />;
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
       return (

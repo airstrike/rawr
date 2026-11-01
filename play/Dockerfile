@@ -64,7 +64,9 @@ RUN . /cross.env && target="$(cat /target)" \
 
 # The universe runner (#434, #436): rawr-import builds generated bindings
 # for play/universe (iced at the pinned rev, iced_test and tokio) and the
-# runner that links them, once, here. The bot runs each snippet on that
+# runner that links them, once, here. iced's shell there is ?play's own
+# (play/universe/shell), which draws an iced program's first settled frame
+# to a PNG instead of opening a window. The bot runs each snippet on that
 # runner with no Cargo and no nightly. This stage runs on the target
 # platform, since the project's own Cargo builds the runner for the machine
 # it runs on. The universe keeps its build path, /universe, in the runtime

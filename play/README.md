@@ -1,6 +1,7 @@
 # rawr-play
 
-Run a Rawr snippet. A program runs and returns its output as text.
+Run a Rawr snippet. A program runs and returns its output as text, and an
+iced program the PNG of its first settled frame.
 One long-running bot links `rawr` as a library and starts one `rawr-play`
 process per snippet. It runs no rustc and no importer per request. It needs
 no GPU and no fonts, so it runs on any Linux VM or container.
@@ -31,6 +32,14 @@ runner that links them. The bot hands it a snippet on stdin with
 `Cargo.toml` against its own native surface, with no Cargo and no nightly,
 and runs `main` once. The process's wall time is the snippet's time budget.
 
+iced has no window in the universe. Its `[patch]` puts ?play's shell
+(`play/universe/shell`) in place of iced_winit, the crate iced's `run`
+hands a program to. The shell runs the program in iced_test's emulator,
+drawn with tiny-skia, until its boot and the tasks the boot started have
+finished. It writes that frame as a PNG to the file `PLAY_FRAME` names and
+returns, as iced's `run` returns when its window closes. A run that wrote a
+frame and exited with status 0 answers with the PNG.
+
 A universe runner names a script type by its index in the program's
 definition order (`__RawrScript0`, ..), never by its name, so a snippet
 whose native calls are the universe program's runs whatever its types are
@@ -52,7 +61,8 @@ cargo run -p rawr-play -- hello.rs -o target/play/hello.json
 echo '1 + 2' | cargo run -p rawr-play -- - -o -
 ```
 
-A program writes one JSON object:
+An iced program writes the PNG of its first settled frame. A program
+writes one JSON object:
 
 ```json
 {"kind":"text","status":0,"output":[{"stream":"stdout","text":"total: 27\n"}],"truncated":false,"limit":false}
@@ -75,7 +85,8 @@ The bot replies to a message whose first line starts with `?play`, or whose
 code fence info string contains `?play`. The snippet is the first code
 block: ` ```rust `, ` ```rawr ` or a bare fence. A program gets its
 output in a ` ```text ` block. Output longer than Discord allows is cut,
-with a note. A non-zero exit status follows the block. An error gets its text in a code
+with a note. A non-zero exit status follows the block. An iced program
+gets its frame attached as `play.png`. An error gets its text in a code
 block (at most 2000 characters). It ignores bots. When the author edits a
 message it already answered, it runs it again and edits its reply. Over the
 rate limit it reacts with ⏳ and does not run.

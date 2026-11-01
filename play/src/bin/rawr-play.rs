@@ -8,6 +8,7 @@
 //! A program writes its output as one JSON object
 //! (`rawr_play::Output::to_json`):
 //! `{"kind":"text","status":0,"output":[{"stream":"stdout","text":".."}],..}`.
+//! An iced program writes the PNG of its first settled frame instead.
 //! Errors (diagnostics, bad arguments) go to stderr with exit status 1.
 //!
 //! `rawr-play decrypt-server <token>...` prints the guild ID behind each
@@ -102,6 +103,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let bytes = output.to_json().into_bytes();
                 let summary = format!("text, exit status {}, {} bytes", output.status, bytes.len());
                 (bytes, summary)
+            }
+            rawr_play::Outcome::Image(png) => {
+                let summary = format!("png, {} bytes", png.len());
+                (png, summary)
             }
         };
     if output == "-" {

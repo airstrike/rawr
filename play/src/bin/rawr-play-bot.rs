@@ -1,5 +1,6 @@
 //! `rawr-play-bot`: run `?play` code blocks posted to Discord. A program
-//! replies with its output, and one that doesn't compile with its error.
+//! replies with its output, an iced program with its first settled frame
+//! attached as a PNG, and one that doesn't compile with its error.
 //!
 //! Each snippet runs in its own `rawr-play` process (beside this binary, or
 //! `PLAY_RENDERER`), so a run past `PLAY_TIMEOUT_MS` is killed and one
@@ -33,15 +34,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rawr_play::channels::{self, Channels, Parents, Store};
-use rawr_play::message::{self, Done, RateLimit};
+use rawr_play::message::{self, Done, RateLimit, Reply};
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
     Channel, ChannelId, ChannelType, Command, CommandInteraction, CommandOptionType, Context,
-    CreateCommand, CreateCommandOption, CreateMessage, EditInteractionResponse, EditMessage,
-    EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId, Interaction,
-    InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions, ReactionType, Ready,
-    ResolvedValue, UnavailableGuild,
+    CreateAttachment, CreateCommand, CreateCommandOption, CreateMessage, EditInteractionResponse,
+    EditMessage, EventHandler, GatewayIntents, GetMessages, Guild, GuildChannel, GuildId,
+    Interaction, InteractionContext, Message, MessageId, MessageUpdateEvent, Permissions,
+    ReactionType, Ready, ResolvedValue, UnavailableGuild,
 };
 use serenity::async_trait;
 use tokio::io::AsyncWriteExt;
@@ -385,9 +386,13 @@ impl EventHandler for Handler {
             self.send(&context, event.channel_id, event.id, reply).await;
             return;
         };
+        let edit = match reply {
+            Reply::Text(text) => EditMessage::new().content(text).remove_all_attachments(),
+            Reply::Image(png) => EditMessage::new().content("").new_attachment(frame(png)),
+        };
         match event
             .channel_id
-            .edit_message(&context.http, reply_id, EditMessage::new().content(reply))
+            .edit_message(&context.http, reply_id, edit)
             .await
         {
             Ok(_) => self.remember(event.id, reply_id),
@@ -695,10 +700,12 @@ impl Handler {
     }
 
     /// Post `reply` in `channel` as a reply to `request`, and remember it.
-    async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: String) {
-        let builder = CreateMessage::new()
-            .reference_message((channel, request))
-            .content(reply);
+    async fn send(&self, context: &Context, channel: ChannelId, request: MessageId, reply: Reply) {
+        let builder = CreateMessage::new().reference_message((channel, request));
+        let builder = match reply {
+            Reply::Text(text) => builder.content(text),
+            Reply::Image(png) => builder.add_file(frame(png)),
+        };
         match channel.send_message(&context.http, builder).await {
             Ok(sent) => self.remember(request, sent.id),
             Err(error) => eprintln!("rawr-play-bot: cannot reply: {error}"),
@@ -721,29 +728,35 @@ impl Handler {
         &self,
         request: Result<message::Request, String>,
         guild: Option<GuildId>,
-    ) -> String {
+    ) -> Reply {
         match request {
-            Err(error) => message::error_text(&error),
+            Err(error) => Reply::Text(message::error_text(&error)),
             Ok(request) => self.run(&request, guild).await,
         }
     }
 
-    async fn run(&self, request: &message::Request, guild: Option<GuildId>) -> String {
+    async fn run(&self, request: &message::Request, guild: Option<GuildId>) -> Reply {
         let Some(ran) = self.shared.renderer.run(request, false).await else {
-            return message::error_text("the run pool is busy");
+            return Reply::Text(message::error_text("the run pool is busy"));
         };
         self.shared.record(ran.outcome, ran.millis, guild);
         match ran.result {
-            Ok(Done::Text(output)) => message::output_text(&output),
-            Err(text) => message::error_text(&text),
+            Ok(Done::Text(output)) => Reply::Text(message::output_text(&output)),
+            Ok(Done::Image(png)) => Reply::Image(png),
+            Err(text) => Reply::Text(message::error_text(&text)),
         }
     }
 }
 
+/// An iced program's frame as a Discord attachment.
+fn frame(png: Vec<u8>) -> CreateAttachment {
+    CreateAttachment::bytes(png, "play.png")
+}
+
 /// Serve `POST /render` (the playground, through the Worker) and `GET
 /// /health` on `port`: a program's output as JSON
-/// (`rawr_play::Output::to_json`) on success; the error text as 422
-/// otherwise.
+/// (`rawr_play::Output::to_json`) or an iced program's frame as
+/// `image/png` on success; the error text as 422 otherwise.
 async fn serve(shared: Arc<Shared>, port: u16) {
     use http_body_util::{BodyExt, Full, Limited};
     use hyper::body::{Bytes, Incoming};
@@ -811,6 +824,7 @@ async fn serve(shared: Arc<Shared>, port: u16) {
                             };
                             match ran.result {
                                 Ok(Done::Text(output)) => json(output.to_json()),
+                                Ok(Done::Image(png)) => reply(StatusCode::OK, "image/png", png),
                                 Err(error) => text(StatusCode::UNPROCESSABLE_ENTITY, error),
                             }
                         }

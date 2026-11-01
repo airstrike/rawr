@@ -1,0 +1,33 @@
+# ?play's iced shell (#434): the universe's `[patch]` puts it in place of
+# iced_winit, the crate iced's `run` hands a program to. It has no window.
+# It runs the program in iced_test's emulator until its boot settles and
+# writes that frame as a PNG to the file `PLAY_FRAME` names. Its public
+# items are the ones iced takes from iced_winit, and its features are
+# iced_winit's, so iced builds against it unchanged.
+[package]
+name = "iced_winit"
+version = "0.15.0-dev"
+edition = "2024"
+publish = false
+
+[features]
+default = ["x11", "wayland"]
+debug = ["iced_debug/enable"]
+image = ["iced_runtime/image"]
+# The windowing features iced forwards: a shell with no window takes them
+# and has nothing to enable.
+sysinfo = []
+unconditional-rendering = []
+linux-theme-detection = []
+x11 = []
+wayland = []
+wayland-dlopen = []
+wayland-decorations = []
+
+[dependencies]
+iced_debug = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_program = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+png = "0.18"
+thiserror = "2"

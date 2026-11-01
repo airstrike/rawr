@@ -17,6 +17,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 # Its own workspace: it is not a member of Rawr's.
 [workspace]
 
+# iced's shell has no window here (#434): iced's `run` hands the program to
+# ?play's shell, which runs it in iced_test's emulator and writes its first
+# settled frame as a PNG (shell/src/lib.rs).
+[patch."https://github.com/iced-rs/iced"]
+iced_winit = { path = "shell" }
+
 # No debug info: on Linux it is linked into the runner, which then passes
 # the 256 MiB a runner's executable may have. The image has no debugger.
 [profile.dev]
