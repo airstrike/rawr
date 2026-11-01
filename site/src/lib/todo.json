@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr check` publishes the bindings it extracts to rawr's home once the `cargo check` beside it has finished, so a later project with the same crates checks with no second nightly build and no extraction process.","issues":[661]},
+        {"text":"A first check asks for everything its program misses in each round instead of one type per round: download_progress drops from five extraction processes and nightly builds to three.","issues":[662]},
+        {"text":"The project's compiler is asked for its version and sysroot once per run instead of about six times per demand round.","issues":[663]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.84",
@@ -1545,9 +1552,9 @@
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":659,"title":"std::fs inside an async block","state":"closed","category":"Divergences from rustc"},
     {"issue":660,"title":"A first check replays its own extracted tables for later demand rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.82"},
-    {"issue":661,"title":"rawr check publishes shared bindings, so a later project skips extraction","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":662,"title":"A demand round finds every missing owner type at once","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":663,"title":"The project's compiler is queried once per run","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":661,"title":"rawr check publishes shared bindings, so a later project skips extraction","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":662,"title":"A demand round finds every missing owner type at once","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":663,"title":"The project's compiler is queried once per run","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
     {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
     {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"closed","category":"No glue (D593)","release":"0.3.84"},
@@ -1555,7 +1562,9 @@
     {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"},
     {"issue":669,"title":"?play's universe runner names a widget's theme from its impl (E0121)","state":"closed","category":"No glue (D593)","release":"0.3.84"},
     {"issue":670,"title":"Impl headers keep impls whose self type is a reference","state":"open","category":"No glue (D593)"},
-    {"issue":671,"title":"`.into()` to a type with no From impl gives rustc's E0277","state":"open","category":"Divergences from rustc"}
+    {"issue":671,"title":"`.into()` to a type with no From impl gives rustc's E0277","state":"open","category":"Divergences from rustc"},
+    {"issue":672,"title":"A program with its own Rust modules reads shared bindings in a second project","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":673,"title":"symbolic_contract::real_extracted_contract_is_snapshot_bound_positioned_and_symbolic fails on main","state":"open","category":"Health"}
   ],
   "groups": [
     {

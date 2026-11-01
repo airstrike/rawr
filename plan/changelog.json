@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"`rawr check` publishes the bindings it extracts to rawr's home once the `cargo check` beside it has finished, so a later project with the same crates checks with no second nightly build and no extraction process.","issues":[661]},
+      {"text":"A first check asks for everything its program misses in each round instead of one type per round: download_progress drops from five extraction processes and nightly builds to three.","issues":[662]},
+      {"text":"The project's compiler is asked for its version and sysroot once per run instead of about six times per demand round.","issues":[663]}
+    ]
   },
   "releases": [
     {

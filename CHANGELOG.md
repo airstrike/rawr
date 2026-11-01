@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `rawr check` publishes the bindings it extracts to rawr's home once the `cargo check` beside it has finished, so a later project with the same crates checks with no second nightly build and no extraction process. (#661)
+- A first check asks for everything its program misses in each round instead of one type per round: download_progress drops from five extraction processes and nightly builds to three. (#662)
+- The project's compiler is asked for its version and sysroot once per run instead of about six times per demand round. (#663)
 
 ## 0.3.84 (2026-11-01)
 
