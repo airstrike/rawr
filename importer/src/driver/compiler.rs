@@ -84,7 +84,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // of the type's own implementations of its bound, not only through one.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 39;
+const PROTOCOL_SCHEMA: u32 = 40;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2258,10 +2258,38 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             return Ok(());
         }
         if obligation.polarity != ty::PredicatePolarity::Positive
-            || obligation.arguments.len() < 2
             || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
             || self.is_sysroot_crate(obligation.trait_id.krate)?
         {
+            return Ok(());
+        }
+        // A bound of no arguments ties no parameter, but its impl for a
+        // string reference says at which lifetime a `&str` fills the
+        // parameter, as `impl Heading for &'static str` makes a literal
+        // passed to `heading(impl Heading)` live for the program. Two such
+        // impls would overlap, so there is at most one.
+        if obligation.arguments.len() < 2 {
+            let mut implementations = Vec::new();
+            for impl_id in self.tcx.all_impls(obligation.trait_id) {
+                self.budget.edge(1)?;
+                let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
+                    continue;
+                };
+                let reference = reference.instantiate_identity().skip_norm_wip();
+                if matches!(
+                    reference.self_ty().kind(),
+                    ty::Ref(_, target, ty::Mutability::Not) if target.is_str()
+                ) && self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive
+                {
+                    implementations.push(impl_id);
+                }
+            }
+            implementations.sort_unstable_by_key(|impl_id| {
+                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+            });
+            for impl_id in implementations {
+                self.request_implementation(impl_id, obligation.relevance, None)?;
+            }
             return Ok(());
         }
         let mut implementations = Vec::new();

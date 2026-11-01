@@ -714,6 +714,34 @@ impl Parser<'_> {
         &self,
         item: &crate::host::item::Definition,
         output: &Ty,
+        arguments: &[Ty],
+    ) -> Summary {
+        let mut summary = self.host_keeps(item, output, arguments.len());
+        // A string borrowed where only a `&'static str` goes, as iced's
+        // `title(impl Title<State>)` takes one, is borrowed for `'static`:
+        // a literal is, and a borrow of a local is rustc's E0597.
+        if let Some(statics) = &mut summary.statics {
+            for (index, ty) in arguments.iter().enumerate() {
+                let lent = match self.inference.resolve(ty) {
+                    Ty::Str => true,
+                    Ty::Reference {
+                        mutable: false,
+                        target,
+                    } => matches!(*target, Ty::String | Ty::Str),
+                    _ => false,
+                };
+                if lent && item.lent_static(index) {
+                    statics.push((Input::Argument(index), Path::OWN));
+                }
+            }
+        }
+        summary
+    }
+
+    fn host_keeps(
+        &self,
+        item: &crate::host::item::Definition,
+        output: &Ty,
         arguments: usize,
     ) -> Summary {
         let mode = item.receiver().map(|mode| match mode {

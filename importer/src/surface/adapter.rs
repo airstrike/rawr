@@ -1155,11 +1155,14 @@ fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::P
         .try_reserve_exact(source.len())
         .map_err(|_| Error::Allocation)?;
     for parameter in source {
+        // One a `&str` fills only at `'static` keeps its mark, so the call
+        // gets the program's string for as long as the program runs.
         let cloned = signature::Parameter::new(
             parameter.index(),
             clone_str(parameter.name())?,
             parameter.kind(),
-        );
+        )
+        .with_static_str(parameter.static_str());
         // An argument's `impl Trait` keeps its mark, so no turbofish names
         // it (E0632).
         parameters.push(if parameter.is_argument_impl() {

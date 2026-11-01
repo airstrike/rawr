@@ -2407,7 +2407,8 @@ fn imported_item(
                 )?,
                 _ => unreachable!("an item's plan is of its selector's kind"),
             }
-            .imported(outcome.identity().selector().try_clone()?),
+            .imported(outcome.identity().selector().try_clone()?)
+            .lending_static(lent_static(plan.signature())),
         ),
         Representability::Method(plan) => Some(
             host::item::Definition::method(
@@ -2417,7 +2418,8 @@ fn imported_item(
             )?
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some()),
+            .opening(plan.signature().scope().is_some())
+            .lending_static(lent_static(plan.signature())),
         ),
         Representability::Constant(plan) => Some(
             match outcome.identity().selector() {
@@ -2461,7 +2463,8 @@ fn imported_item(
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some()),
+            .opening(plan.signature().scope().is_some())
+            .lending_static(lent_static(plan.signature())),
         ),
         // A generic function Rawr calls at the types it infers or a
         // turbofish names. The bridge calls it at those types, where rustc
@@ -2503,7 +2506,8 @@ fn imported_item(
             }
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
-            .opening(plan.signature().scope().is_some()),
+            .opening(plan.signature().scope().is_some())
+            .lending_static(lent_static(plan.signature())),
         ),
         Representability::Value(_)
         | Representability::Struct(_)
@@ -2513,6 +2517,28 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     Ok(item)
+}
+
+/// The inputs of `signature`, by bit, that only a `&'static str` fills:
+/// one written `&'static str`, as iced's `Font::with_name` takes, or a type
+/// parameter a `&str` fills only at `'static`, as iced's `title(impl
+/// Title<State>)` is, which iced implements for `&'static str`.
+fn lent_static(signature: &representability::signature::Signature) -> u64 {
+    use representability::convert::{Builtin, Type};
+    signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .take(64)
+        .filter(|(_, input)| match input {
+            Type::Builtin(Builtin::StaticStr) => true,
+            Type::Parameter(index) => signature
+                .parameters()
+                .iter()
+                .any(|parameter| parameter.index() == *index && parameter.static_str()),
+            _ => false,
+        })
+        .fold(0, |bits, (index, _)| bits | 1 << index)
 }
 
 /// The form of `outcome`'s item that a value fills where the item takes a
@@ -2575,7 +2601,8 @@ fn imported_values(
         definition
             .imported(selector.try_clone()?)
             .guarded(guard(values.signature()))
-            .opening(values.signature().scope().is_some()),
+            .opening(values.signature().scope().is_some())
+            .lending_static(lent_static(values.signature())),
     ))
 }
 

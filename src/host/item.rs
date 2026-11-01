@@ -110,6 +110,10 @@ pub struct Definition {
     /// The output borrows what the call takes: the call opens a scope
     /// frame the statement it is in runs inside (D558 tier 1).
     opens: bool,
+    /// The arguments, by bit, that only a `&'static str` fills, as iced's
+    /// `Font::with_name(&'static str)` and `title(impl Title<State>)`
+    /// take: a borrow of a local passed there is rustc's E0597.
+    lent_static: u64,
     /// A `macro_rules!` macro's source.
     rules: Option<crate::Shared<MacroRules>>,
     /// The proof-backed application this imported method stands for: its
@@ -147,6 +151,7 @@ pub struct Fingerprint {
     imported: Option<[u8; 32]>,
     guard: Option<Guard>,
     opens: bool,
+    lent_static: u64,
     rules: Option<[u8; 32]>,
     application: Option<Box<[u8; 32]>>,
 }
@@ -199,6 +204,7 @@ impl Definition {
                 .transpose()?,
             guard: self.guard,
             opens: self.opens,
+            lent_static: self.lent_static,
             application: self.application,
             rules: self.rules.clone(),
         })
@@ -221,6 +227,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
@@ -253,6 +260,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -275,6 +283,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -295,6 +304,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -315,6 +325,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -338,6 +349,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -358,6 +370,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -379,6 +392,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -400,6 +414,7 @@ impl Definition {
             imported: None,
             guard: None,
             opens: false,
+            lent_static: 0,
             application: None,
             rules: None,
         })
@@ -502,6 +517,18 @@ impl Definition {
         self.opens
     }
 
+    /// The arguments, by bit, that only a `&'static str` fills.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lending_static(mut self, arguments: u64) -> Self {
+        self.lent_static = arguments;
+        self
+    }
+
+    /// Whether only a `&'static str` fills the argument at `index`.
+    pub(crate) const fn lent_static(&self, index: usize) -> bool {
+        index < 64 && self.lent_static & (1 << index) != 0
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn imported_path_len(&self) -> Option<usize> {
         self.imported.as_ref()?;
@@ -528,6 +555,7 @@ impl Definition {
             imported,
             guard: self.guard,
             opens: self.opens,
+            lent_static: self.lent_static,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(MacroRules::digest),
         }
@@ -545,6 +573,7 @@ impl Definition {
             imported: self.imported.as_ref().map(ImportedSelector::fingerprint),
             guard: self.guard,
             opens: self.opens,
+            lent_static: self.lent_static,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(MacroRules::digest),
         })
@@ -634,6 +663,7 @@ impl Definition {
             imported: self.imported.clone(),
             guard: self.guard,
             opens: self.opens,
+            lent_static: self.lent_static,
             application: self.application,
             rules: self.rules.clone(),
         })

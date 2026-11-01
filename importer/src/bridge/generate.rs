@@ -8029,13 +8029,46 @@ fn lends_str(
 ) -> bool {
     match input {
         convert::Type::Builtin(convert::Builtin::Str) => true,
-        convert::Type::Parameter(_) => matches!(
+        convert::Type::Parameter(_) => {
+            fills_with_str(input, signature, substitutions)
+                && !static_str(input, signature, substitutions)
+        }
+        _ => false,
+    }
+}
+
+/// Whether the instance fills the type parameter `input` with `&str`.
+fn fills_with_str(
+    input: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> bool {
+    matches!(input, convert::Type::Parameter(_))
+        && matches!(
             substituted(input, signature, substitutions),
             Ok(convert::Type::Borrowed { mutable: false, ty })
                 if matches!(*ty, convert::Type::Builtin(convert::Builtin::Str))
-        ),
-        _ => false,
-    }
+        )
+}
+
+/// Whether `input` is a type parameter the instance fills with `&str` that
+/// only a `&'static str` fills, as a literal fills iced's `title(impl
+/// Title<State>)`, implemented for `&'static str`: the string lives for the
+/// program, as a `&'static str` input's does, and the call lends it to
+/// nothing shorter.
+fn static_str(
+    input: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> bool {
+    let convert::Type::Parameter(index) = input else {
+        return false;
+    };
+    signature
+        .parameters()
+        .iter()
+        .any(|parameter| parameter.index() == *index && parameter.static_str())
+        && fills_with_str(input, signature, substitutions)
 }
 
 /// Whether the call's output borrows what it takes, so it opens a scope
@@ -11241,6 +11274,16 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // A type parameter only a `&'static str` fills, as a literal fills
+    // iced's `title(impl Title<State>)`: a `&'static str` input.
+    if static_str(ty, signature, substitutions) {
+        return render_take(
+            local,
+            index,
+            &convert::Type::Builtin(convert::Builtin::StaticStr),
+            output,
+        );
+    }
     // A type parameter a `&str` fills, as a string literal fills iced's
     // `button(content: W)`: a `&str` input.
     if matches!(ty, convert::Type::Parameter(_)) && lends_str(ty, signature, substitutions) {
@@ -11692,11 +11735,19 @@ fn render_take(
     ty: &convert::Type,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    // A `&'static str` input pins the string taken from Rawr for as long as
-    // the runner lives, as a string literal's is.
-    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr))
-        || (PINNED_STRINGS.get() && matches!(ty, convert::Type::Builtin(convert::Builtin::Str)))
-    {
+    // A `&'static str` input is the program's own string, pinned for as
+    // long as the runner lives, as a string literal is: the site's pins
+    // hold one string per text, however often the call runs, as iced's
+    // `Font::with_name` does every frame (`Pins::constant`). Nothing is
+    // copied or leaked.
+    if matches!(ty, convert::Type::Builtin(convert::Builtin::StaticStr)) {
+        return writeln!(
+            output,
+            "    let argument_{local} = {{ static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); PINS.pin(take_primitive::<ImmutableString>(arguments, {index})?) }};"
+        )
+        .map_err(request::unwritable);
+    }
+    if PINNED_STRINGS.get() && matches!(ty, convert::Type::Builtin(convert::Builtin::Str)) {
         return writeln!(
             output,
             "    let argument_{local} = static_pins().pin(take_primitive::<ImmutableString>(arguments, {index})?);"
