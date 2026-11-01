@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.65 (2026-11-01)
+
 - rawr no longer keys any behaviour on iced's paths. Bounds, type paths, coercions and calls of iced items follow the same rules as any crate's. (#587)
 - A method that lends its receiver to a closure, as `frame.with_save(|frame| ..)` does, runs, nested too. (#586)
 

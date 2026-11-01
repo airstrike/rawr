@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.64",
+  "version": "0.3.65",
   "examples": {
     "running": 19,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr no longer keys any behaviour on iced's paths. Bounds, type paths, coercions and calls of iced items follow the same rules as any crate's.","issues":[587]},
-        {"text":"A method that lends its receiver to a closure, as `frame.with_save(|frame| ..)` does, runs, nested too.","issues":[586]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.65",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"rawr no longer keys any behaviour on iced's paths. Bounds, type paths, coercions and calls of iced items follow the same rules as any crate's.","issues":[587]},
+          {"text":"A method that lends its receiver to a closure, as `frame.with_save(|frame| ..)` does, runs, nested too.","issues":[586]}
+        ]
+      },
       {
         "version": "0.3.64",
         "date": "2026-11-01",
@@ -1321,8 +1323,8 @@
     {"issue":583,"title":"bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":584,"title":"A store missing its executions fails every check instead of rebuilding","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":585,"title":"Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","release":"0.3.60"},
-    {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"closed","category":"No glue (D593)"},
-    {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"closed","category":"No glue (D593)"},
+    {"issue":586,"title":"Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"closed","category":"No glue (D593)","release":"0.3.65"},
+    {"issue":587,"title":"Retire the resolver's remaining iced path-keyed special cases","state":"closed","category":"No glue (D593)","release":"0.3.65"},
     {"issue":588,"title":"Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"closed","category":"No glue (D593)"},
     {"issue":589,"title":"Crate trait impls for Option, Result and Vec","state":"closed","category":"No glue (D593)","release":"0.3.61"},
     {"issue":590,"title":"qr_code: iced::widget::qr_code(data) has no binding because its signature borrows","state":"closed","category":"No glue (D593)","release":"0.3.64"},
