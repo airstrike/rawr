@@ -119,7 +119,7 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
     let compiler_host = host
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let models = Models::new(program, runtime, compiler_host);
+    let models = Models::new(program, runtime, compiler_host, engine.access().clone());
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
@@ -346,7 +346,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host);
+        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
         let mut revealed = Vec::new();
         let mut waiting = Vec::new();
         let mut first_failure = None;
@@ -935,7 +935,7 @@ fn body_templates<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host);
+        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
         let mut promoted = Vec::new();
         for (key, candidate) in &candidates {
             let mut uses = Vec::new();
@@ -1051,7 +1051,7 @@ fn instance_round<A: crate::host::ImportAllocation>(
         let compiler_host = host
             .clone_for_import(allocation)
             .map_err(super::ImportedFailure::Surface)?;
-        let models = Models::new(program, runtime, compiler_host);
+        let models = Models::new(program, runtime, compiler_host, engine.access().clone());
         let mut found = Vec::<(crate::item::Key, Vec<Ty>)>::new();
         let mut impl_uses = Vec::new();
         for shell in program.items.iter() {
@@ -2448,7 +2448,12 @@ pub(super) fn lower(
     scope: Option<&Scope>,
     optimization_level: crate::OptimizationLevel,
 ) -> Result<Output, LoweringFailure> {
-    let models = Models::new(program, runtime_model.clone(), engine.host_registry.clone());
+    let models = Models::new(
+        program,
+        runtime_model.clone(),
+        engine.host_registry.clone(),
+        engine.access().clone(),
+    );
     lower_with_context(
         engine,
         program,
@@ -2474,7 +2479,12 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         .host_registry
         .clone_for_import(allocation)
         .map_err(super::ImportedFailure::Surface)?;
-    let mut models = Models::new(program, runtime_model.clone(), compiler_host);
+    let mut models = Models::new(
+        program,
+        runtime_model.clone(),
+        compiler_host,
+        engine.access().clone(),
+    );
     models._imported_owner = allocation.support_owner();
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
@@ -4132,6 +4142,9 @@ struct Tables {
     index_mut: BTreeMap<type_def::Id, (ImmutableString, String)>,
     runtime: crate::program::model::Model,
     host: crate::host::Registry,
+    /// What the program may reach while it compiles: the files
+    /// `include_str!` reads and the variables `env!` reads (D683.4).
+    access: crate::Access,
     imports: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     #[cfg(feature = "rust-import")]
@@ -4279,6 +4292,7 @@ impl Models {
         program: &Program,
         runtime: crate::program::model::Model,
         host: crate::host::Registry,
+        access: crate::Access,
     ) -> Self {
         let definitions: BTreeMap<_, _> = program
             .types
@@ -4737,6 +4751,7 @@ impl Models {
         let tables = Tables {
             runtime,
             host,
+            access,
             imports,
             #[cfg(feature = "rust-import")]
             lexical: program.lexical.clone(),
@@ -7420,6 +7435,7 @@ impl ExecutableOp {
                     args,
                     &models.runtime,
                     Some(&equal),
+                    context.engine().access(),
                 )
             }
             Self::Projection { proof } => {
@@ -43161,12 +43177,9 @@ impl<'a> Parser<'a> {
             return Ok(self.literal(text, Ty::Int(Int::U32), at));
         }
         // `option_env!("NAME")`: `Some` of its value at compile time, or
-        // `None`; ?play's snippets have no environment.
+        // `None`.
         if name == "option_env" {
-            let value = crate::resolve::files_denied()
-                .is_none()
-                .then(|| self.environment_variable(&text))
-                .flatten();
+            let value = self.environment_variable(&text);
             let ty = Ty::Option(Box::new(Ty::Str));
             let source = match value {
                 Some(value) => self.prelude_op(PreludeOp::Some, [format!("{value:?}").into()]),
@@ -43341,17 +43354,6 @@ impl<'a> Parser<'a> {
                         operation: at,
                     });
                 };
-                // ?play's server environment is not the snippet's.
-                if let Some(reason) = crate::resolve::files_denied() {
-                    return Err(Error::InvalidHostOperation {
-                        item: "env!".into(),
-                        reason: format!(
-                            "{reason}. It has no environment variable `{variable}` either"
-                        )
-                        .into(),
-                        operation: at,
-                    });
-                }
                 match self.environment_variable(variable) {
                     Some(value) => value,
                     None => {
@@ -43489,6 +43491,11 @@ impl<'a> Parser<'a> {
     /// directory of the project the file is in; any other is the
     /// environment's.
     fn environment_variable(&self, name: &str) -> Option<String> {
+        // A program granted no environment has none: every variable is
+        // undefined, as rustc reports one.
+        if !self.models.access.env() {
+            return None;
+        }
         {
             // What Cargo sets for the crate this file is in.
             if name.starts_with("CARGO_")
@@ -43530,9 +43537,6 @@ impl<'a> Parser<'a> {
         if let Some((_, bytes)) = crate::resolve::bundled(path) {
             return Ok(bytes.to_vec());
         }
-        if let Some(reason) = crate::resolve::files_denied() {
-            return Err(error(reason.into()));
-        }
         {
             let Some(file) = self.source_file() else {
                 return Err(error(format!(
@@ -43543,8 +43547,13 @@ impl<'a> Parser<'a> {
                 || std::path::PathBuf::from(path),
                 |directory| directory.join(path),
             );
-            std::fs::read(&target)
-                .map_err(|failure| error(format!("cannot read `{}`: {failure}", target.display())))
+            self.models
+                .access
+                .read(&target)
+                .and_then(|()| std::fs::read(&target))
+                .map_err(|failure| {
+                    error(format!("couldn't read `{}`: {failure}", target.display()))
+                })
         }
     }
 
@@ -53804,8 +53813,18 @@ pub fn run() -> i64 {
         let new_generation = crate::program::GenerationId::issue();
         let old_runtime = crate::program::model::Model::new(old_generation, &old);
         let new_runtime = crate::program::model::Model::new(new_generation, &new);
-        let old_models = Models::new(&old, old_runtime, host::Registry::new());
-        let new_models = Models::new(&new, new_runtime, host::Registry::new());
+        let old_models = Models::new(
+            &old,
+            old_runtime,
+            host::Registry::new(),
+            crate::Access::none(),
+        );
+        let new_models = Models::new(
+            &new,
+            new_runtime,
+            host::Registry::new(),
+            crate::Access::none(),
+        );
         let old_outer = old_models.get("Outer").unwrap();
         let new_outer = new_models.get("Outer").unwrap();
         let retained = default_value(old_outer, &old_models, &mut Vec::new()).unwrap();

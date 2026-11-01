@@ -106,6 +106,8 @@ mod defer;
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 mod digest;
 
+/// What a program's own code may reach outside the engine (D683.4).
+pub mod access;
 mod api;
 mod ast;
 /// Compile-time capabilities proven for Rawr values and callables.
@@ -220,6 +222,7 @@ type InclusiveRange = std::ops::RangeInclusive<INT>;
 
 use once_cell::sync::OnceCell;
 
+pub use access::Access;
 pub use api::build_type::{CustomType, TypeBuilder};
 pub use api::custom_syntax::Expression;
 pub use api::events::Output;

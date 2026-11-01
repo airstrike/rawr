@@ -1,10 +1,12 @@
 //! std's `path`, `ffi` and `io` types for every program (D528.4), with
-//! `env::args`, `io::stdin`, `fs::read_to_string` and `process::id`. Every
+//! `env::args`, `io::stdin`, the `fs` functions and `process::id`. Every
 //! [`Engine`](crate::Engine) made by `Engine::new` declares them, and every
 //! runtime registry binds them, so a plain program, an embedding and an
 //! iced app all name `std::path::PathBuf` (`resolve::std_reexport` sends
 //! `std::path`, `std::ffi`, `std::io`, `std::env`, `std::fs` and
-//! `std::process` here). Only `fs::read_to_string` reads a file.
+//! `std::process` here). The `fs` functions, `env::args` and `process::id`
+//! reach the operating system only as far as the calling program's
+//! [`Access`](crate::Access) grants (D683.4).
 
 mod env;
 mod fs;

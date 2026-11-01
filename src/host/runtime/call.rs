@@ -23,6 +23,7 @@ pub struct Call<'a> {
     invocation: Option<&'a invocation::Proof>,
     event_mapper: Option<&'a [u8; 16]>,
     equal: Option<&'a Equal<'a>>,
+    access: &'a crate::Access,
 }
 
 enum Operation<'a> {
@@ -83,6 +84,7 @@ impl<'a> Call<'a> {
             invocation,
             event_mapper: None,
             equal: None,
+            access: &crate::access::NONE,
         }
     }
 
@@ -97,6 +99,7 @@ impl<'a> Call<'a> {
             invocation: None,
             event_mapper: None,
             equal: None,
+            access: &crate::access::NONE,
         }
     }
 
@@ -123,6 +126,7 @@ impl<'a> Call<'a> {
             invocation: None,
             event_mapper: None,
             equal: None,
+            access: &crate::access::NONE,
         }
     }
 
@@ -131,6 +135,22 @@ impl<'a> Call<'a> {
     pub(super) fn with_equal(mut self, equal: Option<&'a Equal<'a>>) -> Self {
         self.equal = equal;
         self
+    }
+
+    /// This call, made by a program that may reach `access`.
+    pub(super) const fn with_access(mut self, access: &'a crate::Access) -> Self {
+        self.access = access;
+        self
+    }
+
+    /// What the calling program may reach outside the engine: the files,
+    /// environment, process and network its engine granted (D683.4). A
+    /// binding that reaches the operating system consults it, and refuses
+    /// as the operating system would. A call from Rust, with no program,
+    /// may reach nothing.
+    #[must_use]
+    pub const fn access(&self) -> &crate::Access {
+        self.access
     }
 
     /// Whether `lhs == rhs`, as Rust's `PartialEq` of the calling program

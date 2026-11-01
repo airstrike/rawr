@@ -19,7 +19,7 @@ const CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Static,
 ];
 
-const PATH: &str = "path::PathBuf";
+pub(super) const PATH: &str = "path::PathBuf";
 const OS: &str = "ffi::OsString";
 
 /// Register `Debug` for each type.

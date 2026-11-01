@@ -174,6 +174,31 @@ fn rawr_prints_a_final_value_and_main_output() {
     assert_eq!(stderr(&main), "to stderr\n");
 }
 
+/// `rawr run` and `rawr check` grant a program everything, as `cargo run`
+/// does (D683.4): `std::fs` reads and writes the working directory's
+/// files, and `include_str!` reads beside the file.
+#[test]
+fn rawr_run_reads_and_writes_files_as_cargo_run_does() {
+    let sandbox = Sandbox::new("files");
+    fs::write(sandbox.work().join("note.txt"), "from disk").unwrap();
+    fs::write(
+        sandbox.work().join("files.rs"),
+        "use std::fs;\n\nfn main() -> Result<(), std::io::Error> {\n    let text = fs::read_to_string(\"note.txt\")?;\n    fs::write(\"out.txt\", format!(\"{text}!\"))?;\n    println!(\"{} {}\", fs::read_to_string(\"out.txt\")?, include_str!(\"note.txt\"));\n    Ok(())\n}\n",
+    )
+    .unwrap();
+
+    let checked = sandbox.rawr(&["check", "files.rs"]);
+    let run = sandbox.rawr(&["run", "files.rs"]);
+
+    assert_success(&checked);
+    assert_success(&run);
+    assert_eq!(stdout(&run), "from disk! from disk\n");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("out.txt")).unwrap(),
+        "from disk!"
+    );
+}
+
 #[test]
 fn main_returning_err_fails_like_rust() {
     let sandbox = Sandbox::new("err");

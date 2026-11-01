@@ -9065,8 +9065,15 @@ fn language_moves_keep_what_rust_accepts() {
 
 /// What a program prints, line by line, as `?play` shows it.
 fn printed(source: &str) -> String {
+    printed_with(source, crate::Access::none())
+}
+
+/// What `source` prints on an engine granted `access`, as `rawr run`
+/// grants everything (D683.4).
+fn printed_with(source: &str, access: crate::Access) -> String {
     let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let mut engine = Engine::new();
+    engine.set_access(access);
     let sink = lines.clone();
     engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
     engine.run(source).unwrap_or_else(|error| panic!("{error}"));
@@ -10036,7 +10043,7 @@ main();
 #[test]
 fn language_std_env_fs_and_stdin_for_a_cli_tool() {
     assert_eq!(
-        printed(
+        printed_with(
             r#"
 use std::io::{BufRead, Read, Write};
 
@@ -10057,7 +10064,8 @@ fn main() {
     }
 }
 main();
-"#
+"#,
+            crate::Access::all(),
         ),
         "true 0\nErr(NotFound)\n[x] [a] [ c]\n"
     );
@@ -10068,14 +10076,15 @@ main();
 #[test]
 fn language_std_process_id() {
     assert_eq!(
-        printed(
+        printed_with(
             r#"
 fn main() {
     let id: u32 = std::process::id();
     println!("{}", id == std::process::id() && id > 0);
 }
 main();
-"#
+"#,
+            crate::Access::all(),
         ),
         "true\n"
     );

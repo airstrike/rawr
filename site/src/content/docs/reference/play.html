@@ -3,14 +3,18 @@
 <h1>Play</h1>
 <p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. Both run plain Rust programs with the same limits.</p>
 <h2 id="sandbox">The sandbox</h2>
-<p>A snippet has no files, no environment variables and no network. On the server each run is its own process, and that process starts with an empty environment.</p>
+<p>A snippet has no files, no environment variables, no process and no network. rawr&rsquo;s engine starts with none of them, and ?play grants none (see <a href="/docs/embedding#access">Access</a>). A call that needs one fails at the call, as the operating system would refuse it. On the server each run is also its own process, and that process starts with an empty environment.</p>
+<p>The grant covers the snippet&rsquo;s own code. A crate the bot&rsquo;s universe binds, such as iced or tokio, runs as native code and calls the operating system directly. The server&rsquo;s container bounds what that code can reach.</p>
 <table>
   <tr><th>The snippet uses</th><th>What happens</th></tr>
-  <tr><td><code>include_str!("notes.txt")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_str!` here: ?play has no files</code>.</td></tr>
-  <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `include_bytes!` here: ?play has no files</code>.</td></tr>
+  <tr><td><code>std::fs::read_to_string("notes.txt")</code></td><td>It returns <code>Err</code>, an <code>io::Error</code> of kind <code>PermissionDenied</code>. So do <code>fs::read</code>, <code>fs::write</code> and the other <code>std::fs</code> functions, and nothing is read or written.</td></tr>
+  <tr><td><code>include_str!("notes.txt")</code></td><td>The snippet doesn&rsquo;t compile. The error says the file can&rsquo;t be read.</td></tr>
+  <tr><td><code>include_bytes!("cat.png")</code></td><td>The snippet doesn&rsquo;t compile. The error says the file can&rsquo;t be read.</td></tr>
   <tr><td><code>mod util;</code></td><td>The snippet doesn&rsquo;t compile, because there is no <code>util.rs</code>. The error is <code>file modules require project/package compilation</code>. An inline module, <code>mod util { .. }</code>, works.</td></tr>
-  <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is <code>cannot use `env!` here: ?play has no files. It has no environment variable `HOME` either</code>.</td></tr>
-  <tr><td><code>std::fs</code>, <code>std::env</code>, <code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has none of these modules. The error for <code>std::fs</code> is <code>unknown type `std::fs`</code>.</td></tr>
+  <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is rustc&rsquo;s: <code>environment variable `HOME` not defined at compile time</code>. <code>option_env!("HOME")</code> is <code>None</code>.</td></tr>
+  <tr><td><code>std::env::args()</code></td><td>It yields no arguments.</td></tr>
+  <tr><td><code>std::process::id()</code></td><td>It panics with std&rsquo;s message for a platform without processes, <code>no pids on this platform</code>.</td></tr>
+  <tr><td><code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has neither module.</td></tr>
   <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
 </table>
 

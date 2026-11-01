@@ -284,6 +284,35 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
 </div>
 <p>Every call returns <code>Result&lt;_, Box&lt;EvalAltResult&gt;&gt;</code>. A runtime error, such as a panic or a limit the script reached, names the problem and its position in the script.</p>
 
+<h2 id="access">Access</h2>
+<p>An <code>Engine</code> starts with no access outside itself. A script can&rsquo;t read or write a file, read an environment variable or reach its process until the app grants it. This follows WASI, where a module sees only the directories its host opens for it. A grant goes on the engine before the script loads:</p>
+<div class="block"><pre><code>use rawr::{Access, Engine};
+
+let mut engine = Engine::new();
+engine.set_access(
+    Access::none()
+        .allow_read("scripts/data")
+        .allow_write("scripts/out"),
+);</code></pre></div>
+<ul>
+  <li><code>allow_read(dir)</code> and <code>allow_write(dir)</code> grant the files under a directory, as Deno&rsquo;s <code>--allow-read=dir</code> does. Write covers creating, writing, renaming and removing. A path is checked after its symbolic links and <code>..</code> are followed, so a path that leads outside the directory is refused. <code>allow_read_all</code> and <code>allow_write_all</code> grant every file.</li>
+  <li><code>allow_env</code> grants the environment: <code>env!</code>, <code>option_env!</code> and <code>std::env::args</code>.</li>
+  <li><code>allow_process</code> grants the process, such as <code>std::process::id</code>.</li>
+  <li><code>allow_net</code> grants the network. rawr&rsquo;s std has no network functions yet, so a script can&rsquo;t reach the network either way.</li>
+  <li><code>Access::all()</code> grants everything. <code>rawr run</code> and <code>rawr check</code> grant it, so a program behaves as it does under <code>cargo run</code>.</li>
+</ul>
+<p>A call without its grant fails at the call, as the operating system would refuse it:</p>
+<table>
+  <tr><th>The script calls</th><th>Without the grant</th></tr>
+  <tr><td><code>std::fs::read</code>, <code>read_to_string</code>, <code>write</code>, <code>exists</code>, <code>create_dir</code>, <code>create_dir_all</code>, <code>remove_file</code>, <code>remove_dir</code>, <code>remove_dir_all</code>, <code>rename</code> or <code>copy</code></td><td>It returns <code>Err</code>, an <code>io::Error</code> of kind <code>PermissionDenied</code>.</td></tr>
+  <tr><td><code>include_str!</code> or <code>include_bytes!</code></td><td>The script doesn&rsquo;t compile. The error says the file can&rsquo;t be read.</td></tr>
+  <tr><td><code>env!("NAME")</code></td><td>The script doesn&rsquo;t compile, with rustc&rsquo;s <code>environment variable `NAME` not defined at compile time</code>. <code>option_env!</code> is <code>None</code>.</td></tr>
+  <tr><td><code>std::env::args</code></td><td>It yields no arguments.</td></tr>
+  <tr><td><code>std::process::id</code></td><td>It panics with <code>no pids on this platform</code>, as std does on a platform without processes.</td></tr>
+</table>
+<p>With the grant, each call is Rust&rsquo;s own and returns the operating system&rsquo;s result and errors.</p>
+<p>Access covers the script&rsquo;s own code. A native crate the script imports runs as compiled Rust and calls the operating system directly, as it would under Cargo. To bound that code too, run the app in a container or another operating-system sandbox. The <code class="nw">?play</code> bot runs this way.</p>
+
 <h2 id="limits">Limits</h2>
 <p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before loading a script.</p>
 <ul>
@@ -292,6 +321,6 @@ fn main() -&gt; Result&lt;(), Box&lt;rawr::EvalAltResult&gt;&gt; {
   <li><code>set_max_string_size</code>, <code>set_max_array_size</code> and <code>set_max_map_size</code> bound the size of values.</li>
   <li><code>on_progress</code> runs a callback as the script runs. Returning <code>Some(value)</code> from it stops the script. A host can use it for a wall-clock deadline.</li>
 </ul>
-<p>The <a href="/docs/reference/play#limits">playground and the <code class="nw">?play</code> bot</a> use these limits for untrusted snippets.</p>
+<p>The <a href="/docs/reference/play#limits">playground and the <code class="nw">?play</code> bot</a> use these limits for untrusted snippets, with <a href="#access">no access</a>.</p>
 
 </article>

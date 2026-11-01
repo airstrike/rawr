@@ -172,6 +172,7 @@ impl Proof {
             args,
             model,
             None,
+            &crate::Access::NONE,
         )
     }
 
@@ -183,6 +184,7 @@ impl Proof {
         args: &mut [&mut Dynamic],
         model: &crate::program::model::Model,
         equal: Option<&host::runtime::Equal<'_>>,
+        access: &crate::Access,
     ) -> RawrResult {
         if args.len() != self.operands.len() {
             return Err(EvalAltResult::ErrorRuntime(
@@ -211,7 +213,7 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, invocation, equal);
+        let result = runtime.invoke(requirement, args, invocation, equal, access);
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =
@@ -578,6 +580,7 @@ mod tests {
                     &mut [&mut value],
                     &empty_model(),
                     None,
+                    &crate::Access::NONE,
                 )
                 .unwrap()
                 .as_int()

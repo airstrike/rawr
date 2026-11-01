@@ -117,9 +117,17 @@ pub fn uses(claims: &Claims) -> String {
         .join(" or ")
 }
 
+/// An engine for a program `rawr run` or `rawr check` reads: one that may
+/// reach everything, as a program Cargo builds may (D683.4).
+fn engine() -> Engine {
+    let mut engine = Engine::new();
+    engine.set_access(rawr::Access::all());
+    engine
+}
+
 /// Compile a base program; the source path checked.
 pub fn check(loaded: Loaded) -> Result<PathBuf, diagnostic::Report> {
-    Engine::new()
+    engine()
         .compile_package(loaded.graph)
         .map_err(|error| compile_report(&error, &loaded.target))?;
     Ok(loaded.target.source().path().to_path_buf())
@@ -138,7 +146,7 @@ pub enum Failed {
 pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
-    let mut engine = Engine::new();
+    let mut engine = engine();
     // The debugger is registered before the program compiles, so only a
     // program a debugger reads carries what reading needs (#526).
     let inspector = inspector(&mut engine);

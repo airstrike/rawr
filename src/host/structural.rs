@@ -200,7 +200,7 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, None, None);
+        let result = runtime.invoke(requirement, args, None, None, &crate::Access::NONE);
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =

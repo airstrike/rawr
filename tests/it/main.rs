@@ -5,6 +5,7 @@
 //! Tests that reach the importer's native Cargo lane hold
 //! `rawr_import::store::test_turn()`: the lane admits one owner per process.
 
+mod access;
 mod arrays;
 mod assignments;
 mod binary_ops;
