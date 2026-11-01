@@ -1051,7 +1051,6 @@ fn a_compiled_program_moves_to_the_owner_thread() {
     moves::<crate::reload::Candidate>();
     moves::<std::sync::Arc<crate::reload::Generation>>();
     moves::<crate::host::facade::Definition>();
-    moves::<crate::package::import::runner::account::Observation>();
 }
 
 /// What of `main` a running program compares: its text without comments

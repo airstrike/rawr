@@ -412,18 +412,6 @@ impl Carrier {
         self.coverage.digest()
     }
 
-    /// Return owned carrier metadata items and bytes for caller accounting.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn retained_usage(&self) -> (usize, usize) {
-        let (items, bytes) = self.coverage.retained_usage();
-        (
-            items + self.entries.len(),
-            std::mem::size_of::<Self>() + self.entries.len() * std::mem::size_of::<Entry>() + bytes
-                - std::mem::size_of::<coverage::Inventory>(),
-        )
-    }
-
     /// Prove that the manifest contains one exact generated adapter row.
     #[doc(hidden)]
     #[must_use]

@@ -6,12 +6,13 @@ use crate::{Engine, Shared};
 
 fn retained() -> Shared<Engine> {
     let engine = compiler();
-    let native = account::Native::transform(account::tests::carrier()).unwrap();
+    let native = account::Native::transform(account::tests::carrier());
     engine.retain_imported_native(native).unwrap()
 }
 
-fn usage(engine: &Engine) -> (usize, usize) {
-    engine.imported_native.as_ref().unwrap().usage()
+/// How many scopes keep the engine's decoded native metadata alive.
+fn owners(engine: &Engine) -> usize {
+    engine.imported_native.as_ref().unwrap().owners()
 }
 
 /// Whether `ast`'s support module holds the program's own support
@@ -34,24 +35,24 @@ fn resident_compilation_requires_the_engines_retained_native_context() {
 #[test]
 fn native_miss_and_source_error_release_attempts_without_retry_classification() {
     let engine = retained();
-    let before = usage(&engine);
+    let before = owners(&engine);
     assert!(matches!(
         engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo"))),
         Ok(Outcome::NeedsPreparation)
     ));
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
     let invalid = source("Foo").replace("native::echo(7)", "true");
     assert!(matches!(
         engine.compile_package_snapshot_resident_plain(&snapshot(&invalid)),
         Err(Error::Source(_))
     ));
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
 }
 
 #[test]
 fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
     let engine = retained();
-    let before = usage(&engine);
+    let before = owners(&engine);
     for source in [
         "use native::new_function; pub fn sample() -> i64 { new_function() }",
         "pub fn sample() -> i64 { native::new_function() }",
@@ -61,7 +62,7 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
             engine.compile_package_snapshot_resident_plain(&native_snapshot(source)),
             Ok(Outcome::NeedsPreparation)
         ));
-        assert_eq!(usage(&engine), before);
+        assert_eq!(owners(&engine), before);
     }
     assert!(matches!(
         engine.compile_package_snapshot_resident_plain(&native_snapshot(
@@ -69,13 +70,13 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
         )),
         Err(Error::Source(_))
     ));
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
 }
 
 #[test]
 fn resident_receipt_follows_executable_authority_after_generation_metadata_retires() {
     let engine = retained();
-    let before = usage(&engine);
+    let before = owners(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let Outcome::Compiled(compiled) = engine
@@ -84,8 +85,8 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
     else {
         panic!("no native requirement needs preparation");
     };
-    let retained = usage(&engine);
-    assert!(retained.0 > before.0 && retained.1 > before.1);
+    let retained = owners(&engine);
+    assert!(retained > before);
     let (candidate, carrier, coverage) = compiled.into_parts();
     assert_eq!(
         carrier,
@@ -102,37 +103,37 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
     assert_eq!(bootstrap.generation().id(), id);
     let retained_bootstrap = bootstrap.clone();
     drop(bootstrap);
-    assert_eq!(usage(&engine), retained);
+    assert_eq!(owners(&engine), retained);
     drop(retained_bootstrap);
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
 }
 
 #[test]
 fn initial_and_ordinary_generations_share_the_resident_account() {
     let engine = retained();
-    let baseline = usage(&engine);
+    let baseline = owners(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let (initial, ast) = engine
         .compile_package_snapshot_generation_with_top_level(&pure)
         .unwrap();
-    let live = usage(&engine);
-    assert!(live.0 > baseline.0 && live.1 > baseline.1);
+    let live = owners(&engine);
+    assert!(live > baseline);
     let ordinary = engine
         .compile_package_snapshot_generation_with_top_level(&pure)
         .unwrap();
-    let overlapping = usage(&engine);
-    assert!(overlapping.0 > live.0 && overlapping.1 > live.1);
+    let overlapping = owners(&engine);
+    assert!(overlapping > live);
     drop(ordinary);
-    assert_eq!(usage(&engine), live);
+    assert_eq!(owners(&engine), live);
     drop(ast);
     drop(initial);
-    assert_eq!(usage(&engine), baseline);
+    assert_eq!(owners(&engine), baseline);
 }
 
 mod top_level {
     use super::{
-        account, compiler, has_own_support, preview_runtime, retained, snapshot, usage, Outcome,
+        account, compiler, has_own_support, owners, preview_runtime, retained, snapshot, Outcome,
     };
     use crate::{Dynamic, Engine, Shared, AST};
 
@@ -151,7 +152,7 @@ mod top_level {
     #[test]
     fn neutral_snapshot_retains_support_until_its_last_ast_copy_retires() {
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let ast = engine
             .compile_package_snapshot(&snapshot(
                 "struct State { value: i64 }\n\
@@ -164,24 +165,23 @@ mod top_level {
         assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let copy = ast.clone_functions_only();
-        let live = usage(&engine);
-        assert!(live.0 > baseline.0 && live.1 > baseline.1);
+        let live = owners(&engine);
+        assert!(live > baseline);
         let mut program = Program {
             engine: engine.clone(),
             ast: Some(ast),
         };
         evaluate_program(&mut program).unwrap();
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
+        assert_eq!(owners(&engine), live);
         drop(copy);
         assert!(support.upgrade().is_none());
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 
     #[test]
-    fn neutral_reconstruction_keeps_prior_support_in_the_original_account() {
+    fn neutral_reconstruction_keeps_prior_support_alive() {
         let engine = retained();
-        let original = engine.imported_native_snapshot().unwrap();
         let source = snapshot(
             "struct State { value: i64 }\n\
              #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -193,7 +193,7 @@ mod top_level {
         let ast = engine.compile_package_snapshot(&source).unwrap();
         let first_support = Shared::downgrade(ast.shared_support());
         assert!(has_own_support(&ast));
-        // A live AST copy keeps the first generation's support charged across
+        // A live AST copy keeps the first generation's support alive across
         // the reconstruction and the retirement of its engine.
         let first_copy = ast.clone_functions_only();
         let mut program = Program {
@@ -201,19 +201,15 @@ mod top_level {
             ast: Some(ast),
         };
         evaluate_program(&mut program).unwrap();
-        let first_live = engine.imported_native_snapshot().unwrap();
-        assert!(first_live.current[1] > original.current[1]);
-        let (native, observation) =
-            engine.reconstruct_imported_native(&account::tests::carrier_bytes(&[]));
-        let native = native.unwrap();
+        let native = engine
+            .reconstruct_imported_native(&account::tests::carrier_bytes(&[]))
+            .unwrap();
         let replacement = compiler();
         let replacement = replacement.retain_imported_native(native).unwrap();
         drop(program);
         drop(engine);
         assert!(first_support.upgrade().is_some());
-        let reconstructed = replacement.imported_native_snapshot().unwrap();
-        assert_eq!(reconstructed.limits, original.limits);
-        assert!(reconstructed.current[1] > first_live.current[1]);
+        let reconstructed = owners(&replacement);
 
         let ast = replacement.compile_package_snapshot(&source).unwrap();
         let second_support = Shared::downgrade(ast.shared_support());
@@ -224,11 +220,9 @@ mod top_level {
         };
         evaluate_program(&mut program).unwrap();
         drop(program);
-        let retained = replacement.imported_native_snapshot().unwrap();
-        assert!(retained.current[1] > reconstructed.current[1]);
+        assert!(owners(&replacement) > reconstructed);
         assert!(first_support.upgrade().is_some());
         assert!(second_support.upgrade().is_some());
-        assert_eq!(observation.snapshot(), Some(retained));
         drop(first_copy);
         drop(second_copy);
         assert!(first_support.upgrade().is_none());
@@ -238,7 +232,7 @@ mod top_level {
     #[test]
     fn generated_top_level_retires_initial_support_with_its_last_executable() {
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
@@ -249,8 +243,8 @@ mod top_level {
             .unwrap();
         assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
-        let initial_usage = usage(&engine);
-        assert!(initial_usage.0 > baseline.0 && initial_usage.1 > baseline.1);
+        let initial_owners = owners(&engine);
+        assert!(initial_owners > baseline);
         let initial = std::rc::Rc::new(initial.bind(&engine, preview_runtime()).unwrap());
         let last_good = initial.clone();
         let mut program = Program {
@@ -260,7 +254,7 @@ mod top_level {
         evaluate_program(&mut program).unwrap();
         assert!(program.ast.is_none());
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), initial_usage);
+        assert_eq!(owners(&engine), initial_owners);
 
         let Outcome::Compiled(resident) = engine
             .compile_package_snapshot_resident_plain(&snapshot(&source.replace("7", "8")))
@@ -268,29 +262,23 @@ mod top_level {
         else {
             panic!("the resident edit has no new native requirement");
         };
-        let overlapping = usage(&engine);
-        assert!(overlapping.0 > initial_usage.0 && overlapping.1 > initial_usage.1);
+        let overlapping = owners(&engine);
+        assert!(overlapping > initial_owners);
         drop(initial);
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), overlapping);
+        assert_eq!(owners(&engine), overlapping);
         drop(last_good);
         assert!(support.upgrade().is_none());
-        assert_eq!(
-            usage(&engine),
-            (
-                overlapping.0 - (initial_usage.0 - baseline.0),
-                overlapping.1 - (initial_usage.1 - baseline.1),
-            )
-        );
+        assert_eq!(owners(&engine), overlapping - (initial_owners - baseline));
         drop(resident);
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
         // The original runner Program remains live after resident replacement.
         assert!(program.ast.is_none());
         assert!(evaluate_program(&mut program)
             .unwrap_err()
             .to_string()
             .contains("already evaluated"));
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 
     #[test]
@@ -330,7 +318,7 @@ mod top_level {
     #[test]
     fn escaped_callback_keeps_support_charged_and_observes_later_constants() {
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
@@ -347,24 +335,24 @@ mod top_level {
         assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
         let callback = engine.eval_ast::<crate::FnPtr>(&ast).unwrap();
-        let live = usage(&engine);
+        let live = owners(&engine);
         drop(ast);
         drop(candidate);
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
+        assert_eq!(owners(&engine), live);
         assert_eq!(
             callback.call::<i64>(&engine, &AST::empty(), ()).unwrap(),
             42
         );
         drop(callback);
         assert!(support.upgrade().is_none());
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 
     #[test]
     fn copied_support_functions_keep_one_receipt_after_ast_and_module_merges() {
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
@@ -375,7 +363,7 @@ mod top_level {
             .unwrap();
         assert!(has_own_support(&ast));
         let original = Shared::downgrade(ast.shared_support());
-        let live = usage(&engine);
+        let live = owners(&engine);
         let functions = ast.clone_functions_only();
         let merged = AST::empty().merge(&functions);
         let mut module = crate::Module::new();
@@ -387,7 +375,7 @@ mod top_level {
             .map(|(function, _)| function.clone())
             .collect();
         assert!(!copied.is_empty());
-        assert_eq!(usage(&engine), live);
+        assert_eq!(owners(&engine), live);
         drop(candidate);
         drop(ast);
         drop(functions);
@@ -398,12 +386,12 @@ mod top_level {
             "the outer support module retired"
         );
         assert_eq!(
-            usage(&engine),
+            owners(&engine),
             live,
             "copied closures still own their models"
         );
         drop(copied);
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 
     #[test]
@@ -411,7 +399,7 @@ mod top_level {
         use crate::ModuleResolver as _;
 
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
                 let state = State { value: 7 };\n\
@@ -429,34 +417,34 @@ mod top_level {
         let resolved = resolver
             .resolve(&engine, None, "saved", crate::Position::NONE)
             .unwrap();
-        let live = usage(&engine);
+        let live = owners(&engine);
         drop(candidate);
         drop(ast);
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
+        assert_eq!(owners(&engine), live);
         resolver.clear();
         assert!(support.upgrade().is_some());
-        assert_eq!(usage(&engine), live);
+        assert_eq!(owners(&engine), live);
         drop(resolved);
         assert!(support.upgrade().is_none());
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 
     #[test]
     fn empty_support_receipt_retires_with_the_executable() {
         let engine = retained();
-        let baseline = usage(&engine);
+        let baseline = owners(&engine);
         let (candidate, ast) = engine
             .compile_package_snapshot_generation_with_top_level(&snapshot(
                 "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
             ))
             .unwrap();
         assert!(ast.shared_support().is_empty());
-        assert!(usage(&engine).1 > baseline.1);
+        assert!(owners(&engine) > baseline);
         drop(candidate);
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
         drop(ast);
-        assert_eq!(usage(&engine), baseline);
+        assert_eq!(owners(&engine), baseline);
     }
 }
 
@@ -551,12 +539,12 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         &generated.generated_manifest().carrier().unwrap(),
     )
     .unwrap();
-    let mut native = account::Native::transform(carrier).unwrap();
+    let mut native = account::Native::transform(carrier);
     let plan = facade::Plan::encode(&contract).unwrap();
     let mut engine = compiler();
     let _definitions = runner::install_retained(&mut engine, &plan, &mut native).unwrap();
     let engine = engine.retain_imported_native(native).unwrap();
-    let before = usage(&engine);
+    let before = owners(&engine);
     let mut candidates = Vec::new();
     for text in [original.to_owned(), original.replace("(7)", "(8)")] {
         let Outcome::Compiled(compiled) = engine
@@ -580,22 +568,22 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         candidates.push(candidate);
     }
     assert_ne!(candidates[0].id(), candidates[1].id());
-    let retained = usage(&engine);
-    assert!(retained.0 > before.0 && retained.1 > before.1);
+    let retained = owners(&engine);
+    assert!(retained > before);
     let changed = original.replace("(7)", "(true)");
     assert!(matches!(
         engine.compile_package_snapshot_resident_plain(&snapshot(&changed)),
         Ok(Outcome::NeedsPreparation)
     ));
-    assert_eq!(usage(&engine), retained);
+    assert_eq!(owners(&engine), retained);
     drop(candidates);
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
 }
 
 #[test]
 fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
     let engine = retained();
-    let before = usage(&engine);
+    let before = owners(&engine);
     let Outcome::Compiled(compiled) = engine
         .compile_package_snapshot_resident_plain(&snapshot("fn main() { let value = 1 + 2; }"))
         .unwrap()
@@ -605,7 +593,7 @@ fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
     let (compiled, top_level) = compiled.with_top_level();
     let (candidate, ..) = compiled.into_parts();
     drop((candidate, top_level));
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
     // The same boundaries as a profile's: a native miss needs preparation,
     // and a source error is no miss.
     assert!(matches!(
@@ -620,5 +608,5 @@ fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
         )),
         Err(Error::Source(_))
     ));
-    assert_eq!(usage(&engine), before);
+    assert_eq!(owners(&engine), before);
 }

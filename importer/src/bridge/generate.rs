@@ -2436,108 +2436,9 @@ struct Program {
     application_contract: __rawr_profile::ApplicationContract,
     /// Shared by every generation compiled against the same engine.
     _bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
-    /// The account this program's own native reconstruction observed; a
-    /// resident generation compiled against its predecessor's engine
-    /// reports that engine's account instead.
-    observation: Option<__rawr_internal::package::import::runner::account::Observation>,
     /// Whether `main` is Rawr code, which runs on the thread that owns the
     /// program while the protocol goes on beside it.
     marked_main: bool,
-}
-
-fn program_account(program: &Option<Program>) -> Option<__rawr_internal::package::import::runner::account::Snapshot> {
-    program.as_ref().and_then(|program| match &program.observation {
-        Some(observation) => observation.snapshot(),
-        None => program.engine.imported_native_snapshot(),
-    })
-}
-
-fn observed_account(observation: &Option<__rawr_internal::package::import::runner::account::Observation>) -> Option<__rawr_internal::package::import::runner::account::Snapshot> {
-    observation.as_ref().and_then(|observation| observation.snapshot())
-}
-
-fn retire_program(program: Option<Program>) -> Option<__rawr_internal::package::import::runner::account::Observation> {
-    program.and_then(|program| program.observation)
-}
-
-fn account_payload(
-    tag: u8,
-    request: &[u8],
-    accounts: [Option<__rawr_internal::package::import::runner::account::Snapshot>; 2],
-) -> Option<[u8; __rawr_internal::package::import::runner::account::wire::BYTES]> {
-    use __rawr_internal::package::import::runner::account::{self, wire};
-    fn pair(values: [usize; 2]) -> Option<[u64; 2]> {
-        Some([u64::try_from(values[0]).ok()?, u64::try_from(values[1]).ok()?])
-    }
-    fn snapshot(value: account::Snapshot) -> Option<wire::Snapshot> {
-        let first_refusal = match value.first_refusal {
-            Some(value) => Some(wire::Refusal {
-                axis: match value.axis {
-                    account::Axis::Items => wire::Axis::Items,
-                    account::Axis::Bytes => wire::Axis::Bytes,
-                },
-                cause: match value.cause {
-                    account::Cause::MissingAmount => wire::Cause::MissingAmount,
-                    account::Cause::OwnedOverflow => wire::Cause::OwnedOverflow,
-                    account::Cause::AggregateOverflow => wire::Cause::AggregateOverflow,
-                },
-                current: pair(value.current)?,
-                requested: match value.requested {
-                    Some(value) => Some(u64::try_from(value).ok()?),
-                    None => None,
-                },
-                limit: u64::try_from(value.limit).ok()?,
-            }),
-            None => None,
-        };
-        Some(wire::Snapshot {
-            account: value.account,
-            current: pair(value.current)?,
-            peak: pair(value.peak)?,
-            limits: pair(value.limits)?,
-            first_refusal,
-        })
-    }
-    let tag = wire::Tag::try_from(tag).ok()?;
-    let request = wire::Request::from_parts(tag, request).ok()?;
-    let mut converted = [None; 2];
-    let mut count = 0;
-    for value in accounts.into_iter().flatten() {
-        let value = snapshot(value)?;
-        if let Some(index) = converted.iter().position(|prior: &Option<wire::Snapshot>| {
-            prior.as_ref().is_some_and(|prior| prior.account.is_some() && prior.account == value.account)
-        }) {
-            converted[index] = Some(value);
-        } else {
-            converted[count] = Some(value);
-            count += 1;
-        }
-    }
-    wire::Observation { request, accounts: converted }.encode().ok()
-}
-
-fn report_accounts(
-    stream: &mut std::os::unix::net::UnixStream,
-    tag: u8,
-    request: &[u8],
-    accounts: [Option<__rawr_internal::package::import::runner::account::Snapshot>; 2],
-) {
-    // Reporting grants no control authority and cannot replace an original
-    // error. Missing evidence is a parent qualification fault, never a zero.
-    if let Some(payload) = account_payload(tag, request, accounts) {
-        let _ = send_frame(stream, 45, &payload);
-    }
-}
-
-fn account_result<T>(
-    result: std::io::Result<T>,
-    stream: &mut std::os::unix::net::UnixStream,
-    tag: u8,
-    request: &[u8],
-    accounts: [Option<__rawr_internal::package::import::runner::account::Snapshot>; 2],
-) -> std::io::Result<T> {
-    if result.is_err() { report_accounts(stream, tag, request, accounts); }
-    result
 }
 
 fn snapshot_bytes<'a>(input: &mut &'a [u8], limit: usize) -> std::io::Result<&'a [u8]> {
@@ -2658,7 +2559,6 @@ fn compile_program(
     input: &[u8],
     compilation: Compilation<'_>,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
-    observation: &mut Option<__rawr_internal::package::import::runner::account::Observation>,
 ) -> std::io::Result<Option<Program>> {
     let (expected, input) = input
         .split_first_chunk::<32>()
@@ -2666,14 +2566,13 @@ fn compile_program(
     let snapshot = decode_snapshot(input)?;
     progress(1)?;
     if !COMPILE_SNAPSHOT { return Ok(None); }
-    let (native, observed) = match compilation {
-        Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode_observed(GENERATED_MANIFEST),
+    let native = match compilation {
+        Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST),
         Compilation::Replacement(current) => current.as_ref()
             .ok_or_else(|| std::io::Error::other("missing original compiler ownership"))?
             .engine.reconstruct_imported_native(GENERATED_MANIFEST),
         Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
     };
-    *observation = Some(observed);
     let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
     let (engine, bindings, application_contract) = prepare_engine(native, &mut *progress)?;
     let (candidate, ast) = __rawr_profile::compile_initial(
@@ -2684,10 +2583,9 @@ fn compile_program(
     )?;
     progress(4)?;
     progress(5)?;
-    let observation = observation.take().ok_or_else(|| std::io::Error::other("native observation unavailable"))?;
     let marked_main = snapshot.marked_root();
     Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract,
-        _bindings: bindings.into(), observation: Some(observation), marked_main }))
+        _bindings: bindings.into(), marked_main }))
 }
 
 fn compile_live(
@@ -2716,48 +2614,6 @@ mod native_arena_tests {
     use super::*;
 
     struct NonClone { value: i64 }
-
-    #[test]
-    fn native_account_payload_keeps_reached_failure_and_distinct_owners() {
-        use __rawr_internal::package::import::runner::account::{self, wire};
-        let failed = account::Snapshot {
-            account: std::num::NonZeroU64::new(1),
-            current: [2, 20],
-            peak: [3, 30],
-            limits: [4, 40],
-            first_refusal: Some(account::Refusal {
-                axis: account::Axis::Items,
-                cause: account::Cause::OwnedOverflow,
-                current: [3, 30],
-                requested: Some(5),
-                limit: 4,
-            }),
-        };
-        let request = [7; 48];
-        let bytes = account_payload(3, &request, [None, Some(failed)]).expect("reached constructor failure");
-        let observed = wire::Observation::decode(&bytes).expect("fixed account observation");
-        let reached = observed.accounts[0].expect("failed new account is packed first");
-        assert!(observed.accounts[1].is_none());
-        assert_eq!(reached.current, [2, 20]);
-        assert_eq!(reached.peak, [3, 30]);
-        assert_eq!(reached.first_refusal.expect("original refusal").requested, Some(5));
-        let mut retired = failed;
-        retired.current = [1, 10];
-        let bytes = account_payload(25, &request, [Some(failed), Some(retired)]).expect("one original account");
-        let observed = wire::Observation::decode(&bytes).expect("coalesced observation");
-        assert_eq!(observed.accounts[0].expect("latest original facts").current, [1, 10]);
-        assert!(observed.accounts[1].is_none());
-        retired.account = std::num::NonZeroU64::new(2);
-        let bytes = account_payload(25, &request, [Some(failed), Some(retired)]).expect("distinct old and pending owners");
-        let observed = wire::Observation::decode(&bytes).expect("two original accounts");
-        assert!(observed.accounts.into_iter().all(|account| account.is_some()));
-        let bytes = account_payload(3, &request, [None, None]).expect("unreached account");
-        assert_eq!(wire::Observation::decode(&bytes).expect("unreached observation").accounts, [None, None]);
-        retired.account = None;
-        let bytes = account_payload(3, &request, [Some(retired), None]).expect("exhausted identity is still reached");
-        assert!(wire::Observation::decode(&bytes).expect("exhausted observation").accounts[0]
-            .expect("actual account remains present").account.is_none());
-    }
 
     #[test]
     fn non_clone_values_borrow_move_reuse_and_reject_stale_handles() {
@@ -3123,7 +2979,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&11_u32.to_be_bytes())?;
+    stream.write_all(&12_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -3152,7 +3008,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 11_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -3283,7 +3139,6 @@ fn compile_resident(
         candidate: Some(candidate),
         application_contract: resident.contract.clone(),
         _bindings: resident.bindings.clone(),
-        observation: None,
         marked_main: snapshot.marked_root(),
     };
     Ok(ResidentResult::Compiled(program, None, carrier, coverage))
@@ -3319,7 +3174,6 @@ fn serve_hot(
     pending: &mut Option<PendingProgram>,
     resident: Option<Resident<'_>>,
 ) -> std::io::Result<bool> {
-    let accounts = || [resident.as_ref().and_then(|resident| resident.engine.imported_native_snapshot()), None];
     match tag {
         29 if pending.is_none() && hot.begun.is_none() && payload.len() == 56 && payload[..32] == *key => {
             let sequence = u64::from_le_bytes(payload[48..56].try_into()
@@ -3334,7 +3188,6 @@ fn serve_hot(
         }
         31 if pending.is_none() && hot.begun.as_ref().is_some_and(|begun| payload == begun.identity) => {
             hot.begun = None;
-            report_accounts(stream, tag, payload, accounts());
             send_frame(stream, 32, payload)?;
         }
         33 if pending.is_none() && payload.len() > 56
@@ -3345,15 +3198,14 @@ fn serve_hot(
             send_frame(stream, 34, &payload[..56])?;
         }
         29 | 31 | 33 => {
-            report_accounts(stream, tag, payload, accounts());
             return Err(std::io::Error::other("invalid hot preparation transition"));
         }
         37 if pending.is_none() && hot.begun.as_ref().is_some_and(|begun| begun.observed) => {
             let begun = hot.begun.take().ok_or_else(|| std::io::Error::other("missing original resident request"))?;
             let decoded = __rawr_internal::package::import::resident::wire::Attempt::decode(payload, &begun.identity)
                 .map_err(|error| std::io::Error::other(error.to_string()));
-            let (attempt, input) = account_result(decoded, stream, tag, payload, accounts())?;
-            let snapshot = account_result(decode_snapshot(input), stream, tag, payload, accounts())?;
+            let (attempt, input) = decoded?;
+            let snapshot = decode_snapshot(input)?;
             let nonce: [u8; 16] = begun.identity[32..48].try_into()
                 .map_err(|_| std::io::Error::other("resident transition nonce"))?;
             send_progress(stream, key, &nonce, 3, 1, 1)?;
@@ -3361,13 +3213,12 @@ fn serve_hot(
                 Some(resident) => compile_resident(resident, &snapshot),
                 None => Ok(ResidentResult::Miss),
             };
-            let output = account_result(output, stream, tag, payload, accounts())?;
+            let output = output?;
             send_progress(stream, key, &nonce, 3, 2, 4)?;
             let (response, diagnostic) = match output {
                 ResidentResult::Compiled(program, semantic, carrier, coverage) => {
                     let compiled = attempt.compiled(carrier, coverage, semantic);
                     *pending = Some(PendingProgram { key: compiled.key(), nonce, program: Some(program) });
-                    report_accounts(stream, tag, payload, accounts());
                     send_frame(stream, 38, compiled.encode())?;
                     return Ok(true);
                 }
@@ -3376,11 +3227,9 @@ fn serve_hot(
                 ResidentResult::Resource(reason) => (42, reason),
             };
             // Every other answer consumes the request it answers.
-            report_accounts(stream, tag, payload, accounts());
             resident_response(stream, attempt.response_header(), response, &diagnostic)?;
         }
         37 => {
-            report_accounts(stream, tag, payload, accounts());
             return Err(std::io::Error::other("invalid resident preparation transition"));
         }
         _ => return Ok(false),
@@ -3445,7 +3294,6 @@ fn serve_entry(
                     response.extend_from_slice(&next);
                     response.extend_from_slice(&nonce);
                     if payload[32..64] != COMPILED_SURFACE {
-                        report_accounts(&mut stream, tag, &payload, [None, None]);
                         send_frame(&mut stream, 10, &response)?;
                         continue;
                     }
@@ -3454,15 +3302,13 @@ fn serve_entry(
                         ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                         send_progress(&mut stream, &next, &nonce, 3, ordinal, stage)
                     };
-                    let mut observation = None;
-                    let compiled = compile_program(&payload[112..], Compilation::Live(&running.engine), &mut progress, &mut observation);
+                    let compiled = compile_program(&payload[112..], Compilation::Live(&running.engine), &mut progress);
                     drop(progress);
-                    let candidate = account_result(compiled, &mut stream, tag, &payload, [None, observed_account(&observation)])?;
+                    let candidate = compiled?;
                     let refused = candidate
                         .as_ref()
                         .and_then(|program| program.candidate.as_ref())
                         .and_then(|next| __rawr_internal::island::refusal(&running.generation, next));
-                    report_accounts(&mut stream, tag, &payload, [None, program_account(&candidate)]);
                     if let Some(reason) = refused {
                         send_frame(&mut stream, 16, reason.as_bytes())?;
                         continue;
@@ -3486,8 +3332,7 @@ fn serve_entry(
                         continue;
                     }
                     if let Some(mut program) = candidate.program {
-                        let evaluated = evaluate_program(&mut program);
-                        account_result(evaluated, &mut stream, tag, &payload, [None, None])?;
+                        evaluate_program(&mut program)?;
                         if let (Some(running), Some(next)) = (live.as_mut(), program.candidate.as_ref()) {
                             running.engine = program.engine.clone();
                             running.generation = next.generation().clone();
@@ -3596,12 +3441,10 @@ fn run_protocol(
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
-                let mut observation = None;
-                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress, &mut observation) {
+                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
                     Ok(program) => program,
                     Err(error) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&observation)]);
                         return Err(error);
                     }
                 };
@@ -3610,7 +3453,6 @@ fn run_protocol(
                 let mut response = Vec::with_capacity(48);
                 response.extend_from_slice(&key);
                 response.extend_from_slice(&nonce);
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                 send_frame(&mut stream, 4, &response)?;
             }
             5 if payload.len() == 96 && payload[..32] == key => {
@@ -3626,7 +3468,6 @@ fn run_protocol(
                     if let Some(program) = &mut program { evaluate_program(program)?; }
                     send_progress(&mut stream, &key, &nonce, 2, 2, 8)
                 })();
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                 result?;
                 admitted = true;
                 send_frame(&mut stream, 8, &payload)?;
@@ -3638,7 +3479,6 @@ fn run_protocol(
                     let mut response = Vec::with_capacity(48);
                     response.extend_from_slice(&key);
                     response.extend_from_slice(&nonce);
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     send_frame(&mut stream, 10, &response)?;
                     continue;
                 }
@@ -3647,18 +3487,14 @@ fn run_protocol(
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &next, &nonce, 3, ordinal, stage)
                 };
-                let mut observation = None;
-                let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress, &mut observation);
+                let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress);
                 drop(progress);
-                let candidate = account_result(compiled, &mut stream, tag, &payload,
-                    [program_account(&program), observed_account(&observation)])?;
+                let candidate = compiled?;
                 let mut response = Vec::with_capacity(48);
                 response.extend_from_slice(&next);
                 response.extend_from_slice(&nonce);
                 pending = Some(PendingProgram { key: next, nonce, program: candidate });
                 hot.begun = None;
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 send_frame(&mut stream, 4, &response)?;
             }
             25 if payload.len() == 48 => {
@@ -3669,23 +3505,18 @@ fn run_protocol(
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(mut candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload,
-                        [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 if let Some(candidate_program) = &mut candidate.program {
-                    let evaluated = evaluate_program(candidate_program);
-                    account_result(evaluated, &mut stream, tag, &payload,
-                        [program_account(&program), program_account(&candidate.program)])?;
+                    evaluate_program(candidate_program)?;
                 }
                 install_arena(next);
                 key = next;
-                let retired = retire_program(std::mem::replace(&mut program, candidate.program));
+                program = candidate.program;
                 // A running native `main` calls the new generation next.
                 if __rawr_internal::island::running()
                     && let Some(program) = &mut program
@@ -3693,7 +3524,6 @@ fn run_protocol(
                 {
                     eprintln!("rawr: native code keeps calling the previous generation: {error}");
                 }
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
                 send_frame(&mut stream, 8, &payload)?;
             }
             26 if payload.len() == 48 => {
@@ -3704,17 +3534,13 @@ fn run_protocol(
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload,
-                        [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
-                let retired = retire_program(candidate.program);
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
+                drop(candidate.program);
                 send_frame(&mut stream, 27, &payload)?;
             }
             35 if admitted && payload.len() > 32 && payload[..32] == key => {
@@ -3800,14 +3626,10 @@ fn run_protocol(
             },
             17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
             12 if payload.as_slice() == key => {
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 send_frame(&mut stream, 13, &key)?;
                 return Ok(());
             }
             _ => {
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 return Err(std::io::Error::other(format!("invalid protocol transition (message {tag})")));
             }
         }
@@ -3848,24 +3670,22 @@ fn run_play(root: std::path::PathBuf) -> ! {
     let prepared = (|| -> std::io::Result<_> {
         let manifest = std::fs::read_to_string(&manifest_path)?;
         install_arena([0; 32]);
-        let (native, observation) =
-            __rawr_internal::package::import::runner::account::Native::decode_observed(GENERATED_MANIFEST);
-        let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
+        let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
         let (engine, bindings, application_contract) = prepare_engine(native, &mut |_| Ok(()))?;
         let bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]> = bindings.into();
         let runtime = imported_runtime(&engine, &bindings)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         PREPARED_RUNTIME.set(Some(runtime));
-        Ok((manifest, engine, bindings, application_contract, observation))
+        Ok((manifest, engine, bindings, application_contract))
     })();
-    let (manifest, engine, bindings, application_contract, observation) = match prepared {
+    let (manifest, engine, bindings, application_contract) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
             exit(1);
         }
     };
-    let mut observation = Some(observation);
     let served = __rawr_internal::play::serve(std::path::Path::new(&socket), |source| {
         // A fork of this process, with its own copy of all of the above.
         let files = vec![
@@ -3887,7 +3707,6 @@ fn run_play(root: std::path::PathBuf) -> ! {
                     candidate,
                     application_contract: application_contract.clone(),
                     _bindings: bindings.clone(),
-                    observation: observation.take(),
                     marked_main: snapshot.marked_root(),
                 })
             });
@@ -3965,7 +3784,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&11_u32.to_be_bytes())?;
+    stream.write_all(&12_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -3994,7 +3813,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 11_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -4047,12 +3866,10 @@ fn run_protocol() -> std::io::Result<()> {
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
-                let mut observation = None;
-                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress, &mut observation) {
+                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
                     Ok(program) => program,
                     Err(error) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&observation)]);
                         return Err(error);
                     }
                 };
@@ -4060,17 +3877,15 @@ fn run_protocol() -> std::io::Result<()> {
                     Ok(()) => {
                         let advanced = progress(6);
                         drop(progress);
-                        account_result(advanced, &mut stream, tag, &payload, [program_account(&program), None])?;
+                        advanced?;
                         prepared = true;
                         let mut response = Vec::with_capacity(48);
                         response.extend_from_slice(&key);
                         response.extend_from_slice(&nonce);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         send_frame(&mut stream, 4, &response)?;
                     }
                     Err(reason) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         reject(&mut stream, reason)?;
                     }
                 }
@@ -4098,13 +3913,11 @@ fn run_protocol() -> std::io::Result<()> {
                             if let Some(program) = &mut program { evaluate_program(program)?; }
                             send_progress(&mut stream, &key, &nonce, 2, 2, 8)
                         })();
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         result?;
                         admitted = true;
                         send_frame(&mut stream, 8, &payload)?;
                     }
                     Err(reason) => {
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         reject(&mut stream, reason)?;
                     }
                 }
@@ -4116,7 +3929,6 @@ fn run_protocol() -> std::io::Result<()> {
                     let mut response = Vec::with_capacity(48);
                     response.extend_from_slice(&key);
                     response.extend_from_slice(&nonce);
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     send_frame(&mut stream, 10, &response)?;
                     continue;
                 }
@@ -4126,11 +3938,9 @@ fn run_protocol() -> std::io::Result<()> {
                     send_progress(&mut stream, &next, &nonce, 3, ordinal, stage)
                 };
                 let next_receipt: [u8; 32] = payload[64..96].try_into().map_err(|_| std::io::Error::other("activation receipt"))?;
-                let mut observation = None;
-                let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress, &mut observation);
+                let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress);
                 drop(progress);
-                let candidate = account_result(compiled, &mut stream, tag, &payload,
-                    [program_account(&program), observed_account(&observation)])?;
+                let candidate = compiled?;
                 let mut response = Vec::with_capacity(48);
                 response.extend_from_slice(&next);
                 response.extend_from_slice(&nonce);
@@ -4140,8 +3950,6 @@ fn run_protocol() -> std::io::Result<()> {
                     nonce,
                     program: candidate,
                 });
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 send_frame(&mut stream, 4, &response)?;
             }
             25 if payload.len() == 48 => {
@@ -4152,26 +3960,20 @@ fn run_protocol() -> std::io::Result<()> {
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(mut candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload,
-                        [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 if let Some(candidate_program) = &mut candidate.program {
-                    let evaluated = evaluate_program(candidate_program);
-                    account_result(evaluated, &mut stream, tag, &payload,
-                        [program_account(&program), program_account(&candidate.program)])?;
+                    evaluate_program(candidate_program)?;
                 }
                 install_arena(next);
                 key = next;
-                let retired = retire_program(std::mem::replace(&mut program, candidate.program));
+                program = candidate.program;
                 receipt = Some(candidate.receipt);
                 sequence = 0;
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
                 send_frame(&mut stream, 8, &payload)?;
             }
             26 if payload.len() == 48 => {
@@ -4182,17 +3984,13 @@ fn run_protocol() -> std::io::Result<()> {
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload,
-                        [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
-                let retired = retire_program(candidate.program);
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&retired)]);
+                drop(candidate.program);
                 send_frame(&mut stream, 27, &payload)?;
             }
             14 if admitted && payload.len() >= 72 && payload[..32] == key && receipt.is_some_and(|value| payload[32..64] == value) => {
@@ -4222,14 +4020,10 @@ fn run_protocol() -> std::io::Result<()> {
             17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
             12 if payload.as_slice() == key => {
                 if activated { profile.retire(); }
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 send_frame(&mut stream, 13, &key)?;
                 return Ok(());
             }
             _ => {
-                report_accounts(&mut stream, tag, &payload,
-                    [program_account(&program), pending.as_ref().and_then(|pending| program_account(&pending.program))]);
                 return Err(std::io::Error::other("invalid protocol transition"));
             }
         }
@@ -4253,7 +4047,7 @@ fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u
     let length = 5_usize.checked_add(payload.len()).ok_or_else(|| std::io::Error::other("frame length"))?;
     if length > 8 * 1024 * 1024 { return Err(std::io::Error::other("frame limit")); }
     stream.write_all(&(length as u32).to_be_bytes())?;
-    stream.write_all(&11_u32.to_be_bytes())?;
+    stream.write_all(&12_u32.to_be_bytes())?;
     stream.write_all(&[tag])?;
     stream.write_all(payload)?;
     stream.flush()
@@ -4282,7 +4076,7 @@ fn receive_frame(stream: &mut std::os::unix::net::UnixStream) -> std::io::Result
     if !(5..=8 * 1024 * 1024).contains(&length) { return Err(std::io::Error::other("frame bound")); }
     let mut frame = vec![0_u8; length];
     stream.read_exact(&mut frame)?;
-    if frame[..4] != 11_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
+    if frame[..4] != 12_u32.to_be_bytes() { return Err(std::io::Error::other("wire version")); }
     Ok((frame[4], frame.split_off(5)))
 }
 
@@ -4484,10 +4278,8 @@ fn live_protocol(
                 && begun.as_ref().is_some_and(|(identity, _, _)| payload.as_slice() == identity) => {
                 let (_, installation, _) = begun.take()
                     .ok_or_else(|| std::io::Error::other("missing hot cancellation"))?;
-                let result = transport.cancel_install(installation)
-                    .map_err(|error| std::io::Error::other(error.to_string()));
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
-                result?;
+                transport.cancel_install(installation)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
                 send_frame(&mut stream, 32, &payload)?;
             }
             33 if pending.is_none() && payload.len() > 56
@@ -4503,7 +4295,6 @@ fn live_protocol(
                 }
             }
             29 | 31 | 33 => {
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 return Err(std::io::Error::other("invalid hot preparation transition"));
             }
             37 if pending.is_none()
@@ -4513,10 +4304,8 @@ fn live_protocol(
                 let decoded = __rawr_internal::package::import::resident::wire::Attempt::decode(
                     &payload, &identity,
                 ).map_err(|error| std::io::Error::other(error.to_string()));
-                let (attempt, input) = account_result(decoded, &mut stream, tag, &payload,
-                    [engine.imported_native_snapshot(), None])?;
-                let snapshot = account_result(decode_snapshot(input), &mut stream, tag, &payload,
-                    [engine.imported_native_snapshot(), None])?;
+                let (attempt, input) = decoded?;
+                let snapshot = decode_snapshot(input)?;
                 let nonce: [u8; 16] = identity[32..48].try_into()
                     .map_err(|_| std::io::Error::other("resident transition nonce"))?;
                 let mut ordinal = 0_u8;
@@ -4531,8 +4320,7 @@ fn live_protocol(
                     )
                 })();
                 drop(progress);
-                let output = account_result(output, &mut stream, tag, &payload,
-                    [engine.imported_native_snapshot(), None])?;
+                let output = output?;
                 let (response_tag, diagnostic) = match output {
                     ResidentResult::Compiled(compiled) => {
                         let (candidate, carrier, coverage) = compiled.into_parts();
@@ -4544,7 +4332,6 @@ fn live_protocol(
                             nonce,
                             candidate,
                         });
-                        report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                         send_frame(&mut stream, 38, compiled.encode())?;
                         continue;
                     }
@@ -4555,14 +4342,11 @@ fn live_protocol(
                 };
                 // Every nonprepared response consumes the exact begun request.
                 // Cancellation failure is owner loss, never guessed non-installation.
-                let cancelled = transport.cancel_install(installation)
-                    .map_err(|error| std::io::Error::other(error.to_string()));
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
-                cancelled?;
+                transport.cancel_install(installation)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
                 resident_response(&mut stream, attempt.response_header(), response_tag, &diagnostic)?;
             }
             37 => {
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 return Err(std::io::Error::other("invalid resident preparation transition"));
             }
             9 if pending.is_none() && payload.len() >= 112
@@ -4577,7 +4361,6 @@ fn live_protocol(
                     let mut response = Vec::with_capacity(48);
                     response.extend_from_slice(&key);
                     response.extend_from_slice(&nonce);
-                    report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                     send_frame(&mut stream, 10, &response)?;
                     continue;
                 }
@@ -4593,13 +4376,11 @@ fn live_protocol(
                     Ok(Some(candidate)) => candidate,
                     Ok(None) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                         reject(&mut stream, "profile produced no live generation")?;
                         continue;
                     }
                     Err(error) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                         reject(&mut stream, &error.to_string())?;
                         continue;
                     }
@@ -4617,7 +4398,6 @@ fn live_protocol(
                     nonce,
                     candidate,
                 });
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 send_frame(&mut stream, 4, &response)?;
             }
             25 if payload.len() == 48 => {
@@ -4628,16 +4408,13 @@ fn live_protocol(
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                     return Err(std::io::Error::other("stale hot commit"));
                 }
                 let installed = transport.install(candidate.installation, candidate.candidate);
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 if let Err(error) = installed {
                     if let Some(reason) = error.not_installed_diagnostic() {
                         // Pending was consumed. Only correlated no-install
@@ -4669,19 +4446,15 @@ fn live_protocol(
                     .try_into()
                     .map_err(|_| std::io::Error::other("transition nonce"))?;
                 let Some(candidate) = pending.take() else {
-                    report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                     return Err(std::io::Error::other("missing hot preparation"));
                 };
                 if candidate.key != next || candidate.nonce != nonce {
                     pending = Some(candidate);
-                    report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                     return Err(std::io::Error::other("stale hot abort"));
                 }
                 drop(candidate.candidate);
-                let cancelled = transport.cancel_install(candidate.installation)
-                    .map_err(|error| std::io::Error::other(error.to_string()));
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
-                cancelled?;
+                transport.cancel_install(candidate.installation)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
                 send_frame(&mut stream, 27, &payload)?;
             }
             11 if payload.len() >= 32 && payload[..32] == key => {
@@ -4728,10 +4501,8 @@ fn live_protocol(
             )?,
             12 if begun.is_none() && pending.is_none() && payload.len() == 33
                 && payload[..32] == key && payload[32] == 1 => {
-                let retired = transport.retire()
-                    .map_err(|error| std::io::Error::other(error.to_string()));
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
-                let refresh = retired?;
+                let refresh = transport.retire()
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
                 let mut response = [0_u8; 33];
                 response[..32].copy_from_slice(&key);
                 response[32] = <u8 as From<bool>>::from(refresh);
@@ -4739,19 +4510,15 @@ fn live_protocol(
                 return Ok(());
             }
             12 if payload.as_slice() == key => {
-                let exited = transport.exit()
-                    .map_err(|error| std::io::Error::other(error.to_string()));
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
-                exited?;
+                transport.exit()
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
                 send_frame(&mut stream, 13, &key)?;
                 return Ok(());
             }
             12 => {
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 return Err(std::io::Error::other("invalid live retirement transition"));
             }
             _ => {
-                report_accounts(&mut stream, tag, &payload, [engine.imported_native_snapshot(), None]);
                 reject(&mut stream, "invalid live protocol transition")?;
             }
         }
@@ -4790,12 +4557,10 @@ fn run_protocol() -> std::io::Result<()> {
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
-                let mut observation = None;
-                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress, &mut observation) {
+                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
                     Ok(program) => program,
                     Err(error) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), observed_account(&observation)]);
                         return Err(error);
                     }
                 };
@@ -4803,17 +4568,15 @@ fn run_protocol() -> std::io::Result<()> {
                     Ok(()) => {
                         let advanced = progress(6);
                         drop(progress);
-                        account_result(advanced, &mut stream, tag, &payload, [program_account(&program), None])?;
+                        advanced?;
                         prepared = true;
                         let mut response = Vec::with_capacity(48);
                         response.extend_from_slice(&key);
                         response.extend_from_slice(&nonce);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         send_frame(&mut stream, 4, &response)?;
                     }
                     Err(reason) => {
                         drop(progress);
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         reject(&mut stream, reason)?;
                     }
                 }
@@ -4841,13 +4604,11 @@ fn run_protocol() -> std::io::Result<()> {
                             if let Some(program) = &mut program { evaluate_program(program)?; }
                             send_progress(&mut stream, &key, &nonce, 2, 2, 8)
                         })();
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         result?;
                         admitted = true;
                         send_frame(&mut stream, 8, &payload)?;
                     }
                     Err(reason) => {
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         reject(&mut stream, &reason)?;
                     }
                 }
@@ -4870,7 +4631,6 @@ fn run_protocol() -> std::io::Result<()> {
                 let (running, transport) = match profile.start(program.as_mut()) {
                     Ok(live) => live,
                     Err(reason) => {
-                        report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                         reject(&mut stream, reason)?;
                         continue;
                     }
@@ -4882,14 +4642,11 @@ fn run_protocol() -> std::io::Result<()> {
                     let receipt = receipt.ok_or_else(|| std::io::Error::other("activation receipt"))?;
                     Ok((engine, application_contract, receipt))
                 })();
-                let (engine, application_contract, receipt) = account_result(context, &mut stream, tag, &payload,
-                    [program_account(&program), None])?;
-                let mut control = account_result(stream.try_clone(), &mut stream, tag, &payload,
-                    [program_account(&program), None])?;
+                let (engine, application_contract, receipt) = context?;
+                let mut control = stream.try_clone()?;
                 let worker = std::thread::Builder::new()
                     .name("rawr-generated-protocol".to_owned())
                     .spawn(move || live_protocol(stream, key, receipt, engine, application_contract, transport));
-                report_accounts(&mut control, tag, &payload, [program_account(&program), None]);
                 let worker = worker?;
                 send_frame(&mut control, 21, &key)?;
                 let result = running
@@ -4911,9 +4668,7 @@ fn run_protocol() -> std::io::Result<()> {
             22 if admitted && payload.len() == 48 && payload[..32] == key => match profile.snapshot() {
                 Ok(outcome) => {
                     let nonce: [u8; 16] = payload[32..48].try_into().map_err(|_| std::io::Error::other("transition nonce"))?;
-                    let advanced = send_progress(&mut stream, &key, &nonce, 4, 1, 10);
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
-                    advanced?;
+                    send_progress(&mut stream, &key, &nonce, 4, 1, 10)?;
                     let mut response = Vec::with_capacity(48 + outcome.len());
                     response.extend_from_slice(&key);
                     response.extend_from_slice(&nonce);
@@ -4921,12 +4676,10 @@ fn run_protocol() -> std::io::Result<()> {
                     send_frame(&mut stream, 23, &response)?;
                 }
                 Err(reason) => {
-                    report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                     reject(&mut stream, &reason)?;
                 }
             },
             9 if admitted => {
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                 reject(&mut stream, "live lifecycle has not started")?;
             }
             14 if admitted && payload.len() >= 72 && payload[..32] == key && receipt.is_some_and(|value| payload[32..64] == value) => {
@@ -4956,12 +4709,10 @@ fn run_protocol() -> std::io::Result<()> {
             17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
             12 if payload.as_slice() == key => {
                 if activated { profile.retire(); }
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                 send_frame(&mut stream, 13, &key)?;
                 return Ok(());
             }
             _ => {
-                report_accounts(&mut stream, tag, &payload, [program_account(&program), None]);
                 return Err(std::io::Error::other("invalid protocol transition"));
             }
         }
@@ -14926,13 +14677,13 @@ mod tests {
             compile,
             &[
                 "if !COMPILE_SNAPSHOT { return Ok(None); }",
-                "account::Native::decode_observed(GENERATED_MANIFEST)",
+                "account::Native::decode(GENERATED_MANIFEST)",
                 "prepare_engine(native, &mut *progress)?",
                 "__rawr_profile::compile_initial(",
                 "Ok(Some(Program { engine,",
             ],
         );
-        assert_eq!(compile.matches("Native::decode_observed(").count(), 1);
+        assert_eq!(compile.matches("Native::decode(").count(), 1);
         assert!(compile.contains("Compilation::Replacement(current) => current.as_ref()"));
         assert!(compile.contains(".engine.reconstruct_imported_native(GENERATED_MANIFEST)"));
         assert!(!compile.contains("Shared::new(engine)"));
@@ -15017,7 +14768,7 @@ mod tests {
             "begun.take()",
             "wire::Attempt::decode(",
             "&payload, &identity",
-            "account_result(decode_snapshot(input)",
+            "decode_snapshot(input)?",
             "send_progress(&mut stream, &key, &nonce, 3, ordinal, stage)",
             "compiled.into_parts()",
             "receipt: compiled.advance_receipt(receipt)",
@@ -15070,7 +14821,7 @@ mod tests {
         for operation in [
             "hot.begun.take()",
             "wire::Attempt::decode(payload, &begun.identity)",
-            "account_result(decode_snapshot(input)",
+            "decode_snapshot(input)?",
             "attempt.compiled(carrier, coverage, semantic)",
             "send_frame(stream, 38, compiled.encode())",
             "attempt.response_header()",
@@ -15287,9 +15038,6 @@ mod tests {
         let framing = &source[..source.find("fn lifecycle()").unwrap()];
         let live = &source
             [source.find("struct PendingLive").unwrap()..source.find("fn run_protocol()").unwrap()];
-        let runtime = std::str::from_utf8(RUNTIME_SOURCE).unwrap();
-        let reporting = &runtime[runtime.find("fn report_accounts(").unwrap()
-            ..runtime.find("fn snapshot_bytes").unwrap()];
         let root =
             std::env::temp_dir().join(format!("rawr-early-hot-protocol-{}", std::process::id()));
         std::fs::create_dir(&root).expect("exclusive protocol test directory");
@@ -15298,7 +15046,7 @@ mod tests {
         std::fs::write(
             &path,
             format!(
-                "{framing}\n{reporting}\n{live}\n{}",
+                "{framing}\n{live}\n{}",
                 include_str!("generate/live_protocol_fixture.rs")
             ),
         )
@@ -15335,7 +15083,7 @@ mod tests {
             (LIFECYCLE_PROFILE_RUNNER_MAIN, "9 if pending.is_none()"),
         ] {
             let source = std::str::from_utf8(runner).expect("runner source is UTF-8");
-            assert!(source.contains("&11_u32.to_be_bytes()"));
+            assert!(source.contains("&12_u32.to_be_bytes()"));
             assert!(source.contains(prepare_marker));
             assert!(source.contains("25 if payload.len() == 48"));
             assert!(source.contains("26 if payload.len() == 48"));

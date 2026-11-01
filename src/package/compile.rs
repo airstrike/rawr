@@ -114,8 +114,7 @@ fn snapshot_executable(
         let resource = |error| Error::import(super::import::Error::Surface(error));
         let mut attempt = super::import::runner::account::support::Pending::transform(
             native.attempt().map_err(resource)?,
-        )
-        .map_err(resource)?;
+        );
         let (mut executable, _uses) = resolve::lower_package_with_uses(
             engine,
             program,

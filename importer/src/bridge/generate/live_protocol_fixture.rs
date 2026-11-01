@@ -8,22 +8,12 @@ use std::sync::{
     Arc,
 };
 const COMPILED_SURFACE: [u8; 32] = [42; 32];
-static ACCOUNT_REPORTS: AtomicUsize = AtomicUsize::new(0);
 mod __rawr_internal {
     pub type Shared<T> = std::sync::Arc<T>;
     pub struct Engine {
         pub revision: super::Arc<super::AtomicUsize>,
         pub compiled: super::Arc<super::AtomicUsize>,
         pub eligible: super::Arc<super::AtomicBool>,
-    }
-    impl Engine {
-        pub fn imported_native_snapshot(
-            &self,
-        ) -> Option<package::import::runner::account::Snapshot> {
-            Some(package::import::runner::account::Snapshot(
-                self.compiled.load(super::Ordering::SeqCst),
-            ))
-        }
     }
     pub mod reload {
         pub struct Candidate(pub usize);
@@ -33,12 +23,6 @@ mod __rawr_internal {
             pub struct Snapshot(pub u8);
         }
         pub mod import {
-            pub mod runner {
-                pub mod account {
-                    #[derive(Clone, Copy)]
-                    pub struct Snapshot(pub usize);
-                }
-            }
             pub mod resident {
                 pub struct Compiled(pub crate::__rawr_internal::reload::Candidate);
                 impl Compiled {
@@ -124,44 +108,8 @@ mod __rawr_internal {
     }
 }
 
-// The exact codec is tested in protocol::account. This fixture models its fixed
-// payload while executing the emitted reporting and original-error helper.
-fn account_payload(
-    tag: u8,
-    request: &[u8],
-    accounts: [Option<__rawr_internal::package::import::runner::account::Snapshot>; 2],
-) -> Option<[u8; 252]> {
-    if !matches!(tag, 3 | 7 | 9 | 12 | 20 | 22 | 25 | 26 | 31 | 37) {
-        return None;
-    }
-    let mut bytes = [0; 252];
-    bytes[0] = 1;
-    bytes[1] = tag;
-    bytes[2..10].copy_from_slice(&(request.len() as u64).to_le_bytes());
-    let prefix = request.len().min(56);
-    bytes[10..10 + prefix].copy_from_slice(&request[..prefix]);
-    for (index, account) in accounts.into_iter().enumerate() {
-        if let Some(account) = account {
-            bytes[66 + index * 93] = 1;
-            bytes[67 + index * 93..75 + index * 93]
-                .copy_from_slice(&(account.0 as u64).to_le_bytes());
-        }
-    }
-    Some(bytes)
-}
-
 fn receive_response(stream: &mut UnixStream) -> std::io::Result<(u8, Vec<u8>)> {
-    let mut reports = 0;
-    loop {
-        let frame = receive_frame(stream)?;
-        if frame.0 != 45 {
-            return Ok(frame);
-        }
-        reports += 1;
-        assert_eq!(reports, 1, "one account frame per existing completion");
-        assert_eq!(frame.1.len(), 252);
-        ACCOUNT_REPORTS.fetch_add(1, Ordering::SeqCst);
-    }
+    receive_frame(stream)
 }
 
 mod __rawr_profile {
@@ -387,11 +335,8 @@ fn identity(sequence: u64) -> Vec<u8> {
     bytes
 }
 fn exchange_test(s: &mut Session, tag: u8, payload: &[u8], response: u8) -> Vec<u8> {
-    let before = ACCOUNT_REPORTS.load(Ordering::SeqCst);
     send_frame(&mut s.client, tag, payload).unwrap();
     let (actual, bytes) = receive_response(&mut s.client).unwrap();
-    let expected = usize::from(matches!(tag, 3 | 7 | 9 | 12 | 20 | 22 | 25 | 26 | 31 | 37));
-    assert_eq!(ACCOUNT_REPORTS.load(Ordering::SeqCst) - before, expected);
     assert_eq!(actual, response);
     bytes
 }
@@ -423,7 +368,6 @@ fn resident_request(sequence: u64, scenario: u8) -> Vec<u8> {
 }
 fn resident(s: &mut Session, scenario: u8, expected: u8, compiled: bool) -> Vec<u8> {
     let request = resident_request(1, scenario);
-    let before = ACCOUNT_REPORTS.load(Ordering::SeqCst);
     send_frame(&mut s.client, 37, &request).unwrap();
     let mut stages = Vec::new();
     loop {
@@ -438,7 +382,6 @@ fn resident(s: &mut Session, scenario: u8, expected: u8, compiled: bool) -> Vec<
             continue;
         }
         assert_eq!(tag, expected);
-        assert_eq!(ACCOUNT_REPORTS.load(Ordering::SeqCst) - before, 1);
         assert_eq!(&bytes[..100], &request[..100]);
         assert_eq!(stages, if compiled { vec![1, 4] } else { vec![1] });
         return bytes;
@@ -454,22 +397,6 @@ fn stop(mut s: Session, key: u8) {
     s.server.join().unwrap().unwrap();
 }
 fn main() {
-    let (mut sender, receiver) = UnixStream::pair().unwrap();
-    drop(receiver);
-    let error = account_result::<()>(
-        Err(std::io::Error::other("original compiler refusal")),
-        &mut sender,
-        37,
-        &[1; 100],
-        [
-            Some(__rawr_internal::package::import::runner::account::Snapshot(
-                1,
-            )),
-            None,
-        ],
-    )
-    .unwrap_err();
-    assert_eq!(error.to_string(), "original compiler refusal");
     // Each edit interval must consume the pending candidate without advancing
     // the old owner, and a subsequent fresh request must still succeed.
     for before_compile in [true, false] {
