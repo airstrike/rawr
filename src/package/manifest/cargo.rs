@@ -285,7 +285,9 @@ by-default = { git = "https://example.invalid/d" }
                 version: Some("1.2".to_owned()),
             }
         );
+        #[cfg(feature = "rust-import")]
         let rendered = crate::package::rust::app_manifest(&cargo, Path::new("lib.rs"));
+        #[cfg(feature = "rust-import")]
         assert!(
             rendered.contains("dep = { git = \"https://example.invalid/a\", tag = \"v1.2.0\", version = \"1.2\" }"),
             "{rendered}"
