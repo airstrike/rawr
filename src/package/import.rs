@@ -1035,6 +1035,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnlabeledJumpInWhileCondition { .. }
         | R::AsyncMain { .. }
         | R::TypeAnnotationsNeeded { .. }
+        | R::CannotCompare { .. }
         | R::MemberKind { .. } => None,
     }
 }

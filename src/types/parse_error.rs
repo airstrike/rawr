@@ -464,6 +464,9 @@ impl fmt::Display for ParseErrorType {
                     found: *found,
                 }
                 .fmt(f),
+                crate::resolve::Error::CannotCompare { lhs, rhs, .. } => {
+                    crate::resolve::CannotCompare(lhs, rhs).fmt(f)
+                }
             }
             Self::PropertyExpected => f.write_str("Expecting name of a property"),
             Self::VariableExpected => f.write_str("Expecting name of a variable"),

@@ -24,6 +24,8 @@ mod argument_count_tests;
 mod collected_tests;
 mod compare;
 #[cfg(test)]
+mod comparison_tests;
+#[cfg(test)]
 mod copies_tests;
 #[cfg(test)]
 mod language_tests;
@@ -8269,6 +8271,34 @@ impl Pointer {
             Self::Arc => "Arc",
         }
     }
+}
+
+/// One side of a `PartialEq` impl: a type, or `str`, which Rawr's types
+/// hold only as the referent of a `&str` (`Ty::Str`).
+#[derive(Clone, Debug, PartialEq)]
+enum Compared {
+    Ty(Ty),
+    Str,
+}
+
+impl Compared {
+    /// What a reference refers to: `str` for a `&str`.
+    fn referent(&self) -> Option<Self> {
+        match self {
+            Self::Ty(Ty::Reference { target, .. }) => Some(Self::Ty((**target).clone())),
+            Self::Ty(Ty::Str) => Some(Self::Str),
+            _ => None,
+        }
+    }
+}
+
+/// Which `PartialEq` impl an `==` resolves to.
+enum PartialEqImpl {
+    /// The left operand's type's own, `PartialEq<Self>`: the right operand
+    /// takes the left's type.
+    Own,
+    /// An impl between two types, which compares their values as they are.
+    Between,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28651,7 +28681,7 @@ impl<'a> Parser<'a> {
             let owner = self.models.item_owner(&variant_path).cloned();
             let constant = self.parse_host_value(item, owner, at)?;
             let subject = self.operator_expr(value, ty.clone(), at);
-            let test = self.apply_binary(Token::EqualsTo, subject, constant)?;
+            let test = self.apply_binary(Token::EqualsTo, None, subject, constant)?;
             out.tests.push(test.rendered_source());
             return Ok(());
         };
@@ -30052,7 +30082,11 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
-            let operator = self.next().0;
+            let (operator, operator_at) = self.next();
+            let operator_at = span(
+                operator_at,
+                text_end(operator_at, operator.literal_syntax()),
+            );
             // `String + &str` takes the `String` by value.
             if matches!(operator, Token::Plus)
                 && matches!(self.inference.resolve(&lhs.ty), Ty::String)
@@ -30086,7 +30120,7 @@ impl<'a> Parser<'a> {
                 rhs.prelude = origin::Fragment::default();
                 rhs.lvalue = None;
             }
-            lhs = self.apply_binary(operator, lhs, rhs)?;
+            lhs = self.apply_binary(operator, Some(operator_at), lhs, rhs)?;
             if precedence == COMPARISON && binary_precedence(&self.peek()) == Some(COMPARISON) {
                 return Err(self.unsupported("chained comparison operators"));
             }
@@ -30249,9 +30283,12 @@ impl<'a> Parser<'a> {
         Ok(value.retain_origin())
     }
 
+    /// `lhs operator rhs`; `operator_at` is the operator's span where the
+    /// program wrote one.
     fn apply_binary(
         &mut self,
         operator: Token,
+        operator_at: Option<Span>,
         lhs: ParsedExpr,
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
@@ -30337,7 +30374,9 @@ impl<'a> Parser<'a> {
         let (symbol, allowed, output) = match operator {
             Token::Or => ("||", &[Ty::Bool][..], Some(Ty::Bool)),
             Token::And => ("&&", &[Ty::Bool][..], Some(Ty::Bool)),
-            Token::EqualsTo | Token::NotEqualsTo => return self.equality(operator, lhs, rhs),
+            Token::EqualsTo | Token::NotEqualsTo => {
+                return self.equality(operator, operator_at, lhs, rhs)
+            }
             Token::LessThan => (
                 "<",
                 &[
@@ -30398,6 +30437,32 @@ impl<'a> Parser<'a> {
             Token::Modulo => ("%", NUMBERS, None),
             _ => unreachable!("binary_precedence admits only binary operators"),
         };
+        // `&a < &b` through core's `impl PartialOrd<&B> for &A where A:
+        // PartialOrd<B>` (and its `&mut` form): the referents compare, and
+        // a reference is its referent's value at runtime. Every other
+        // `PartialOrd` impl of Rawr's types is the type's own, so the right
+        // operand takes the left's type, as rustc infers it.
+        let mut lhs = lhs;
+        if matches!(symbol, "<" | ">" | "<=" | ">=") {
+            while let (
+                Ty::Reference {
+                    mutable,
+                    target: left,
+                },
+                Ty::Reference {
+                    mutable: other,
+                    target: right,
+                },
+            ) = (
+                self.inference.resolve(&lhs.ty),
+                self.inference.resolve(&rhs.ty),
+            ) && mutable == other
+            {
+                lhs.ty = *left;
+                rhs.ty = *right;
+            }
+        }
+        let lhs = lhs;
         if let Some(value) = self.time_binary(symbol, lhs.clone(), rhs.clone())? {
             return Ok(value);
         }
@@ -30785,7 +30850,7 @@ impl<'a> Parser<'a> {
         if let Some(value) = self.operator_impl(symbol, &target, Some(&mut replacement))? {
             return Ok(value);
         }
-        self.apply_binary(operator, target, replacement)
+        self.apply_binary(operator, None, target, replacement)
     }
 
     /// `a + b`, `-a` or `a += b` on a crate type through its `std::ops`
@@ -31374,9 +31439,147 @@ impl<'a> Parser<'a> {
         Ok(Some(value))
     }
 
+    /// The `PartialEq` impl that `lhs == rhs` selects, as rustc selects it
+    /// from std's impls: the blanket `impl PartialEq<&B> for &A where A:
+    /// PartialEq<B>` (with its `&mut` forms), the impls between `String`,
+    /// `str` and `&str`, and those between `Vec<T>`, `[T]` and `[T; N]`
+    /// where `T: PartialEq<U>`. Each other type has only its own impl,
+    /// which takes a right operand of its type (`Own`). `Err` gives the two
+    /// types no impl compares, the innermost an impl required.
+    fn partial_eq(
+        &mut self,
+        lhs: &Compared,
+        rhs: &Compared,
+    ) -> Result<PartialEqImpl, (Compared, Compared)> {
+        let resolve = |this: &Self, side: &Compared| match side {
+            Compared::Ty(ty) => Compared::Ty(this.inference.resolve(ty)),
+            Compared::Str => Compared::Str,
+        };
+        let (lhs, rhs) = (resolve(self, lhs), resolve(self, rhs));
+        // A right operand still to be inferred takes the left's type.
+        if matches!(rhs, Compared::Ty(Ty::Infer(_) | Ty::Unknown | Ty::Never)) {
+            return Ok(PartialEqImpl::Own);
+        }
+        let refused = Err((lhs.clone(), rhs.clone()));
+        match (&lhs, &rhs) {
+            (Compared::Ty(Ty::Str), Compared::Ty(Ty::Str)) => Ok(PartialEqImpl::Own),
+            // `impl PartialEq<String> for &str`.
+            (Compared::Ty(Ty::Str), Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
+            (Compared::Ty(Ty::Reference { .. } | Ty::Str), _) => {
+                let left = lhs.referent().expect("matched a reference");
+                // `impl PartialEq<Vec<U>> for &[T]` and `PartialEq<[U; N]>`.
+                if let Compared::Ty(Ty::Array { length: None, .. }) = &left
+                    && let Compared::Ty(Ty::Array { .. }) = &rhs
+                {
+                    return self
+                        .sequence_eq(&left, &rhs)
+                        .map(|_| PartialEqImpl::Between);
+                }
+                match rhs.referent() {
+                    Some(right) => self.partial_eq(&left, &right),
+                    None => refused,
+                }
+            }
+            (Compared::Ty(Ty::String), Compared::Ty(Ty::String | Ty::Str)) => {
+                Ok(PartialEqImpl::Own)
+            }
+            // `impl PartialEq<str> for String` and `PartialEq<String> for str`.
+            (Compared::Ty(Ty::String), Compared::Str)
+            | (Compared::Str, Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
+            (Compared::Str, Compared::Str) => Ok(PartialEqImpl::Own),
+            (Compared::Str | Compared::Ty(Ty::String), _) => refused,
+            (Compared::Ty(Ty::Array { .. }), _) => self.sequence_eq(&lhs, &rhs),
+            _ => Ok(PartialEqImpl::Own),
+        }
+    }
+
+    /// `lhs == rhs` where `lhs` is a `Vec<T>`, a slice or an array: std's
+    /// impls take a `Vec<U>`, a slice or an array of the same length, or a
+    /// reference to a slice (or, for a `Vec`, to an array), where `T:
+    /// PartialEq<U>`. Rawr's type of a `Vec<T>` is also a slice's, so a
+    /// slice's impls hold for it.
+    fn sequence_eq(
+        &mut self,
+        lhs: &Compared,
+        rhs: &Compared,
+    ) -> Result<PartialEqImpl, (Compared, Compared)> {
+        let refused = Err((lhs.clone(), rhs.clone()));
+        let Compared::Ty(Ty::Array {
+            element: left,
+            length,
+        }) = lhs
+        else {
+            return refused;
+        };
+        let (right, other) = match rhs {
+            Compared::Ty(Ty::Array {
+                element,
+                length: other,
+            }) => (element, other),
+            // `&[U]`, or `&[U; N]` after a `Vec<T>`.
+            Compared::Ty(Ty::Reference { target, .. }) => match self.inference.resolve(target) {
+                Ty::Array {
+                    element,
+                    length: other,
+                } => {
+                    let fits = length.is_none() || other.is_none();
+                    self.sequence_elements(lhs, rhs, fits.then_some((&**left, &*element)))?;
+                    return Ok(PartialEqImpl::Between);
+                }
+                _ => return refused,
+            },
+            _ => return refused,
+        };
+        let fits = match (length, other) {
+            (Some(length), Some(other)) => length == other,
+            _ => true,
+        };
+        let own = length == other;
+        match self.sequence_elements(lhs, rhs, fits.then_some((&**left, &**right)))? {
+            PartialEqImpl::Own if own => Ok(PartialEqImpl::Own),
+            _ => Ok(PartialEqImpl::Between),
+        }
+    }
+
+    /// The elements' impl of a sequence impl, `None` when no sequence impl
+    /// takes the right operand.
+    fn sequence_elements(
+        &mut self,
+        lhs: &Compared,
+        rhs: &Compared,
+        elements: Option<(&Ty, &Ty)>,
+    ) -> Result<PartialEqImpl, (Compared, Compared)> {
+        let Some((left, right)) = elements else {
+            return Err((lhs.clone(), rhs.clone()));
+        };
+        let (left, right) = (Compared::Ty(left.clone()), Compared::Ty(right.clone()));
+        match self.partial_eq(&left, &right)? {
+            PartialEqImpl::Own => {
+                let (Compared::Ty(left_ty), Compared::Ty(right_ty)) = (&left, &right) else {
+                    unreachable!("elements are types")
+                };
+                if self.unify_type(left_ty, right_ty) {
+                    Ok(PartialEqImpl::Own)
+                } else {
+                    Err((left, right))
+                }
+            }
+            between => Ok(between),
+        }
+    }
+
+    /// A compared type as rustc names it.
+    fn compared_name(&self, side: &Compared) -> ImmutableString {
+        match side {
+            Compared::Ty(ty) => self.inference.resolve(ty).name(&self.models),
+            Compared::Str => "str".into(),
+        }
+    }
+
     fn equality(
         &mut self,
         operator: Token,
+        operator_at: Option<Span>,
         lhs: ParsedExpr,
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
@@ -31389,7 +31592,30 @@ impl<'a> Parser<'a> {
             }
             return Ok(value);
         }
-        self.coerce_expr(&lhs.ty, &mut rhs)?;
+        // The `PartialEq<Rhs>` impl of the left operand's type that takes
+        // the right operand's: one between two types (`&String == &str`)
+        // compares their values as they are; `Self`'s takes the right
+        // operand as the left's type.
+        let (left, right) = (
+            Compared::Ty(self.inference.resolve(&lhs.ty)),
+            Compared::Ty(self.inference.resolve(&rhs.ty)),
+        );
+        match self.partial_eq(&left, &right) {
+            Ok(PartialEqImpl::Own) => {
+                self.coerce_expr(&lhs.ty, &mut rhs)?;
+            }
+            Ok(PartialEqImpl::Between) => {}
+            Err((inner_lhs, inner_rhs)) => {
+                let required = (inner_lhs != left || inner_rhs != right)
+                    .then(|| (self.compared_name(&left), self.compared_name(&right)));
+                return Err(Error::CannotCompare {
+                    lhs: self.compared_name(&inner_lhs),
+                    rhs: self.compared_name(&inner_rhs),
+                    required,
+                    at: operator_at.unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
+                });
+            }
+        }
         // `&T == &T` compares the referents, as Rust's `PartialEq for &A` does,
         // and `Box<T> == Box<T>` their contents.
         let mut peeled = self.inference.resolve(&lhs.ty);
@@ -34491,7 +34717,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Token::NotEqualsTo
                 };
-                value = self.apply_binary(operator, subject, other)?;
+                value = self.apply_binary(operator, None, subject, other)?;
                 value.span = call;
                 continue;
             }
