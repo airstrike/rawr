@@ -31,7 +31,28 @@ permissions:
   actions: read
 
 jobs:
+  # A push that main has moved past by the time its turn comes has nothing to
+  # deploy: a later run in the queue deploys main's newer head. Checked on its
+  # turn, inside the group, so runs queued behind a long release collapse to
+  # the newest one.
+  latest:
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - id: head
+        run: |
+          head=$(git ls-remote "https://github.com/${{ github.repository }}" refs/heads/main | cut -f1)
+          if [ "${{ github.event_name }}" != push ] || [ "$head" = "${{ github.sha }}" ]; then
+            echo current=true >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at $head, past ${{ github.sha }}; a later run deploys it"
+            echo current=false >> "$GITHUB_OUTPUT"
+          fi
+
   site:
+    needs: latest
+    if: needs.latest.outputs.current == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
