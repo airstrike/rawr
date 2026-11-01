@@ -10,7 +10,6 @@ const DEFINITION_DOMAIN: &[u8] = b"rawr.identity.definition/v1";
 const EXPORT_DOMAIN: &[u8] = b"rawr.identity.export/v1";
 const IMPLEMENTATION_DOMAIN: &[u8] = b"rawr.identity.implementation/v1";
 const OPERATION_DOMAIN: &[u8] = b"rawr.identity.operation/v3";
-const SIPPER_DOMAIN: &[u8] = b"rawr.identity.sipper/v1";
 const VALUE_DOMAIN: &[u8] = b"rawr.identity.value/v1";
 const ELEMENT_DOMAIN: &[u8] = b"rawr.identity.element/v1";
 const THEME_DOMAIN: &[u8] = b"rawr.identity.theme/v1";
@@ -241,14 +240,6 @@ impl Definition {
         Self(framed.finish())
     }
 
-    /// The type a Rust `impl Sipper<Output, Progress>` crosses as. Sipper is
-    /// a trait, so no Rust definition names it; iced's facade declares it as
-    /// `task::Sipper<Output, Progress>`.
-    #[must_use]
-    pub fn sipper() -> Self {
-        Self(Framed::new(SIPPER_DOMAIN).finish())
-    }
-
     /// The type a Rust future of `T` crosses as: iced's `Task<T>`. Any
     /// crate may return one, so no crate's own types declare it.
     #[must_use]
@@ -331,12 +322,11 @@ impl Definition {
     }
 
     /// Whether these bytes name a type the iced facade declares for a Rust
-    /// value no imported crate declares: a future, a sipper, a duration, an
+    /// value no imported crate declares: a future, a duration, an
     /// instant or an inclusive range.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         *bytes == Self::future().0
-            || *bytes == Self::sipper().0
             || *bytes == Self::duration().0
             || *bytes == Self::instant().0
             || *bytes == Self::range_inclusive().0

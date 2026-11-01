@@ -1656,6 +1656,9 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
     let list = definition("7c", identity::Namespace::Value);
     let opaque = definition("7d", identity::Namespace::Type);
     let pair = definition("7e", identity::Namespace::Type);
+    let straw = sysroot_definition("7f", identity::Namespace::Type, "sipper");
+    let download = definition("80", identity::Namespace::Value);
+    let sipped = definition("81", identity::Namespace::Type);
     let of = |id: &identity::Definition, arguments: Vec<model::Type>| model::Type::Definition {
         id: id.clone(),
         arguments: arguments.into_iter().map(model::Argument::Type).collect(),
@@ -1884,6 +1887,33 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
             },
             844,
         ),
+        sysroot(&straw, &["sipper", "Straw"], "trait", 870),
+        // `fn download() -> impl Straw<(), i64, i64>`, as iced's examples
+        // give their own sippers (#561).
+        function(
+            &download,
+            "download",
+            false,
+            Vec::new(),
+            model::Type::ImplTrait {
+                id: sipped,
+                bounds: Box::from([model::Predicate::Bound {
+                    ty: model::Type::Tuple(Box::default()),
+                    bound: model::Bound::Trait {
+                        trait_id: straw.clone(),
+                        arguments: Box::from([
+                            model::Argument::Type(model::Type::Tuple(Box::default())),
+                            model::Argument::Type(primitive("i64")),
+                            model::Argument::Type(primitive("i64")),
+                        ]),
+                        polarity: model::Polarity::Positive,
+                        binders: Box::default(),
+                    },
+                }]),
+                captures: Box::default(),
+            },
+            881,
+        ),
     ];
     definitions.sort_by(|left, right| left.id().cmp(right.id()));
     let export = |name: &str, id: &identity::Definition, at: u32| {
@@ -1908,6 +1938,7 @@ pub fn native_shapes() -> api::Graph<api::Extracted> {
         export("Entry", &entry, 910),
         export("list", &list, 912),
         export("Pair", &pair, 914),
+        export("download", &download, 916),
     ];
     let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
     api::Graph::seal(
