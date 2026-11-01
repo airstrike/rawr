@@ -41,7 +41,5 @@ field password | "$crane" auth login "$registry" -u "$(field username)" --passwo
 "$crane" push "$oci" "$image"
 container image delete "$image" >/dev/null 2>&1 || true
 
-sed -i '' -E "s|\"image\": \"[^\"]*\"|\"image\": \"$image\"|" "$here/wrangler.jsonc"
-# The Durable Object restarts a running bot whose image is not this one.
-sed -i '' -E "s|\"PLAY_VERSION\": \"[^\"]*\"|\"PLAY_VERSION\": \"$sha\"|" "$here/wrangler.jsonc"
+"$here/pin-image.sh" "$image" >/dev/null
 echo "pushed $image; now: npx wrangler deploy"
