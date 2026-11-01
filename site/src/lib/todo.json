@@ -1021,7 +1021,10 @@
     {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health"},
     {"issue":493,"title":"Run the ?play release on each release push to main","state":"open","category":"Health"},
     {"issue":494,"title":"Move the workflows' actions off Node 20","state":"open","category":"Health"},
-    {"issue":495,"title":"Cache the Linux workflow's release build of the importer","state":"open","category":"Health"}
+    {"issue":495,"title":"Cache the Linux workflow's release build of the importer","state":"open","category":"Health"},
+    {"issue":496,"title":"Deploy the site on each push to main, not only at release","state":"closed","category":"Health"},
+    {"issue":497,"title":"A site change that needs a newer rawr-web or image goes live before them","state":"open","category":"Health"},
+    {"issue":498,"title":"An image pushed from a Mac leaves the site workflow without rawr-web","state":"open","category":"Health"}
   ],
   "groups": [
     {

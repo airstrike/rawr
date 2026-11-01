@@ -495,6 +495,9 @@
     {"t":"T492","issue":492,"title":"T492: CI runs fail only when the code is broken","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"ef5d948a8","release":null},
     {"t":"T493","issue":493,"title":"T493: Run the ?play release on each release push to main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T494","issue":494,"title":"T494: Move the workflows' actions off Node 20","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T495","issue":495,"title":"T495: Cache the Linux workflow's release build of the importer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T495","issue":495,"title":"T495: Cache the Linux workflow's release build of the importer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T496","issue":496,"title":"T496: Deploy the site on each push to main, not only at release","state":"closed","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":"1826cdd19","release":null},
+    {"t":"T497","issue":497,"title":"T497: A site change that needs a newer rawr-web or image goes live before them","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T498","issue":498,"title":"T498: An image pushed from a Mac leaves the site workflow without rawr-web","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
