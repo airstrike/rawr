@@ -803,25 +803,25 @@ fn request_inventory(
         limits,
     )?
     .environment(environment)
-    .profile(&config.profile)?;
-    builder = builder.cargo_authority(&config.cargo_authority)?;
+    .profile(&config.profile);
+    builder = builder.cargo_authority(&config.cargo_authority);
     // The probe declares what the program does; the inventory declares
     // its whole library closure, each crate by its own name.
     if closure.is_empty() {
         for dependency in dependencies(config)? {
-            builder = builder.dependency(dependency)?;
+            builder = builder.dependency(dependency);
         }
         if let Some(app) = app {
-            builder = builder.dependency(app)?;
+            builder = builder.dependency(app);
         }
     } else {
         for dependency in closure {
-            builder = builder.dependency(dependency.clone())?;
+            builder = builder.dependency(dependency.clone());
         }
     }
     builder
         .inventory()
-        .policy(Policy::manifest().seal())?
+        .policy(Policy::manifest().seal())
         .build()
 }
 
@@ -844,7 +844,7 @@ fn dependencies(config: &Config) -> rawr_import::Result<Vec<Dependency>> {
                 };
                 let dependency = Dependency::git(&configured.alias, url, reference)?;
                 match version {
-                    Some(version) => dependency.git_version(version)?,
+                    Some(version) => dependency.git_version(version),
                     None => dependency,
                 }
             }
@@ -882,19 +882,19 @@ fn request(
         limits,
     )?
     .environment(environment)
-    .profile(&config.profile)?;
-    builder = builder.cargo_authority(&config.cargo_authority)?;
+    .profile(&config.profile);
+    builder = builder.cargo_authority(&config.cargo_authority);
     for dependency in dependencies(config)? {
-        builder = builder.dependency(dependency)?;
+        builder = builder.dependency(dependency);
     }
     if let Some(app) = app {
-        builder = builder.dependency(app)?;
+        builder = builder.dependency(app);
     }
     if let Some(universe) = universe {
-        builder = builder.resolution_universe(universe)?;
+        builder = builder.resolution_universe(universe);
     }
     for path in demand {
-        builder = builder.demand(path.split("::"))?;
+        builder = builder.demand(path.split("::"));
     }
-    builder.policy(Policy::manifest().seal())?.build()
+    builder.policy(Policy::manifest().seal()).build()
 }

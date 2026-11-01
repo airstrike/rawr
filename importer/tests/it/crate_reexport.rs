@@ -192,9 +192,7 @@ fn extract_demanding(
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let mut request = request(project, &limits, dependencies);
     for path in demand {
-        request = request
-            .demand(path.iter().copied())
-            .expect("the demanded path fits the request");
+        request = request.demand(path.iter().copied());
     }
     let resolution = request
         .build()
@@ -246,16 +244,13 @@ fn request(project: &Project, limits: &Limits, dependencies: &[(&str, &str)]) ->
     )
     .expect("the limits-bound request builder seals")
     .environment(environment)
-    .policy(Policy::manifest().seal())
-    .expect("the manifest policy fits the request");
+    .policy(Policy::manifest().seal());
     for (alias, package) in dependencies {
-        builder = builder
-            .dependency(
-                Dependency::path(alias, &fixture(package))
-                    .and_then(|dependency| dependency.package(package))
-                    .expect("the fixture selection is exact"),
-            )
-            .expect("the fixture dependency fits the request");
+        builder = builder.dependency(
+            Dependency::path(alias, &fixture(package))
+                .and_then(|dependency| dependency.package(package))
+                .expect("the fixture selection is exact"),
+        );
     }
     builder
 }

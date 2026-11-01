@@ -311,13 +311,11 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
                 .expect("the package-member environment seals"),
         )
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("fallback", &added_copy)
                 .and_then(|dependency| dependency.package("fallback-api"))
                 .expect("the fallback member-addition dependency seals"),
         )
-        .expect("the fallback dependency fits the request")
         .build()
         .expect("the member-addition request seals")
         .resolve(&native, &limits)
@@ -374,19 +372,16 @@ fn request(project: &Project, environment: Environment, limits: &Limits) -> Requ
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("freshness", &fixture("freshness-api"))
                 .and_then(|dependency| dependency.package("freshness-api"))
                 .expect("the freshness dependency seals"),
         )
-        .expect("the freshness dependency fits the request")
         .dependency(
             Dependency::path("fallback", &fixture("fallback-api"))
                 .and_then(|dependency| dependency.package("fallback-api"))
                 .expect("the fallback dependency seals"),
         )
-        .expect("the fallback dependency fits the request")
         .build()
         .expect("the freshness request seals")
 }
@@ -401,13 +396,11 @@ fn single_request(
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("freshness", dependency)
                 .and_then(|dependency| dependency.package("freshness-api"))
                 .expect("the copied freshness dependency seals"),
         )
-        .expect("the freshness dependency fits the request")
         .build()
         .expect("the copied freshness request seals")
 }
@@ -420,8 +413,8 @@ fn extract_fallback(
 ) -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
     Request::builder(&project.0, &project.cache(), limits)?
         .environment(Environment::capture()?.setting("CARGO_NET_OFFLINE", "true")?)
-        .policy(Policy::manifest().seal())?
-        .dependency(Dependency::path("fallback", dependency)?.package("fallback-api")?)?
+        .policy(Policy::manifest().seal())
+        .dependency(Dependency::path("fallback", dependency)?.package("fallback-api")?)
         .build()?
         .resolve(native, limits)
         .and_then(|resolution| rawr_import::extract::from_resolution(resolution, native, limits))

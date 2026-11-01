@@ -334,7 +334,7 @@ impl Dependency {
 
     /// Add the `version` written beside `git`. Cargo checks the requirement
     /// against the Git package's version, so rawr passes it through as written.
-    pub fn git_version(mut self, version: &str) -> Result<Self> {
+    pub fn git_version(mut self, version: &str) -> Self {
         let Source::Git {
             version: retained, ..
         } = &mut self.source
@@ -342,7 +342,7 @@ impl Dependency {
             panic!("a `version` beside `git` belongs to a Git dependency");
         };
         *retained = Some(version.into());
-        Ok(self)
+        self
     }
 
     /// Select a package name when it differs from the Rawr alias.

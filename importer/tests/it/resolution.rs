@@ -104,13 +104,11 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
         .expect("the limits-bound request builder seals")
         .environment(environment)
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .dependency(
             Dependency::path("catalog", fixture)
                 .and_then(|dependency| dependency.package("catalog-api"))
                 .expect("the unchanged fixture specification is valid"),
         )
-        .expect("the catalog dependency fits the request")
         .build()
         .expect("the request seals before native execution")
 }
@@ -139,15 +137,12 @@ fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
         .expect("the limits-bound request builder seals")
         .environment(Environment::empty())
         .policy(Policy::manifest().seal())
-        .expect("the manifest policy fits the request")
         .target("x86_64-unknown-linux-gnu")
-        .expect("the triple is syntactically valid")
         .dependency(
             Dependency::path("catalog", &fixture())
                 .and_then(|dependency| dependency.package("catalog-api"))
                 .expect("the fixture specification is valid"),
         )
-        .expect("the catalog dependency fits the request")
         .build()
         .expect_err("unsupported targets reject before Cargo graph authority");
     assert!(matches!(
