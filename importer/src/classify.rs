@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 72;
+const CLASSIFIER_VERSION: u32 = 73;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -5726,6 +5726,42 @@ impl<P: api::Phase> Context<'_, P> {
             })
     }
 
+    /// Whether a function with no receiver gives a struct or enum that
+    /// declares a lifetime, and each input that borrows at an early lifetime is a
+    /// shared reference to a crate type that declares none, as iced's
+    /// `qr_code<'a, Theme>(data: &'a Data) -> QRCode<'a, Theme>`: its output
+    /// borrows those values, which a view's region holds for as long as the
+    /// output lives.
+    fn lends_values(&self, signature: &model::Signature) -> bool {
+        let lifetimes = |id: &api::identity::Definition| {
+            self.graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|definition| match definition.kind() {
+                    model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
+                        Some(lifetime_parameters(generics))
+                    }
+                    _ => None,
+                })
+        };
+        matches!(signature.receiver(), model::Receiver::None)
+            && matches!(signature.output(), model::Type::Definition { id, .. }
+                if matches!(lifetimes(id), Some(count) if count != 0))
+            && signature
+                .inputs()
+                .filter(|input| borrows_at_early_lifetime(input))
+                .all(|input| {
+                    matches!(input, model::Type::Reference {
+                        mutability: model::Mutability::Shared,
+                        lifetime: model::Lifetime::Early { .. },
+                        ty,
+                    } if matches!(&**ty, model::Type::Definition { id, arguments }
+                        if lifetimes(id) == Some(0)
+                            && !arguments.iter().any(|argument| matches!(argument,
+                                model::Argument::Type(ty) if borrows_at_early_lifetime(ty)))))
+                })
+    }
+
     /// Whether `generics` bound a type parameter by iced's `Renderer`, as
     /// an iced widget's do: its lifetime is iced's view lifetime.
     fn renders(&self, generics: &model::Generics) -> bool {
@@ -6281,10 +6317,13 @@ impl<P: api::Phase> Context<'_, P> {
                 && names_early_lifetime(signature.output())
             {
                 Some(representability::signature::Scope::Opens)
-            } else if self.view_output(signature.output()) {
+            } else if self.view_output(signature.output()) || self.lends_values(signature) {
                 // An iced view type's constructor, as `PaneGrid::new(&state,
                 // view)`: its value is a recipe, which borrows its inputs
-                // again at each lowering (D558 tier 2).
+                // again at each lowering (D558 tier 2). So is a value whose
+                // type borrows a crate value its function takes, as iced's
+                // `qr_code(&'a Data) -> QRCode<'a, Theme>`: a view's region
+                // keeps the borrowed value for the view's lifetime.
                 None
             } else {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());

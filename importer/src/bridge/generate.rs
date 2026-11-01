@@ -119,6 +119,49 @@ trait Homed: Any {
     fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error>;
     fn mutable(&self, call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error>;
     fn as_any(&self) -> &dyn Any;
+    /// The value, where the home holds it plainly.
+    fn value(&self) -> Option<&dyn Any> {
+        None
+    }
+    /// The value back for its slot, once nothing borrows it from the home.
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>>;
+}
+
+/// A native value a view's widget borrows past its call, as `qr_code(&self.
+/// data)` and `pick_list(Some(&self.backend), ..)` do (D568): shared with
+/// the pins of the script value the view was lent, which keep it for as
+/// long as the view can borrow it. Its slot reaches it here, and takes it
+/// back once those pins let it go.
+#[allow(dead_code)]
+struct Viewed<T>(std::rc::Rc<T>);
+
+impl<T: 'static> Homed for Viewed<T> {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        call(&*self.0);
+        Ok(())
+    }
+
+    /// A view still borrows it, as rustc's E0502 says of a `&mut` while a
+    /// shared borrow lives.
+    fn mutable(&self, _call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        Err(Error::Home(
+            "cannot borrow this value as mutable because a view still borrows it (E0502)".into(),
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn value(&self) -> Option<&dyn Any> {
+        Some(&*self.0)
+    }
+
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        std::rc::Rc::try_unwrap(self.0)
+            .map(|value| Box::new(value) as Box<dyn Any>)
+            .map_err(|shared| Box::new(Viewed(shared)) as Box<dyn Homed>)
+    }
 }
 
 /// Rust's `Debug` text of a stored value, for a type that implements it.
@@ -906,7 +949,11 @@ impl Arena {
         if handle.epoch != self.epoch || handle.generation != entry.generation {
             return None;
         }
-        Some((entry, entry.value.as_deref()?))
+        let value = match entry.value.as_deref() {
+            Some(value) => value,
+            None => entry.homed.as_deref()?.value()?,
+        };
+        Some((entry, value))
     }
 
     /// `==` of two values of one type by its `PartialEq`.
@@ -948,6 +995,48 @@ impl Arena {
         let homed = home(value)?;
         self.slots[index].homed = Some(Box::new(homed.clone()));
         Ok(homed)
+    }
+
+    /// The value of `handle`, shared with the pins a view's widget borrows
+    /// it through ([`Viewed`]). The value moves out of its slot once, and
+    /// isn't copied.
+    #[allow(dead_code)]
+    fn share<T: 'static>(&mut self, handle: NativeHandle) -> Result<std::rc::Rc<T>, Error> {
+        self.settle(&handle);
+        if let Some(homed) = self.homed(&handle) {
+            return homed
+                .as_any()
+                .downcast_ref::<Viewed<T>>()
+                .map(|viewed| viewed.0.clone())
+                .ok_or(Error::Leased);
+        }
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
+        let shared = std::rc::Rc::new(*value);
+        self.slots[index].homed = Some(Box::new(Viewed(shared.clone())));
+        Ok(shared)
+    }
+
+    /// Give the slot of `handle` its value back from its home once nothing
+    /// borrows it there.
+    fn settle(&mut self, handle: &NativeHandle) {
+        if handle.epoch != self.epoch {
+            return;
+        }
+        let Some(entry) = self.slots.get_mut(handle.slot as usize) else {
+            return;
+        };
+        if entry.generation != handle.generation {
+            return;
+        }
+        let Some(homed) = entry.homed.take() else {
+            return;
+        };
+        match homed.settle() {
+            Ok(value) => entry.value = Some(value),
+            Err(homed) => entry.homed = Some(homed),
+        }
     }
 
     fn equal(&self, lhs: NativeHandle, rhs: NativeHandle) -> Option<bool> {
@@ -1016,6 +1105,7 @@ impl Arena {
     }
 
     fn take<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+        self.settle(&handle);
         // A homed value is copied out by its `Clone`, as a slot's is; one
         // without it stays where the view borrows it.
         if let Some(homed) = self.homed(&handle) {
@@ -1120,6 +1210,7 @@ impl Arena {
     /// refuses every use until the future gives it back.
     #[allow(dead_code)]
     fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
+        self.settle(&handle);
         if self.homed(&handle).is_some() {
             return Err(Error::Leased);
         }
@@ -1133,6 +1224,7 @@ impl Arena {
     /// Lend a native place synchronously on its owner thread, without
     /// imposing the transfer bound required by an asynchronous Held value.
     fn lease_place<T: 'static>(&mut self, handle: NativeHandle) -> Result<PlaceHeld<T>, Error> {
+        self.settle(&handle);
         if self.homed(&handle).is_some() { return Err(Error::Leased); }
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
@@ -1253,6 +1345,7 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut T) -> R,
     ) -> Result<R, Error> {
+        self.settle(&handle);
         if let Some(homed) = self.homed(&handle) {
             let mut call = Some(call);
             let mut output = None;
@@ -1283,6 +1376,7 @@ impl Arena {
         handle: NativeHandle,
         call: impl FnOnce(&mut Self, &mut T) -> R,
     ) -> Result<R, Error> {
+        self.settle(&handle);
         // A homed value is in the home, so the arena is free to lend.
         if let Some(index) = self.homed(&handle).map(|_| handle.slot as usize) {
             let homed = self.slots[index].homed.take().ok_or(Error::StaleHandle)?;
@@ -7116,6 +7210,11 @@ fn render_adapter_body(
             // strings are, and out of any region for the runner's life.
             let pins = !opens && replay.is_none() && lends_str_to_output(signature, substitutions)?;
             let _pins = PinnedStrings::enter(pins);
+            // A crate value the output borrows past the call, as
+            // `qr_code(&self.data)` gives a `QRCode<'a>` (D568).
+            let _viewed = ViewedArguments::enter(
+                !opens && replay.is_none() && views_natives(signature, substitutions)?,
+            );
             if (opens || pins) && replay.is_none() {
                 render_anchored_opening(
                     plan,
@@ -7245,6 +7344,13 @@ fn render_adapter_body(
                     writeln!(
                         output,
                         "    let output = __rawr_profile_host::task::lazy(move || {call});"
+                    )
+                } else if VIEWED_ARGUMENTS.get() {
+                    // Out of any view's region, the output is at
+                    // `'static`, and so is what it borrows.
+                    writeln!(
+                        output,
+                        "    let pins = static_pins();\n    let output = lend(arguments.arena, || {call});"
                     )
                 } else {
                     writeln!(output, "    let output = lend(arguments.arena, || {call});")
@@ -8034,10 +8140,17 @@ fn render_anchored_output(
     let Some(family) = family_of(returned) else {
         return Ok(());
     };
+    // The crate values the output borrows are shared with the region's
+    // pins, which live as long as the view's borrow (`views_natives`).
+    let pins = if VIEWED_ARGUMENTS.get() {
+        "\n            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;"
+    } else {
+        ""
+    };
     writeln!(
         output,
         "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
-        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{{pins}
             let made = lend(arguments.arena, || {call});
             Ok::<Dynamic, Error>(Dynamic::from(region.insert::<{family}>(made)))
         }})
@@ -10474,6 +10587,19 @@ fn function_argument_list(
             {
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
+            _ if VIEWED_ARGUMENTS.get()
+                && viewed_native(&substituted(ty, signature, substitutions)?).is_some() =>
+            {
+                if matches!(
+                    substituted(ty, signature, substitutions)?,
+                    convert::Type::Option(_)
+                ) {
+                    write!(output, "argument_{position}.map(|value| pins.hold(value))")
+                } else {
+                    write!(output, "pins.hold(argument_{position})")
+                }
+                .map_err(request::unwritable)?;
+            }
             _ => {
                 let ty = substitute(ty, signature, substitutions)?;
                 if profile.is_some_and(|proof| is_projection_target(ty, proof)) {
@@ -10647,6 +10773,30 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // A crate value the output borrows past the call: the value moved into
+    // an `Rc` its slot shares, which the call's pins hold (`views_natives`).
+    if VIEWED_ARGUMENTS.get() {
+        let substituted = substituted(ty, signature, substitutions)?;
+        if let Some(target) = viewed_native(&substituted) {
+            let rust = concrete_type(target)
+                .ok_or_else(|| request::drift("a viewed native input's type"))?;
+            let share = format!(
+                "inner.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.share::<{rust}>(handle))"
+            );
+            return if matches!(substituted, convert::Type::Option(_)) {
+                writeln!(
+                    output,
+                    "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); match __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)? {{ None => None, Some(inner) => Some({share}?) }} }};"
+                )
+            } else {
+                writeln!(
+                    output,
+                    "    let argument_{local} = {{ let inner = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {share}? }};"
+                )
+            }
+            .map_err(request::unwritable);
+        }
+    }
     // `&mut Vec<T>` of scalars, or `&mut String`: a copy of Rawr's array or
     // string the call changes, which goes back after it (D558 slice 2).
     if let convert::Type::Borrowed {
@@ -12338,6 +12488,70 @@ thread_local! {
     /// Whether an adapter takes its `&str` arguments pinned for the
     /// runner's life, as its output borrows them (`lends_str_to_output`).
     static PINNED_STRINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter's output borrows crate values it takes by `&T`,
+    /// which it shares with `pins` for as long as the output can borrow
+    /// them (`views_natives`).
+    static VIEWED_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes an adapter's `&T` arguments of crate values shared with `pins`
+/// while it lives, when `viewed`.
+struct ViewedArguments(bool);
+
+impl ViewedArguments {
+    fn enter(viewed: bool) -> Self {
+        Self(VIEWED_ARGUMENTS.replace(viewed))
+    }
+}
+
+impl Drop for ViewedArguments {
+    fn drop(&mut self) {
+        VIEWED_ARGUMENTS.set(self.0);
+    }
+}
+
+/// The crate type of a `&T`, or of an `Option<&T>`, that a call takes: a
+/// value the runner's arena holds, which its output may borrow past the
+/// call, as `qr_code(&self.data)` gives a `QRCode<'a>` and `pick_list(Some(
+/// &self.backend), ..)` a `PickList` whose `V` is `&Backend`.
+fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
+    let ty = match ty {
+        convert::Type::Option(inner) => inner.as_ref(),
+        ty => ty,
+    };
+    match ty {
+        convert::Type::Borrowed { mutable: false, ty }
+            if matches!(**ty, convert::Type::Nominal { .. })
+                && !is_value(ty)
+                && !is_facade_value(ty)
+                && std_time(ty).is_none()
+                && !carries_lifetime(ty) =>
+        {
+            Some(ty)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the call's output carries a lifetime and an input is a `&T` of
+/// a crate value, or an `Option` of one (`viewed_native`): the output may
+/// borrow the value for as long as it lives, so the adapter shares it with
+/// the pins of the view's region, or of the runner out of any region,
+/// instead of lending it for the call alone (D568).
+fn views_natives(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<bool, request::Error> {
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    if !matches!(returned, convert::Type::Nominal { .. }) || !carries_lifetime(&returned) {
+        return Ok(false);
+    }
+    for input in signature.inputs() {
+        if viewed_native(&substituted(input, signature, substitutions)?).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Takes an adapter's `&str` arguments pinned for the runner's life while
@@ -12619,7 +12833,17 @@ fn container_family(path: &str, container: &str) -> Option<String> {
     if lifetimes.count == 0 && !borrowed && !inner {
         return None;
     }
-    let rest = rest.replace("&[", "&'x [").replace("&str", "&'x str");
+    // Each borrow in it, `&[u8]`, `&str` or a crate value's `&Backend`, is
+    // at `'x`.
+    let mut marked = String::with_capacity(rest.len());
+    let mut characters = rest.chars().peekable();
+    while let Some(character) = characters.next() {
+        marked.push(character);
+        if character == '&' && characters.peek() != Some(&'\'') {
+            marked.push_str("'x ");
+        }
+    }
+    let rest = marked;
     let marks = vec!["'x"; lifetimes.count as usize].join(", ");
     let text = match rest.strip_prefix('<') {
         Some(arguments) if lifetimes.count != 0 => format!("{path}<{marks}, {arguments}"),
@@ -13833,6 +14057,13 @@ fn render_generic_arguments(
                     | convert::Type::Range(_)
                     | convert::Type::Borrowed { .. }
                     | convert::Type::Result(..) => concrete_type(ty),
+                    // In a type, which a scope family's declaration can't
+                    // leave to inference: the `Vec` a crate's `&[T]`
+                    // constant crosses as, as `pick_list(.., Backend::ALL,
+                    // ..)`'s `L` is.
+                    convert::Type::Sequence { length: None, .. } if opening == b"<" => {
+                        concrete_type(ty)
+                    }
                     _ => None,
                 };
                 output

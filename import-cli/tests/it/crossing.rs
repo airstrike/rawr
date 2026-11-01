@@ -757,6 +757,42 @@ fn a_choice_of_script_values_beside_a_string_literal_runs() {
     );
 }
 
+/// iced's solar_system and qr_code (#591): `pick(..)`'s `V: Borrow<T>` is a
+/// reference to a crate enum the state holds, from `Some(&self.backend)`
+/// and `self.chosen.as_ref()`, and a reference to a script enum, and its
+/// `L` is a crate's `&'static [Self]` constant. The view borrows the crate
+/// value, which `update` then replaces. The output is `cargo run`'s.
+#[test]
+fn a_reference_to_a_crate_or_script_value_fills_a_crate_type_argument() {
+    let (rawr, cargo) = both_printed("crossing-selected", "selected.rs", "Software,Elm");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 <Best: *Best|Software> <Mine: Best|Software> <Rust: *Rust|Elm>"
+        ) && rawr.ends_with(
+            "last view pad 0 <Software: Best|*Software> <Mine: Best|Software> <Elm: Rust|*Elm>"
+        ),
+        "{rawr}"
+    );
+}
+
+/// iced's qr_code (#590): `qr_code<'a, Theme>(data: &'a Data) ->
+/// QRCode<'a, Theme>` borrows the state's data for the view's lifetime.
+/// The data isn't `Clone` and counts its draws, so the count shows each
+/// view borrows the one value, and `update` changes it in place once no
+/// view borrows it. The output is `cargo run`'s.
+#[test]
+fn a_widget_borrows_a_crate_value_of_the_state_for_the_views_lifetime() {
+    let (rawr, cargo) = both_printed("crossing-qr", "qr.rs", "Limit,Limit");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 <Limit:0> qr 9@10 draw 1")
+            && rawr.contains("2 view pad 0 <x Limit:0> qr 11@16.923077 draw 2")
+            && rawr.ends_with("last view pad 0 <Limit:0> qr 13@10 draw 3"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas examples: the program's own type implements the crate's
 /// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
 /// crate calls the impl's `draw` back while it lays the view out, lending
