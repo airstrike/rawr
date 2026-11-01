@@ -139,11 +139,15 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let Loaded { target, graph, .. } = loaded;
     let target = &target;
     let mut engine = Engine::new();
+    // The debugger is registered before the program compiles, so only a
+    // program a debugger reads carries what reading needs (#526).
+    let known = std::sync::Arc::new(std::sync::OnceLock::new());
+    inspect(&mut engine, target, &known);
     let (ast, main, positions) = engine
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
     let positions = std::sync::Arc::new(positions);
-    inspect(&mut engine, target, &positions);
+    let _ = known.set(std::sync::Arc::clone(&positions));
     // A runtime error's position is in the lowered program: the compiler's
     // positions map it back to its file, the entry or a module's, or to
     // none in code it wrote.
@@ -198,11 +202,12 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
 }
 
 /// Under `rawr mcp`, answer `inspect` on the socket it named: each step's
-/// file and line come from the compiler's positions.
+/// file and line come from the compiler's positions, once `positions`
+/// holds them.
 fn inspect(
     engine: &mut Engine,
     target: &project::Target,
-    positions: &std::sync::Arc<rawr::program::Positions>,
+    positions: &std::sync::Arc<std::sync::OnceLock<std::sync::Arc<rawr::program::Positions>>>,
 ) {
     let Some(socket) = std::env::var_os(crate::events::INSPECT).filter(|path| !path.is_empty())
     else {
@@ -213,7 +218,7 @@ fn inspect(
     };
     let positions = std::sync::Arc::clone(positions);
     let locate = move |position| {
-        let (file, span) = positions.locate_position(&entry, position)?;
+        let (file, span) = positions.get()?.locate_position(&entry, position)?;
         Some((file.identity().to_owned(), span.start().line()?))
     };
     #[cfg(unix)]
