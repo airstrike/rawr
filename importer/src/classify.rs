@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 77;
+const CLASSIFIER_VERSION: u32 = 78;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -1662,6 +1662,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         }
         // A callable parameter's inputs and output, which a script function
         // that fills it names as the types the projections are.
+        let declared = found.len();
         for predicate in generics.predicates() {
             match predicate {
                 model::Predicate::Bound {
@@ -1693,20 +1694,25 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
         }
         let mut projected: Vec<Projected> = Vec::new();
-        for (index, trait_id, associated) in found {
-            // A future's `Output` is its own synthetic parameter (D527), and
-            // a callable's is its output.
-            if self.is_core_trait(&trait_id, "Future")
+        for (position, (index, trait_id, associated)) in found.into_iter().enumerate() {
+            // A future's `Output` an input or the output names is its own
+            // synthetic parameter (D527), and a callable's is its output. A
+            // callable's input is read as any other projection is, as iced's
+            // `Task::sip` takes `impl FnOnce(<S as Future>::Output) -> T`
+            // with `S: sipper::Core`.
+            let called = position >= declared;
+            if (!called
+                && (self.is_core_trait(&trait_id, "Future")
+                    || generics.predicates().any(|predicate| {
+                        matches!(predicate, model::Predicate::Bound {
+                            ty: model::Type::Parameter { index: bounded, .. },
+                            bound: model::Bound::Trait { trait_id, .. },
+                        } if *bounded == index && self.is_core_trait(trait_id, "Future"))
+                    })))
                 || matches!(
                     self.definition_name(&trait_id),
                     Some("Fn" | "FnMut" | "FnOnce")
                 )
-                || generics.predicates().any(|predicate| {
-                    matches!(predicate, model::Predicate::Bound {
-                        ty: model::Type::Parameter { index: bounded, .. },
-                        bound: model::Bound::Trait { trait_id, .. },
-                    } if *bounded == index && self.is_core_trait(trait_id, "Future"))
-                })
                 || !generics
                     .parameters()
                     .any(|parameter| parameter.index() == index)
@@ -1974,6 +1980,114 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 return None;
             }
             found = Some(self.normalize_at(&substitute_bindings(value, &bindings), depth + 1)?);
+        }
+        found
+    }
+
+    /// Each associated type an opaque type's `bounds` bind, as `(trait,
+    /// associated type, value)`: its own, as `impl Program<State = S>`
+    /// binds, then each one a bound's supertraits bind at the bound's
+    /// arguments, as rustc elaborates them. `impl Straw<(), Progress,
+    /// Error>` binds `Future::Output` to `Result<(), Error>` and
+    /// `Stream::Item` to `Progress` through `Sipper` and `Core`.
+    fn bound_associated(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Vec<(
+        api::identity::Definition,
+        api::identity::Definition,
+        model::Type,
+    )> {
+        /// Supertraits are read this deep.
+        const DEPTH: usize = 8;
+        fn is_self(ty: &model::Type) -> bool {
+            matches!(
+                ty,
+                model::Type::SelfType(_) | model::Type::Parameter { index: 0, .. }
+            )
+        }
+        let mut found = Vec::new();
+        let mut pending = Vec::new();
+        let mut read = |predicates: &[model::Predicate],
+                        bindings: &BTreeMap<u32, model::Type>,
+                        depth: usize,
+                        pending: &mut Vec<_>| {
+            for predicate in predicates {
+                match predicate {
+                    model::Predicate::ProjectionEquality {
+                        projection:
+                            model::Type::Projection {
+                                trait_id,
+                                associated,
+                                arguments,
+                            },
+                        ty,
+                    } if depth == 0
+                        || matches!(arguments.first(),
+                            Some(model::Argument::Type(this)) if is_self(this)) =>
+                    {
+                        found.push((
+                            trait_id.clone(),
+                            associated.clone(),
+                            substitute_bindings(ty, bindings),
+                        ));
+                    }
+                    model::Predicate::Bound {
+                        ty,
+                        bound:
+                            model::Bound::Trait {
+                                trait_id,
+                                arguments,
+                                polarity: model::Polarity::Positive,
+                                binders,
+                            },
+                    } if (depth == 0 || is_self(ty)) && binders.is_empty() => {
+                        let arguments = arguments
+                            .iter()
+                            .map(|argument| match argument {
+                                model::Argument::Type(ty) => {
+                                    model::Argument::Type(substitute_bindings(ty, bindings))
+                                }
+                                other => other.clone(),
+                            })
+                            .collect::<Vec<_>>();
+                        pending.push((trait_id.clone(), arguments, depth));
+                    }
+                    _ => {}
+                }
+            }
+        };
+        read(bounds, &BTreeMap::new(), 0, &mut pending);
+        let mut seen = Vec::new();
+        while let Some((trait_id, arguments, depth)) = pending.pop() {
+            if depth >= DEPTH || seen.contains(&(trait_id.clone(), arguments.clone())) {
+                continue;
+            }
+            let Some(model::Kind::Trait {
+                supertraits,
+                generics,
+                ..
+            }) = self
+                .graph
+                .definition_index(&trait_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .map(model::Definition::kind)
+            else {
+                continue;
+            };
+            // The trait's own parameters after `Self` take the bound's
+            // arguments, in order.
+            let bindings = generics
+                .parameters()
+                .filter(|parameter| parameter.index() != 0)
+                .zip(&arguments)
+                .filter_map(|(parameter, argument)| match argument {
+                    model::Argument::Type(ty) => Some((parameter.index(), ty.clone())),
+                    _ => None,
+                })
+                .collect();
+            read(supertraits, &bindings, depth + 1, &mut pending);
+            seen.push((trait_id, arguments));
         }
         found
     }
@@ -6972,29 +7086,23 @@ impl<P: api::Phase> Context<'_, P> {
                 // Each associated type its bounds bind, as `impl Program<
                 // State = S>` binds `State`, is one more argument, so a
                 // call that takes the opaque type's value reads `P::State`
-                // from it, as rustc does. A std trait's, as an iterator's
-                // `Item`, keeps its own reading, as `projections` does.
+                // from it, as rustc does. So is each one a bound's
+                // supertraits bind, as `impl Straw<(), Progress, Error>`
+                // binds `Future::Output` through `Sipper` and `Core`.
                 let mut associated = Vec::new();
-                for predicate in bounds.iter() {
-                    let model::Predicate::ProjectionEquality {
-                        projection:
-                            model::Type::Projection {
-                                trait_id,
-                                associated: item,
-                                ..
-                            },
-                        ty,
-                    } = predicate
-                    else {
+                for (trait_id, item, ty) in self.bound_associated(bounds) {
+                    let Some(name) = self.definition_name(&item) else {
                         continue;
                     };
-                    if trait_id.unit().authority().sysroot().is_some() {
+                    let identity = *crate::surface::identity::Definition::of(&trait_id).as_bytes();
+                    if associated.iter().any(
+                        |(known, _): &(representability::signature::Associated, u32)| {
+                            known.trait_identity() == identity && known.name() == name
+                        },
+                    ) {
                         continue;
                     }
-                    let Some(name) = self.definition_name(item) else {
-                        continue;
-                    };
-                    let Ok(value) = self.convert(ty) else {
+                    let Ok(value) = self.convert(&ty) else {
                         continue;
                     };
                     let Ok(position) = u32::try_from(arguments.len()) else {
@@ -7002,10 +7110,7 @@ impl<P: api::Phase> Context<'_, P> {
                     };
                     self.retain_str(name)?;
                     associated.push((
-                        representability::signature::Associated::new(
-                            *crate::surface::identity::Definition::of(trait_id).as_bytes(),
-                            name.into(),
-                        ),
+                        representability::signature::Associated::new(identity, name.into()),
                         position,
                     ));
                     arguments.push(value);

@@ -217,23 +217,52 @@ impl<T> Task<T> {
         Task(sipper.sipped().into_iter().map(f).last())
     }
 
-    /// The work that gives `f` of `future`'s output, as iced's `Task::sip`
-    /// gives its output's message: `f` takes `<S as Future>::Output`.
+    /// iced's `Task::sip` whole: `on_progress` takes the sipper's `Item`
+    /// and `on_output` its `<S as Future>::Output`, both reached through
+    /// `Core`'s supertraits. The task's value is the output's message.
     pub fn finish<S>(
-        future: S,
-        f: impl FnOnce(<S as std::future::Future>::Output) -> T + MaybeSend + 'static,
+        mut sipper: S,
+        on_progress: impl FnMut(S::Item) -> T + MaybeSend + 'static,
+        on_output: impl FnOnce(<S as std::future::Future>::Output) -> T + MaybeSend + 'static,
     ) -> Self
     where
-        S: std::future::Future + MaybeSend + 'static,
+        S: Core + MaybeSend + 'static,
         T: MaybeSend + 'static,
     {
-        let mut future = Box::pin(future);
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        match future.as_mut().poll(&mut context) {
-            std::task::Poll::Ready(output) => Task(Some(f(output))),
-            std::task::Poll::Pending => Task(None),
-        }
+        let output = match std::pin::Pin::new(&mut sipper).poll(&mut context) {
+            std::task::Poll::Ready(output) => output,
+            std::task::Poll::Pending => return Task(None),
+        };
+        let progress = sipper.sipped().into_iter().map(on_progress);
+        Task(progress.chain([on_output(output)]).last())
     }
+}
+
+/// Work that is a future and reports items, as sipper's `Core` is a
+/// `Future` and a `Stream`.
+pub trait Core: std::future::Future + Sip + Unpin {}
+
+impl<T: std::future::Future + Sip + Unpin> Core for T {}
+
+/// As sipper's `Sipper<Output, Progress>: Core<Output = Output, Item =
+/// Progress>`.
+pub trait Sipper<Output, Progress = Output>: Core<Output = Output, Item = Progress> {}
+
+impl<T, Output, Progress> Sipper<Output, Progress> for T where
+    T: Core<Output = Output, Item = Progress>
+{
+}
+
+/// As sipper's `Straw<Output, Progress, Error>`: a sipper that can fail.
+pub trait Straw<Output, Progress = Output, Error = ()>:
+    Sipper<Result<Output, Error>, Progress>
+{
+}
+
+impl<S, Output, Progress, Error> Straw<Output, Progress, Error> for S where
+    S: Sipper<Result<Output, Error>, Progress>
+{
 }
 
 /// What may cross to another thread, as iced's `MaybeSend` on native.

@@ -3258,10 +3258,13 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
             // A script function fills each callable as a slot (D594).
             item_signature(plan)?,
         ),
-        // A callable parameter whose closure Rawr can't make leaves the item
-        // uncallable, as cosmic text's `with_buffer_mut` is.
+        // A callable parameter whose closure Rawr can't make, and that no
+        // script function fills by a slot (D594), leaves the item
+        // uncallable, as cosmic text's `with_buffer_mut` is. iced's
+        // `Task::sip` takes two callables, each filled by a slot.
         Representability::Invocation(plan)
             if plan.call().is_none()
+                && plan.item().crossings().is_empty()
                 && plan.signature().parameters().iter().any(|parameter| {
                     parameter.kind() == representability::signature::Kind::Callable
                 }) =>
