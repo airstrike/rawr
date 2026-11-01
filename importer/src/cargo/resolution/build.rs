@@ -570,7 +570,7 @@ fn capture_root(
             .map_err(|_| node::Error::OutsideRoot(path.clone()))?;
         validate_relative(relative)?;
         state.retain_path(relative)?;
-        let evidence = Evidence::capture(&path, bundle_byte_limit())?;
+        let evidence = Evidence::capture(&path)?;
         let destination = destination_root.join(relative);
         clone_file_exact(
             &path,
@@ -928,7 +928,7 @@ fn clone_file_exact(
         path: destination.to_path_buf(),
         source,
     })?;
-    let evidence = Evidence::capture_with_budget(destination, bundle_byte_limit(), budget)?;
+    let evidence = Evidence::capture_with_budget(destination, budget)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: destination.to_path_buf(),
@@ -1005,7 +1005,7 @@ fn validate_file_with_mode(
     {
         return Err(node::Error::Shape(path.to_path_buf()));
     }
-    let evidence = Evidence::capture_with_budget(path, bundle_byte_limit(), budget)?;
+    let evidence = Evidence::capture_with_budget(path, budget)?;
     if evidence.length != expected_length || evidence.digest != expected_digest {
         return Err(node::Error::Corrupt {
             path: path.to_path_buf(),
@@ -1021,10 +1021,6 @@ struct Evidence {
     digest: [u8; 32],
 }
 
-fn bundle_byte_limit() -> usize {
-    usize::try_from(crate::store::bundle::MAX_BYTES).unwrap_or(usize::MAX)
-}
-
 /// The product's node content bound: the physical store ceiling, never derived
 /// from the configurable JSON accounting target.
 fn product_byte_limit(limits: &super::super::Limits) -> Result<usize, node::Error> {
@@ -1037,13 +1033,13 @@ fn bundle_member_limit() -> usize {
 }
 
 impl Evidence {
-    fn capture(path: &Path, limit: usize) -> Result<Self, node::Error> {
-        Self::capture_with_budget(path, limit, None)
+    fn capture(path: &Path) -> Result<Self, node::Error> {
+        Self::capture_with_budget(path, None)
     }
 
+    /// Hashes the file as a stream, with no read limit: nothing is buffered.
     fn capture_with_budget(
         path: &Path,
-        limit: usize,
         budget: Option<&node::GraphBudget>,
     ) -> Result<Self, node::Error> {
         let metadata = fs::symlink_metadata(path).map_err(|source| node::Error::Io {
@@ -1055,13 +1051,6 @@ impl Evidence {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
         let length = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
-        if length > limit {
-            return Err(node::Error::Limit {
-                resource: "cached authoritative build file bytes",
-                limit,
-                actual: length,
-            });
-        }
         if let Some(budget) = budget {
             budget.hash(length)?;
         }
@@ -1083,13 +1072,6 @@ impl Evidence {
                 break;
             }
             actual = actual.checked_add(read).ok_or(node::Error::Allocation)?;
-            if actual > limit {
-                return Err(node::Error::Limit {
-                    resource: "cached authoritative build file bytes",
-                    limit,
-                    actual,
-                });
-            }
             hasher.update(&buffer[..read]);
         }
         if actual != length {

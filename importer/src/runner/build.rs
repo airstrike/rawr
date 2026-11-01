@@ -111,13 +111,8 @@ impl<B> super::Manifest<super::Generated, B> {
         validate_carrier(&entry, &self.generated)?;
         let executable = executable(&entry);
         let output = entry.join("target");
-        let artifact = super::artifact::BuiltArtifactProof::seal(
-            &self.generated,
-            &executable,
-            &output,
-            &[],
-            &crate::cargo::Limits::standard(),
-        )?;
+        let artifact =
+            super::artifact::BuiltArtifactProof::seal(&self.generated, &executable, &output, &[])?;
         crate::cache::seal::validate(&entry, &self.generated.digest(), &artifact.digest())?;
         let pin = crate::cache::pins::Pin::acquire(&entry)?;
         Ok(self.built(
@@ -199,7 +194,6 @@ impl<B> super::Manifest<super::Generated, B> {
             &executable(entry),
             &target,
             &[],
-            &crate::cargo::Limits::standard(),
         )?;
         Ok(artifact)
     }

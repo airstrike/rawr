@@ -814,11 +814,7 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     fs::set_permissions(grandparent, fs::Permissions::from_mode(0o755)).unwrap();
     let moved = grandparent.join("detached");
     let detached = crate::runner::artifact::retained::observe_hashes(graph, |hashes| {
-        hashes.hash(
-            &artifact,
-            &fs::metadata(&artifact).unwrap(),
-            limits.json_bytes,
-        )?;
+        hashes.hash(&artifact, &fs::metadata(&artifact).unwrap())?;
         fs::rename(parent, &moved).unwrap();
         fs::create_dir(parent).unwrap();
         fs::write(&artifact, b"native").unwrap();
@@ -835,7 +831,7 @@ fn published_resolution_data_round_trips_without_recapture_and_checks_controls()
     let (paths, _, inventory, budget) = replay.into_parts();
     let mut extraction = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
     assert!(
-        matches!(inventory.complete(paths.root(), None, &mut extraction, budget.graph(), limits.json_bytes),
+        matches!(inventory.complete(paths.root(), None, &mut extraction, budget.graph()),
         Err(crate::Error::Node { source, .. }) if matches!(*source, node::Error::CandidateCorrupt(_)))
     );
     fs::set_permissions(&artifact, fs::Permissions::from_mode(0o644)).unwrap();

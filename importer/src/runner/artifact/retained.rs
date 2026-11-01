@@ -247,11 +247,7 @@ impl Stored {
                     });
                 }
                 if retains(&path) {
-                    (
-                        1,
-                        metadata.len(),
-                        hash(&path, &metadata, bundle::MAX_BYTES as usize, budget)?,
-                    )
+                    (1, metadata.len(), hash(&path, &metadata, budget)?)
                 } else {
                     (2, metadata.len(), [0; 32])
                 }
@@ -474,7 +470,7 @@ impl Stored {
             node::read_set::Scope::Complete,
             None,
             mismatch,
-            |path, metadata, _| hash(path, metadata, bundle::MAX_BYTES as usize, budget).map(Some),
+            |path, metadata, _| hash(path, metadata, budget).map(Some),
         )
     }
 
@@ -568,7 +564,7 @@ impl Stored {
                 let control = matches!(relative.components().next(),
                     Some(std::path::Component::Normal(name)) if name == "declared" || name == "generated");
                 if control {
-                    hash(path, metadata, bundle::MAX_BYTES as usize, budget).map(Some)
+                    hash(path, metadata, budget).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -595,7 +591,7 @@ impl Stored {
             // may have raced a path replacement. Only the inventory's
             // safe current read can establish candidate-local corruption.
             self.replay_resolution_content_from(root, origin, budget, |path, metadata, _| {
-                hash(path, metadata, bundle::MAX_BYTES as usize, budget)
+                hash(path, metadata, budget)
             })?;
             return Err(node::Error::Codec(
                 "early control bytes changed during read",
@@ -1002,20 +998,14 @@ pub(crate) fn directory(path: &Path, budget: &node::GraphBudget) -> Result<PathB
     store::existing_directory_budgeted(anchor, relative, budget)?.ok_or_else(|| corrupt(path))
 }
 
+/// Hashes the file as a stream. The read is not bounded: nothing is held in
+/// memory, and Cargo builds artifacts of any size.
 pub(crate) fn hash(
     path: &Path,
     metadata: &fs::Metadata,
-    limit: usize,
     budget: &node::GraphBudget,
 ) -> Result<[u8; 32], node::Error> {
     let length = usize::try_from(metadata.len()).map_err(|_| node::Error::Allocation)?;
-    if length > limit {
-        return Err(node::Error::Limit {
-            resource: "runner artifact file bytes",
-            limit,
-            actual: length,
-        });
-    }
     // The digest is a pure function of the file bytes: one computation per
     // physical identity serves every later check. `metadata` is the caller's
     // current no-follow observation of `path` under a parent it has proved
@@ -1313,7 +1303,7 @@ mod tests {
             Origin::Unpublished(Mode::Pending),
             &budget,
             node::read_set::Scope::Consumer,
-            |path, metadata, _| hash(path, metadata, bundle::MAX_BYTES as usize, &budget),
+            |path, metadata, _| hash(path, metadata, &budget),
         )
     }
 
@@ -1762,7 +1752,7 @@ mod tests {
             budget
                 .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize - remaining)
                 .unwrap();
-            hash(&executable, &metadata, 4, &budget).unwrap();
+            hash(&executable, &metadata, &budget).unwrap();
             let exceeded = budget.exceedances();
             assert_eq!(exceeded.is_exceeded(), remaining == 4);
             if remaining == 4 {
@@ -1786,7 +1776,7 @@ mod tests {
             .hash(node::MAX_HASHED_BYTES_PER_GRAPH as usize)
             .unwrap();
         assert!(matches!(
-            hash(&fixture.root.join("missing"), &metadata, 4, &budget),
+            hash(&fixture.root.join("missing"), &metadata, &budget),
             Err(node::Error::Io { .. })
         ));
         assert_eq!(
@@ -1800,19 +1790,14 @@ mod tests {
         let budget = node::GraphBudget::new();
         budget.paths(node::MAX_PATH_CHECKS_PER_GRAPH).unwrap();
         assert!(matches!(
-            hash(&fixture.root.join("missing"), &metadata, 4, &budget),
+            hash(&fixture.root.join("missing"), &metadata, &budget),
             Err(node::Error::Io { .. })
         ));
         assert!(budget
             .exceedances()
             .axis(node::PATHS_RESOURCE)
             .is_some_and(|axis| axis.high_water > node::MAX_PATH_CHECKS_PER_GRAPH as u64));
-        assert!(super::super::hash(executable.clone(), 4, Some(&node::GraphBudget::new())).is_ok());
-        assert!(matches!(
-            super::super::hash(executable, 3, Some(&node::GraphBudget::new())),
-            Err(super::super::Error::Limit)
-        ));
-        // The twelve-byte runtime asset is independent of the four-byte executable allowance.
+        assert!(super::super::hash(executable, Some(&node::GraphBudget::new())).is_ok());
         fixture.capture();
     }
 
@@ -1827,14 +1812,14 @@ mod tests {
         .unwrap();
         let metadata = fs::metadata(&executable).unwrap();
         let first = node::GraphBudget::new();
-        let digest = hash(&executable, &metadata, 4, &first).unwrap();
+        let digest = hash(&executable, &metadata, &first).unwrap();
         assert_eq!(
             first.census_usage().unwrap().2,
             5,
             "the first check reads the file"
         );
         let second = node::GraphBudget::new();
-        assert_eq!(hash(&executable, &metadata, 4, &second).unwrap(), digest);
+        assert_eq!(hash(&executable, &metadata, &second).unwrap(), digest);
         assert_eq!(
             second.census_usage().unwrap().2,
             0,
@@ -1843,7 +1828,7 @@ mod tests {
         fs::set_permissions(&executable, metadata.permissions()).unwrap();
         let changed = fs::metadata(&executable).unwrap();
         let third = node::GraphBudget::new();
-        assert_eq!(hash(&executable, &changed, 4, &third).unwrap(), digest);
+        assert_eq!(hash(&executable, &changed, &third).unwrap(), digest);
         assert_eq!(
             third.census_usage().unwrap().2,
             5,
@@ -1852,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_asset_uses_its_own_bound_while_executable_sealing_records_its_target() {
+    fn a_sealed_executable_and_its_retained_assets_revalidate() {
         let fixture = Fixture::new();
         let manifest = crate::runner::manifest::GeneratedManifest::new(
             crate::bridge::BuildRequestKey::fixture([1; 32]),
@@ -1861,8 +1846,6 @@ mod tests {
             Box::default(),
             [0; 32],
         );
-        let mut limits = crate::cargo::Limits::standard();
-        limits.json_bytes = 4;
         let budget = node::GraphBudget::new();
         let executable = fixture.root.join("target/debug/runner");
         let artifact = super::super::BuiltArtifactProof::seal_budgeted(
@@ -1870,27 +1853,25 @@ mod tests {
             &executable,
             &fixture.root.join("target"),
             &[],
-            &limits,
             &budget,
         )
         .unwrap();
         artifact.revalidate_budgeted(&budget).unwrap();
         Stored::capture(&fixture.root, fixture.reference, Mode::Pending, &budget).unwrap();
-        // The JSON target is accounting for artifact sealing; one
-        // byte over it is recorded and the executable still seals, bound only
-        // by the physical capture bound.
         fs::write(&executable, b"five!").unwrap();
+        assert!(matches!(
+            artifact.revalidate_budgeted(&budget),
+            Err(super::super::Error::Drift)
+        ));
         let sealed = super::super::BuiltArtifactProof::seal_budgeted(
             &manifest,
             &executable,
             &fixture.root.join("target"),
             &[],
-            &limits,
             &budget,
         )
-        .expect("the JSON target records and admits");
+        .unwrap();
         assert_eq!(sealed.executable.bytes, 5);
-        assert_eq!(sealed.byte_limit, crate::process::CAPTURE_BYTES);
         sealed.revalidate_budgeted(&budget).unwrap();
     }
 }

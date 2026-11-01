@@ -430,7 +430,6 @@ mod tests {
             &[],
             &mut allocation,
             &graph,
-            1024,
         )
         .unwrap();
         let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -449,7 +448,7 @@ mod tests {
         .unwrap();
         let completion = Completion::decode(&bytes).unwrap();
         let mut namespace = observed
-            .complete(&completion, &mut allocation, &graph, 1024)
+            .complete(&completion, &mut allocation, &graph)
             .unwrap();
         namespace
             .require_selection(&completion, &mut allocation, &graph)
@@ -466,12 +465,12 @@ mod tests {
             Stored::capture_resolution(&root, reference, Mode::Pending, &graph, &scope).unwrap();
         let before = graph.census_usage().unwrap().2;
         stored.replay(&root, Mode::Pending, &graph).unwrap();
-        namespace.revalidate(&mut allocation, &graph, 1024).unwrap();
+        namespace.revalidate(&mut allocation, &graph).unwrap();
         let separate = graph.census_usage().unwrap().2 - before;
         let before = graph.census_usage().unwrap().2;
         assert_eq!(
             namespace
-                .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 1024,)
+                .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
                 .unwrap(),
             6
         );
@@ -486,17 +485,17 @@ mod tests {
             .unwrap();
         let digest = namespace.members[selected].digest.replace([0; 32]);
         assert!(namespace
-            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 1024)
+            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
             .is_err());
         namespace.members[selected].digest = digest;
         namespace.members.swap(0, 1);
         assert!(namespace
-            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 1024)
+            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
             .is_err());
         namespace.members.swap(0, 1);
         fs::write(&external, b"after!").unwrap();
         assert!(namespace
-            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 1024)
+            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
             .is_err());
         fs::write(&external, b"before").unwrap();
         // A graph account spent to its target is not a gate. Revalidation
@@ -540,8 +539,7 @@ mod tests {
                         &root,
                         Mode::Pending,
                         &mut allocation,
-                        &exhausted,
-                        1024
+                        &exhausted
                     )
                     .unwrap(),
                 6
@@ -553,9 +551,6 @@ mod tests {
             assert_eq!(axis.target, target);
             assert!(axis.high_water > target);
         }
-        assert!(namespace
-            .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 5,)
-            .is_err());
         fs::write(&archive, b"after!").unwrap();
         stored.replay(&root, Mode::Pending, &graph).unwrap();
         for protected in [&independent, &queried] {
@@ -563,7 +558,7 @@ mod tests {
             assert!(stored.replay(&root, Mode::Pending, &graph).is_err());
             // A new consumer cannot reuse the previous invocation's read.
             assert!(namespace
-                .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph, 1024,)
+                .revalidate_inventory(&stored, &root, Mode::Pending, &mut allocation, &graph)
                 .is_err());
             fs::write(protected, b"before").unwrap();
         }

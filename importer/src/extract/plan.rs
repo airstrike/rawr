@@ -984,13 +984,8 @@ impl Probe {
                 .graph_budget
                 .as_ref()
                 .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
-            let snapshot = namespace::Snapshot::capture(
-                &roots,
-                &explicit,
-                &mut self.allocation,
-                graph,
-                process::CAPTURE_BYTES,
-            )?;
+            let snapshot =
+                namespace::Snapshot::capture(&roots, &explicit, &mut self.allocation, graph)?;
             self.namespace = Some(Namespace::Cold(search, snapshot));
         }
         if let Some(reuse) = &self.reuse {
@@ -1324,12 +1319,7 @@ impl Probe {
                         "compiler search selector changed",
                     ));
                 }
-                let retained = snapshot.complete(
-                    &completion,
-                    &mut allocation,
-                    graph,
-                    process::CAPTURE_BYTES,
-                )?;
+                let retained = snapshot.complete(&completion, &mut allocation, graph)?;
                 // The shared holder's two counters are retained with the namespace.
                 allocation.bytes(2 * std::mem::size_of::<usize>())?;
                 (Some(Arc::new(retained)), Some(after))
@@ -1403,12 +1393,8 @@ impl Probe {
                         Some(_) => {}
                         None => authority = Some(resolved),
                     }
-                    let (length, digest) = artifact_digest(
-                        &path,
-                        process::CAPTURE_BYTES,
-                        &mut allocation,
-                        self.graph_budget.as_ref(),
-                    )?;
+                    let (length, digest) =
+                        artifact_digest(&path, &mut allocation, self.graph_budget.as_ref())?;
                     insert_artifact(
                         &mut artifacts,
                         path,
@@ -1670,8 +1656,8 @@ impl Capture {
         self.revalidate_with_inventory(limits, None)
     }
 
-    /// Every artifact, sidecar and namespace read here binds to the physical
-    /// capture constant; the accounting limits play no part.
+    /// Artifacts and namespace members are hashed as streams; the accounting
+    /// limits play no part.
     fn revalidate_with_inventory(
         &mut self,
         _limits: &cargo::Limits,
@@ -1694,18 +1680,13 @@ impl Capture {
                 self.namespace.as_deref(),
                 &mut self.invocations.allocation,
                 graph,
-                process::CAPTURE_BYTES,
             )?;
         } else if let Some(namespace) = &self.namespace {
             let graph = self
                 .graph_budget
                 .as_ref()
                 .ok_or_else(|| extraction("compiler-namespace", "original graph absent"))?;
-            namespace.revalidate(
-                &mut self.invocations.allocation,
-                graph,
-                process::CAPTURE_BYTES,
-            )?;
+            namespace.revalidate(&mut self.invocations.allocation, graph)?;
         }
         for (path, expected) in &self.controls {
             let bytes = read_bounded_accounted(
@@ -1746,7 +1727,6 @@ impl Capture {
         for (path, expected_length, expected_digest) in &self.artifacts {
             let (length, digest) = artifact_digest(
                 path,
-                process::CAPTURE_BYTES,
                 &mut self.invocations.allocation,
                 self.graph_budget.as_ref(),
             )?;
@@ -2427,11 +2407,10 @@ fn publish(path: &Path, bytes: &[u8], allocation: &mut Allocation) -> Result<()>
     })
 }
 
-/// Hash graph-owned artifacts with the existing bounded physical-file reader.
-/// The legacy extraction path retains its original allocation contract.
+/// Hash graph-owned artifacts as a stream, with no read limit. The legacy
+/// extraction path retains its original allocation contract.
 fn artifact_digest(
     path: &Path,
-    limit: usize,
     allocation: &mut Allocation,
     graph: Option<&crate::node::GraphBudget>,
 ) -> Result<(u64, [u8; 32])> {
@@ -2460,7 +2439,7 @@ fn artifact_digest(
             path.to_path_buf(),
         )));
     }
-    let digest = crate::runner::artifact::retained::hash(path, &metadata, limit, graph)
+    let digest = crate::runner::artifact::retained::hash(path, &metadata, graph)
         .map_err(artifact_graph_error)?;
     Ok((metadata.len(), digest))
 }
@@ -2755,8 +2734,7 @@ mod tests {
         let graph = crate::node::GraphBudget::new();
         // Artifact bytes are streamed, not owned by the extraction decoder.
         let mut allocation = Allocation::with_limits(0, 0);
-        let observed =
-            super::artifact_digest(&path, bytes.len(), &mut allocation, Some(&graph)).unwrap();
+        let observed = super::artifact_digest(&path, &mut allocation, Some(&graph)).unwrap();
         assert_eq!(
             observed,
             (bytes.len() as u64, Sha256::digest(&bytes).into())
@@ -2765,15 +2743,11 @@ mod tests {
         // account, so even a zero-target account records no axis.
         assert!(!allocation.exceedances().is_exceeded());
         assert_eq!(allocation.usage(), (0, 0));
-        // The `limit` argument is the physical file-read bound: it refuses.
-        assert!(
-            super::artifact_digest(&path, bytes.len() - 1, &mut allocation, Some(&graph)).is_err()
-        );
         // An unchanged artifact reuses its digest without a read; a new
         // status-change time gives it a new identity that is read again.
         let reused = crate::node::GraphBudget::new();
         assert_eq!(
-            super::artifact_digest(&path, bytes.len(), &mut allocation, Some(&reused)).unwrap(),
+            super::artifact_digest(&path, &mut allocation, Some(&reused)).unwrap(),
             observed
         );
         assert_eq!(reused.census_usage().unwrap().2, 0);
@@ -2785,7 +2759,7 @@ mod tests {
             .hash(crate::node::MAX_HASHED_BYTES_PER_GRAPH as usize)
             .unwrap();
         assert_eq!(
-            super::artifact_digest(&path, bytes.len(), &mut allocation, Some(&spent)).unwrap(),
+            super::artifact_digest(&path, &mut allocation, Some(&spent)).unwrap(),
             observed
         );
         let axis = spent
@@ -2800,15 +2774,12 @@ mod tests {
         );
         let linked = root.join("linked.rmeta");
         fs::hard_link(&path, &linked).unwrap();
-        assert!(super::artifact_digest(&path, bytes.len(), &mut allocation, Some(&graph)).is_err());
+        assert!(super::artifact_digest(&path, &mut allocation, Some(&graph)).is_err());
         fs::remove_file(&linked).unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&path, &linked).unwrap();
-            assert!(
-                super::artifact_digest(&linked, bytes.len(), &mut allocation, Some(&graph))
-                    .is_err()
-            );
+            assert!(super::artifact_digest(&linked, &mut allocation, Some(&graph)).is_err());
         }
         fs::remove_dir_all(&root).unwrap();
     }
@@ -3416,13 +3387,11 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// Artifact hashing in namespace capture, completion, and
-    /// inventory revalidation binds to the physical capture constant that
-    /// `Probe::run` passes, never to the configured `json_bytes` target, so a
-    /// tiny JSON target cannot refuse a real compiler artifact.
+    /// Artifact hashing in namespace capture and validation streams the file
+    /// with no read limit, so neither the JSON target nor any capture bound
+    /// can refuse a compiler artifact.
     #[test]
-    fn artifact_hashing_binds_to_the_physical_capture_bound_not_the_json_target() {
-        assert_eq!(crate::process::CAPTURE_BYTES, 268_435_456);
+    fn artifact_hashing_has_no_read_limit() {
         let root = std::env::temp_dir().join(format!(
             "rawr-artifact-physical-{}-{:?}",
             std::process::id(),
@@ -3436,12 +3405,9 @@ mod tests {
         let mut limits = Limits::standard();
         limits.json_bytes = 1;
         let mut allocation = Allocation::new(&limits);
-        // The artifact is far above the JSON target and still hashes whole
-        // under the physical bound, with nothing recorded on the account.
         assert_eq!(
             super::artifact_digest(
                 &path,
-                crate::process::CAPTURE_BYTES,
                 &mut allocation,
                 Some(&crate::node::GraphBudget::new())
             )
@@ -3449,33 +3415,15 @@ mod tests {
             (bytes.len() as u64, Sha256::digest(&bytes).into())
         );
         assert!(!allocation.exceedances().is_exceeded());
-        // Bound to the JSON target instead, the same digest would refuse.
-        assert!(super::artifact_digest(
-            &path,
-            limits.json_bytes,
-            &mut allocation,
-            Some(&crate::node::GraphBudget::new())
-        )
-        .is_err());
-        // Namespace capture hashes the same candidate under the same bound.
         let roots = vec![root.clone()];
         super::namespace::Snapshot::capture(
             &roots,
             &[],
             &mut allocation,
             &crate::node::GraphBudget::new(),
-            crate::process::CAPTURE_BYTES,
         )
-        .expect("a candidate above the JSON target captures under the physical bound");
+        .expect("a candidate above the JSON target captures");
         assert!(!allocation.exceedances().is_exceeded());
-        assert!(super::namespace::Snapshot::capture(
-            &roots,
-            &[],
-            &mut allocation,
-            &crate::node::GraphBudget::new(),
-            limits.json_bytes
-        )
-        .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -46,7 +46,6 @@ pub(super) fn build<B>(
     let parents = [chain.parent(), node::Parent::validated(toolchain.as_ref())];
     let recipe = context.discover_with_parents::<Product>(&authority, PRODUCT_BYTES, &parents)?;
     let validation = inputs.clone();
-    let limits = context.limits();
     let store = context.open_store()?;
     let validation_store = store.clone();
     let retention = chain
@@ -93,7 +92,7 @@ pub(super) fn build<B>(
     )?;
     let native = product
         .value()
-        .native(&store, &inputs, &manifest.generated, &limits, pin)?;
+        .native(&store, &inputs, &manifest.generated, pin)?;
     let runner_chain = retain_runner(&chain, &product)?;
     let read_set = prepare_union(&runner_chain, manifest.overlay.as_ref())?;
     manifest.chain = Some(runner_chain);
@@ -433,20 +432,16 @@ fn compile<B>(
         &executable,
         &target,
         &[],
-        &context.limits(),
         budget,
     )
     .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
-    // The executable read is a physical capture-class I/O bound; the node
-    // product bound stays MAX_CONTENT_BYTES.
-    let executable = Evidence::capture(&executable, crate::process::CAPTURE_BYTES, budget)?;
+    let executable = Evidence::capture(&executable, budget)?;
     let carrier = Evidence::capture(
         &crate::store::bundle::path(
             &generated,
             Path::new("rawr-generated-manifest.carrier"),
             budget,
         )?,
-        context.limits().node_output_bytes(),
         budget,
     )?;
     let reference = attempt.reference();
@@ -786,10 +781,7 @@ impl Product {
             }),
             budget,
         )?;
-        // The executable read is a physical capture-class I/O bound; the node
-        // product bound stays MAX_CONTENT_BYTES.
-        let executable =
-            Evidence::capture(&executable_path, crate::process::CAPTURE_BYTES, budget)?;
+        let executable = Evidence::capture(&executable_path, budget)?;
         if frozen_mode(executable.mode) != self.mode
             || executable.bytes != self.executable_bytes
             || executable.digest != self.executable_digest
@@ -851,7 +843,6 @@ impl Product {
         store: &crate::store::Store,
         inputs: &Inputs,
         manifest: &super::super::manifest::GeneratedManifest,
-        limits: &crate::cargo::Limits,
         pin: crate::store::bundle::Guard,
     ) -> Result<super::super::Native, super::Error> {
         self.revalidate(store, inputs, store.graph_budget())?;
@@ -875,7 +866,6 @@ impl Product {
             &executable,
             &target,
             &[],
-            limits,
             store.graph_budget(),
         )?;
         if artifact.digest() != self.artifact {
@@ -929,7 +919,7 @@ struct Evidence {
 }
 
 impl Evidence {
-    fn capture(path: &Path, limit: usize, budget: &node::GraphBudget) -> Result<Self, node::Error> {
+    fn capture(path: &Path, budget: &node::GraphBudget) -> Result<Self, node::Error> {
         let parent = path
             .parent()
             .ok_or_else(|| node::Error::Shape(path.to_path_buf()))?;
@@ -949,7 +939,7 @@ impl Evidence {
         {
             return Err(node::Error::Shape(path.to_path_buf()));
         }
-        let digest = retained::hash(path, &metadata, limit, budget)?;
+        let digest = retained::hash(path, &metadata, budget)?;
         Ok(Self {
             bytes: metadata.len(),
             digest,
@@ -1029,7 +1019,7 @@ fn validate_file(
     digest: [u8; 32],
     budget: &node::GraphBudget,
 ) -> Result<(), node::Error> {
-    let evidence = Evidence::capture(path, expected, budget)?;
+    let evidence = Evidence::capture(path, budget)?;
     if usize::try_from(evidence.bytes).unwrap_or(usize::MAX) != expected
         || evidence.digest != digest
     {
