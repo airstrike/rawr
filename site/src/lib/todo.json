@@ -1259,7 +1259,8 @@
     {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"open","category":"Health"},
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
     {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
-    {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"}
+    {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"},
+    {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {

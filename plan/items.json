@@ -576,6 +576,7 @@
     {"t":"T573","issue":573,"title":"T573: Debugger frames name methods by their internal symbol","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T574","issue":574,"title":"T574: Check the engine under Miri's Stacked Borrows","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T575","issue":575,"title":"T575: Say why a caller frame has no bindings to read","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T576","issue":576,"title":"T576: imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T576","issue":576,"title":"T576: imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T577","issue":577,"title":"T577: rawr's store keeps every execution it ever ran","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D494"],"commit":null,"release":null}
   ]
 }
