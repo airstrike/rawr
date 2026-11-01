@@ -190,6 +190,7 @@ fn main() {
 <p>A closure that native code calls with a <code>&amp;T</code> gets a copy of the value when <code>T</code> has <code>Clone</code>. iced&rsquo;s <code>PaneGrid::new(&amp;state, |pane, value, is_maximized| ..)</code> calls its closure with a <code>&amp;T</code> of each pane&rsquo;s value.</p>
 <p>An async method that borrows its receiver crosses too. <a href="/docs/run#async">Run</a> explains how its future holds the receiver.</p>
 <p>An async function whose future borrows its arguments crosses whatever the arguments&rsquo; types are, as fount&rsquo;s <code>google::load(family: &amp;str, catalog: Option&lt;&amp;Catalog&gt;)</code> does. The future holds each borrowed value until it ends: a crate value is lent to it, an <code>Option</code> lends what its <code>Some</code> holds, a tuple lends each member, and a string is your program&rsquo;s own, with nothing copied. A struct that holds references doesn&rsquo;t cross yet.</p>
+<p>A method whose input is an associated type its impl sets crosses at that type, as palette&rsquo;s <code>shift_hue(self, amount: Self::Scalar)</code> takes an <code>f32</code> for an <code>Hsl</code> of <code>f32</code>. One that a blanket impl sets through another trait&rsquo;s associated type, as palette&rsquo;s <code>Darken</code> does for every <code>Lighten</code> color, doesn&rsquo;t cross yet.</p>
 
 <h2 id="gaps">Known gaps</h2>
 <ul>

@@ -954,7 +954,9 @@ fn rust_miss(
         R::NotInModule { module, item, .. } => format!("{module}::{item}"),
         _ => return None,
     };
-    if !path.contains("::") {
+    // A member of a type not known yet, as a second pass past a miss may
+    // ask for (`_::Image`), names no crate path to demand.
+    if !path.contains("::") || path.split("::").any(|segment| segment == "_") {
         return None;
     }
     let through_alias = contract.reaches_through_crate_alias(&path);

@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 88;
+const CLASSIFIER_VERSION: u32 = 89;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7539,6 +7539,19 @@ impl<P: api::Phase> Context<'_, P> {
                         representability::signature::Associated::new(identity, name.into()),
                         position,
                     ));
+                    // The type is a future, whatever bound makes it one, as
+                    // `impl Straw<..>` is through `Core`: its value is taken
+                    // where a future of its `Output` is, as rustc takes it
+                    // for iced's `Task::future(impl Future<Output = T>)`.
+                    if name == "Output" && self.is_core_trait(&trait_id, "Future") {
+                        associated.push((
+                            representability::signature::Associated::new(
+                                *crate::surface::identity::Definition::future().as_bytes(),
+                                name.into(),
+                            ),
+                            position,
+                        ));
+                    }
                     arguments.push(value);
                 }
                 let definition = crate::surface::identity::Definition::of(id);

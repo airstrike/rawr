@@ -239,3 +239,47 @@ impl<Wp> Clamp for Lab<Wp, f32> {
         }
     }
 }
+
+/// Shifting the hue by an amount, as palette's `ShiftHue`, whose amount is
+/// the trait's own associated type that each impl sets to the component.
+pub trait ShiftHue {
+    /// The type of the hue modifier.
+    type Scalar;
+
+    /// The color with its hue shifted by `amount`.
+    #[must_use]
+    fn shift_hue(self, amount: Self::Scalar) -> Self;
+}
+
+impl<S, T> ShiftHue for Hsl<S, T>
+where
+    T: std::ops::Add<Output = T>,
+{
+    type Scalar = T;
+
+    fn shift_hue(mut self, amount: Self::Scalar) -> Self {
+        self.hue = self.hue + amount;
+        self
+    }
+}
+
+/// Lightening by a factor, as palette's `Lighten`.
+pub trait Lighten {
+    /// The type of the lighten modifier.
+    type Scalar;
+
+    /// The color lightened by `factor`.
+    #[must_use]
+    fn lighten(self, factor: Self::Scalar) -> Self;
+}
+
+impl<S> Lighten for Hsl<S, f32> {
+    type Scalar = f32;
+
+    fn lighten(self, factor: Self::Scalar) -> Self {
+        Hsl {
+            lightness: self.lightness + (1.0 - self.lightness) * factor,
+            ..self
+        }
+    }
+}
