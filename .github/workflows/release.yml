@@ -117,6 +117,31 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "ref=registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/rawr-play:$sha" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # build.mjs builds the site (an Astro package with its own lock file).
+      - name: Install the site's dependencies
+        working-directory: site
+        run: npm ci --no-audit --no-fund
+
+      # The lock file is not committed yet, so this is `npm install`, not `npm ci`.
+      - name: Install the Worker's dependencies
+        working-directory: play/deploy/cloudflare
+        run: npm install --no-audit --no-fund
+
+      # The site and the Worker's tests take a minute and the image takes
+      # many, so a broken site stops the release before an image is built or
+      # pushed. deploy.sh runs the same tests again on the deployed tree; its
+      # build reuses this site/dist (SITE_BUILT) and only merges rawr-web in.
+      - name: Build and test the site
+        working-directory: play/deploy/cloudflare
+        run: |
+          node build.mjs
+          npm test
+          npm --prefix ../../../site test
+
       - uses: docker/setup-buildx-action@v3
 
       # Built once and loaded into the local docker, then pushed: the
@@ -144,15 +169,6 @@ jobs:
           docker image ls "${{ steps.image.outputs.ref }}"
           docker history --format '{{.Size}}\t{{.CreatedBy}}' "${{ steps.image.outputs.ref }}" | cut -c1-120
 
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      # The lock file is not committed yet, so this is `npm install`, not `npm ci`.
-      - name: Install the Worker's dependencies
-        working-directory: play/deploy/cloudflare
-        run: npm install --no-audit --no-fund
-
       - name: Push the image
         working-directory: play/deploy/cloudflare
         env:
@@ -165,22 +181,18 @@ jobs:
           printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
           docker push "$IMAGE"
 
-      # build.mjs builds the site (an Astro package with its own lock file).
-      - name: Install the site's dependencies
-        working-directory: site
-        run: npm ci --no-audit --no-fund
-
       # The `web` job usually finishes first. If not, wait for its artifact,
-      # and stop if the job ended without one.
+      # and stop if the job ended without one. A failed API call is asked
+      # again on the next turn rather than ending the release.
       - name: Wait for rawr-web
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           run="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           for _ in $(seq 1 180); do
-            found="$(gh api "$run/artifacts" --jq '[.artifacts[] | select(.name == "web")] | length')"
+            found="$(gh api "$run/artifacts" --jq '[.artifacts[] | select(.name == "web")] | length')" || found=0
             [ "$found" -gt 0 ] && exit 0
-            ended="$(gh api "$run/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "web") | .conclusion // empty')"
+            ended="$(gh api "$run/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "web") | .conclusion // empty')" || ended=""
             case "$ended" in
               "" | success) ;;
               *) echo "the web job ended ($ended) without rawr-web" >&2; exit 1 ;;
@@ -214,6 +226,7 @@ jobs:
         working-directory: play/deploy/cloudflare
         env:
           PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}
+          SITE_BUILT: 1
         run: ./deploy.sh
 
       - name: Show the logs

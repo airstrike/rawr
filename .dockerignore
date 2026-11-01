@@ -6,3 +6,7 @@ target
 editors
 *.vsix
 SOL_PROMPT.md
+# Built and installed in place by the release before the image (gitignored).
+**/node_modules
+site/dist
+play/deploy/cloudflare/dist
