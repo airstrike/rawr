@@ -776,6 +776,20 @@ fn build(
             Err(error) => return Err(entry_error(facade.root(), path, error.into())),
         }
     }
+    // A dependency's derive macros, which a program's `#[derive(..)]`
+    // names, each in its module.
+    for path in facade.derives() {
+        let prefixes = path.match_indices("::").map(|(end, _)| &path[..end]);
+        for module in prefixes {
+            match builder.imported_module(module, allocation) {
+                Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
+                Err(error) => return Err(entry_error(facade.root(), module, error.into())),
+            }
+        }
+        builder
+            .derive(path)
+            .map_err(|source| entry_error(facade.root(), path, source.into()))?;
+    }
     builder
         .finish_imported(allocation)
         .map_err(|source| entry_error(facade.root(), "", source.into()))

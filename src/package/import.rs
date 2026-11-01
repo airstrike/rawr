@@ -1347,6 +1347,8 @@ struct Facade<'contract> {
     )>,
     /// The root's `macro_rules!` macros, as in the facade plan.
     macros: Vec<&'contract rawr_import::surface::facade::Macro>,
+    /// The root's derive macros, as in the facade plan.
+    derives: Vec<&'contract str>,
     /// The methods the traits the program names give Rawr's string through
     /// their impls for `&str`, each at its path (`surface::text`).
     text_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
@@ -1503,6 +1505,7 @@ fn install(
             }),
     )?;
     let macros = rawr_import::surface::facade::macros(contract.raw_graph())?;
+    let derives = rawr_import::surface::facade::derives(contract.raw_graph())?;
     let mut facades = Vec::<Facade<'_>>::new();
     facades
         .try_reserve_exact(facade_count)
@@ -1520,6 +1523,7 @@ fn install(
                         traits: Vec::new(),
                         variants: Vec::new(),
                         macros: Vec::new(),
+                        derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
@@ -1530,6 +1534,31 @@ fn install(
             }
         };
         facades[index].macros.push(rules);
+    }
+    for rawr_import::surface::facade::Derive { root, path } in &derives {
+        let index = match facades.binary_search_by(|facade| facade.root.cmp(root)) {
+            Ok(index) => index,
+            Err(index) => {
+                facades.try_reserve(1).map_err(|_| Error::Allocation)?;
+                facades.insert(
+                    index,
+                    Facade {
+                        root,
+                        entries: Vec::new(),
+                        traits: Vec::new(),
+                        variants: Vec::new(),
+                        macros: Vec::new(),
+                        derives: Vec::new(),
+                        trait_identities: Vec::new(),
+                        text_members: Vec::new(),
+                        self_members: Vec::new(),
+                        std_reexports: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        facades[index].derives.push(path);
     }
     for outcome in contract.outcomes() {
         let named_trait = matches!(
@@ -1552,6 +1581,7 @@ fn install(
                             traits: Vec::new(),
                             variants: Vec::new(),
                             macros: Vec::new(),
+                            derives: Vec::new(),
                             trait_identities: Vec::new(),
                             text_members: Vec::new(),
                             self_members: Vec::new(),
@@ -1633,6 +1663,7 @@ fn install(
                         traits: Vec::new(),
                         variants: Vec::new(),
                         macros: Vec::new(),
+                        derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
@@ -1693,6 +1724,7 @@ fn install(
                         traits: Vec::new(),
                         variants: Vec::new(),
                         macros: Vec::new(),
+                        derives: Vec::new(),
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
@@ -1856,11 +1888,17 @@ fn build(
             path.rsplit_once("::")
                 .map(|(module, _)| Box::<str>::from(module))
         });
+    // So is the module a derive macro is in.
+    let derive_modules = facade.derives.iter().filter_map(|path| {
+        path.rsplit_once("::")
+            .map(|(module, _)| Box::<str>::from(module))
+    });
     let modules = facade
         .traits
         .iter()
         .cloned()
         .chain(macro_modules)
+        .chain(derive_modules)
         .chain(text_modules)
         .collect::<Vec<_>>();
     for path in &modules {
@@ -2273,6 +2311,10 @@ fn build(
             Ok(_) | Err(host::Error::DuplicateFacadeEntry { .. }) => {}
             Err(error) => return Err(error.into()),
         }
+    }
+    // A dependency's derive macros, which a program's `#[derive(..)]` names.
+    for path in &facade.derives {
+        builder.derive(path)?;
     }
     builder.finish_imported(allocation).map_err(Error::from)
 }

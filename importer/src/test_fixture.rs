@@ -1163,6 +1163,58 @@ pub fn representability_families() -> api::Graph<api::Extracted> {
     .expect("freshness proof publishes family fixture")
 }
 
+/// A crate whose root exports a derive macro, `fixture::Serialize`, an
+/// attribute macro, `fixture::main`, from a proc-macro crate, and a value
+/// rejected with the derive kind, as the extraction reports them.
+pub fn derive_exports() -> api::Graph<api::Extracted> {
+    let export = |name: &str, namespace| {
+        identity::Export::new(
+            "fixture".into(),
+            Box::from([Box::<str>::from(name)]),
+            namespace,
+        )
+    };
+    let derive = || ledger::Reason::UnsupportedPublicPath {
+        compiler_kind: crate::extract::protocol::DERIVE_MACRO.into(),
+    };
+    let exports = vec![
+        ledger::Path::Rejected {
+            key: export("Serialize", identity::Namespace::Macro),
+            reason: derive(),
+            span: span(1, 2),
+        },
+        ledger::Path::Rejected {
+            key: export("main", identity::Namespace::Macro),
+            reason: ledger::Reason::ExternalAuthorityUnavailable {
+                crate_name: "fixture_macros".into(),
+                stable_crate_id: "0123456789abcdef".into(),
+            },
+            span: span(3, 4),
+        },
+        ledger::Path::Rejected {
+            key: export("value", identity::Namespace::Value),
+            reason: derive(),
+            span: span(5, 6),
+        },
+    ];
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        Vec::new(),
+        exports,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        usize::MAX,
+        &mut allocation,
+    )
+    .expect("derive fixture seals")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("freshness proof publishes derive fixture")
+}
+
 /// A free function taking and returning core's `Option`:
 /// `fixture::pick(Option<i64>) -> Option<Option<bool>>`.
 pub fn option_function() -> api::Graph<api::Extracted> {

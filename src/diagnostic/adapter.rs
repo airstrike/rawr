@@ -430,7 +430,9 @@ fn resolution_report_with_sources(
 /// The label under the primary span, where rustc writes one.
 fn primary_label(error: &resolve::Error) -> Option<crate::ImmutableString> {
     match error {
-        resolve::Error::Syntax { label, .. } => Some(label.clone()),
+        resolve::Error::Syntax { label, .. } => {
+            Some(label.clone()).filter(|label| !label.is_empty())
+        }
         resolve::Error::UnlabeledJumpInWhileCondition { keyword, .. } => {
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }

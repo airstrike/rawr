@@ -52,6 +52,8 @@ pub struct Body {
     type_aliases: Box<[TypeAlias]>,
     trait_headers: Box<[TraitHeader]>,
     impl_headers: Box<[ImplHeader]>,
+    /// The crate's derive macros, as serde's `Serialize`, sorted.
+    derives: Box<[host::path::Path]>,
     fingerprint: Fingerprint,
 }
 
@@ -269,7 +271,6 @@ fn header_parameters(
 
 /// A header joins a facade's proof as a pseudo-module under a spelling
 /// no module has: `prefix` and a digest of what it holds.
-#[cfg(feature = "rust-import")]
 fn header_proof_path(
     root: &host::path::Path,
     prefix: &str,
@@ -290,6 +291,7 @@ pub(crate) struct RegistryParts {
     pub(crate) type_aliases: Box<[TypeAlias]>,
     pub(crate) trait_headers: Box<[TraitHeader]>,
     pub(crate) impl_headers: Box<[ImplHeader]>,
+    pub(crate) derives: Box<[host::path::Path]>,
     pub(crate) fingerprint: Fingerprint,
 }
 
@@ -350,6 +352,7 @@ pub struct Builder {
     trait_headers: Vec<TraitHeader>,
     #[cfg(feature = "rust-import")]
     impl_headers: Vec<ImplHeader>,
+    derives: Vec<host::path::Path>,
 }
 
 #[derive(Debug)]
@@ -388,6 +391,7 @@ impl Builder {
             trait_headers: Vec::new(),
             #[cfg(feature = "rust-import")]
             impl_headers: Vec::new(),
+            derives: Vec::new(),
         })
     }
 
@@ -414,6 +418,7 @@ impl Builder {
             trait_headers: Vec::new(),
             #[cfg(feature = "rust-import")]
             impl_headers: Vec::new(),
+            derives: Vec::new(),
         })
     }
 
@@ -567,6 +572,19 @@ impl Builder {
             parameters,
             defaults,
         });
+        Ok(self)
+    }
+
+    /// Record the crate's derive macro at `path`, relative, as serde's
+    /// `Serialize`. A derive is in the macro namespace, so it shares its
+    /// path with a trait or type of the same name.
+    #[cfg(any(test, feature = "rust-import"))]
+    pub(crate) fn derive(&mut self, path: &str) -> Result<&mut Self, host::Error> {
+        let path = host::path::Path::qualify(&self.root, &host::path::Path::parse(path)?);
+        self.derives
+            .try_reserve(1)
+            .map_err(|_| host::Error::Allocation)?;
+        self.derives.push(path);
         Ok(self)
     }
 
@@ -1186,6 +1204,14 @@ impl Builder {
         for alias in &type_aliases {
             modules.push(alias.proof_path()?);
         }
+        // A derive joins the proof as a header does.
+        for derive in &self.derives {
+            modules.push(header_proof_path(
+                &self.root,
+                "derive",
+                &derive.to_string(),
+            )?);
+        }
         let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
         Ok(Definition(Shared::new(Body {
             root: self.root,
@@ -1197,6 +1223,12 @@ impl Builder {
             type_aliases: type_aliases.into_boxed_slice(),
             trait_headers: Box::default(),
             impl_headers: Box::default(),
+            derives: {
+                let mut derives = self.derives;
+                derives.sort();
+                derives.dedup();
+                derives.into_boxed_slice()
+            },
             fingerprint,
         })))
     }
@@ -1425,6 +1457,14 @@ impl Builder {
                 .map_err(|_| host::Error::Allocation)?;
             impl_headers.push(header);
         }
+        // A derive joins the proof as a header does.
+        for derive in &self.derives {
+            modules.push(header_proof_path(
+                &self.root,
+                "derive",
+                &derive.to_string(),
+            )?);
+        }
         let fingerprint = fingerprint(&self.root, self.abi, &modules, &self.types, &items)?;
         Ok((
             Definition(Shared::new(Body {
@@ -1437,6 +1477,11 @@ impl Builder {
                 type_aliases: type_aliases.into_boxed_slice(),
                 trait_headers: trait_headers.into_boxed_slice(),
                 impl_headers: impl_headers.into_boxed_slice(),
+                derives: {
+                    self.derives.sort();
+                    self.derives.dedup();
+                    self.derives.into_boxed_slice()
+                },
                 fingerprint,
             })),
             families,
@@ -1637,6 +1682,7 @@ impl Definition {
             type_aliases: body.type_aliases,
             trait_headers: body.trait_headers,
             impl_headers: body.impl_headers,
+            derives: body.derives,
             fingerprint: body.fingerprint,
         }
     }

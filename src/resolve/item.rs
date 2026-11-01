@@ -86,6 +86,10 @@ pub(crate) enum Import {
     HostVariant {
         owner: crate::ImmutableString,
     },
+    /// A crate's derive macro and nothing else at its path, as serde's
+    /// `Deserialize` when the program names no trait of that name: only a
+    /// `#[derive(..)]` reads the name.
+    Derive,
 }
 
 /// A generic type parameter and its bounds: built-in derivable traits as
@@ -196,6 +200,8 @@ pub(crate) struct Field {
     /// The field is written `&str`, which `ty` reads as `String`: `Copy`,
     /// as a shared reference is.
     pub shared_str: bool,
+    /// The field's attributes as written, as `#[serde(default)]`.
+    pub attributes: Box<[crate::item::Attribute]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -255,6 +261,10 @@ pub(crate) struct Variant {
     /// `V = 5`: the explicit discriminant an `as` cast reads.
     pub discriminant: Option<crate::INT>,
     pub span: Span,
+    /// The variant's attributes as written, as `#[serde(rename = "all")]`.
+    pub attributes: Box<[crate::item::Attribute]>,
+    /// Each payload field's attributes as written, one list per payload.
+    pub field_attributes: Box<[Box<[crate::item::Attribute]>]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

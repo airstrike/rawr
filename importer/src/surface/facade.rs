@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 30;
+const SCHEMA: u32 = 31;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -160,6 +160,11 @@ pub struct Facade {
     /// The `macro_rules!` macros the root exports, sorted by path.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     macros: Box<[Macro]>,
+    /// The derive macros the root exports, as serde's `Serialize`: each
+    /// path, relative to the root, sorted. A program's `#[derive(..)]`
+    /// resolves a crate's derive through them.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    derives: Box<[Box<str>]>,
     /// The traits Rawr code names with their type parameters and defaults,
     /// in path order (D604).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
@@ -380,6 +385,49 @@ pub fn macros(
         left_root == right_root && left.path == right.path
     });
     Ok(macros)
+}
+
+/// A derive macro a crate exports, as serde's `Serialize`.
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Derive {
+    /// The crate's root alias (`serde`).
+    pub root: Box<str>,
+    /// The path under that root (`Serialize`).
+    pub path: Box<str>,
+}
+
+/// The derive macros `graph` exports, sorted by root and path. A derive's
+/// crate is a proc macro, so its export has no definition: the extraction
+/// rejects it as a public path of the derive-macro kind.
+pub fn derives(
+    graph: &crate::api::Graph<impl crate::api::Phase>,
+) -> Result<Vec<Derive>, super::Error> {
+    let mut derives = Vec::new();
+    for export in graph.exports() {
+        let crate::api::ledger::Path::Rejected {
+            key,
+            reason: crate::api::ledger::Reason::UnsupportedPublicPath { compiler_kind },
+            ..
+        } = export
+        else {
+            continue;
+        };
+        if key.namespace() != crate::api::identity::Namespace::Macro
+            || compiler_kind.as_ref() != crate::extract::protocol::DERIVE_MACRO
+        {
+            continue;
+        }
+        derives
+            .try_reserve(1)
+            .map_err(|_| super::Error::Allocation)?;
+        derives.push(Derive {
+            root: copy(key.root_alias())?,
+            path: path(key.path())?,
+        });
+    }
+    derives.sort_unstable();
+    derives.dedup();
+    Ok(derives)
 }
 
 /// A crate's re-export of an item of the standard library, as iced's
@@ -876,6 +924,7 @@ impl Plan {
                             variants: Box::default(),
                             type_aliases: Box::default(),
                             macros: Box::default(),
+                            derives: Box::default(),
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
@@ -1093,6 +1142,7 @@ impl Plan {
                             variants: Box::default(),
                             type_aliases: Box::default(),
                             macros: Box::default(),
+                            derives: Box::default(),
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
@@ -1106,6 +1156,41 @@ impl Plan {
             list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
             list.push(rules);
             facade.macros = list.into_boxed_slice();
+        }
+        // A dependency's derive macros, which a program's `#[derive(..)]`
+        // names.
+        for Derive { root, path } in derives(graph)? {
+            let index = match facades.binary_search_by(|facade| facade.root.cmp(&root)) {
+                Ok(index) => index,
+                Err(index) => {
+                    facades
+                        .try_reserve(1)
+                        .map_err(|_| super::Error::Allocation)?;
+                    facades.insert(
+                        index,
+                        Facade {
+                            root,
+                            types: Box::default(),
+                            items: Box::default(),
+                            traits: Box::default(),
+                            builtins: Box::default(),
+                            variants: Box::default(),
+                            type_aliases: Box::default(),
+                            macros: Box::default(),
+                            derives: Box::default(),
+                            trait_headers: Box::default(),
+                            impls: Box::default(),
+                            std_reexports: Box::default(),
+                        },
+                    );
+                    index
+                }
+            };
+            let facade = &mut facades[index];
+            let mut list = std::mem::take(&mut facade.derives).into_vec();
+            list.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+            list.push(path);
+            facade.derives = list.into_boxed_slice();
         }
         // A crate's re-export of a std item names that item, which Rawr
         // resolves by its std path.
@@ -1127,6 +1212,7 @@ impl Plan {
                             variants: Box::default(),
                             type_aliases: Box::default(),
                             macros: Box::default(),
+                            derives: Box::default(),
                             trait_headers: Box::default(),
                             impls: Box::default(),
                             std_reexports: Box::default(),
@@ -1661,6 +1747,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
             variants: Box::default(),
             type_aliases: Box::default(),
             macros: Box::default(),
+            derives: Box::default(),
             trait_headers: Box::default(),
             impls: Box::default(),
             std_reexports: Box::default(),
@@ -1785,6 +1872,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
                 variants: Box::default(),
                 type_aliases: Box::default(),
                 macros: Box::default(),
+                derives: Box::default(),
                 trait_headers: Box::default(),
                 impls: Box::default(),
                 std_reexports: Box::default(),
@@ -1838,6 +1926,7 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
         variants: Box::default(),
         type_aliases: Box::default(),
         macros: Box::default(),
+        derives: Box::default(),
         trait_headers: Box::default(),
         impls: Box::default(),
         std_reexports: Box::default(),
@@ -2055,6 +2144,12 @@ impl Facade {
     /// Iterate the root's `macro_rules!` macros, sorted by path.
     pub fn macros(&self) -> impl ExactSizeIterator<Item = &Macro> {
         self.macros.iter()
+    }
+
+    /// Iterate the root's derive macros, each path relative to the root,
+    /// sorted.
+    pub fn derives(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.derives.iter().map(AsRef::as_ref)
     }
 
     /// Iterate the headers of the traits Rawr code names (D604).
@@ -3618,6 +3713,22 @@ fn copy(source: &str) -> Result<Box<str>, super::Error> {
         .map_err(|_| super::Error::Allocation)?;
     output.push_str(source);
     Ok(output.into_boxed_str())
+}
+
+#[cfg(test)]
+mod derive_tests {
+    #[test]
+    fn a_crates_derive_macros_are_its_rejected_macro_paths_of_the_derive_kind() {
+        let graph = crate::test_fixture::derive_exports();
+        let derives = super::derives(&graph).unwrap();
+        assert_eq!(
+            derives,
+            [super::Derive {
+                root: "fixture".into(),
+                path: "Serialize".into(),
+            }]
+        );
+    }
 }
 
 #[cfg(test)]

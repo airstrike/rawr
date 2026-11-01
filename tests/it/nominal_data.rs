@@ -243,7 +243,6 @@ fn duplicate_fields_and_variants_report_the_previous_declaration() {
 #[test]
 fn invalid_derives_fail_at_compile_time() {
     let cases = [
-        ("#[derive(Display)] struct Value { inner: i64 }", "unsupported derive"),
         ("#[derive(Default)] enum Message { Tick }", "no default declared"),
         ("#[derive(Copy)] struct Value { inner: i64 }", "Copy requires Clone"),
         ("#[derive(Eq)] struct Value { inner: i64 }", "Eq requires PartialEq"),
@@ -255,6 +254,8 @@ fn invalid_derives_fail_at_compile_time() {
     for (source, message) in cases {
         assert_resolution(&Engine::new(), source, Category::InvalidDerive, message);
     }
+    // A derive that names nothing is rustc's error.
+    assert_resolution(&Engine::new(), "#[derive(Display)] struct Value { inner: i64 }", Category::Syntax, "cannot find derive macro `Display` in this scope");
 }
 
 #[test]

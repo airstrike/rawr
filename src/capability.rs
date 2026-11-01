@@ -275,12 +275,112 @@ struct Request {
     enum_default: Result<(), &'static str>,
 }
 
-pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Set>, LocatedError> {
+/// What a `#[derive(..)]` path names, resolved as rustc resolves it in the
+/// macro namespace: through the file's `use`, then the std prelude.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Derive {
+    /// One of std's derives.
+    Std(Kind),
+    /// A crate's derive macro, at the path the program's `use` or path
+    /// names it by (`serde::Serialize`).
+    Crate(ImmutableString),
+    /// Nothing in scope.
+    Unknown,
+}
+
+/// The std derive `path` names, as `std::fmt::Debug` or `core::cmp::Ord`.
+fn std_derive(path: &[&str]) -> Option<Kind> {
+    let [root, module, name] = path else {
+        return None;
+    };
+    if !matches!(*root, "std" | "core") {
+        return None;
+    }
+    let kind = Kind::from_derive(name)?;
+    let home = match kind {
+        Kind::Debug => "fmt",
+        Kind::Clone => "clone",
+        Kind::Copy => "marker",
+        Kind::Default => "default",
+        Kind::Hash => "hash",
+        Kind::PartialEq | Kind::Eq | Kind::PartialOrd | Kind::Ord => "cmp",
+        Kind::Send | Kind::Static | Kind::Iterator => return None,
+    };
+    (*module == home).then_some(kind)
+}
+
+/// What the derive `path`, written in a file whose imports are `uses`,
+/// names.
+fn derive_target(
+    path: &crate::item::type_ref::Path,
+    uses: &[&item::Use],
+    host: &crate::host::Registry,
+) -> Derive {
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.name.text.as_str())
+        .collect::<Vec<_>>();
+    let binding = |name: &str| {
+        uses.iter()
+            .flat_map(|used| used.bindings.iter())
+            .find(|binding| binding.name.text == name)
+    };
+    let named = |qualified: &str| {
+        let parts = qualified.split("::").collect::<Vec<_>>();
+        if let Some(kind) = std_derive(&parts) {
+            Derive::Std(kind)
+        } else if host.derive_macro(qualified) {
+            Derive::Crate(qualified.into())
+        } else {
+            Derive::Unknown
+        }
+    };
+    match segments.as_slice() {
+        [] => Derive::Unknown,
+        // A name a `use` brought into the macro namespace, else std's
+        // prelude. A `use` of a trait alone leaves the prelude's derive.
+        [name] if !path.global => {
+            if let Some(binding) = binding(name)
+                && let found @ (Derive::Std(_) | Derive::Crate(_)) = named(&binding.qualified)
+            {
+                return found;
+            }
+            Kind::from_derive(name).map_or(Derive::Unknown, Derive::Std)
+        }
+        [first, rest @ ..] => {
+            let mut qualified = match binding(first) {
+                Some(binding) if !path.global => binding.qualified.to_string(),
+                _ => (*first).to_string(),
+            };
+            for segment in rest {
+                qualified.push_str("::");
+                qualified.push_str(segment);
+            }
+            named(&qualified)
+        }
+    }
+}
+
+pub(crate) fn resolve(
+    items: &[item::Shell],
+    host: &crate::host::Registry,
+) -> Result<BTreeMap<type_def::Id, Set>, LocatedError> {
     let mut requests = BTreeMap::new();
+    let mut uses = BTreeMap::<program::source::Id, Vec<&item::Use>>::new();
+    for shell in items {
+        if let item::Kind::Use(used) = &shell.kind {
+            uses.entry(shell.source).or_default().push(used);
+        }
+    }
+    let derive = |source: program::source::Id, path: &crate::item::type_ref::Path| {
+        derive_target(path, uses.get(&source).map_or(&[][..], Vec::as_slice), host)
+    };
 
     for shell in items {
         let request = match &shell.kind {
             item::Kind::Struct(item) => Request::new(
+                &derive,
                 shell.source,
                 &item.header,
                 &item.name.text,
@@ -305,6 +405,7 @@ pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Se
             )
             .map_err(|error| LocatedError::primary(shell.source, error))?,
             item::Kind::Enum(item) => Request::new(
+                &derive,
                 shell.source,
                 &item.header,
                 &item.name.text,
@@ -481,6 +582,7 @@ pub(crate) fn resolve(items: &[item::Shell]) -> Result<BTreeMap<type_def::Id, Se
 
 impl Request {
     fn new(
+        derive: &dyn Fn(program::source::Id, &crate::item::type_ref::Path) -> Derive,
         source: program::source::Id,
         header: &crate::item::Header,
         owner: &str,
@@ -505,14 +607,30 @@ impl Request {
                     .map(|segment| segment.name.text.as_str())
                     .collect::<Vec<_>>()
                     .join("::");
-                let Some(capability) = Kind::from_derive(&name) else {
-                    return Err(Error::InvalidDerive {
-                        owner: owner.into(),
-                        capability: name.into(),
-                        reason: "unsupported derive".into(),
-                        attribute: argument.span,
-                        declaration: owner_span,
-                    });
+                let capability = match derive(source, argument) {
+                    Derive::Std(capability) => capability,
+                    Derive::Crate(path) => {
+                        return Err(Error::InvalidDerive {
+                            owner: owner.into(),
+                            capability: name.into(),
+                            reason: format!(
+                                "deriving the crate's macro `{path}` on a type of this program \
+                                 isn't supported yet"
+                            )
+                            .into(),
+                            attribute: argument.span,
+                            declaration: owner_span,
+                        });
+                    }
+                    Derive::Unknown => {
+                        return Err(Error::Syntax {
+                            message: format!("cannot find derive macro `{name}` in this scope")
+                                .into(),
+                            label: ImmutableString::new(),
+                            help: None,
+                            at: argument.span,
+                        });
+                    }
                 };
                 if spans.insert(capability, argument.span).is_some() {
                     return Err(Error::InvalidDerive {
@@ -809,7 +927,106 @@ mod tests {
         for capability in ["Send", "Static"] {
             let source = format!("#[derive({capability})] struct Value;");
             let error = Engine::new().compile(&source).unwrap_err();
-            assert!(error.to_string().contains("unsupported derive"), "{error}");
+            assert!(
+                error.to_string().contains(&format!(
+                    "cannot find derive macro `{capability}` in this scope"
+                )),
+                "{error}"
+            );
+        }
+    }
+
+    /// An engine whose crate `serde` has the derive macros `Serialize` and
+    /// `Deserialize`.
+    fn serde() -> Engine {
+        let mut engine = Engine::new();
+        let mut builder = facade::Builder::new("serde", facade::Abi::new(1).unwrap()).unwrap();
+        builder.derive("Serialize").unwrap();
+        builder.derive("Deserialize").unwrap();
+        engine
+            .register_host_facade(builder.finish().unwrap())
+            .unwrap();
+        engine
+    }
+
+    /// The resolver's error for `source`, and the text its span covers.
+    fn derive_error(engine: &Engine, source: &str) -> (resolve::Error, String) {
+        let unit = engine.parse_unit(source).unwrap();
+        let Err(error) = resolve::resolve(unit, &engine.host_registry) else {
+            panic!("expected `{source}` to be rejected");
+        };
+        let text = error.primary_span().text(source).to_owned();
+        (error, text)
+    }
+
+    #[test]
+    fn a_std_derive_resolves_by_its_name_or_its_std_path() {
+        let engine = Engine::new();
+        let unit = engine
+            .parse_unit(
+                "use std::fmt::Debug; \
+                 #[derive(Debug, std::clone::Clone, core::cmp::PartialEq)] struct Value;",
+            )
+            .unwrap();
+        let program = resolve::resolve(unit, &engine.host_registry).unwrap();
+        let capabilities = program.types()[0].capabilities();
+        assert!(capabilities.contains(Kind::Debug));
+        assert!(capabilities.contains(Kind::Clone));
+        assert!(capabilities.contains(Kind::PartialEq));
+    }
+
+    #[test]
+    fn a_derive_that_names_nothing_is_rustcs_cannot_find() {
+        let engine = serde();
+        for (source, name) in [
+            ("#[derive(Debug, Serialize)] struct Value;", "Serialize"),
+            ("#[derive(serde::Hash)] struct Value;", "serde::Hash"),
+            (
+                "#[derive(std::fmt::Clone)] struct Value;",
+                "std::fmt::Clone",
+            ),
+        ] {
+            let (error, text) = derive_error(&engine, source);
+            assert!(
+                matches!(&error, resolve::Error::Syntax { message, .. }
+                    if *message == format!("cannot find derive macro `{name}` in this scope")),
+                "{error:?}"
+            );
+            assert_eq!(text, name);
+        }
+    }
+
+    #[test]
+    fn a_crates_derive_resolves_through_use_or_its_path_and_is_not_supported_yet() {
+        let engine = serde();
+        for (source, written) in [
+            (
+                "use serde::{Deserialize, Serialize};\n\
+                 #[derive(Debug, Clone, Serialize)] struct Point { x: i64 }",
+                "Serialize",
+            ),
+            (
+                "use serde::Deserialize as Load;\n#[derive(Load)] enum Shape { Dot }",
+                "Load",
+            ),
+            (
+                "#[derive(Debug, serde::Deserialize)] struct Point { x: i64 }",
+                "serde::Deserialize",
+            ),
+        ] {
+            let (error, text) = derive_error(&engine, source);
+            let resolve::Error::InvalidDerive {
+                capability, reason, ..
+            } = &error
+            else {
+                panic!("{error:?}");
+            };
+            assert_eq!(capability.as_str(), written);
+            assert!(
+                reason.contains("crate's macro `serde::") && reason.contains("isn't supported yet"),
+                "{reason}"
+            );
+            assert_eq!(text, written);
         }
     }
 }

@@ -3,7 +3,7 @@
 use super::ParseResult;
 use crate::item::type_ref;
 use crate::tokenizer::{Token, TokenStream, TokenizerControl};
-use crate::{Engine, Position, Span, PERR};
+use crate::{Engine, ImmutableString, Position, Span, PERR};
 
 /// The items of a file, and the spans of its inner attributes (`#![..]`),
 /// which the legacy script does not see.
@@ -33,10 +33,12 @@ pub(super) fn parse(engine: &Engine, source: &str) -> ParseResult<ParsedFile> {
     let outer_skipped = SKIPPED.take();
     let outer_inner = INNER.take();
     let parsed = parse_items(engine, source);
-    let nested = NESTED.replace(outer);
+    let mut nested = NESTED.replace(outer);
     let skipped = SKIPPED.replace(outer_skipped);
-    let inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
+    let mut inner_attributes = INNER.replace(outer_inner).into_boxed_slice();
     let (mut items, mut inner) = parsed?;
+    attribute_text(source, &mut items, &mut inner_attributes);
+    attribute_text(source, &mut nested, &mut []);
     inner.extend(skipped);
     // Preserve source authority before compatibility hoisting discards duplicates.
     let mut imports = items
@@ -991,13 +993,14 @@ fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
 }
 
 /// The attributes on a field or an enum variant. Only `#[cfg(..)]` and a
-/// variant's `#[default]` mean anything to Rawr. Any other attribute, such as
-/// a derive helper like `#[serde(default = "..")]`, is passed over unread, the
-/// way rustc leaves a derive helper inert.
+/// variant's `#[default]` mean anything to Rawr. Every attribute, such as a
+/// derive helper like `#[serde(default = "..")]`, is kept as written for the
+/// Rust a later pass writes; Rawr leaves a helper inert, as rustc does.
 #[derive(Default)]
 struct MemberAttributes {
     default: Option<Span>,
     disabled: bool,
+    attributes: Vec<crate::item::Attribute>,
 }
 
 fn parse_member_attributes(input: &mut TokenStream) -> ParseResult<MemberAttributes> {
@@ -1010,19 +1013,78 @@ fn parse_member_attributes(input: &mut TokenStream) -> ParseResult<MemberAttribu
         expect(input, Token::LeftBracket, "after '#' in an attribute")?;
         let path = parse_path(input)?;
         let name = (path.segments.len() == 1).then(|| path.segments[0].name.text.as_str());
-        if name == Some("cfg") {
+        let close = if name == Some("cfg") {
             expect(input, Token::LeftParen, "after `cfg`")?;
             attributes.disabled |= !parse_cfg_predicate(input)?;
             expect(input, Token::RightParen, "to close `cfg`")?;
-            expect(input, Token::RightBracket, "to close an attribute")?;
-            continue;
-        }
-        let close = skip_to_attribute_end(input)?;
+            expect(input, Token::RightBracket, "to close an attribute")?
+        } else {
+            skip_to_attribute_end(input)?
+        };
+        let span = Span::new(hash, after(close, 1));
         if name == Some("default") {
-            attributes.default = Some(Span::new(hash, after(close, 1)));
+            attributes.default = Some(span);
         }
+        attributes.attributes.push(crate::item::Attribute {
+            path,
+            arguments: Box::default(),
+            span,
+            text: ImmutableString::new(),
+        });
     }
     Ok(attributes)
+}
+
+/// Fill each attribute's `text` from `source`, which every span of `items`
+/// and `inner` points into.
+fn attribute_text(
+    source: &str,
+    items: &mut [crate::item::Parsed],
+    inner: &mut [crate::item::Attribute],
+) {
+    use crate::item::Parsed;
+    let fill = |attributes: &mut [crate::item::Attribute]| {
+        for attribute in attributes {
+            let text = attribute.span.text(source);
+            let text = text.strip_prefix('#').unwrap_or(text).trim_start();
+            let text = text.strip_prefix('[').unwrap_or(text);
+            let text = text.strip_suffix(']').unwrap_or(text);
+            attribute.text = text.trim().into();
+        }
+    };
+    let function = |function: &mut crate::item::Function| fill(&mut function.header.attributes);
+    fill(inner);
+    for item in items {
+        match item {
+            Parsed::Module(item) => fill(&mut item.header.attributes),
+            Parsed::Use(item) => fill(&mut item.header.attributes),
+            Parsed::Struct(item) => {
+                fill(&mut item.header.attributes);
+                for field in &mut item.fields {
+                    fill(&mut field.attributes);
+                }
+            }
+            Parsed::Enum(item) => {
+                fill(&mut item.header.attributes);
+                for variant in &mut item.variants {
+                    fill(&mut variant.attributes);
+                    for attributes in &mut variant.field_attributes {
+                        fill(attributes);
+                    }
+                }
+            }
+            Parsed::Impl(item) => {
+                fill(&mut item.header.attributes);
+                item.functions.iter_mut().for_each(&function);
+            }
+            Parsed::Trait(item) => {
+                fill(&mut item.header.attributes);
+                item.functions.iter_mut().for_each(&function);
+            }
+            Parsed::Function(item) => function(item),
+            Parsed::TypeAlias(item) => fill(&mut item.header.attributes),
+        }
+    }
 }
 
 /// Pass over the rest of an attribute up to and including its `]`, and
@@ -1086,6 +1148,7 @@ fn parse_attribute_after_marker(
             path,
             arguments: Box::default(),
             span: Span::new(hash, after(close, 1)),
+            text: ImmutableString::new(),
         });
     }
 
@@ -1122,10 +1185,36 @@ fn parse_attribute_after_marker(
         }
     }
 
+    // `derive`'s arguments are paths. Another attribute's may be any
+    // tokens, as a derive helper's `#[serde(rename_all = "camelCase")]` or
+    // `#[doc = ".."]` are: they are kept as text, with no path arguments.
+    let derive = path.segments.len() == 1 && path.segments[0].name.text == "derive";
+    let paths_only =
+        |token: &Token| is_name(token) || matches!(token, Token::DoubleColon | Token::RightParen);
+    if !derive
+        && !matches!(
+            input.peek(),
+            Some((Token::LeftParen | Token::RightBracket, _))
+        )
+    {
+        let close = skip_to_attribute_end(input)?;
+        return Ok(crate::item::Attribute {
+            path,
+            arguments: Box::default(),
+            span: Span::new(hash, after(close, 1)),
+            text: ImmutableString::new(),
+        });
+    }
+
     if matches!(input.peek(), Some((Token::LeftParen, _))) {
         input.next();
 
         while !matches!(input.peek(), Some((Token::RightParen, _))) {
+            if !derive && !input.peek().is_some_and(|(token, _)| paths_only(token)) {
+                arguments.clear();
+                skip_to_close_paren(input)?;
+                break;
+            }
             arguments.push(parse_path(input)?);
 
             match input.peek().expect("token streams always end with EOF") {
@@ -1136,6 +1225,11 @@ fn parse_attribute_after_marker(
                     }
                 }
                 (Token::RightParen, _) => break,
+                (_, _) if !derive => {
+                    arguments.clear();
+                    skip_to_close_paren(input)?;
+                    break;
+                }
                 (_, position) => {
                     return Err(PERR::MissingToken(
                         Token::Comma.into(),
@@ -1155,7 +1249,34 @@ fn parse_attribute_after_marker(
         path,
         arguments: arguments.into_boxed_slice(),
         span: Span::new(hash, after(close, 1)),
+        text: ImmutableString::new(),
     })
+}
+
+/// Pass over an attribute's arguments up to, not including, the `)` that
+/// closes them.
+fn skip_to_close_paren(input: &mut TokenStream) -> ParseResult<()> {
+    let mut depth = 0usize;
+    loop {
+        match input.peek().expect("token streams always end with EOF") {
+            (Token::RightParen, _) if depth == 0 => return Ok(()),
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
+                depth = depth.saturating_sub(1);
+            }
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::RightParen.into(),
+                    "to close attribute arguments".into(),
+                )
+                .into_err(*position));
+            }
+            _ => {}
+        }
+        input.next();
+    }
 }
 
 fn parse_use(
@@ -1327,7 +1448,7 @@ fn parse_struct(
         let mut fields = Vec::new();
         if matches!(input.next(), Some((Token::LeftParen, _))) {
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
-                parse_member_attributes(input)?;
+                let field_attributes = parse_member_attributes(input)?;
                 let ty = match skip_field_visibility(input)? {
                     Some(open) => parse_parenthesized_type(input, open)?,
                     None => parse_type(input)?,
@@ -1340,6 +1461,7 @@ fn parse_struct(
                     },
                     ty,
                     span,
+                    attributes: field_attributes.attributes.into_boxed_slice(),
                 });
                 consume_comma_or_end(input, Token::RightParen, "between tuple struct fields")?;
             }
@@ -1385,6 +1507,7 @@ fn parse_struct(
                 name: field_name,
                 ty,
                 span,
+                attributes: field_attributes.attributes.into_boxed_slice(),
             });
         }
 
@@ -1483,6 +1606,7 @@ fn parse_enum(
         let default = variant_attributes.default;
         let variant_name = parse_name(input, "as an enum variant")?;
         let mut payload = Vec::new();
+        let mut field_attributes = Vec::new();
         let mut fields = None;
         let mut end = variant_name.span.end();
 
@@ -1490,6 +1614,11 @@ fn parse_enum(
             input.next();
 
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
+                field_attributes.push(
+                    parse_member_attributes(input)?
+                        .attributes
+                        .into_boxed_slice(),
+                );
                 let ty = parse_type(input)?;
                 payload.push(ty);
                 consume_comma_or_end(input, Token::RightParen, "between variant payload types")?;
@@ -1503,7 +1632,11 @@ fn parse_enum(
             let mut names = Vec::new();
 
             while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-                parse_member_attributes(input)?;
+                field_attributes.push(
+                    parse_member_attributes(input)?
+                        .attributes
+                        .into_boxed_slice(),
+                );
                 let field = parse_name(input, "as a variant field")?;
                 if names
                     .iter()
@@ -1554,6 +1687,8 @@ fn parse_enum(
             fields,
             default,
             discriminant,
+            attributes: variant_attributes.attributes.into_boxed_slice(),
+            field_attributes: field_attributes.into_boxed_slice(),
         });
 
         consume_comma_or_end(input, Token::RightBrace, "between enum variants")?;
@@ -4704,6 +4839,103 @@ fn after(mut position: Position, width: usize) -> Position {
 mod tests {
     use crate::item::{type_ref, Parsed, Receiver, UseTree};
     use crate::{Engine, ImmutableString, Position};
+
+    fn texts(attributes: &[crate::item::Attribute]) -> Vec<&str> {
+        attributes
+            .iter()
+            .map(|attribute| attribute.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn keeps_item_field_and_variant_attributes_as_written() {
+        let source = r#"
+#[derive(Debug, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[doc = "A task"]
+struct Task {
+    #[serde(default = "Uuid::new_v4")]
+    id: i64,
+    #[cfg(test)]
+    missing: String,
+    #[serde(skip)] #[allow(dead_code)]
+    pub weight: i64,
+}
+struct Pair(#[serde(with = "m")] i64, i64);
+enum Filter {
+    #[serde(rename = "all")]
+    #[default]
+    All,
+    Done { #[serde(skip_serializing_if = "Option::is_none")] count: i64 },
+    Both(#[serde(with = "m")] i64, i64),
+}
+"#;
+        let unit = Engine::new().parse_unit(source).unwrap();
+        let Parsed::Struct(task) = &unit.items()[0] else {
+            panic!("expected the struct Task")
+        };
+        assert_eq!(
+            texts(&task.header.attributes),
+            [
+                "derive(Debug, Clone)",
+                r#"serde(rename_all = "camelCase", deny_unknown_fields)"#,
+                r#"doc = "A task""#,
+            ]
+        );
+        assert_eq!(task.header.attributes[0].arguments.len(), 2);
+        assert!(task.header.attributes[1].arguments.is_empty());
+        assert_eq!(
+            task.header.attributes[1].path.segments[0].name.text,
+            "serde"
+        );
+        let fields = task
+            .fields
+            .iter()
+            .map(|field| (field.name.text.as_str(), texts(&field.attributes)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields,
+            [
+                ("id", vec![r#"serde(default = "Uuid::new_v4")"#]),
+                ("weight", vec!["serde(skip)", "allow(dead_code)"]),
+            ]
+        );
+
+        let Parsed::Struct(pair) = &unit.items()[1] else {
+            panic!("expected the struct Pair")
+        };
+        assert_eq!(texts(&pair.fields[0].attributes), [r#"serde(with = "m")"#]);
+        assert!(pair.fields[1].attributes.is_empty());
+
+        let Parsed::Enum(filter) = &unit.items()[2] else {
+            panic!("expected the enum Filter")
+        };
+        let [all, done, both] = &*filter.variants else {
+            panic!("expected three variants")
+        };
+        assert_eq!(
+            texts(&all.attributes),
+            [r#"serde(rename = "all")"#, "default"]
+        );
+        assert_eq!(all.default, Some(all.attributes[1].span));
+        assert!(all.field_attributes.is_empty());
+        assert!(done.attributes.is_empty());
+        assert_eq!(done.field_attributes.len(), 1);
+        assert_eq!(
+            texts(&done.field_attributes[0]),
+            [r#"serde(skip_serializing_if = "Option::is_none")"#]
+        );
+        assert_eq!(both.field_attributes.len(), 2);
+        assert_eq!(texts(&both.field_attributes[0]), [r#"serde(with = "m")"#]);
+        assert!(both.field_attributes[1].is_empty());
+    }
+
+    #[test]
+    fn a_derive_keeps_rejecting_arguments_that_are_not_paths() {
+        assert!(Engine::new()
+            .parse_unit("#[derive(Debug = 1)] struct Value;")
+            .is_err());
+    }
 
     #[test]
     fn parses_public_file_module_declarations() {
