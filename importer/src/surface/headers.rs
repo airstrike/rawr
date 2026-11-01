@@ -111,6 +111,14 @@ impl<'g> Headers<'g> {
             model::Type::Parameter { index, .. } => convert::Type::Parameter(*index),
             model::Type::Definition { id, arguments } => {
                 let definition = identity(id);
+                // A std type Rawr holds as its own, as iced's `impl<T>
+                // Widget for Option<T>` names `Option<T>`: the type the
+                // classifier converts it to, which every facade can write.
+                if let Some(model) = self.models.get(&definition).copied()
+                    && let Some(converted) = self.std_type(model, arguments)
+                {
+                    return converted;
+                }
                 if !self.declared.contains(&definition) {
                     return None;
                 }
@@ -127,6 +135,37 @@ impl<'g> Headers<'g> {
             }
             _ => return None,
         })
+    }
+
+    /// `Option<T>`, `Result<T, E>` or `Vec<T>` of std, which Rawr holds as
+    /// its own `Option`, `Result` and array: `Some` of the converted type,
+    /// itself `None` when an argument can't be written. `None` for any
+    /// other definition.
+    fn std_type(
+        &self,
+        definition: &model::Definition,
+        arguments: &[model::Argument],
+    ) -> Option<Option<convert::Type>> {
+        use crate::classify::{option_element, result_elements, vec_element};
+        if let Some(element) = option_element(definition, arguments) {
+            return Some(
+                self.ty(element)
+                    .map(|element| convert::Type::Option(Box::new(element))),
+            );
+        }
+        if let Some((ok, err)) = result_elements(definition, arguments) {
+            return Some(
+                self.ty(ok)
+                    .zip(self.ty(err))
+                    .map(|(ok, err)| convert::Type::Result(Box::new(ok), Box::new(err))),
+            );
+        }
+        let element = vec_element(definition, arguments)?;
+        Some(self.ty(element).map(|element| convert::Type::Sequence {
+            element: Box::new(element),
+            owned: true,
+            length: None,
+        }))
     }
 
     /// A trait's type arguments other than `Self`, by its parameters.

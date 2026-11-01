@@ -9172,7 +9172,7 @@ fn selector(definition: &model::Definition) -> Result<crate::surface::identity::
 }
 
 /// `T` of alloc's `Vec<T>`, with its allocator or without.
-fn vec_element<'a>(
+pub(crate) fn vec_element<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<&'a model::Type> {
@@ -9578,7 +9578,7 @@ fn cow_target<'a>(
 }
 
 /// `T` of core's `Option<T>`, which Rawr represents as its own `Option`.
-fn option_element<'a>(
+pub(crate) fn option_element<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<&'a model::Type> {
@@ -9597,7 +9597,7 @@ fn option_element<'a>(
 
 /// `T` and `E` of core's `Result<T, E>`, which Rawr represents as its own
 /// `Result`.
-fn result_elements<'a>(
+pub(crate) fn result_elements<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<(&'a model::Type, &'a model::Type)> {

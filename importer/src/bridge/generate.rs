@@ -1655,14 +1655,17 @@ fn scoped_value(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__raw
 }
 
 /// The first value of a scope frame's region in the array at `index`, as
-/// `column![..]`'s elements are.
+/// `column![..]`'s elements are, or in the option there, as `column![..,
+/// maybe.map(|x| text(x))]`'s `Option<Text>` is.
 #[allow(dead_code)]
 fn scoped_item(arguments: &Arguments<'_, '_, '_>, index: usize) -> Option<__rawr_internal::scope::Scoped> {
     let value = arguments.values.get(index)?;
+    let scoped = |item: &Dynamic| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped);
+    if let Some(option) = value.read_lock::<__rawr_internal::option::Value>() {
+        return option.as_ref().and_then(scoped);
+    }
     let items = value.read_lock::<__rawr_internal::Array>()?;
-    items
-        .iter()
-        .find_map(|item| item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped))
+    items.iter().find_map(scoped)
 }
 
 /// A value native code lent the call (D558.3) that an argument reaches,
@@ -6701,14 +6704,17 @@ fn region_inputs(plan: &Plan) -> Result<Vec<usize>, request::Error> {
             continue;
         }
         let ty = substituted(input, signature, substitutions)?;
-        // A value of a region, or an array of them, as `Column::
-        // with_children` takes `column![..]`'s elements.
+        // A value of a region, an array of them, as `Column::
+        // with_children` takes `column![..]`'s elements, or an option of
+        // one, as a crate's impl of its trait for `Option<T>` takes
+        // `maybe.map(|x| text(x))`.
         let element = match &ty {
             convert::Type::Sequence {
                 element,
                 owned: true,
                 length: None,
-            } => element,
+            }
+            | convert::Type::Option(element) => element,
             ty => ty,
         };
         if family_of(element).is_some() {
@@ -8052,10 +8058,12 @@ fn lifetime_inputs(
             continue;
         }
         let ty = substituted(input, signature, substitutions)?;
-        // A native value, or a sequence of them, as `column(iterator)`
-        // takes a view's `Text`s.
+        // A native value, a sequence of them, as `column(iterator)`
+        // takes a view's `Text`s, or an option of one.
         let native = match &ty {
-            convert::Type::Sequence { element, .. } => element.as_ref(),
+            convert::Type::Sequence { element, .. } | convert::Type::Option(element) => {
+                element.as_ref()
+            }
             ty => ty,
         };
         if matches!(native, convert::Type::Nominal { .. }) && carries_lifetime(native) {
@@ -10740,6 +10748,30 @@ fn render_take_input(
         return writeln!(
             output,
             "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).collect::<Result<Vec<_>, Error>>())?;"
+        )
+        .map_err(request::unwritable);
+    }
+    // An option of a scope frame's region's value, moved out of it into
+    // the call, as a crate's impl of its trait for `Option<T>` takes
+    // `maybe.map(|x| text(x))`. One made outside any region is in the
+    // arena, as an array's element is.
+    if REGION_ARGUMENTS.get()
+        && let convert::Type::Option(element) = substituted(ty, signature, substitutions)?
+        && let Some(family) = family_of(&element)
+    {
+        let rust =
+            concrete_type(&element).ok_or_else(|| request::drift("a region option's element"))?;
+        let arena = if shortens(&element) {
+            format!("item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| arguments.arena.take::<{rust}>(handle))")
+        } else {
+            format!(
+                "Err(Error::Value({:?}.to_owned()))",
+                format!("`{rust}` is invariant in its lifetime, so one made outside the view can't join those the view makes")
+            )
+        };
+        return writeln!(
+            output,
+            "    let argument_{local} = {{ let mut value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); __rawr_internal::option::take(&mut value).ok_or(Error::TypeMismatch)?.map(|item| {{ let scoped = item.read_lock::<__rawr_internal::scope::Scoped>().map(|scoped| *scoped); match scoped {{ Some(scoped) => region.take::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error)), None => {arena} }} }}).transpose()? }};"
         )
         .map_err(request::unwritable);
     }
