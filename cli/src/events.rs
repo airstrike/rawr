@@ -24,6 +24,10 @@ use serde_json::{json, Value};
 /// The file a supervised `rawr run` appends its events to.
 pub const EVENTS: &str = "RAWR_MCP_EVENTS";
 
+/// The socket a supervised program answers `inspect` on
+/// ([`rawr::inspect`]): the process that runs the program serves it.
+pub const INSPECT: &str = "RAWR_MCP_INSPECT";
+
 /// The pid of the `rawr mcp` server that started this process.
 pub const PARENT: &str = "RAWR_MCP_PARENT";
 

@@ -61,6 +61,12 @@ const FUNCTION_SENTINEL: &str = "__rawr_nominal_function_";
 /// functions (`rewrite_call`).
 const NATIVE_ONLY: &str = "\0rawr.native-only";
 const DISPATCH_SENTINEL: &str = "__rawr_nominal_dispatch_";
+/// The program's dispatcher of `Debug::fmt`, present when it has a
+/// hand-written `Debug` impl; it falls back to [`DEBUG_GENERIC`].
+pub(crate) const DEBUG_DISPATCHER: &str = "__rawr_nominal_dispatch_Debug__fmt";
+/// The `Debug` text of any value: a derive's, a builtin's or a crate
+/// type's.
+pub(crate) const DEBUG_GENERIC: &str = "\0rawr.generic.debug";
 /// The generated function from a type witness to that type's default.
 const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
 const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
@@ -2745,6 +2751,18 @@ fn lower_with_context(
         rewrites.insert(sentinel, private.clone());
         register(&mut module, private, op, &models);
     }
+    // A debugger reads any value's `Debug` text through it (#488).
+    debug_assert_eq!(
+        format!("\0rawr.{}", PreludeOp::GenericDebug.name()),
+        DEBUG_GENERIC
+    );
+    debug_assert_eq!(trait_dispatcher_name("Debug", "fmt"), DEBUG_DISPATCHER);
+    register(
+        &mut module,
+        DEBUG_GENERIC.into(),
+        ExecutableOp::Prelude(PreludeOp::GenericDebug),
+        &models,
+    );
 
     rewrite_statements(ast.statements_mut(), &rewrites, &nominal_patterns);
     ast.for_each_fn_def_mut(|function| {

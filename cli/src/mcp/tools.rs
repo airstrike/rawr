@@ -13,7 +13,7 @@ use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
 /// listed.
-pub const CORE: [&str; 8] = [
+pub const CORE: [&str; 9] = [
     "new",
     "check",
     "run",
@@ -22,6 +22,7 @@ pub const CORE: [&str; 8] = [
     "status",
     "stop",
     "screenshot",
+    "inspect",
 ];
 
 /// Crates whose programs draw a terminal UI, which `start` can't host yet.
@@ -175,6 +176,19 @@ pub fn list() -> Vec<Value> {
                 },
             },
         }),
+        json!({
+            "name": "inspect",
+            "description": "Read the started program's values while it runs: the bindings in scope where it is, or one binding by `name`, each as Rust's `{:?}` prints it. The program answers at its next step in its own code; with `name` or `file`, at the next step where that binding is in scope or in that file. A program waiting for input or an event answers once it runs again.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "name": { "type": "string", "description": "A binding's name, such as a local or a parameter like `state`" },
+                    "file": { "type": "string", "description": "A source file of the program: absolute, or relative to the server's project root" },
+                    "timeout_ms": milliseconds("How long to wait for the program to reach such a step", 2_000),
+                },
+            },
+        }),
     ];
     tools.extend(
         extension::offered(&installed, &CORE)
@@ -195,7 +209,7 @@ pub fn instructions(root: &Path) -> String {
         .map_or_else(|| "rawr".to_owned(), |path| path.display().to_string());
     let mut text = format!(
         "rawr {} ({executable}) runs Rust programs for dev builds: a Cargo crate whose files start with `// rawr`, or one .rs file. It reloads them when you save.\n\
-         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window. `stop` ends it.\n\
+         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window. `inspect` reads its values while it runs. `stop` ends it.\n\
          Relative paths start at {}.\n",
         rawr::VERSION,
         root.display()
@@ -381,6 +395,13 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         }),
         "status" => Ok(status(server, text("path"))),
         "stop" => stop(server, text("path")),
+        "inspect" => inspect(
+            server,
+            text("path"),
+            text("name"),
+            text("file"),
+            bounded(&arguments, "timeout_ms", 2_000),
+        ),
         "screenshot" => screenshot(server, text("path"), text("title"), cancel, &progress),
         name => extension_call(server, name, &arguments, cancel, &progress),
     };
@@ -635,6 +656,106 @@ fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
         format!("stopped {}", session.root.display()),
         Vec::new(),
     ))
+}
+
+/// `inspect`: ask the started program for its values over its socket.
+fn inspect(
+    server: &Server,
+    path: Option<&str>,
+    name: Option<&str>,
+    file: Option<&str>,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let session = session(server, path)?;
+    let file = file.map(|file| absolute(server, Some(file)));
+    let request = json!({
+        "name": name,
+        "file": file,
+        "timeout_ms": timeout.as_millis() as u64,
+    });
+    let answer = ask(&session.socket, &request, timeout).map_err(|error| {
+        let phase = session.phase();
+        if phase == session::Phase::Running {
+            format!("cannot reach the running program: {error}")
+        } else {
+            format!(
+                "the program started for {} isn't running (state: {})",
+                session.root.display(),
+                phase.name()
+            )
+        }
+    })?;
+    if answer["reached"] != true {
+        let mut place = String::new();
+        if let Some(name) = name {
+            place.push_str(&format!(" where `{name}` is in scope"));
+        }
+        if let Some(file) = &file {
+            place.push_str(&format!(" in {}", file.display()));
+        }
+        return Err(format!(
+            "the program ran none of its own code{place} within {} ms, so no values were read. It may be waiting, for example for input or an event; call `inspect` again once it runs.",
+            timeout.as_millis()
+        ));
+    }
+    let mut summary = match (answer["file"].as_str(), answer["line"].as_u64()) {
+        (Some(file), Some(line)) => format!("{file}:{line}"),
+        _ => "at a step outside the program's files".to_owned(),
+    };
+    if let Some(function) = answer["function"].as_str() {
+        summary.push_str(&format!(" in `{function}`"));
+    }
+    summary.push('\n');
+    let bindings = answer["bindings"].as_array().cloned().unwrap_or_default();
+    if bindings.is_empty() {
+        summary.push_str("no bindings in scope\n");
+    }
+    for binding in &bindings {
+        let name = binding["name"].as_str().unwrap_or_default();
+        match binding["value"].as_str() {
+            Some(value) => summary.push_str(&format!("{name} = {value}\n")),
+            None => summary.push_str(&format!(
+                "{name}: {}\n",
+                binding["error"].as_str().unwrap_or_default()
+            )),
+        }
+    }
+    let structured = json!({
+        "root": session.root,
+        "file": answer["file"],
+        "line": answer["line"],
+        "function": answer["function"],
+        "bindings": bindings,
+    });
+    Ok(content::success(structured, summary.trim_end(), Vec::new()))
+}
+
+/// One request and its answer over the program's socket.
+#[cfg(unix)]
+fn ask(socket: &Path, request: &Value, timeout: Duration) -> std::io::Result<Value> {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    // A program that just started or restarted serves the socket once it
+    // compiled.
+    let deadline = Instant::now() + timeout;
+    let mut stream = loop {
+        match std::os::unix::net::UnixStream::connect(socket) {
+            Ok(stream) => break stream,
+            Err(error) if Instant::now() >= deadline => return Err(error),
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    // The program gives up on its side at `timeout`; this side waits a
+    // little longer for that answer.
+    stream.set_read_timeout(Some(timeout + Duration::from_secs(2)))?;
+    writeln!(stream, "{request}")?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    serde_json::from_str(&line).map_err(std::io::Error::other)
+}
+
+#[cfg(not(unix))]
+fn ask(_socket: &Path, _request: &Value, _timeout: Duration) -> std::io::Result<Value> {
+    Err(std::io::Error::other("reading values needs a Unix socket"))
 }
 
 fn is_alive(pid: u32) -> bool {

@@ -586,4 +586,18 @@ impl Engine {
         self.debugger_interface = Some((Box::new(init), Box::new(callback)));
         self
     }
+    /// _(debugging)_ Run the debugger callback at each step while `wake` is
+    /// set, with [`DebuggerEvent::Wake`][crate::debugger::DebuggerEvent::Wake].
+    /// Another thread sets it to reach the running program at its next
+    /// statement or expression; the callback clears it once it is done.
+    /// Exported under the `debugging` feature only.
+    #[cfg(feature = "debugging")]
+    #[inline(always)]
+    pub fn wake_debugger_on(
+        &mut self,
+        wake: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> &mut Self {
+        self.debugger_wake = Some(wake);
+        self
+    }
 }

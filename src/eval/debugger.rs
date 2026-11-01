@@ -84,6 +84,8 @@ pub enum DebuggerEvent<'a> {
     FunctionExitWithError(&'a EvalAltResult),
     /// Script evaluation ends.
     End,
+    /// Another thread woke the debugger ([`Engine::wake_debugger_on`]).
+    Wake,
 }
 
 /// A break-point for debugging.
@@ -457,6 +459,7 @@ impl Engine {
                     Some(e) => e,
                     None => match dbg.is_break_point(global.source(), node) {
                         Some(bp) => DebuggerEvent::BreakPoint(bp),
+                        None if self.is_debugger_woken() => DebuggerEvent::Wake,
                         None => return Ok(None),
                     },
                 };

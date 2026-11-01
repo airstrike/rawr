@@ -203,6 +203,11 @@ pub struct Engine {
         Box<crate::eval::OnDebuggingInit>,
         Box<crate::eval::OnDebuggerCallback>,
     )>,
+
+    /// While set, the debugger callback runs at each step
+    /// ([`DebuggerEvent::Wake`][crate::debugger::DebuggerEvent::Wake]).
+    #[cfg(feature = "debugging")]
+    pub(crate) debugger_wake: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl fmt::Debug for Engine {
@@ -247,6 +252,8 @@ impl fmt::Debug for Engine {
 
         #[cfg(feature = "debugging")]
         f.field("debugger_interface", &self.debugger_interface.is_some());
+        #[cfg(feature = "debugging")]
+        f.field("debugger_wake", &self.debugger_wake.is_some());
 
         f.finish()
     }
@@ -330,6 +337,8 @@ impl Engine {
 
         #[cfg(feature = "debugging")]
         debugger_interface: None,
+        #[cfg(feature = "debugging")]
+        debugger_wake: None,
     };
 
     /// Create a new [`Engine`].
@@ -461,5 +470,16 @@ impl Engine {
     #[must_use]
     pub(crate) const fn is_debugger_registered(&self) -> bool {
         self.debugger_interface.is_some()
+    }
+
+    /// Whether another thread asked the debugger callback to run at the
+    /// next step.
+    #[cfg(feature = "debugging")]
+    #[inline(always)]
+    #[must_use]
+    pub(crate) fn is_debugger_woken(&self) -> bool {
+        self.debugger_wake
+            .as_ref()
+            .is_some_and(|wake| wake.load(std::sync::atomic::Ordering::Acquire))
     }
 }

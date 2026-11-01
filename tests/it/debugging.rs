@@ -7,6 +7,8 @@ use rawr::Map;
 fn test_debugger_state() {
     let mut engine = Engine::new();
 
+    // The API is marked deprecated only as volatile.
+    #[allow(deprecated)]
     engine.register_debugger(
         |_, mut debugger| {
             // Say, use an object map for the debugger state
