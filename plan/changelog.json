@@ -8,7 +8,8 @@
       {"text":"The work plan at rawr.airstrike.fyi/todo, its changelog and the docs update on each push to main, not only at a release.","issues":[496]},
       {"text":"The /todo chart puts milestones at the top level, each with the epics that have work in it.","issues":[501]},
       {"text":"CI fails only when the code is broken. Each push to main gets its own Linux run, tests compare with `cargo run` instead of hand-copied output, and a release tests the site before it builds the image.","issues":[492]},
-      {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]}
+      {"text":"The core no longer carries rawr-iced's operation endpoints or signature supports. About 1,600 lines went, with no change in behaviour.","issues":[450]},
+      {"text":"The importer no longer carries the request path for rawr-iced's host profile.","issues":[487],"refs":[451]}
     ]
   },
   "releases": [
