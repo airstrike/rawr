@@ -3,13 +3,18 @@
   "updated": "2026-11-01",
   "version": "0.3.77",
   "examples": {
-    "running": 22,
+    "running": 23,
     "total": 56,
-    "note": "22 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc, qr_code, clock, the_matrix and download_progress); the rest stop at recorded gaps"
+    "note": "23 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc, qr_code, clock, the_matrix, download_progress and geometry); the rest stop at recorded gaps"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A trait's provided method called on an opaque alias, as `iced::Renderer`'s `renderer.with_translation(v, |renderer| renderer.draw_mesh(mesh))`, lends the alias's renderer to the closure as its `&mut Self`. iced's geometry example passes `rawr check`.","issues":[634],"refs":[624]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.77",
@@ -1466,12 +1471,14 @@
     {"issue":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":633,"title":"A capturing closure lent a &mut crate value by a trait method","state":"closed","category":"No glue (D593)","release":"0.3.76"},
-    {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"open","category":"No glue (D593)"},
+    {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)"},
     {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
     {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"},
     {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"open","category":"No glue (D593)"},
     {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"open","category":"No glue (D593)"},
-    {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"}
+    {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
+    {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"open","category":"Health"},
+    {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"}
   ],
   "groups": [
     {
