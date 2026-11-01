@@ -8,7 +8,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"`rawr mcp` can pause a running program, with or without Rust dependencies: `break` on a line or a function, `step` over, into or out, `continue` and `clear`. `inspect` reads values where it paused. A breakpoint stays across saves while its line's text is in the file. A plain `rawr run` pays nothing.","issues":[489]}
+        {"text":"`rawr mcp` can pause a running program, with or without Rust dependencies: `break` on a line or a function, `step` over, into or out, `continue` and `clear`. `inspect` reads values where it paused. A breakpoint stays across saves while its line's text is in the file. A plain `rawr run` pays nothing.","issues":[489]},
+        {"text":"?play prepares its runner once. The runner decodes its bindings, installs them and binds their runtime when the bot starts, and each snippet runs in a fork of it under its own time and memory limits, so a snippet pays only for its own compile and run.","issues":[515],"refs":[516]}
       ]
     },
     "releases": [
@@ -1137,7 +1138,7 @@
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
     {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
-    {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open","category":"No glue (D593)"},
+    {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
     {"issue":518,"title":"rawr refuses a runner executable over 256 MiB that Cargo builds fine","state":"closed","category":"Divergences from rustc","release":"0.3.51"},
@@ -1157,7 +1158,9 @@
     {"issue":532,"title":"inspect on a real iced app's state in update and view","state":"open","category":"Health"},
     {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health"},
     {"issue":534,"title":"inspect reads a free function's &mut parameter","state":"open","category":"Health"},
-    {"issue":535,"title":"Show a paused program in wait and status","state":"open","category":"Health"}
+    {"issue":535,"title":"Show a paused program in wait and status","state":"open","category":"Health"},
+    {"issue":536,"title":"The compiler's registry copies each facade definition it installs","state":"open","category":"Importer"},
+    {"issue":537,"title":"Run ?play's memory-limit test on Linux","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -1662,7 +1665,7 @@
             {"number":436,"title":"?play and the playground run async programs on generated bindings","state":"closed"},
             {"number":465,"title":"Build the play image's universe stage","state":"closed"},
             {"number":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"closed"},
-            {"number":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"open"}
+            {"number":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed"}
           ]
         },
         {
