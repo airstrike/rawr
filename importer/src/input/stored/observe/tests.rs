@@ -581,3 +581,80 @@ fn an_unchanged_freshness_file_is_hashed_once_and_a_rewrite_is_hashed_again() {
     assert_eq!(hashed, 5, "a changed identity is read and hashed again");
     assert_ne!(changed, first);
 }
+
+/// #520: a config candidate under a symlinked `.cargo` keeps the path Cargo
+/// reads and is read through the link as it is now. Other inputs still refuse
+/// symlinks.
+#[cfg(unix)]
+#[test]
+fn config_candidates_follow_symlinks_and_other_inputs_refuse_them() {
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let shared = fixture.0.join("shared");
+    fs::create_dir(&shared).expect("shared configs");
+    fs::write(shared.join("first.toml"), b"first").expect("first config");
+    fs::write(shared.join("second.toml"), b"second!").expect("second config");
+    fs::create_dir(fixture.0.join("real")).expect("real .cargo");
+    symlink(
+        shared.join("first.toml"),
+        fixture.0.join("real/config.toml"),
+    )
+    .expect("file link");
+    symlink(fixture.0.join("real"), fixture.0.join(".cargo")).expect("directory link");
+    let spelled = fixture.0.join(".cargo/config.toml");
+
+    let limits = cargo::Limits::standard();
+    let observe = |role| {
+        let graph = node::GraphBudget::new();
+        let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
+        let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+        let optional = super::limited_optional_file(
+            role,
+            None,
+            &spelled,
+            &fixture.0,
+            "Cargo config provenance",
+            limits.manifest_bytes,
+            &mut budget,
+        );
+        let path = entry::<()>(
+            super::super::view::View::Path {
+                role,
+                package_id: None,
+                path: &spelled,
+            },
+            &fixture.0,
+            &mut budget,
+        );
+        (optional, path)
+    };
+    let expected = |content: &[u8]| proof::Entry::File {
+        role: proof::Role::Config,
+        package_id: None,
+        path: spelled.to_str().unwrap().into(),
+        bytes: content.len(),
+        digest: Sha256::digest(content).into(),
+    };
+    let (optional, path) = observe(proof::Role::Config);
+    assert!(optional.ok() == Some(expected(b"first")));
+    assert!(path.ok() == Some(expected(b"first")));
+
+    // Retargeting the file link changes the entry.
+    fs::remove_file(fixture.0.join("real/config.toml")).expect("file link is removed");
+    symlink(
+        shared.join("second.toml"),
+        fixture.0.join("real/config.toml"),
+    )
+    .expect("relink");
+    let (optional, path) = observe(proof::Role::Config);
+    assert!(optional.ok() == Some(expected(b"second!")));
+    assert!(path.ok() == Some(expected(b"second!")));
+
+    let (_, path) = observe(proof::Role::DeclaredInput);
+    assert!(matches!(
+        path,
+        Err(stored::Error::Observation(Error::Policy("symlink-input")))
+    ));
+}

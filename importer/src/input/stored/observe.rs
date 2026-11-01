@@ -94,7 +94,13 @@ pub(in crate::input) fn limited_file(
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     budget.check()?;
-    let source = path::canonical(source, base, false, budget)?;
+    // A config candidate keeps the path Cargo reads; Cargo follows a symlinked
+    // `.cargo` directory or config file, and its content is read through it.
+    let source = if follows(role) {
+        path::normalized(source, base, budget)?
+    } else {
+        path::canonical(source, base, false, budget)?
+    };
     let metadata = path::metadata(&source, false, budget)?;
     let bytes = read::length(metadata.len(), budget)?;
     budget.limited(resource, target, bytes)?;
@@ -120,7 +126,9 @@ pub(in crate::input) fn limited_optional_file(
 ) -> Result<Entry> {
     budget.check()?;
     let normalized = path::normalized(source, base, budget)?;
-    path::reject_symlinks(&normalized, budget)?;
+    if !follows(role) {
+        path::reject_symlinks(&normalized, budget)?;
+    }
     match path::metadata(&normalized, false, budget) {
         Ok(metadata) if metadata.is_file() => limited_file(
             role,
@@ -153,7 +161,9 @@ fn optional(
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
     let normalized = path::normalized(source, base, budget)?;
-    path::reject_symlinks(&normalized, budget)?;
+    if !follows(role) {
+        path::reject_symlinks(&normalized, budget)?;
+    }
     match path::metadata(&normalized, false, budget) {
         Ok(metadata) if metadata.is_file() => file(role, package_id, &normalized, base, budget),
         Ok(metadata) if metadata.is_dir() => {
@@ -171,6 +181,11 @@ fn optional(
         }
         Err(error) => Err(error),
     }
+}
+
+/// Cargo follows symlinks to its config files; every other input is canonical.
+fn follows(role: Role) -> bool {
+    matches!(role, Role::Config)
 }
 
 fn package(value: Option<&str>, budget: &mut Budget<'_>) -> Result<Option<Box<str>>> {

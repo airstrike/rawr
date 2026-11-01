@@ -6,13 +6,13 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use semver::VersionReq;
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use super::{canonical_file, digest, normalized_absolute, Digest, Limits, RequestAllocation};
+use super::{digest, normalized_absolute, Digest, Limits, RequestAllocation};
 use crate::process::ToolPaths;
 use crate::{Error, Result};
 
@@ -1333,7 +1333,6 @@ fn append_candidate(
         .saturating_add(relative.len());
     allocation.retained(1, bytes)?;
     let path = directory.join(relative);
-    reject_symlink_components(&path)?;
     let state = candidate_state_budgeted(&path, MAX_VALUE_BYTES, allocation)?;
     candidates.push(Candidate { path, state });
     Ok(())
@@ -1386,21 +1385,10 @@ fn candidate_state_inner(
     limit: usize,
     allocation: Option<&mut RequestAllocation>,
 ) -> Result<State> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::Path {
-            field: "Cargo config candidate",
-            path: path.to_path_buf(),
-            reason: "must not be a symlink".into(),
-        }),
+    // Cargo follows a symlinked `.cargo` directory or config file. Each check
+    // reads through the link as it is now, so a changed link or target is seen.
+    match fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => {
-            let canonical = canonical_file("Cargo config", path)?;
-            if canonical != path {
-                return Err(Error::Path {
-                    field: "Cargo config candidate",
-                    path: path.to_path_buf(),
-                    reason: "contains a symlink or non-canonical ancestor".into(),
-                });
-            }
             let bytes = if let Some(allocation) = allocation {
                 read_config_budgeted(path, limit, allocation)?
             } else {
@@ -1420,36 +1408,6 @@ fn candidate_state_inner(
             source,
         }),
     }
-}
-
-fn reject_symlink_components(path: &Path) -> Result<()> {
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
-            Component::RootDir | Component::Normal(_) => current.push(component.as_os_str()),
-            Component::CurDir | Component::ParentDir => continue,
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(Error::Path {
-                    field: "Cargo config candidate",
-                    path: current,
-                    reason: "contains a symlink component".into(),
-                });
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-            Err(source) => {
-                return Err(Error::Io {
-                    operation: "inspect Cargo config ancestor",
-                    path: current,
-                    source,
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 fn read_config(path: &Path, limit: usize) -> Result<Vec<u8>> {
@@ -2042,6 +2000,89 @@ mod tests {
             candidate.path == cargo_home.join("config.toml")
                 && matches!(candidate.state, State::Present(_))
         }));
+    }
+
+    /// #520: Cargo follows a symlinked `.cargo` directory and a symlinked
+    /// config file. rawr reads through both, and a changed target or a
+    /// retargeted link makes the discovery stale.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_cargo_directory_and_config_file_are_followed() {
+        use std::os::unix::fs::symlink;
+
+        let root = Root::new("dot-cargo-link");
+        let project = root.0.join("project");
+        let shared = root.0.join("shared");
+        let cargo_home = root.0.join("cargo-home");
+        fs::create_dir_all(project.join("member")).expect("project");
+        fs::create_dir_all(&shared).expect("shared configs");
+        fs::create_dir_all(&cargo_home).expect("Cargo home");
+        fs::write(
+            shared.join("config.toml"),
+            "[build]\nrustc = \"bin/first\"\n",
+        )
+        .expect("shared config writes");
+        fs::write(
+            shared.join("other.toml"),
+            "[build]\nrustc = \"bin/other\"\n",
+        )
+        .expect("other config writes");
+        // The project's `.cargo` is a symlinked directory.
+        symlink(&shared, project.join(".cargo")).expect(".cargo symlink");
+        // The member's `.cargo/config.toml` is a symlinked file.
+        fs::create_dir_all(project.join("member/.cargo")).expect("member .cargo");
+        let member_config = project.join("member/.cargo/config.toml");
+        symlink(shared.join("other.toml"), &member_config).expect("config symlink");
+
+        let provenance =
+            discover_in(&project, &cargo_home).expect("Cargo accepts a symlinked .cargo directory");
+        // Config-relative paths stay relative to the directory Cargo found.
+        assert_eq!(
+            provenance.compiler(&project).configured(),
+            Some(project.join("bin/first").as_path())
+        );
+        assert!(provenance.candidates.iter().any(|candidate| {
+            candidate.path == project.join(".cargo/config.toml")
+                && matches!(candidate.state, State::Present(_))
+        }));
+        provenance
+            .revalidate(&Limits::standard(), "test")
+            .expect("unchanged links stay fresh");
+        let member = project.join("member");
+        discover_in(&member, &cargo_home)
+            .expect("Cargo accepts a symlinked config file")
+            .revalidate(&Limits::standard(), "test")
+            .expect("unchanged links stay fresh");
+
+        let stale = |provenance: &Provenance| {
+            matches!(
+                provenance.revalidate(&Limits::standard(), "test"),
+                Err(Error::ResolutionDrift {
+                    field: "Cargo config provenance",
+                    ..
+                })
+            )
+        };
+        // An edit to the target is seen through the link.
+        fs::write(
+            shared.join("config.toml"),
+            "[build]\nrustc = \"bin/second\"\n",
+        )
+        .expect("shared config rewrites");
+        assert!(stale(&provenance));
+
+        // Retargeting the file link is seen too.
+        let provenance = discover_in(&member, &cargo_home).expect("member discovers");
+        fs::remove_file(&member_config).expect("config link is removed");
+        symlink(shared.join("config.toml"), &member_config).expect("config link retargets");
+        assert!(stale(&provenance));
+
+        // A dangling link reads as absent, as Cargo reads it.
+        let provenance = discover_in(&member, &cargo_home).expect("member rediscovers");
+        fs::remove_file(&member_config).expect("config link is removed");
+        symlink(shared.join("missing.toml"), &member_config).expect("dangling link");
+        assert!(stale(&provenance));
+        discover_in(&member, &cargo_home).expect("a dangling config link is absent");
     }
 
     #[test]

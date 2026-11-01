@@ -1450,8 +1450,6 @@ impl Baseline {
                 recipe!(Recipe::file(role, path, &mut allocation)?);
             }
             for (path, expected) in config.candidates {
-                // A Cargo config file is a manifest-class read bound to the
-                // physical tail capture, never to the manifest target.
                 let current = optional_file_digest_accounted(&path, &mut allocation)?;
                 if current != expected {
                     return Err(Error::ResolutionDrift {
