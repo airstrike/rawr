@@ -9007,7 +9007,7 @@ fn futurize(
 /// `signature` with each parameter in `substitutions` replaced in its
 /// receiver, inputs and output.
 /// The opaque `impl Trait` types `ty` holds, outermost first.
-fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Type>) {
+pub(crate) fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Type>) {
     match ty {
         model::Type::ImplTrait { .. } => found.push(ty),
         model::Type::Definition { arguments, .. } => {

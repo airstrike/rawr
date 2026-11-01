@@ -2230,9 +2230,15 @@ fn build(
         .iter()
         .map(|definition| *definition.as_bytes())
         .collect::<std::collections::BTreeSet<_>>();
+    // Each opaque type's parameter count, as `opaque_types` declares it.
+    let opaque = opaque_types(contract, &facade)
+        .into_iter()
+        .map(|(_, definition, parameters, _)| (*definition.as_bytes(), parameters.len()))
+        .collect::<std::collections::BTreeMap<_, _>>();
     let (trait_headers, impl_headers) = rawr_import::surface::headers::headers(
         contract.raw_graph(),
         &declared_bytes,
+        &opaque,
         &facade.trait_identities,
     );
     for header in trait_headers {

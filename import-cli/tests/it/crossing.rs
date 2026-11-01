@@ -717,6 +717,22 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
 
+/// iced's color_palette (#617): `Rgb { red, ..Rgb::default() }` reads
+/// green and blue from a default whose component type `red` and the return
+/// type fix, and `Hsl { lightness, ..hsl }` in a loop copies the other
+/// fields out of `hsl` each time. Each field is read as a copy because its
+/// type is `Copy` once the body fixes it, as rustc decides it. The output
+/// is `cargo run`'s.
+#[test]
+fn a_struct_update_of_a_generic_crate_struct_copies_its_fields() {
+    let (rawr, cargo) = both_printed("crossing-updated", "updated.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "rgb 0.5 0 0\nstep 1 0.5 0 0\nstep 2 1 0 0\nstep 3 1 0.5 0.5\nhsl 0 1 0.5"
+    );
+}
+
 /// iced's color_palette (#607): `impl<C: Space + Copy> Picker<C>`'s `fn
 /// view(&self, color: C) -> impl Widget<C>` names the impl's parameter in
 /// a crate's trait, so it is compiled once per space it is used at, a
@@ -933,6 +949,24 @@ fn a_borrowing_opaque_widget_is_boxed_in_a_closure_before_its_function() {
                 "last view pad 0 [Increment] pad 1 pad 2 pad 0 [image#0] preview0@16 \
                  pad 2 [image#1] pad 2 pad 0 [image#2] preview2@16"
             ),
+        "{rawr}"
+    );
+}
+
+/// iced's gallery (#623): `Viewer::view` gives `Option<impl
+/// Widget<Message>>`, and its body returns `Some(opaque(..))`, whose theme
+/// and renderer the crate's `opaque` leaves open. The written `impl
+/// Widget<Message>` fixes them by the trait's defaults, as it does for a
+/// bare `impl Widget<Message>`, and as rustc does. The output is `cargo
+/// run`'s.
+#[test]
+fn an_option_of_an_opaque_widget_takes_the_written_bounds_defaults() {
+    let (rawr, cargo) = both_printed("crossing-viewer", "viewer.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("2 view pad 0 [Increment] none")
+            && rawr.contains("3 view pad 0 [Increment] opaque pad 0 0..=10@2/None")
+            && rawr.ends_with("last view pad 0 [Increment] opaque pad 0 0..=10@3/None"),
         "{rawr}"
     );
 }

@@ -12055,9 +12055,47 @@ impl<'a> Parser<'a> {
     /// impl whose self type and arguments fit it fixes them, then each of
     /// its where-clause bounds the same way. Nothing else is selected:
     /// method lookup and other inference are as before.
+    ///
+    /// An `impl Trait` inside the output, as `Option<impl Widget<Message>>`,
+    /// is fixed the same way at its place in the body's type, which
+    /// `opaque_expected` built with the output's shape.
     #[cfg(feature = "rust-import")]
     fn fix_opaque(&mut self, written: &type_ref::Type, hidden: &Ty) -> Result<(), Error> {
-        self.fix_opaque_in(written, hidden, &BTreeMap::new())
+        if written.opaque_trait().is_some() {
+            return self.fix_opaque_in(written, hidden, &BTreeMap::new());
+        }
+        if !written.has_opaque() {
+            return Ok(());
+        }
+        let hidden = self.inference.resolve(hidden);
+        match (written, &hidden) {
+            (type_ref::Type::Tuple { members, .. }, Ty::Tuple(hidden)) => {
+                for (member, hidden) in members.iter().zip(hidden.iter()) {
+                    self.fix_opaque(member, hidden)?;
+                }
+            }
+            (type_ref::Type::Reference { target, .. }, Ty::Reference { target: hidden, .. }) => {
+                self.fix_opaque(target, hidden)?;
+            }
+            (type_ref::Type::Path(path), _) => {
+                let inner = match &hidden {
+                    Ty::Option(element) | Ty::Array { element, .. } | Ty::Boxed(_, element) => {
+                        vec![&**element]
+                    }
+                    Ty::Result(ok, err) => vec![&**ok, &**err],
+                    _ => Vec::new(),
+                };
+                let written = path.arguments.iter().filter_map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => Some(ty),
+                    type_ref::Argument::Lifetime(_) => None,
+                });
+                for (written, hidden) in written.zip(inner) {
+                    self.fix_opaque(written, hidden)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `fix_opaque` with the generic parameters `written` names at the
@@ -16356,6 +16394,18 @@ impl<'a> Parser<'a> {
                     })?;
                 let instance =
                     (!types.is_empty()).then(|| rawr_import::surface::instance::key(&types));
+                // Whether a field is read as a copy is decided at the field's
+                // type once the body has fixed it, as rustc decides it: a
+                // struct update's `..base` can read a field before a later
+                // use fixes its type.
+                let mut operation = operation;
+                if let crate::host::structural::Kind::Field { copy } = &mut operation.kind
+                    && !*copy
+                    && self.type_provides(&operation.output, capability::Kind::Copy)
+                {
+                    *copy = true;
+                    operation.receiver = Some(crate::receiver::Mode::Shared);
+                }
                 let definition = self
                     .models
                     .host
@@ -42658,6 +42708,34 @@ impl<'a> Parser<'a> {
                     }
                     None => None,
                 };
+                // The named fields fix what they can of the type's
+                // arguments first, so a field `base` gives is read knowing
+                // whether it is `Copy`, as rustc decides it at the end.
+                if base_value.is_some() {
+                    let mut parameters = definition
+                        .parameters()
+                        .iter()
+                        .cloned()
+                        .zip(instance.iter().cloned())
+                        .collect::<BTreeMap<_, _>>();
+                    for field in &fields {
+                        let Some((value, _)) = values.get(field.name()) else {
+                            continue;
+                        };
+                        let actual = value.ty.clone();
+                        let expected = self.instantiate_host_type(
+                            field.ty(),
+                            &mut parameters,
+                            &path,
+                            value.span,
+                            selected_owner.as_ref(),
+                            Some(&definition),
+                        )?;
+                        if self.unifies(&expected, &actual) {
+                            self.unify_type(&expected, &actual);
+                        }
+                    }
+                }
                 let mut arguments = Vec::with_capacity(fields.len());
                 for field in &fields {
                     if let (None, Some(base)) = (values.get(field.name()), &base_value) {

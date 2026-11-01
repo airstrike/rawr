@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 32;
+const SCHEMA: u32 = 34;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1351,12 +1351,21 @@ impl Plan {
                 .iter()
                 .map(|ty| ty.identity)
                 .collect::<std::collections::BTreeSet<_>>();
+            // Each opaque type's parameter count, at which an impl by its
+            // bounds must write it.
+            let opaque = facade
+                .types
+                .iter()
+                .filter(|ty| ty.opaque)
+                .map(|ty| (ty.identity, ty.parameters.len()))
+                .collect::<std::collections::BTreeMap<_, _>>();
             let traits = named_traits
                 .iter()
                 .filter(|(root, _, _)| *root == facade.root)
                 .map(|(_, path, identity)| (path.clone(), *identity))
                 .collect::<Vec<_>>();
-            let (trait_headers, impls) = super::headers::headers(graph, &declared, &traits);
+            let (trait_headers, impls) =
+                super::headers::headers(graph, &declared, &opaque, &traits);
             let mut converted = Vec::new();
             for header in trait_headers {
                 let Ok(defaults) = header

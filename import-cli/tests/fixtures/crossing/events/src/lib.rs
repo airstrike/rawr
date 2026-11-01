@@ -763,6 +763,35 @@ pub mod widgets {
         }
     }
 
+    /// `content` behind an opaque widget of its own, as iced's `opaque`,
+    /// whose output names the theme and renderer only as parameters.
+    pub fn opaque<'a, Message, Theme, Renderer>(
+        content: impl Widget<Message, Theme, Renderer> + 'a,
+    ) -> impl Widget<Message, Theme, Renderer> + 'a
+    where
+        Message: 'a,
+        Theme: 'a,
+        Renderer: 'a,
+    {
+        struct Opaque<W>(W);
+
+        impl<W, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Opaque<W>
+        where
+            W: Widget<Message, Theme, Renderer>,
+        {
+            fn labels(&self, labels: &mut Vec<String>) {
+                labels.push("opaque".to_owned());
+                self.0.labels(labels);
+            }
+
+            fn press(&self, label: &str) -> Option<Message> {
+                self.0.press(label)
+            }
+        }
+
+        Opaque(content)
+    }
+
     /// A column of one widget, as iced's `center` is a container of one.
     pub fn center<W>(content: W) -> Column<W> {
         Column {
