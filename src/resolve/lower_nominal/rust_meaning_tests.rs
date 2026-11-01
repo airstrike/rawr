@@ -473,3 +473,25 @@ fn language_rust_meaning_moved_parts_are_not_observable() {
     );
     assert_eq!(value, "a 1 x x 1 1");
 }
+
+#[test]
+fn language_rust_meaning_option_as_deref_borrows_through_deref() {
+    // `Option<String>::as_deref` is an `Option<&str>`, as fount's picker
+    // compares it with `Some(name.as_str())`.
+    let value = text(
+        r#"
+        let loaded: Option<String> = Some(String::from("Inter"));
+        let none: Option<String> = None;
+        let name = String::from("Inter");
+        let boxed: Option<Box<i64>> = Some(Box::new(7));
+        format!(
+            "{} {} {:?} {:?}",
+            loaded.as_deref() == Some(name.as_str()),
+            none.as_deref() == Some("Inter"),
+            loaded.as_deref(),
+            boxed.as_deref(),
+        )
+        "#,
+    );
+    assert_eq!(value, "true false Some(\"Inter\") Some(7)");
+}

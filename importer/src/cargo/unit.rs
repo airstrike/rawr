@@ -3292,6 +3292,10 @@ fn validate_declaration(
     Ok(())
 }
 
+/// The package Cargo selected for `dependency` carries its name. Its source
+/// is Cargo's answer: a `[patch]` or `[replace]` in the workspace root
+/// selects a Git or path package for a registry declaration, or another
+/// source for a Git or path one, exactly as `cargo build` does.
 fn validate_package(dependency: &Selected, package: &Value) -> Result<()> {
     let expected_name = dependency.package().unwrap_or(dependency.alias());
     if value_string(package, "name") != Some(expected_name) {
@@ -3299,50 +3303,6 @@ fn validate_package(dependency: &Selected, package: &Value) -> Result<()> {
             command: "metadata",
             field: "selected package name",
         });
-    }
-    match dependency.source() {
-        Source::Path(path) => {
-            if !package.get("source").is_some_and(Value::is_null) {
-                return Err(Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected path package source",
-                });
-            }
-            let manifest = package
-                .get("manifest_path")
-                .and_then(Value::as_str)
-                .ok_or_else(|| schema("Cargo metadata", "selected manifest path is absent"))?;
-            let manifest = canonical_file("selected manifest", Path::new(manifest))?;
-            if manifest.parent() != Some(path.as_path()) {
-                return Err(Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected path package identity",
-                });
-            }
-        }
-        Source::Registry { .. } => {
-            if value_string(package, "source").is_none_or(|source| !source.starts_with("registry+"))
-            {
-                return Err(Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected registry package source",
-                });
-            }
-        }
-        Source::Git { url, reference, .. } => {
-            let Some(source) = value_string(package, "source") else {
-                return Err(Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected Git package source",
-                });
-            };
-            if !git_source_matches(source, url, reference) {
-                return Err(Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected Git package revision",
-                });
-            }
-        }
     }
     Ok(())
 }

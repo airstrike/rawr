@@ -11862,6 +11862,16 @@ fn render_take(
                 "an inferred type parameter reached a runtime value",
             ))
         }
+        // Named as narrow integers are: `Sides::from(6)` beside core's
+        // reflexive `From<Sides>` is rustc's `From<i64>` only when the
+        // argument's type is written.
+        convert::Type::Builtin(builtin) if let Some(rust) = builtin.rust_name() => {
+            return writeln!(
+                output,
+                "    let argument_{local} = take_primitive::<{rust}>(arguments, {index})?;"
+            )
+            .map_err(request::unwritable);
+        }
         convert::Type::Unit | convert::Type::Builtin(_) => "take_primitive",
     };
     writeln!(

@@ -2430,7 +2430,16 @@ impl Builder {
             .as_deref()
             .map(canonical_authority)
             .transpose()?;
-        let mut authority = Authority::load(selected_authority.as_deref())?;
+        // Cargo reads `[patch]`, `[replace]`, `[profile]`, the resolver and
+        // the lock from the workspace root, so a member's authority is the
+        // root manifest of the workspace it belongs to.
+        let workspace_authority = selected_authority
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|package| rawr_location::workspace_root(package).join("Cargo.toml"))
+            .map(|manifest| canonical_authority(&manifest))
+            .transpose()?;
+        let mut authority = Authority::load(workspace_authority.as_deref())?;
         if let (Some(universe), Some(patch)) = (self.universe.as_ref(), internal.patch()) {
             authority.inherit_patches(patch, |name| universe.names_package(name))?;
         }
