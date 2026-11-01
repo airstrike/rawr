@@ -41,10 +41,13 @@ pub struct ImplBound {
 
 /// The headers of `traits`, each a path relative to the root and the
 /// trait's identity, and of every trait impl in `graph` whose types the
-/// facade declaring `declared` can write.
+/// facade declaring `declared` can write. `opaque` gives the number of
+/// parameters the facade declares each opaque type with: an opaque type's
+/// impl by its bounds is kept only where it writes the type at as many.
 pub fn headers<P: api::Phase>(
     graph: &api::Graph<P>,
     declared: &BTreeSet<[u8; 32]>,
+    opaque: &BTreeMap<[u8; 32], usize>,
     traits: &[(Box<str>, [u8; 32])],
 ) -> (Vec<TraitHeader>, Vec<ImplHeader>) {
     let headers = Headers::new(graph, declared);
@@ -54,10 +57,13 @@ pub fn headers<P: api::Phase>(
         .collect::<Vec<_>>();
     trait_headers.sort_by(|left, right| left.path.cmp(&right.path));
     trait_headers.dedup_by(|left, right| left.path == right.path);
-    let impls = graph
+    let mut impls = graph
         .implementations()
         .filter_map(|implementation| headers.impl_header(implementation))
-        .collect();
+        .collect::<Vec<_>>();
+    for definition in graph.definitions() {
+        impls.extend(headers.opaque_headers(definition, opaque));
+    }
     (trait_headers, impls)
 }
 
@@ -249,6 +255,119 @@ impl<'g> Headers<'g> {
         })
     }
 
+    /// The impls an opaque type a function gives has by its bounds, as
+    /// `fn opaque<Message, Theme, Renderer>(..) -> impl Widget<Message,
+    /// Theme, Renderer>` gives a type that is `Widget<Message, Theme,
+    /// Renderer>` at the arguments it captures. Rustc reads an opaque
+    /// type's traits from its bounds alone, so the resolver selects these
+    /// as any other impl. The self type is the opaque type at every type it
+    /// captures. One the facade declares with other parameters (a capture
+    /// left out, an associated type's value) has no such header.
+    fn opaque_headers(
+        &self,
+        definition: &model::Definition,
+        declared: &BTreeMap<[u8; 32], usize>,
+    ) -> Vec<ImplHeader> {
+        let model::Kind::Function {
+            signature,
+            generics,
+        } = definition.kind()
+        else {
+            return Vec::new();
+        };
+        let mut opaques = Vec::new();
+        crate::classify::impl_traits(signature.output(), &mut opaques);
+        let mut headers = Vec::new();
+        for opaque in opaques {
+            let model::Type::ImplTrait {
+                id,
+                bounds,
+                captures,
+            } = opaque
+            else {
+                continue;
+            };
+            let opaque = identity(id);
+            let Some(arguments) = captures
+                .iter()
+                .filter_map(|capture| match capture {
+                    model::Argument::Type(ty) => Some(self.ty(ty)),
+                    _ => None,
+                })
+                .collect::<Option<Box<[_]>>>()
+            else {
+                continue;
+            };
+            if declared.get(&opaque) != Some(&arguments.len()) {
+                continue;
+            }
+            // The header's parameters are those the captures name, which
+            // may be an enclosing impl's as well as the function's own.
+            let mut named = BTreeSet::new();
+            for argument in arguments.iter() {
+                parameter_indices(argument, &mut named);
+            }
+            // An `impl Trait` input's parameter has no name a path can
+            // spell, and one of an enclosing impl isn't among `generics`.
+            let parameters = named
+                .iter()
+                .map(|index| {
+                    let name = generics
+                        .parameters()
+                        .find(|parameter| parameter.index() == *index)
+                        .map(|parameter| parameter.name())
+                        .filter(|name| {
+                            !name.is_empty()
+                                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                && !name.starts_with(|c: char| c.is_ascii_digit())
+                        })
+                        .map_or_else(|| format!("Impl{index}").into(), Into::into);
+                    signature::Parameter::new(*index, name, signature::Kind::Type)
+                })
+                .collect::<Box<[_]>>();
+            let self_type = convert::Type::Nominal {
+                definition: crate::surface::identity::Definition::authenticated(opaque),
+                arguments,
+            };
+            for predicate in bounds.iter() {
+                let model::Predicate::Bound {
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            binders,
+                        },
+                    ..
+                } = predicate
+                else {
+                    continue;
+                };
+                if !binders.is_empty() {
+                    continue;
+                }
+                let Some(arguments) = self.trait_arguments(trait_id, arguments) else {
+                    continue;
+                };
+                let mut bound = BTreeSet::new();
+                for argument in arguments.iter() {
+                    parameter_indices(argument, &mut bound);
+                }
+                if !bound.is_subset(&named) {
+                    continue;
+                }
+                headers.push(ImplHeader {
+                    parameters: parameters.clone(),
+                    trait_identity: identity(trait_id),
+                    arguments,
+                    self_type: self_type.clone(),
+                    bounds: Box::default(),
+                });
+            }
+        }
+        headers
+    }
+
     fn impl_header(&self, implementation: &model::Implementation) -> Option<ImplHeader> {
         if implementation.polarity() != model::Polarity::Positive {
             return None;
@@ -289,5 +408,35 @@ impl<'g> Headers<'g> {
             self_type,
             bounds,
         })
+    }
+}
+
+/// The indices of the type parameters `ty` names.
+fn parameter_indices(ty: &convert::Type, found: &mut BTreeSet<u32>) {
+    match ty {
+        convert::Type::Parameter(index) => {
+            found.insert(*index);
+        }
+        convert::Type::Nominal { arguments, .. }
+        | convert::Type::Tuple(arguments)
+        | convert::Type::Script { arguments, .. } => {
+            for argument in arguments.iter() {
+                parameter_indices(argument, found);
+            }
+        }
+        convert::Type::Option(inner)
+        | convert::Type::Sequence { element: inner, .. }
+        | convert::Type::Borrowed { ty: inner, .. }
+        | convert::Type::Range(inner)
+        | convert::Type::ProfileMessage { payload: inner, .. } => parameter_indices(inner, found),
+        convert::Type::Result(ok, err)
+        | convert::Type::FunctionItem {
+            input: ok,
+            output: err,
+        } => {
+            parameter_indices(ok, found);
+            parameter_indices(err, found);
+        }
+        convert::Type::Unit | convert::Type::Builtin(_) | convert::Type::Inferred => {}
     }
 }
