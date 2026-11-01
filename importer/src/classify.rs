@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 76;
+const CLASSIFIER_VERSION: u32 = 77;
 const COMPILER_ABI: u32 = 1;
 
 /// Frozen classifier policy; callers cannot choose semantic versions.
@@ -6433,6 +6433,9 @@ impl<P: api::Phase> Context<'_, P> {
         // at the type parameters the caller fixes (`iced::widget::iced`).
         // A parameter a value fills where another form takes a callable is
         // left out as the callable is, so both forms give the one type.
+        // So is an `impl AsRef<str>` input, which Rawr fills with a
+        // `String` and no signature parameter names (iced's
+        // download_progress, #568).
         self.opaque_associated.borrow_mut().clear();
         *self.opaque_output.borrow_mut() = Some(
             call.iter()
@@ -6440,6 +6443,7 @@ impl<P: api::Phase> Context<'_, P> {
                 .chain(crossings.iter().map(|(parameter, ..)| *parameter))
                 .chain(futures.iter().map(|(parameter, _)| *parameter))
                 .chain(valued.iter().copied().filter(|_| values))
+                .chain(strings.iter().copied())
                 .collect(),
         );
         let output = match signature.receiver() {
@@ -6644,6 +6648,15 @@ impl<P: api::Phase> Context<'_, P> {
                 let returned = self.convert_value(&returned).ok()?;
                 Some(callable::Call::new(parameter, inputs, returned))
             });
+            // A closure input that is an associated type of a type
+            // parameter, as `Task::sip`'s `S::Item`, has no type until the
+            // call fixes the parameter.
+            let projected_input = crossings.iter().any(|(_, inputs, ..)| {
+                inputs.iter().any(|input| {
+                    matches!(input, model::Type::Projection { .. })
+                        && self.convert_crossing_input(input).is_none()
+                })
+            });
             // What each callable parameter takes and gives when a script
             // function fills it by a slot (D594); all or none.
             let crossings = crossings
@@ -6669,7 +6682,12 @@ impl<P: api::Phase> Context<'_, P> {
                     .iter()
                     .any(|parameter| parameter.name().starts_with("impl "))
             {
-                return Err(representability::reject::Kind::CallableProtocol.into());
+                return Err(if projected_input {
+                    representability::reject::Kind::ProjectedClosureInput
+                } else {
+                    representability::reject::Kind::CallableProtocol
+                }
+                .into());
             }
             return Ok(Representability::FunctionItem(
                 callable::Item::new(

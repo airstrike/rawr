@@ -174,6 +174,68 @@ impl<T> Task<T> {
     }
 }
 
+/// Work that reports its steps, as sipper's `Sipper` reports progress. A
+/// program's own native code gives it behind `impl Steps`.
+pub trait Steps {
+    /// Each step, in order.
+    fn steps(self) -> Vec<u32>;
+}
+
+impl<I: Iterator<Item = u32>> Steps for I {
+    fn steps(self) -> Vec<u32> {
+        self.collect()
+    }
+}
+
+/// Work that reports items of its own type, as sipper's `Sipper` names
+/// its progress `Stream::Item`.
+pub trait Sip {
+    /// What it reports.
+    type Item;
+
+    /// Each item it reports, in order.
+    fn sipped(self) -> Vec<Self::Item>;
+}
+
+impl<T> Task<T> {
+    /// The work that gives `f` of the last of `steps`, as iced's
+    /// `Task::sip` gives its output's message.
+    pub fn stepped<S>(steps: S, f: impl FnOnce(u32) -> T + MaybeSend + 'static) -> Self
+    where
+        S: Steps + MaybeSend + 'static,
+        T: MaybeSend + 'static,
+    {
+        Task(steps.steps().pop().map(f))
+    }
+
+    /// iced's `Task::sip`: `f` takes the sipper's own `Item`.
+    pub fn sip<S>(sipper: S, f: impl FnMut(S::Item) -> T + MaybeSend + 'static) -> Self
+    where
+        S: Sip + MaybeSend + 'static,
+        T: MaybeSend + 'static,
+    {
+        Task(sipper.sipped().into_iter().map(f).last())
+    }
+
+    /// The work that gives `f` of `future`'s output, as iced's `Task::sip`
+    /// gives its output's message: `f` takes `<S as Future>::Output`.
+    pub fn finish<S>(
+        future: S,
+        f: impl FnOnce(<S as std::future::Future>::Output) -> T + MaybeSend + 'static,
+    ) -> Self
+    where
+        S: std::future::Future + MaybeSend + 'static,
+        T: MaybeSend + 'static,
+    {
+        let mut future = Box::pin(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(output) => Task(Some(f(output))),
+            std::task::Poll::Pending => Task(None),
+        }
+    }
+}
+
 /// What may cross to another thread, as iced's `MaybeSend` on native.
 pub trait MaybeSend: Send {}
 

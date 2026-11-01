@@ -31,6 +31,13 @@ fn root(name: &str) -> PathBuf {
     let _ = fs::remove_file(root.join("stop"));
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
+    // The program's own native module, which only some variants declare.
+    // It lives beside them so that rustfmt finds it from each.
+    fs::copy(
+        root.join("variants/download.rs"),
+        root.join("src/download.rs"),
+    )
+    .unwrap();
     root
 }
 
@@ -815,6 +822,81 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
         ) && rawr.contains("4 message Part(Down)")
             && rawr.ends_with(
                 "last view pad 0 [Increment] map [Decrement] [Decrement] map canvas[primary curves 0 0#1]"
+            ),
+        "{rawr}"
+    );
+}
+
+/// iced's download_progress (#568): the program's own native
+/// `download(url: impl AsRef<str>) -> impl Steps` gives an opaque type
+/// that captures its `impl AsRef<str>` input, which Rawr fills with a
+/// `String`, so the opaque type takes no argument for it. The value fills a
+/// crate function's generic `S`, and a variant takes the last step. The
+/// output is `cargo run`'s.
+#[test]
+fn a_native_opaque_output_of_a_string_input_fills_a_crate_generic() {
+    let (rawr, cargo) = both_printed("crossing-stepped", "stepped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Finished(27))\nSome(Finished(0))");
+}
+
+/// iced's `Task::sip` shape: the program's own native `impl Sip<Item =
+/// u32>` fills `S`, and a variant fills `impl FnMut(S::Item) -> T`, whose
+/// input the opaque type's binding decides. The output is `cargo run`'s.
+#[test]
+fn a_closure_takes_the_item_a_native_opaque_type_binds() {
+    let (rawr, cargo) = both_printed("crossing-sipped", "sipped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "Some(Downloading(18))");
+}
+
+/// iced's `Task::sip` also takes `impl FnOnce(<S as Future>::Output) ->
+/// T`. Rawr can't make that closure yet, so the call is reported at its
+/// span, naming the item and why, in Rust's terms (D664).
+#[test]
+fn a_closure_of_a_future_parameters_output_is_reported_at_the_call() {
+    let root = root("crossing-finished");
+    fs::copy(
+        root.join("variants").join("finished.rs"),
+        root.join("src/main.rs"),
+    )
+    .unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(!check.status.success(), "{stderr}");
+    assert!(stderr.contains("main.rs:16:36-16:42"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "rawr has no binding for `finish`: it takes a closure whose input is an \
+             associated type of a type parameter"
+        ),
+        "{stderr}"
+    );
+}
+
+/// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`
+/// closure over the program's own native images, where `card` is written
+/// after the view and borrows the image and an `Option<&String>` an `if`
+/// chooses, behind `impl Widget<Message> + 'a`. The receiver of `boxed` is
+/// `card`'s opaque type, as rustc infers it. The output is `cargo run`'s.
+#[test]
+fn a_borrowing_opaque_widget_is_boxed_in_a_closure_before_its_function() {
+    let (rawr, cargo) = both_printed("crossing-gallery", "gallery.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 [Increment] pad 1 ...@16 ...@16")
+            && rawr.ends_with(
+                "last view pad 0 [Increment] pad 1 pad 2 pad 0 [image#0] preview0@16 \
+                 pad 2 [image#1] pad 2 pad 0 [image#2] preview2@16"
             ),
         "{rawr}"
     );
