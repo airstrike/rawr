@@ -8,7 +8,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"The importer no longer counts request items and bytes that nothing read. About 1,600 lines of accounting are gone, with no change in behaviour.","issues":[547]}
+        {"text":"The importer no longer counts request items and bytes that nothing read. About 1,600 lines of accounting are gone, with no change in behaviour.","issues":[547]},
+        {"text":"A closure passed to a method of iced's opaque `application(..)` program without annotations, as in `.subscription(|state| ..)` or `.scale_factor(|_| 2.0)`, takes its input from the program's `State` as rustc reads it. It used to stop with E0609 \"no field on type `_`\".","issues":[550]}
       ]
     },
     "releases": [
@@ -1219,11 +1220,13 @@
     {"issue":547,"title":"RequestAllocation counts items and bytes that nothing reads","state":"closed","category":"Importer"},
     {"issue":548,"title":"Remove the limit figures that no longer bound anything","state":"open","category":"Importer"},
     {"issue":549,"title":"Generator panicked on every program whose closures cross as slots","state":"closed","category":"Importer","release":"0.3.57"},
-    {"issue":550,"title":"An unannotated closure input of an opaque program's P::State is typed _","state":"open","category":"No glue (D593)"},
+    {"issue":550,"title":"An unannotated closure input of an opaque program's P::State is typed _","state":"closed","category":"No glue (D593)"},
     {"issue":551,"title":"A closure that returns a future runs where a crate function takes one","state":"open","category":"No glue (D593)"},
     {"issue":552,"title":"Arity errors through an fn pointer say E0057, and lack notes across files","state":"open","category":"Divergences from rustc"},
     {"issue":553,"title":"Request builder methods return a Result that can no longer fail","state":"open","category":"Importer"},
-    {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health"}
+    {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"open","category":"Health"},
+    {"issue":555,"title":"An opaque type's binding that names a closure parameter can't be declared","state":"open","category":"No glue (D593)"},
+    {"issue":556,"title":"An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
