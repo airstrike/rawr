@@ -7,6 +7,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - Type errors name a crate's types by a path the program can write, such as `iced::widget::Slider` or `iced_core::text::Span<u64>`, never by rawr's internal crate paths. A crate function item's parameters print as rustc writes them. (#563)
 - A crate call rawr can't build yet is reported at the call, naming the item, instead of with no location in rawr's terms. A generic function whose type parameter rustc would infer from a later use names that parameter and the turbofish to write. (#565)
+- A widget's `update` can name iced's `Shell<'_, Message>`: its type argument counts as rustc counts it. (#566)
+- An associated function that takes a closure lent a `&mut` value, such as iced's `Path::new(|p| ..)`, is found and runs. (#585; part of #477)
 
 ## 0.3.59 (2026-11-01)
 

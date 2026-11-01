@@ -566,7 +566,7 @@
     {"t":"T563","issue":563,"title":"T563: Type errors still print rawr's internal crate paths","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":"6be2f0852","release":null},
     {"t":"T564","issue":564,"title":"T564: column! with an Option<widget> has no _boxed","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T565","issue":565,"title":"T565: Importer messages about overloads and surface instances name rawr's machinery","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T566","issue":566,"title":"T566: iced's advanced Shell is named with no type argument","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T566","issue":566,"title":"T566: iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b30eef56b","release":null},
     {"t":"T567","issue":567,"title":"T567: bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"ac82b77da","release":"0.3.59"},
     {"t":"T568","issue":568,"title":"T568: download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
     {"t":"T569","issue":569,"title":"T569: websocket: a generic crate function passed as a value is refused","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -581,6 +581,10 @@
     {"t":"T578","issue":578,"title":"T578: Infer a per-instance generic function's type arguments from a later use","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T579","issue":579,"title":"T579: palette's inherent new_srgb functions land on the wrong owner type","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T581","issue":581,"title":"T581: Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T581","issue":581,"title":"T581: Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T582","issue":582,"title":"T582: An associated function's one-shot closure that takes a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b30eef56b","release":null},
+    {"t":"T583","issue":583,"title":"T583: bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T584","issue":584,"title":"T584: A store missing its executions fails every check instead of rebuilding","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T585","issue":585,"title":"T585: Path::new and closures lent a &mut borrow","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
