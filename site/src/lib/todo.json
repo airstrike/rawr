@@ -1,18 +1,20 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-10-31",
-  "version": "0.3.41",
+  "version": "0.3.42",
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`rawr run` calls `.map` on a widget returned as `impl Widget<M>`, such as a `button(..)` behind `fn part() -> impl Widget<Part>`, at the renderer the `impl Widget` names, as `cargo run` does.","issues":[428]},
-        {"text":"`rawr run` names iced types that the `iced` crate doesn't re-export, such as the `Map` that `.map` returns, through the crate that defines them.","issues":[476]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.42",
+        "date": "2026-10-31",
+        "entries": [
+          {"text":"`rawr run` calls `.map` on a widget returned as `impl Widget<M>`, such as a `button(..)` behind `fn part() -> impl Widget<Part>`, at the renderer the `impl Widget` names, as `cargo run` does.","issues":[428]},
+          {"text":"`rawr run` names iced types that the `iced` crate doesn't re-export, such as the `Map` that `.map` returns, through the crate that defines them.","issues":[476]}
+        ]
+      },
       {
         "version": "0.3.41",
         "date": "2026-10-31",
@@ -960,7 +962,7 @@
     {"issue":425,"title":"game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)","release":"0.3.39"},
     {"issue":426,"title":"clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)"},
     {"issue":427,"title":"the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)"},
-    {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"closed","category":"Divergences from rustc"},
+    {"issue":428,"title":"A revealed impl Widget loses the trait arguments the opaque type fixes","state":"closed","category":"Divergences from rustc","release":"0.3.42"},
     {"issue":429,"title":"A tuple struct's constructor named through its module has no binding","state":"open","category":"No glue (D593)"},
     {"issue":430,"title":"Generated bindings collide with rawr-iced's hand-written entries","state":"closed","category":"No glue (D593)","release":"0.3.32"},
     {"issue":431,"title":"On Linux, `rawr run` compiles rawr's runtime again","state":"closed","category":"Platforms","release":"0.3.31"},
@@ -1008,7 +1010,7 @@
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
     {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":475,"title":"The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)"},
-    {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)"},
+    {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","release":"0.3.42"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)"},
     {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"open","category":"No glue (D593)"},
     {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"},
