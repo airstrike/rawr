@@ -647,6 +647,13 @@
     {"t":"T644","issue":644,"title":"T644: std::io::Result<T> alias in rawr's std","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D683"],"commit":null,"release":null},
     {"t":"T645","issue":645,"title":"T645: std::env::var and VarError","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T646","issue":646,"title":"T646: std::fs::read_dir, metadata, File and OpenOptions","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T647","issue":647,"title":"T647: Decide whether stdin and stdout are granted like files","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T647","issue":647,"title":"T647: Decide whether stdin and stdout are granted like files","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T648","issue":648,"title":"T648: Read a crate struct's plain-value field without moving the struct","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T649","issue":649,"title":"T649: Lease an async fn's borrowed arguments to its future","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T650","issue":650,"title":"T650: Lend a crate struct's field in place with no copy (D683.1)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T651","issue":651,"title":"T651: rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T652","issue":652,"title":"T652: A closure's input comes from an async block's output (D683.5)","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T653","issue":653,"title":"T653: std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T654","issue":654,"title":"T654: A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
