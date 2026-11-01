@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate alias that is the only name of its type, as `iced::Renderer` is, stays its own type when another dependency re-exports what it names. So `fn view(&self) -> impl Widget<Message>` checks in a project that also depends on iced_test.","issues":[504],"refs":[465,434]},
+        {"text":"Generated runners build when a dependency's trait with a `from` method, such as num-traits' `NumCast`, is in scope. Before, the runner's own `u8::from` calls failed with E0034.","issues":[505],"refs":[465]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.44",
@@ -1052,7 +1058,11 @@
     {"issue":500,"title":"Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc"},
     {"issue":501,"title":"Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health"},
     {"issue":502,"title":"game_of_life: Point minus Point is not typed as iced's Vector","state":"open","category":"No glue (D593)"},
-    {"issue":503,"title":"Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer"}
+    {"issue":503,"title":"Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer"},
+    {"issue":504,"title":"Judge a crate alias the only name of its type per root crate","state":"open","category":"No glue (D593)"},
+    {"issue":505,"title":"Generated runners name the trait in primitive From calls","state":"open","category":"No glue (D593)"},
+    {"issue":506,"title":"Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)"},
+    {"issue":507,"title":"The ?play universe runner spends its time budget before a snippet's main","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

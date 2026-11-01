@@ -503,6 +503,10 @@
     {"t":"T500","issue":500,"title":"T500: Read an impl's open parameters from the impl Trait bound, not the trait's defaults","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T501","issue":501,"title":"T501: Nest the /todo Gantt by milestone, then group","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"6e21333a1","release":null},
     {"t":"T502","issue":502,"title":"T502: game_of_life: Point minus Point is not typed as iced's Vector","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T503","issue":503,"title":"T503: Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T503","issue":503,"title":"T503: Read char and other non-integer anonymous constants in impl headers","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T504","issue":504,"title":"T504: Judge a crate alias the only name of its type per root crate","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T505","issue":505,"title":"T505: Generated runners name the trait in primitive From calls","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T506","issue":506,"title":"T506: Regression test for an instance alias with two roots","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T507","issue":507,"title":"T507: The ?play universe runner spends its time budget before a snippet's main","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
