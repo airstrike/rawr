@@ -424,7 +424,7 @@
     {"t":"T421","issue":421,"title":"T421: Binding store unit tests fail under parallel test threads","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T422","issue":422,"title":"T422: `rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.30"},
     {"t":"T423","issue":423,"title":"T423: rawr run misses a crate method whose output names its closure type","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"11fab4694","release":"0.3.37"},
-    {"t":"T424","issue":424,"title":"T424: bezier_tool: no method map on a Canvas behind impl Widget","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T424","issue":424,"title":"T424: bezier_tool: no method map on a Canvas behind impl Widget","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"43b89abd9","release":null},
     {"t":"T425","issue":425,"title":"T425: game_of_life: column! can't box widget::Map","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"11ca697f9","release":"0.3.39"},
     {"t":"T426","issue":426,"title":"T426: clock: a number's into() doesn't reach a Pixels field","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T427","issue":427,"title":"T427: the_matrix: the driver fails with external crate was not loaded","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -462,7 +462,7 @@
     {"t":"T459","issue":459,"title":"T459: Type annotations don't apply a crate type's default parameters","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T460","issue":460,"title":"T460: No deref coercion or Deref method lookup on crate types","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T461","issue":461,"title":"T461: button(..).on_press(m) runs where rustc gives E0283","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T462","issue":462,"title":"T462: E0106 on an impl Widget return that rustc accepts","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T462","issue":462,"title":"T462: E0106 on an impl Widget return that rustc accepts","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":"43b89abd9","release":null},
     {"t":"T463","issue":463,"title":"T463: The universe runner covers only its seed program's calls","state":"open","category":"No glue (D593)","labels":["no glue","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T464","issue":464,"title":"T464: Universe runs lack operation limits, interleaved output and rendered errors","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T465","issue":465,"title":"T465: Build the play image's universe stage","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"play","row":"bot-prebuilt-bindings"},"decisions":[],"commit":null,"release":null},
@@ -475,6 +475,8 @@
     {"t":"T472","issue":472,"title":"T472: Reading iced's whole dependency set passes the semantic API byte limit","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T473","issue":473,"title":"T473: Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T474","issue":474,"title":"T474: Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T475","issue":475,"title":"T475: The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T475","issue":475,"title":"T475: The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T476","issue":476,"title":"T476: The runner names iced_core's Map by an internal path it can't reach","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T477","issue":477,"title":"T477: bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
