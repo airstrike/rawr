@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`rawr mcp` can pause a running program, with or without Rust dependencies: `break` on a line or a function, `step` over, into or out, `continue` and `clear`. `inspect` reads values where it paused. A breakpoint stays across saves while its line's text is in the file. A plain `rawr run` pays nothing.","issues":[489]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.52",
@@ -1106,7 +1111,7 @@
     {"issue":486,"title":"Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health"},
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
-    {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"open","category":"Health"},
+    {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"closed","category":"Health"},
     {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
     {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
     {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health","release":"0.3.47"},
@@ -1150,7 +1155,9 @@
     {"issue":530,"title":"A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)"},
     {"issue":531,"title":"A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc"},
     {"issue":532,"title":"inspect on a real iced app's state in update and view","state":"open","category":"Health"},
-    {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health"}
+    {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health"},
+    {"issue":534,"title":"inspect reads a free function's &mut parameter","state":"open","category":"Health"},
+    {"issue":535,"title":"Show a paused program in wait and status","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1683,7 +1690,7 @@
           "start": 53,
           "size": 3,
           "state": "now",
-          "note": "rawr mcp inspect reads values; dependencies, frames and the editor remain",
+          "note": "rawr mcp inspect works with or without dependencies; frames, types and the editor remain",
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"closed"},
@@ -1699,10 +1706,12 @@
           "name": "Breakpoints and stepping",
           "start": 56,
           "size": 4,
-          "state": "next",
-          "note": "The interpreter's hooks in rawr run",
+          "state": "now",
+          "note": "rawr mcp break, step, continue and clear; a paused state remains",
           "issues": [
-            {"number":489,"title":"Breakpoints and stepping under rawr run","state":"open"}
+            {"number":489,"title":"Breakpoints and stepping under rawr run","state":"closed"},
+            {"number":534,"title":"inspect reads a free function's &mut parameter","state":"open"},
+            {"number":535,"title":"Show a paused program in wait and status","state":"open"}
           ],
           "milestone": "0.5"
         },

@@ -489,7 +489,7 @@
     {"t":"T486","issue":486,"title":"T486: Cold-harness importer tests read the deleted rawr-iced crate","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D662"],"commit":"e6906ec59","release":null},
     {"t":"T487","issue":487,"title":"T487: Delete the dead host-profile request path","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"e6906ec59","release":"0.3.47"},
     {"t":"T488","issue":488,"title":"T488: Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":["D521","D557"],"commit":null,"release":"0.3.47"},
-    {"t":"T489","issue":489,"title":"T489: Breakpoints and stepping under rawr run","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":["D557"],"commit":null,"release":null},
+    {"t":"T489","issue":489,"title":"T489: Breakpoints and stepping under rawr run","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":["D557"],"commit":"8c260e934","release":null},
     {"t":"T490","issue":490,"title":"T490: Evaluate Rust in a paused frame","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"repl"},"decisions":["D557"],"commit":null,"release":null},
     {"t":"T491","issue":491,"title":"T491: Record and replay messages, with iced's comet","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"record-replay"},"decisions":["D557"],"commit":null,"release":null},
     {"t":"T492","issue":492,"title":"T492: CI runs fail only when the code is broken","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"ef5d948a8","release":"0.3.47"},
@@ -533,6 +533,8 @@
     {"t":"T530","issue":530,"title":"T530: A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T531","issue":531,"title":"T531: A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T532","issue":532,"title":"T532: inspect on a real iced app's state in update and view","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T533","issue":533,"title":"T533: inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T533","issue":533,"title":"T533: inspect says why a runner value can't be read while its arena is lent","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T534","issue":534,"title":"T534: inspect reads a free function's &mut parameter","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":[],"commit":null,"release":null},
+    {"t":"T535","issue":535,"title":"T535: Show a paused program in wait and status","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":[],"commit":null,"release":null}
   ]
 }

@@ -110,8 +110,8 @@
       "subtitle": "D557, toward 0.5",
       "open": true,
       "rows": [
-        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"now","note":"rawr mcp inspect reads values; dependencies, frames and the editor remain","issues":[488,510,511,512,513,514],"milestone":"0.5"},
-        {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"next","note":"The interpreter's hooks in rawr run","issues":[489],"milestone":"0.5"},
+        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"now","note":"rawr mcp inspect works with or without dependencies; frames, types and the editor remain","issues":[488,510,511,512,513,514],"milestone":"0.5"},
+        {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"now","note":"rawr mcp break, step, continue and clear; a paused state remains","issues":[489,534,535],"milestone":"0.5"},
         {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"next","note":"The same interpreter, the same errors","issues":[490],"milestone":"0.5"},
         {"id":"record-replay","name":"Record, replay and comet","start":63,"size":4,"state":"next","note":"Messages and state over time","issues":[491],"milestone":"0.5"}
       ]
