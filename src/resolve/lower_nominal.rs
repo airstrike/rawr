@@ -17460,6 +17460,8 @@ impl<'a> Parser<'a> {
         let mut matched = None;
         let mut matched_stringy = false;
         let mut match_count = 0;
+        let mut matched_exact = false;
+        let mut exact_count = 0_usize;
         for item in items {
             let checkpoint = self.inference.checkpoint();
             let signature =
@@ -17512,14 +17514,36 @@ impl<'a> Parser<'a> {
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;
+                // rustc picks the impl by the argument's exact type: a
+                // literal is a `&'static str`, a `String` value is not,
+                // as iced's `Id::from` of each takes.
+                let exact = repeated
+                    || signature
+                        .inputs
+                        .iter()
+                        .zip(arguments)
+                        .all(|(expected, argument)| {
+                            !matches!(
+                                (
+                                    self.inference.resolve(expected),
+                                    self.inference.resolve(&argument.ty)
+                                ),
+                                (Ty::Str, Ty::String) | (Ty::String, Ty::Str)
+                            )
+                        });
+                exact_count += usize::from(exact);
                 // A form taking a string comes first for an argument whose
                 // type is not known yet.
                 let stringy = signature
                     .inputs
                     .iter()
                     .any(|input| self.inference.resolve(input).is_text());
-                if matched.is_none() || stringy && !matched_stringy {
+                if matched.is_none()
+                    || exact && !matched_exact
+                    || exact == matched_exact && stringy && !matched_stringy
+                {
                     matched_stringy = stringy;
+                    matched_exact = exact;
                     matched = Some((item.clone(), signature, self.inference.patch(checkpoint)));
                 }
             }
@@ -17573,6 +17597,14 @@ impl<'a> Parser<'a> {
             1 => {
                 let (item, signature, patch) =
                     matched.expect("the one form that matched is kept as the match");
+                self.inference.apply(patch);
+                Ok((item, signature))
+            }
+            // Several forms take the arguments, and one takes each string
+            // as the form it is written in.
+            _ if exact_count == 1
+                && let Some((item, signature, patch)) = matched =>
+            {
                 self.inference.apply(patch);
                 Ok((item, signature))
             }
@@ -20005,7 +20037,7 @@ impl<'a> Parser<'a> {
         // depends on this call's receiver and lexical scope, which a
         // proof-backed application settles (D650).
         #[cfg(feature = "rust-import")]
-        if self.models.host.pending_method(&path).is_some()
+        if self.models.host.pending_family(&path).is_some()
             && definition.identity().imported().is_some()
         {
             return self.parse_applied_method(
@@ -20018,17 +20050,8 @@ impl<'a> Parser<'a> {
             );
         }
         #[cfg(feature = "rust-import")]
-        if let Some(family) = self.models.host.pending_method(&path) {
-            return Err(Error::InvalidHostOperation {
-                item: path.into(),
-                reason: format!(
-                    "calling `{member}` here, where {} impls of the crate provide it, is not \
-                     supported in Rawr yet",
-                    family.len(),
-                )
-                .into(),
-                operation: member_span,
-            });
+        if let Some(error) = self.pending_family_call(&path, &member, member_span) {
+            return Err(error);
         }
         // `*rotation.radians_mut() = angle`: a facade writes a `&mut`
         // accessor as the function that stores the value back.
@@ -20613,6 +20636,25 @@ impl<'a> Parser<'a> {
             evaluation: first.evaluation,
         }
         .retain_origin())
+    }
+
+    /// The call of `member` at `path` where several of the crate's impls
+    /// give it the same inputs in Rawr's types, so the argument can't pick
+    /// one as rustc does. Reported at the program's call, only when it is
+    /// made.
+    #[cfg(feature = "rust-import")]
+    fn pending_family_call(&self, path: &str, member: &str, at: Span) -> Option<Error> {
+        let family = self.models.host.pending_family(path)?;
+        Some(Error::InvalidHostOperation {
+            item: path.into(),
+            reason: format!(
+                "calling `{member}` here, where {} impls of the crate provide it, is not \
+                 supported in Rawr yet",
+                family.len(),
+            )
+            .into(),
+            operation: at,
+        })
     }
 
     /// `value.method(..)` of an imported type that only a proof-backed
@@ -44735,6 +44777,10 @@ impl<'a> Parser<'a> {
             }
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
                 #[cfg(feature = "rust-import")]
+                if let Some(error) = self.pending_family_call(&path, &member, member_span) {
+                    return Err(error);
+                }
+                #[cfg(feature = "rust-import")]
                 let native = self.models.host.entry(&path).is_none()
                     && (matches!(&binding.target, item::Import::Type { definition, .. } if definition.identity().imported().is_some())
                         || self
@@ -44952,6 +44998,9 @@ impl<'a> Parser<'a> {
             }
             let path = format!("{owner}::{member}");
             let Some(items) = self.models.host_items(&path).map(<[_]>::to_vec) else {
+                if let Some(error) = self.pending_family_call(&path, &member, member_span) {
+                    return Err(error);
+                }
                 let error = Error::UnknownMember {
                     owner,
                     member,
@@ -45019,6 +45068,12 @@ impl<'a> Parser<'a> {
                 self.pending_turbofish = None;
                 self.splice_tokens(tokens);
                 return self.parse_primary();
+            }
+            #[cfg(feature = "rust-import")]
+            if let Some(error) =
+                self.pending_family_call(&format!("{owner}::{member}"), &member, member_span)
+            {
+                return Err(error);
             }
             // A library module or type that exists lacks only the member:
             // `iced::widget::Column::missing`.

@@ -848,7 +848,7 @@ impl Registry {
     }
 
     #[cfg(feature = "rust-import")]
-    pub(crate) fn pending_method(&self, qualified: &str) -> Option<&family::Pending> {
+    pub(crate) fn pending_family(&self, qualified: &str) -> Option<&family::Pending> {
         let path = path::Path::parse(qualified).ok()?;
         let find = |path: &path::Path| {
             self.families
