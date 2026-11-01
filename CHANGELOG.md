@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.83 (2026-11-01)
+
+- A closure gets the output of the async block given to `Task::future`. In `Task::future(async move { fount::system::load(&font).await }).then(|bytes| match bytes { .. })`, `bytes` is the `Result` that `load` gives, as rustc reads it, and a `Result` holding a crate's own error crosses as itself. (#652)
+
 ## 0.3.82 (2026-11-01)
 
 - A first `rawr check` or `rawr run` of a program with Rust dependencies reuses the facts it already extracted for each later round of demand, with no second nightly build or extraction process. Cold counter goes from 2 extraction processes to 1, and download_progress from 6 to 5. (#660)

@@ -11741,6 +11741,22 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
+        // A script future where native code takes a future of a type of its
+        // own, as iced's `Task::future(impl Future<Output = T>)` of the
+        // call's `T`: its output becomes that type on the owner thread,
+        // where the program's native values are (D683.5).
+        ty if let Some(element) = future_output(ty)
+            && !is_value(element)
+            && *element != convert::Type::Inferred =>
+        {
+            let mut converted = String::new();
+            render_from_dynamic(element, "value", 0, &mut converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().try_cast_result::<__rawr_internal::future::Future>().map_err(|_| Error::TypeMismatch)?.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")));"
+            )
+            .map_err(request::unwritable);
+        }
         // A script future, run as a std future (D527).
         ty if is_future(ty) => "take_script",
         // Rawr's float or integer range, as the range of the number the

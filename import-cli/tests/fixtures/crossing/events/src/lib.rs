@@ -10,6 +10,7 @@ pub mod color;
 pub mod controls;
 pub mod conversions;
 pub mod custom;
+pub mod fonts;
 pub mod plane;
 pub mod results;
 pub mod sequences;
@@ -158,6 +159,32 @@ impl<T> Task<T> {
     /// The value this work gives, when it gives one.
     pub fn value(self) -> Option<T> {
         self.0
+    }
+
+    /// iced's `Task::future`: the work that gives `future`'s output. It is
+    /// polled here until it ends, as an executor would.
+    pub fn future(future: impl std::future::Future<Output = T> + MaybeSend + 'static) -> Self
+    where
+        T: MaybeSend + 'static,
+    {
+        let mut future = Box::pin(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        for _ in 0..100_000 {
+            if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                return Task(Some(output));
+            }
+            std::thread::yield_now();
+        }
+        panic!("the future never ended");
+    }
+
+    /// iced's `Task::then`: the work `f` makes of this work's value.
+    pub fn then<O>(self, mut f: impl FnMut(T) -> Task<O> + MaybeSend + 'static) -> Task<O>
+    where
+        T: MaybeSend + 'static,
+        O: MaybeSend + 'static,
+    {
+        Task(self.0.and_then(|value| f(value).0))
     }
 
     /// The work that gives `f` of this work's value, which `f` makes on

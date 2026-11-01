@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.82",
+  "version": "0.3.83",
   "examples": {
     "running": 23,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.83",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A closure gets the output of the async block given to `Task::future`. In `Task::future(async move { fount::system::load(&font).await }).then(|bytes| match bytes { .. })`, `bytes` is the `Result` that `load` gives, as rustc reads it, and a `Result` holding a crate's own error crosses as itself.","issues":[652]}
+        ]
+      },
       {
         "version": "0.3.82",
         "date": "2026-11-01",
@@ -1521,20 +1528,23 @@
     {"issue":649,"title":"Lease an async fn's borrowed arguments to its future","state":"closed","category":"No glue (D593)","release":"0.3.80"},
     {"issue":650,"title":"Lend a crate struct's field in place with no copy (D683.1)","state":"open","category":"No glue (D593)"},
     {"issue":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open","category":"Divergences from rustc"},
-    {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"open","category":"No glue (D593)"},
+    {"issue":652,"title":"A closure's input comes from an async block's output (D683.5)","state":"closed","category":"No glue (D593)","release":"0.3.83"},
     {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"open","category":"Divergences from rustc"},
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"open","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
     {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc"},
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":659,"title":"std::fs inside an async block","state":"open","category":"Divergences from rustc"},
+    {"issue":659,"title":"std::fs inside an async block","state":"closed","category":"Divergences from rustc"},
     {"issue":660,"title":"A first check replays its own extracted tables for later demand rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.82"},
     {"issue":661,"title":"rawr check publishes shared bindings, so a later project skips extraction","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":662,"title":"A demand round finds every missing owner type at once","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":663,"title":"The project's compiler is queried once per run","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":664,"title":"A workspace member's resolution carries the root's [patch]","state":"open","category":"Divergences from rustc"},
-    {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"}
+    {"issue":665,"title":"bindings::tests::nightly_drift_or_missing_evidence_never_publishes_a_table is flaky","state":"open","category":"Health"},
+    {"issue":666,"title":"A text-only view's message, theme and renderer come from the view's return type","state":"open","category":"No glue (D593)"},
+    {"issue":667,"title":"A string literal lent to iced::application's .title lives for the program","state":"open","category":"No glue (D593)"},
+    {"issue":668,"title":"A direct dependency patched by [patch.crates-io] resolves","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
