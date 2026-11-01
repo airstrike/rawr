@@ -356,7 +356,7 @@ fn prepare(
     let mut crate_demand = rawr_import::crate_demand::load(&project);
     let mut settlement = rawr_import::bindings::Settlement::default();
     let mut remembered = !crate_demand.is_empty();
-    let seed = graph.rust_demand_seed(&[], None);
+    let seed = graph.rust_demand_seed();
     // Proof-backed applications of imported calls whose candidate depends
     // on the call's receiver and lexical scope (D650), proved from the
     // dependencies' intrinsic facts, acquired once.

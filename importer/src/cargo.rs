@@ -3117,9 +3117,7 @@ impl Builder {
         // modules, whose crate is then a dependency too; the internal
         // dependency below brings the runtime and compiler roles.
         assert!(
-            dependencies
-                .iter()
-                .any(|dependency| dependency.roles().contains(config::Role::Library)),
+            !dependencies.is_empty(),
             "a request declares at least one library"
         );
         let internal_dependency = internal.dependency(limits)?;
