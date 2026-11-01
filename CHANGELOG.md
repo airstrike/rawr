@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.71 (2026-11-01)
+
 - A program's own native function that takes `impl AsRef<str>` and returns an `impl Trait`, as download_progress's `download` does, no longer stops the check with an internal error. A program with native modules and a path dependency inside its directory builds instead of failing with a lockfile collision. (#568)
 
 ## 0.3.70 (2026-11-01)

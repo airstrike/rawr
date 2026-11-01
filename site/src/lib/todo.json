@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.70",
+  "version": "0.3.71",
   "examples": {
     "running": 21,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A program's own native function that takes `impl AsRef<str>` and returns an `impl Trait`, as download_progress's `download` does, no longer stops the check with an internal error. A program with native modules and a path dependency inside its directory builds instead of failing with a lockfile collision.","issues":[568]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.71",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A program's own native function that takes `impl AsRef<str>` and returns an `impl Trait`, as download_progress's `download` does, no longer stops the check with an internal error. A program with native modules and a path dependency inside its directory builds instead of failing with a lockfile collision.","issues":[568]}
+        ]
+      },
       {
         "version": "0.3.70",
         "date": "2026-11-01",
@@ -1351,7 +1353,7 @@
     {"issue":565,"title":"Importer messages about overloads and surface instances name rawr's machinery","state":"closed","category":"Divergences from rustc","release":"0.3.60"},
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"closed","category":"No glue (D593)","release":"0.3.60"},
     {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)","release":"0.3.59"},
-    {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"closed","category":"No glue (D593)"},
+    {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"closed","category":"No glue (D593)","release":"0.3.71"},
     {"issue":569,"title":"A generic crate function passed as a value is refused","state":"closed","category":"No glue (D593)","release":"0.3.62"},
     {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"closed","category":"Divergences from rustc"},
     {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
