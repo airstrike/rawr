@@ -5,6 +5,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A program's own function returning `impl Sipper` or `impl Straw`, as download_progress, gallery and websocket have, no longer crashes `rawr check`. Its return type is an ordinary `impl Trait` type. (#561)
+- A crate call whose argument ends a line, as table's `text::success` does, no longer crashes `rawr check`, and source positions sent to the native build are no longer one character off. table now passes. (#562)
+- A crate call whose one-shot closure takes a reference, such as canvas `Cache::draw(renderer, size, |frame| ..)`, no longer fails with "surface instance arguments do not match the selected declaration". (#567)
+- Fixed undefined behaviour that Miri found in rawr's call path: a call that swaps its first argument froze the copy its callee wrote through. The debugger also reads a caller's bindings only through what the call site lends it, and a binding a running call holds reads as borrowed. (#540)
+- While a debugger is attached, native calls no longer copy their arguments into the call stack. (#513)
 
 ## 0.3.58 (2026-11-01)
 

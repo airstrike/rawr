@@ -5,7 +5,16 @@
   "examples": {"running":15,"total":56,"note":"15 pass rawr check with 0.3.57 (2026-11-01); the rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A program's own function returning `impl Sipper` or `impl Straw`, as download_progress, gallery and websocket have, no longer crashes `rawr check`. Its return type is an ordinary `impl Trait` type.","issues":[561]},
+        {"text":"A crate call whose argument ends a line, as table's `text::success` does, no longer crashes `rawr check`, and source positions sent to the native build are no longer one character off. table now passes.","issues":[562]},
+        {"text":"A crate call whose one-shot closure takes a reference, such as canvas `Cache::draw(renderer, size, |frame| ..)`, no longer fails with \"surface instance arguments do not match the selected declaration\".","issues":[567]},
+        {"text":"Fixed undefined behaviour that Miri found in rawr's call path: a call that swaps its first argument froze the copy its callee wrote through. The debugger also reads a caller's bindings only through what the call site lends it, and a binding a running call holds reads as borrowed.","issues":[540]},
+        {"text":"While a debugger is attached, native calls no longer copy their arguments into the call stack.","issues":[513]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.58",
@@ -1185,7 +1194,7 @@
     {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"closed","category":"Health","release":"0.3.52"},
     {"issue":511,"title":"inspect reads callers' frames","state":"closed","category":"Health","release":"0.3.54"},
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"open","category":"Health"},
-    {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open","category":"Health"},
+    {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed","category":"Health"},
     {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)","release":"0.3.53"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
@@ -1212,7 +1221,7 @@
     {"issue":537,"title":"Run ?play's memory-limit test on Linux","state":"open","category":"No glue (D593)"},
     {"issue":538,"title":"Split stale from broken in the profile, checked and bridge invariants","state":"closed","category":"Importer","release":"0.3.56"},
     {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"closed","category":"Divergences from rustc","release":"0.3.56"},
-    {"issue":540,"title":"Check the debugger's caller-frame reads under Miri","state":"open","category":"Health"},
+    {"issue":540,"title":"Check the debugger's caller-frame reads under Miri","state":"closed","category":"Health"},
     {"issue":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health"},
     {"issue":542,"title":"A closure whose input is a borrowed program type fails to import","state":"closed","category":"No glue (D593)","release":"0.3.57"},
     {"issue":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)"},
@@ -1233,13 +1242,22 @@
     {"issue":558,"title":"Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health"},
     {"issue":559,"title":"Delete the item and byte figures host bindings pass to ImportAllocation","state":"open","category":"Importer"},
     {"issue":560,"title":"Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer"},
-    {"issue":561,"title":"rawr panics where a crate signature names a type its bindings don't declare","state":"open","category":"No glue (D593)"},
-    {"issue":562,"title":"rawr panics on a use whose span isn't in its source's text","state":"open","category":"No glue (D593)"},
+    {"issue":561,"title":"rawr panics where a crate signature names a type its bindings don't declare","state":"closed","category":"No glue (D593)"},
+    {"issue":562,"title":"rawr panics on a use whose span isn't in its source's text","state":"closed","category":"No glue (D593)"},
     {"issue":563,"title":"Type errors still print rawr's internal crate paths","state":"open","category":"Divergences from rustc"},
     {"issue":564,"title":"column! with an Option<widget> has no _boxed","state":"open","category":"No glue (D593)"},
     {"issue":565,"title":"Importer messages about overloads and surface instances name rawr's machinery","state":"open","category":"Divergences from rustc"},
     {"issue":566,"title":"iced's advanced Shell is named with no type argument","state":"open","category":"No glue (D593)"},
-    {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"open","category":"No glue (D593)"}
+    {"issue":567,"title":"bezier_tool: no map on a Canvas behind impl Widget again","state":"closed","category":"No glue (D593)"},
+    {"issue":568,"title":"download_progress: Task::sip on the program's own impl Straw fails with an internal error","state":"open","category":"No glue (D593)"},
+    {"issue":569,"title":"websocket: a generic crate function passed as a value is refused","state":"open","category":"No glue (D593)"},
+    {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"open","category":"Divergences from rustc"},
+    {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
+    {"issue":572,"title":"A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc"},
+    {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"open","category":"Health"},
+    {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
+    {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"open","category":"Health"},
+    {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -1778,7 +1796,7 @@
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"closed"},
             {"number":511,"title":"inspect reads callers' frames","state":"closed"},
             {"number":512,"title":"inspect prints bindings by their declared type","state":"open"},
-            {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"open"},
+            {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed"},
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"open"}
           ],
           "milestone": "0.5"
