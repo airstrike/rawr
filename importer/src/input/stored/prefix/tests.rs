@@ -155,8 +155,7 @@ fn scalar_storage_uses_original_exact_floors_without_graph_decode_and_latches() 
                 bytes: PRIOR.bytes + bytes
             }
         );
-        if input_floor == 0 {
-        } else {
+        if input_floor != 0 {
             assert!(budget.check().is_ok());
             // A genuine failure latches; a latched account consumes no recipe.
             budget.refuse();

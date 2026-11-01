@@ -198,15 +198,8 @@ impl<K: Value> Direct<K> {
         semantic_inputs: &[u8],
         output_limit: usize,
         parents: &[Parent],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
-        Self::capture_edges(
-            context,
-            semantic_inputs,
-            output_limit,
-            parents,
-            parent_limit,
-        )
+        Self::capture_edges(context, semantic_inputs, output_limit, parents)
     }
 
     fn capture_edges(
@@ -214,7 +207,6 @@ impl<K: Value> Direct<K> {
         semantic_inputs: &[u8],
         output_limit: usize,
         parents: &[impl content::Edge],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
         if K::SCHEMA == 0 {
             return Err(Error::Codec("node output schema zero is reserved"));
@@ -236,7 +228,6 @@ impl<K: Value> Direct<K> {
                 actual: output_limit,
             });
         }
-        record_parents(parents.len(), parent_limit);
         let mut retained_parents = Vec::new();
         retained_parents
             .try_reserve_exact(parents.len())
@@ -291,14 +282,8 @@ impl<K: Value> Discoverable<K> {
         fixed_inputs: &[u8],
         output_limit: usize,
         parents: &[Parent],
-        parent_limit: usize,
     ) -> Result<Self, Error> {
-        validate_recipe_bounds::<K>(
-            fixed_inputs.len(),
-            output_limit,
-            parents.len(),
-            parent_limit,
-        )?;
+        validate_recipe_bounds::<K>(fixed_inputs.len(), output_limit)?;
         let mut retained_inputs = Vec::new();
         retained_inputs
             .try_reserve_exact(fixed_inputs.len())
@@ -354,7 +339,6 @@ impl<K: Value> Discoverable<K> {
             &semantic_inputs,
             self.output_limit,
             &self.parents,
-            self.parents.len(),
         )
     }
 
@@ -390,19 +374,7 @@ impl<K: Value> Discoverable<K> {
     }
 }
 
-/// The direct-parent count is measured against the `edges` accounting
-/// target (`parent_limit`) and only recorded; the node envelope's physical
-/// parent bound (`codec::MAX_PARENTS`) still refuses at encoding.
-fn record_parents(parents: usize, parent_limit: usize) {
-    if parents > parent_limit {}
-}
-
-fn validate_recipe_bounds<K: Value>(
-    recipe_bytes: usize,
-    output_limit: usize,
-    parents: usize,
-    parent_limit: usize,
-) -> Result<(), Error> {
+fn validate_recipe_bounds<K: Value>(recipe_bytes: usize, output_limit: usize) -> Result<(), Error> {
     if K::SCHEMA == 0 {
         return Err(Error::Codec("node output schema zero is reserved"));
     }
@@ -423,7 +395,6 @@ fn validate_recipe_bounds<K: Value>(
             actual: output_limit,
         });
     }
-    record_parents(parents, parent_limit);
     Ok(())
 }
 

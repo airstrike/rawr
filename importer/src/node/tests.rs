@@ -255,14 +255,8 @@ pub(super) fn registered_retention_parent_in(
     super::Validated<BundleValue>,
     crate::store::bundle::BundleCommitment,
 ) {
-    let recipe = super::Discoverable::capture(
-        context,
-        b"retention-bundled-parent",
-        4_096,
-        parents,
-        parents.len(),
-    )
-    .unwrap();
+    let recipe =
+        super::Discoverable::capture(context, b"retention-bundled-parent", 4_096, parents).unwrap();
     let validation_store = store.clone();
     let value = Evaluator::new(store, &crate::metrics::Current)
         .discover_bundled(

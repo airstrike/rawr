@@ -785,23 +785,9 @@ impl Limits {
     }
 
     pub(crate) fn bind_node_context(&self, digest: &mut Sha256) {
+        // Only the physical bounds that still refuse bind node identity.
         digest.update(b"rawr.import.cargo.limits/v3");
         for value in [
-            self.json_bytes as u64,
-            self.manifest_bytes as u64,
-            self.packages as u64,
-            self.units as u64,
-            self.edges as u64,
-            self.items as u64,
-            self.canonical_items as u64,
-            self.canonical_bytes as u64,
-            self.input_proof_bytes as u64,
-            self.retained_graph_items as u64,
-            self.retained_graph_bytes as u64,
-            self.classified_contract_items as u64,
-            self.classified_contract_bytes as u64,
-            self.containers as u64,
-            self.string_bytes as u64,
             self.depth as u64,
             self.process.stdout() as u64,
             self.process.stderr() as u64,

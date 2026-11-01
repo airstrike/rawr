@@ -1428,13 +1428,13 @@ mod tests {
             }
         }
 
-        let old = node::Discoverable::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[], 0).unwrap();
+        let old = node::Discoverable::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
         let current =
-            node::Discoverable::<Product>::capture([1; 32], &[2; 32], BYTES, &[], 0).unwrap();
+            node::Discoverable::<Product>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
         assert_ne!(old.lookup(), current.lookup());
         assert_ne!(old.execution(), current.execution());
-        let old = node::Direct::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[], 0).unwrap();
-        let current = node::Direct::<Product>::capture([1; 32], &[2; 32], BYTES, &[], 0).unwrap();
+        let old = node::Direct::<Legacy>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
+        let current = node::Direct::<Product>::capture([1; 32], &[2; 32], BYTES, &[]).unwrap();
         let legacy = node::codec::Envelope::direct(&old, node::Digest::from_bytes([3; 32]), BYTES)
             .unwrap()
             .encode()

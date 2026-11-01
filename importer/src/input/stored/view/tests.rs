@@ -436,3 +436,33 @@ fn live_evaluation_preserves_entries_fingerprint_and_exact_prior_accounting() {
     assert_eq!(actual.fingerprint(), expected.fingerprint());
     assert!(actual.stored_parts().1 == expected.stored_parts().1);
 }
+
+/// Live evaluation is owned in full on top of prior usage and never
+/// latches; a genuine failure then latches the account terminally.
+#[test]
+fn live_evaluation_charges_in_full_and_keeps_refusal_terminal() {
+    let baseline = stored::tests::baseline();
+    let limits = cargo::Limits::standard();
+    let prior = Usage {
+        items: 7,
+        bytes: 31,
+    };
+    let mut allocation = Allocation::for_proof(prior, &limits);
+    proof::evaluate(&baseline.recipes[6..11], false, &limits, &mut allocation)
+        .expect("live evaluation is owned, not gated");
+    let spent = allocation.usage();
+    assert_eq!(
+        spent,
+        Usage {
+            items: 26,
+            bytes: 113
+        }
+    );
+    assert!(allocation.bytes(0).is_ok(), "a charge never latches");
+    allocation.refuse();
+    assert!(matches!(
+        proof::evaluate(&baseline.recipes[6..7], false, &limits, &mut allocation),
+        Err(crate::Error::InputAccountRefused)
+    ));
+    assert_eq!(allocation.usage(), spent);
+}

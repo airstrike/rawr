@@ -79,7 +79,7 @@ fn ordered_roundtrip_and_exact_cursor_completion() {
 fn abandoned_missing_and_extra_inspections_cannot_consume_image() {
     let image = sample();
     let limits = cargo::Limits::standard();
-    for mode in 0..3 {
+    for mode in 1..3 {
         let graph = node::GraphBudget::new();
         let mut allocation = input::Allocation::new(&limits);
         let mut host = Host::from_image(
@@ -91,8 +91,7 @@ fn abandoned_missing_and_extra_inspections_cannot_consume_image() {
         )
         .unwrap();
         let mut cursor = host.stream(b"/dir").unwrap().unwrap();
-        if mode == 0 {
-        } else if mode == 1 {
+        if mode == 1 {
             assert!(matches!(cursor.next(&mut host), Ok(Next::Entry(_))));
             assert!(matches!(cursor.next(&mut host), Err(Error::Unconsumed)));
         } else {

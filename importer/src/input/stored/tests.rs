@@ -888,8 +888,7 @@ fn explicit_encode_layout_has_exact_and_one_byte_floor_accounting() {
             }
         );
         assert_eq!(budget.allocations(), 1);
-        if extra == 0 {
-        } else {
+        if extra != 0 {
             assert!(budget.check().is_ok());
             // A genuine failure latches; a latched account encodes nothing.
             budget.refuse();
@@ -1109,4 +1108,80 @@ fn nested_wire_sections_are_framed_by_the_record_charge_and_standalone_decodes_c
     budget.wire_record(&record).expect("second record wire");
     assert_eq!(decoded(), (2 * record.len() + outside.len()) as u64);
     assert_eq!(budget.usage().bytes, 31, "wire framing owns no input bytes");
+}
+
+/// Large charges, then a genuine failure: the account works until the
+/// failure. A genuine failure, then a charge: the latch does no further work.
+/// A physical bound refuses and latches the same way.
+#[test]
+fn large_charges_and_genuine_failure_latch_in_either_order() {
+    let limits = cargo::Limits::standard();
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    budget
+        .bytes(b"12345")
+        .expect("a byte charge past the figure still succeeds");
+    assert!(budget.check().is_ok());
+    assert_eq!(budget.allocations(), 1);
+    assert!(matches!(
+        budget.buffer(usize::MAX / 2 + 1),
+        Err(Error::Allocation(_))
+    ));
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
+    assert_eq!(budget.allocations(), 1);
+
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert!(matches!(
+        budget.items::<u64>(usize::MAX),
+        Err(Error::Overflow)
+    ));
+    assert!(matches!(budget.bytes(b"12345"), Err(Error::Refused)));
+    assert!(matches!(
+        budget.physical("stored baseline bytes", 4, 5),
+        Err(Error::Refused)
+    ));
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert_eq!(budget.usage(), Usage { items: 0, bytes: 0 });
+    assert_eq!(budget.allocations(), 0);
+
+    let graph = node::GraphBudget::new();
+    let mut allocation = Allocation::with_limits(2, 4, limits.string_bytes);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert!(budget.physical("stored baseline bytes", 4, 4).is_ok());
+    assert!(budget.physical("stored baseline bytes", 4, 5).is_err());
+    assert!(matches!(budget.check(), Err(Error::Refused)));
+    assert!(matches!(budget.bytes(b""), Err(Error::Refused)));
+}
+
+/// The replay digest hashes every byte it is given; a checked-arithmetic
+/// overflow of the hash charge latches the account, and the latch refuses
+/// later digests even on a fresh graph.
+#[test]
+fn replay_digest_hashes_its_bytes_and_latches_on_failure() {
+    let limits = cargo::Limits::standard();
+    let graph = node::GraphBudget::new();
+    let bytes = b"retained manifest";
+    let mut allocation = Allocation::for_proof(Usage { items: 0, bytes: 0 }, &limits);
+    let mut budget = Budget::borrow(&limits, &mut allocation, &graph);
+    assert_eq!(
+        budget.digest(bytes).expect("the digest hashes"),
+        cargo::digest(bytes)
+    );
+    assert_eq!(
+        budget.digest(b"x").expect("a second digest"),
+        cargo::digest(b"x")
+    );
+    assert!(budget.check().is_ok(), "hashing never latches");
+    assert!(matches!(
+        budget.hash(usize::MAX),
+        Err(Error::Graph(node::Error::Allocation))
+    ));
+    assert!(matches!(budget.digest(b""), Err(Error::Refused)));
+    let fresh_graph = node::GraphBudget::new();
+    let mut budget = Budget::borrow(&limits, &mut allocation, &fresh_graph);
+    assert!(matches!(budget.digest(bytes), Err(Error::Refused)));
 }

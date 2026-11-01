@@ -6879,6 +6879,33 @@ mod allocation {
 
     /// Checked-arithmetic overflow is a genuine failure: it latches and stays
     /// terminal while usage keeps its last truthful value.
+    /// A genuine failure latches the account: every later charge, decode
+    /// admission, retained validation and reservation refuses, and the usage
+    /// spent before the latch is kept. Charges past any figure never latch.
+    #[test]
+    fn genuine_failure_latches_and_large_charges_never_do() {
+        let mut allocation = Allocation::with_limits(0, 0);
+        allocation.items(1).expect("a charge never latches");
+        allocation.bytes(1).expect("a charge never latches");
+        assert!(!allocation.is_refused());
+        allocation.refuse();
+        assert!(allocation.is_refused());
+        assert!(is_refused_account(&allocation.items(1).unwrap_err()));
+        assert!(is_refused_account(&allocation.bytes(1).unwrap_err()));
+        assert!(is_refused_account(&allocation.string("x").unwrap_err()));
+        assert!(is_refused_account(&allocation.owned("x").unwrap_err()));
+        assert!(is_refused_account(&allocation.admit_decode().unwrap_err()));
+        assert!(is_refused_account(
+            &allocation.validate_retained().unwrap_err()
+        ));
+        assert!(is_refused_account(
+            &allocation.reserve(&mut Vec::<u8>::new(), 1).unwrap_err()
+        ));
+        assert_eq!(allocation.usage(), (1, 1));
+
+        assert!(Allocation::refused().is_refused());
+    }
+
     #[test]
     fn checked_overflow_latches_the_canonical_account() {
         let mut allocation = Allocation::with_limits(usize::MAX, usize::MAX);

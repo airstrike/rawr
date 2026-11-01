@@ -136,7 +136,6 @@ impl<K: Value> Recipe<K> {
             inputs,
             limit,
             std::slice::from_ref(parent),
-            context.limits().edges,
         )
         .map(|direct| Self {
             direct,
@@ -153,13 +152,7 @@ impl<K: Value> Recipe<K> {
         for parent in parents {
             parent.read_set().charge_copy()?;
         }
-        let direct = Direct::capture_edges(
-            context.identity(),
-            inputs,
-            limit,
-            parents,
-            context.limits().edges,
-        )?;
+        let direct = Direct::capture_edges(context.identity(), inputs, limit, parents)?;
         Ok(Self {
             direct,
             current: parents.iter().all(|parent| parent.current),

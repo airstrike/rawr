@@ -2155,6 +2155,30 @@ mod build_message_tests {
 
     static READ_ID: AtomicU64 = AtomicU64::new(1);
 
+    /// A charge past every figure is spent and never latches; a
+    /// checked-arithmetic overflow latches the account, which then refuses
+    /// every further charge while the spent usage stands.
+    #[test]
+    fn checked_overflow_latches_the_input_account_after_large_charges() {
+        let mut allocation = Allocation::with_limits(usize::MAX, 4, usize::MAX);
+        allocation
+            .bytes(5)
+            .expect("a byte charge past the figure is spent");
+        assert!(allocation.items(0).is_ok(), "a large charge never latches");
+        assert!(matches!(
+            allocation.bytes(usize::MAX),
+            Err(crate::Error::Node {
+                operation: super::INPUT_BYTES_RESOURCE,
+                ..
+            })
+        ));
+        assert!(matches!(
+            allocation.items(0),
+            Err(crate::Error::InputAccountRefused)
+        ));
+        assert_eq!(allocation.usage(), Usage { items: 0, bytes: 5 });
+    }
+
     #[test]
     fn removing_an_ordinary_compiler_artifact_rejects_completeness() {
         let output = output("dependency", "lib", "lib");

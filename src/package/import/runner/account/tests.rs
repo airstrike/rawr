@@ -637,3 +637,37 @@ fn arithmetic_refusal_suppresses_every_later_admission_and_keeps_the_first_cause
     );
     assert_eq!(native.snapshot().first_refusal, Some(cause));
 }
+
+#[test]
+fn native_account_runtime_scope_charges_and_types_only_arithmetic_refusal() {
+    // The runtime scope charges its retained runtime and releases it on drop.
+    let mut engine = Engine::new();
+    engine.imported_native = Some(Native::transform(carrier()).unwrap());
+    let native = engine.imported_native.as_ref().unwrap();
+    let before = native.usage();
+    let scope = engine.begin_imported_runtime().unwrap();
+    assert_eq!(
+        native.usage(),
+        (
+            before.0 + 3,
+            before.1 + std::mem::size_of::<runner::Runtime<'_>>()
+        )
+    );
+    assert_eq!(native.snapshot().first_refusal, None);
+    drop(scope);
+    assert_eq!(native.usage(), before);
+
+    // Only a checked-arithmetic failure refuses, and that refusal is typed.
+    lock(&lock(&native.inner.allocation).account).items = usize::MAX;
+    assert!(matches!(
+        engine.begin_imported_runtime(),
+        Err(host::runtime::Error::ImportedAllocation)
+    ));
+    lock(&lock(&native.inner.allocation).account).items = before.0;
+    assert_eq!(native.usage(), before);
+    let refusal = native.snapshot().first_refusal.unwrap();
+    assert_eq!(
+        (refusal.axis, refusal.cause),
+        (Axis::Items, Cause::AggregateOverflow)
+    );
+}

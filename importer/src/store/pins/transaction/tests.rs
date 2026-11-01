@@ -41,7 +41,7 @@ fn store(label: &str) -> Store {
 }
 
 fn proof(store: &Store, value: u8) -> ReadSetProof {
-    let recipe = Direct::<Artifact>::capture([0x28; 32], &[value], 4_096, &[], 1).unwrap();
+    let recipe = Direct::<Artifact>::capture([0x28; 32], &[value], 4_096, &[]).unwrap();
     let evaluator = Evaluator::new(store, &crate::metrics::Noop);
     let value = evaluator.direct(&recipe, || Ok(Artifact(value))).unwrap();
     evaluator
@@ -229,7 +229,7 @@ fn post_bind_witness_drift_uses_the_same_open_store_and_never_calls_admission() 
     let validation = store.clone();
     let validating = Arc::clone(&armed);
     let counting = Arc::clone(&visits);
-    let recipe = Discoverable::<Artifact>::capture([0x28; 32], b"witness", 4_096, &[], 1).unwrap();
+    let recipe = Discoverable::<Artifact>::capture([0x28; 32], b"witness", 4_096, &[]).unwrap();
     let evaluator = Evaluator::new(&store, &crate::metrics::Noop);
     let value = evaluator
         .discover_budgeted(

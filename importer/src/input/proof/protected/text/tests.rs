@@ -264,8 +264,7 @@ fn boxing_shrink_layout_has_exact_byte_floors_without_another_item() {
         // The shrink layout is exactly `bytes` more on the byte axis and
         // never another item; one byte under records the byte axis alone.
         assert_eq!(result.expect("admitted").as_ref(), "é");
-        if byte_floor == 0 {
-        } else {
+        if byte_floor != 0 {
             // A genuine failure latches the account; a latched account moves
             // no further ownership.
             budget.refuse();
