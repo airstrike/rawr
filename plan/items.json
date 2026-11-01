@@ -538,11 +538,14 @@
     {"t":"T535","issue":535,"title":"T535: Show a paused program in wait and status","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"breakpoints"},"decisions":[],"commit":"4a88611dc","release":"0.3.54"},
     {"t":"T536","issue":536,"title":"T536: The compiler's registry copies each facade definition it installs","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T537","issue":537,"title":"T537: Run ?play's memory-limit test on Linux","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T538","issue":538,"title":"T538: Split stale from broken in the profile, checked and bridge invariants","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T539","issue":539,"title":"T539: Remove the remaining placeholders from error messages","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
+    {"t":"T538","issue":538,"title":"T538: Split stale from broken in the profile, checked and bridge invariants","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D664"],"commit":"59c18baa3","release":null},
+    {"t":"T539","issue":539,"title":"T539: Remove the remaining placeholders from error messages","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D664"],"commit":"59c18baa3","release":null},
     {"t":"T540","issue":540,"title":"T540: Check the debugger's caller-frame reads under Miri","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T541","issue":541,"title":"T541: inspect misses a receiver while it is lent to a method call on itself","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T542","issue":542,"title":"T542: A closure whose input is a borrowed program type fails to import","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T543","issue":543,"title":"T543: ?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T543","issue":543,"title":"T543: ?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T544","issue":544,"title":"T544: Arity errors for functions and closures read as rustc's E0061","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T545","issue":545,"title":"T545: Refuse a closure whose output type Rust can't name before generation","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T546","issue":546,"title":"T546: Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
