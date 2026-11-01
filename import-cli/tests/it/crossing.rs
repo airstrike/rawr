@@ -416,7 +416,7 @@ fn constants_of_no_scalar_and_a_sole_alias_run() {
 fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
     let (rawr, cargo) = both_printed("crossing-alias-methods", "alias.rs", "");
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3)");
+    assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3), quad 4r1 rgb(4, 5, 6) at 3");
 }
 
 #[test]

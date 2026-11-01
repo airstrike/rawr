@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 80;
+const CLASSIFIER_VERSION: u32 = 81;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1191,6 +1191,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     ty: model::Type::SelfType(_),
                     ..
                 } => {}
+                // That bound once an alias's instance is `Self`, as
+                // `iced::Renderer` is the `Self: Renderer` of
+                // `with_translation`: a bound on a concrete type, which
+                // rustc checks where the bridge names it.
+                model::Predicate::Bound {
+                    ty: ty @ model::Type::Definition { .. },
+                    ..
+                } if !names_type_parameter(ty) => {}
                 // A bound on an associated type, as iced's `style` has
                 // `where Theme::Class<'a>: From<StyleFn<'a, Theme>>`:
                 // rustc checks it where the bridge calls the method.
@@ -4666,18 +4674,20 @@ impl<P: api::Phase> Context<'_, P> {
                 .map_or((signature, generics), |(signature, generics)| {
                     (signature, generics)
                 });
-            let signature = substituted_signature(signature, substitutions);
-            let generics = model::Generics::new(
-                generics.parameters().cloned().collect(),
-                generics
-                    .predicates()
-                    .map(|predicate| {
-                        map_predicate_types(predicate, |ty| {
-                            substitute_parameters(ty, substitutions)
-                        })
-                    })
-                    .collect(),
-            );
+            // A trait's provided method takes `Self` as the alias's
+            // instance, as iced's `with_translation(&mut self, v, f: impl
+            // FnOnce(&mut Self))` lends `&mut Renderer` to its closure.
+            let instance = |ty: &model::Type| {
+                let own = match implementation.trait_ref() {
+                    model::Trait::Trait { id, .. } => {
+                        self_replaced(ty, id, implementation.self_type())
+                    }
+                    _ => ty.clone(),
+                };
+                substitute_parameters(&own, substitutions)
+            };
+            let signature = map_signature_types(signature, instance);
+            let generics = map_generics_types(generics, instance);
             match self.function(&signature, &generics)? {
                 Representability::FunctionItem(item) => Ok(Representability::Invocation(
                     callable::Invocation::new(item, 0),
@@ -9047,29 +9057,55 @@ pub(crate) fn impl_traits<'t>(ty: &'t model::Type, found: &mut Vec<&'t model::Ty
 /// `ty` with the trait `trait_id`'s `Self` its parameter 0, as a trait's
 /// method is a function of its `Self` (`classify_self_member`).
 fn self_as_parameter(ty: &model::Type, trait_id: &api::identity::Definition) -> model::Type {
-    let inner = |ty: &model::Type| Box::new(self_as_parameter(ty, trait_id));
-    match ty {
-        model::Type::SelfType(owner) if owner == trait_id => model::Type::Parameter {
-            owner: owner.clone(),
+    self_replaced(
+        ty,
+        trait_id,
+        &model::Type::Parameter {
+            owner: trait_id.clone(),
             index: 0,
         },
-        model::Type::Definition { id, arguments } => model::Type::Definition {
+    )
+}
+
+/// `ty` with the trait `trait_id`'s `Self` the type `this`: a parameter
+/// (`self_as_parameter`), or the one type an impl's methods take it as, as
+/// an opaque alias names it (`classify_alias_member`).
+fn self_replaced(
+    ty: &model::Type,
+    trait_id: &api::identity::Definition,
+    this: &model::Type,
+) -> model::Type {
+    let inner = |ty: &model::Type| Box::new(self_replaced(ty, trait_id, this));
+    let arguments = |arguments: &[model::Argument]| {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                model::Argument::Type(ty) => {
+                    model::Argument::Type(self_replaced(ty, trait_id, this))
+                }
+                other => other.clone(),
+            })
+            .collect()
+    };
+    match ty {
+        model::Type::SelfType(owner) if owner == trait_id => this.clone(),
+        model::Type::Definition { id, arguments: of } => model::Type::Definition {
             id: id.clone(),
-            arguments: self_arguments_as_parameter(arguments, trait_id),
+            arguments: arguments(of),
         },
         model::Type::Projection {
             trait_id: projected,
             associated,
-            arguments,
+            arguments: of,
         } => model::Type::Projection {
             trait_id: projected.clone(),
             associated: associated.clone(),
-            arguments: self_arguments_as_parameter(arguments, trait_id),
+            arguments: arguments(of),
         },
         model::Type::Tuple(members) => model::Type::Tuple(
             members
                 .iter()
-                .map(|member| self_as_parameter(member, trait_id))
+                .map(|member| self_replaced(member, trait_id, this))
                 .collect(),
         ),
         model::Type::Slice(element) => model::Type::Slice(inner(element)),
@@ -9094,19 +9130,6 @@ fn self_as_parameter(ty: &model::Type, trait_id: &api::identity::Definition) -> 
     }
 }
 
-fn self_arguments_as_parameter(
-    arguments: &[model::Argument],
-    trait_id: &api::identity::Definition,
-) -> Box<[model::Argument]> {
-    arguments
-        .iter()
-        .map(|argument| match argument {
-            model::Argument::Type(ty) => model::Argument::Type(self_as_parameter(ty, trait_id)),
-            other => other.clone(),
-        })
-        .collect()
-}
-
 /// `predicate` with the trait `trait_id`'s `Self` its parameter 0
 /// (`self_as_parameter`).
 fn self_predicate_as_parameter(
@@ -9123,26 +9146,7 @@ fn map_predicate_types(
     match predicate {
         model::Predicate::Bound { ty: bounded, bound } => model::Predicate::Bound {
             ty: ty(bounded),
-            bound: match bound {
-                model::Bound::Trait {
-                    trait_id: bound,
-                    arguments,
-                    polarity,
-                    binders,
-                } => model::Bound::Trait {
-                    trait_id: bound.clone(),
-                    arguments: arguments
-                        .iter()
-                        .map(|argument| match argument {
-                            model::Argument::Type(value) => model::Argument::Type(ty(value)),
-                            other => other.clone(),
-                        })
-                        .collect(),
-                    polarity: *polarity,
-                    binders: binders.clone(),
-                },
-                other => other.clone(),
-            },
+            bound: map_bound_types(bound, &ty),
         },
         model::Predicate::ProjectionEquality {
             projection,
@@ -9160,6 +9164,63 @@ fn map_predicate_types(
         },
         other => other.clone(),
     }
+}
+
+/// `bound` with each type its trait's arguments name mapped by `ty`.
+fn map_bound_types(bound: &model::Bound, ty: impl Fn(&model::Type) -> model::Type) -> model::Bound {
+    match bound {
+        model::Bound::Trait {
+            trait_id,
+            arguments,
+            polarity,
+            binders,
+        } => model::Bound::Trait {
+            trait_id: trait_id.clone(),
+            arguments: arguments
+                .iter()
+                .map(|argument| match argument {
+                    model::Argument::Type(value) => model::Argument::Type(ty(value)),
+                    other => other.clone(),
+                })
+                .collect(),
+            polarity: *polarity,
+            binders: binders.clone(),
+        },
+        other => other.clone(),
+    }
+}
+
+/// `generics` with each type its parameters' bounds and its predicates
+/// name mapped by `ty`.
+fn map_generics_types(
+    generics: &model::Generics,
+    ty: impl Fn(&model::Type) -> model::Type,
+) -> model::Generics {
+    let parameters = generics
+        .parameters()
+        .map(|parameter| match parameter.kind() {
+            model::ParameterKind::Type { bounds, default } => model::Parameter::new(
+                parameter.owner().clone(),
+                parameter.index(),
+                parameter.name().into(),
+                model::ParameterKind::Type {
+                    bounds: bounds
+                        .iter()
+                        .map(|bound| map_bound_types(bound, &ty))
+                        .collect(),
+                    default: default.clone(),
+                },
+            ),
+            _ => parameter.clone(),
+        })
+        .collect();
+    model::Generics::new(
+        parameters,
+        generics
+            .predicates()
+            .map(|predicate| map_predicate_types(predicate, &ty))
+            .collect(),
+    )
 }
 
 /// Match an impl's self type to an alias's exact instance. Repeated
@@ -9224,7 +9285,14 @@ fn substituted_signature(
     signature: &model::Signature,
     substitutions: &[((api::identity::Definition, u32), model::Type)],
 ) -> model::Signature {
-    let substitute = |ty: &model::Type| substitute_parameters(ty, substitutions);
+    map_signature_types(signature, |ty| substitute_parameters(ty, substitutions))
+}
+
+/// `signature` with each of its types mapped by `substitute`.
+fn map_signature_types(
+    signature: &model::Signature,
+    substitute: impl Fn(&model::Type) -> model::Type,
+) -> model::Signature {
     let receiver = match signature.receiver() {
         model::Receiver::None => model::Receiver::None,
         model::Receiver::Value { ty } => model::Receiver::Value { ty: substitute(ty) },
@@ -9247,7 +9315,7 @@ fn substituted_signature(
         signature.variadic(),
         signature.binders().cloned().collect(),
         receiver,
-        signature.inputs().map(substitute).collect(),
+        signature.inputs().map(&substitute).collect(),
         substitute(signature.output()),
     )
     .with_guard(signature.guard().cloned())
