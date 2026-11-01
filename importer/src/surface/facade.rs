@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 26;
+const SCHEMA: u32 = 27;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -488,6 +488,11 @@ pub struct TypeDefinition {
     /// Rust code can't write (`surface::opaque`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     opaque: bool,
+    /// The associated types an opaque type binds, each with the position
+    /// of the parameter that is its value (`representability::signature::
+    /// Opaque`): a call reads `P::State` from the `P` it fills.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    associated: Box<[(representability::signature::Associated, u32)]>,
     shape: Shape,
 }
 
@@ -600,6 +605,11 @@ pub struct Signature {
     /// `Task<Option<T>>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instance: Option<Type>,
+    /// The associated types each opaque type the output names binds
+    /// (`representability::signature::Opaque`), which its declaration
+    /// carries.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    opaques: Box<[representability::signature::Opaque]>,
 }
 
 /// A bound `R: Trait<A..>` and the trait's implementations Rawr can name:
@@ -614,6 +624,11 @@ pub struct Relation {
     /// may fix what no case does (D604).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trait_identity: Option<[u8; 32]>,
+    /// The associated type a projection's parameter stands for, which an
+    /// opaque type that fills the bound parameter gives
+    /// (`representability::signature::Associated`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    associated: Option<representability::signature::Associated>,
 }
 
 /// One implementation of a [`Relation`]'s trait, its impl parameters
@@ -640,6 +655,13 @@ impl Relation {
     /// The bound's trait, by its definition identity, when known.
     pub const fn trait_identity(&self) -> Option<[u8; 32]> {
         self.trait_identity
+    }
+    /// The associated type a projection's parameter stands for, by its
+    /// trait's definition identity and its name.
+    pub fn associated(&self) -> Option<([u8; 32], &str)> {
+        self.associated
+            .as_ref()
+            .map(|associated| (associated.trait_identity(), associated.name()))
     }
 }
 
@@ -1139,11 +1161,21 @@ impl Plan {
                         if types.iter().any(|ty| *ty.path == *path) {
                             continue;
                         }
+                        let associated = item
+                            .signature
+                            .opaques
+                            .iter()
+                            .find(|opaque| *opaque.definition() == identity)
+                            .map(|opaque| opaque.associated().to_vec())
+                            .unwrap_or_default()
+                            .into_boxed_slice();
+                        let parameters = super::opaque::parameters(parameters, &associated);
                         types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
                         types.push(TypeDefinition {
                             path: path.into(),
                             identity,
                             parameters,
+                            associated,
                             defaults: Box::default(),
                             copy: false,
                             default: false,
@@ -1604,6 +1636,7 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         view: false,
         widget: false,
         opaque: false,
+        associated: Box::default(),
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -1681,6 +1714,7 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 view: false,
                 widget: false,
                 opaque: false,
+                associated: Box::default(),
                 shape: Shape::Struct {
                     form: Form::Unit,
                     constructor: None,
@@ -1727,6 +1761,7 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         view: false,
         widget: false,
         opaque: false,
+        associated: Box::default(),
         shape: Shape::Struct {
             form: Form::Unit,
             constructor: None,
@@ -2709,6 +2744,13 @@ impl TypeDefinition {
     pub const fn opaque(&self) -> bool {
         self.opaque
     }
+    /// Each associated type an opaque type binds, by its trait's identity
+    /// and its name, with the position of the parameter that is its value.
+    pub fn associated(&self) -> impl Iterator<Item = ([u8; 32], &str, u32)> {
+        self.associated.iter().map(|(associated, position)| {
+            (associated.trait_identity(), associated.name(), *position)
+        })
+    }
     /// Return whether the native type is a view type iced implements
     /// `Widget` for.
     pub const fn widget(&self) -> bool {
@@ -2972,6 +3014,7 @@ fn type_definition(
         view: borrowing.2,
         widget: borrowing.3,
         opaque: false,
+        associated: Box::default(),
         shape,
     }))
 }
@@ -3011,6 +3054,7 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
                 scope: None,
                 crossing: false,
                 instance: None,
+                opaques: Box::default(),
             },
         ),
         Representability::Value(_)
@@ -3137,6 +3181,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         scope: source.scope(),
         crossing: false,
         instance: fixed_instance(source)?,
+        opaques: source.opaques().into(),
     })
 }
 
@@ -3204,7 +3249,10 @@ fn relations(
                 arguments: implemented,
             });
         }
-        if cases.is_empty() && relation.trait_identity().is_none() {
+        if cases.is_empty()
+            && relation.trait_identity().is_none()
+            && relation.associated().is_none()
+        {
             continue;
         }
         output.push(Relation {
@@ -3212,6 +3260,7 @@ fn relations(
             arguments,
             cases: cases.into_boxed_slice(),
             trait_identity: relation.trait_identity(),
+            associated: relation.associated().cloned(),
         });
     }
     Ok(output.into_boxed_slice())
@@ -3282,6 +3331,7 @@ fn callable_signature(
         scope: source.scope(),
         crossing: false,
         instance: fixed_instance(source)?,
+        opaques: source.opaques().into(),
     })
 }
 

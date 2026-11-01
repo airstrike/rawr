@@ -18009,9 +18009,14 @@ impl<'a> Parser<'a> {
             item_owner.as_ref(),
             output_origin,
         )?;
-        if let Some(arguments) = arguments {
-            self.apply_relations(item, arguments, &mut parameters, operation)?;
-        }
+        // Without arguments, as a closure's hint is made, the receiver
+        // still fixes its projections, as `P::State` of `.subscription(..)`.
+        self.apply_relations(
+            item,
+            arguments.unwrap_or_default(),
+            &mut parameters,
+            operation,
+        )?;
         // An imported iced item's `Theme` and `Renderer` are iced's, the ones
         // the facade declares, as its defaults name and its view uses (D558
         // tier 2).
@@ -18216,6 +18221,30 @@ impl<'a> Parser<'a> {
                 }
             }
             let (Some((case, mut bindings)), false) = (matched, ambiguous) else {
+                // An opaque type that fills the parameter gives the
+                // associated type from its own bound, as `application(..)`'s
+                // `impl Program<State = S>` gives `P::State`, so a closure
+                // `.subscription(|state| ..)` takes `&S`, as rustc reads it.
+                #[cfg(feature = "rust-import")]
+                if let Some((identity, name)) = relation.associated()
+                    && let Ty::Host { proof, arguments } = &actual
+                    && let Some(value) = proof
+                        .definition
+                        .associated(identity, name)
+                        .and_then(|position| arguments.get(position))
+                    && let [declared] = relation.arguments()
+                {
+                    let value = value.clone();
+                    let declared = self.pattern_type(
+                        declared,
+                        &mut BTreeMap::new(),
+                        parameters,
+                        (&item_path, span),
+                        owner,
+                    )?;
+                    // A mismatch is rustc's to report where it compiles the call.
+                    let _ = self.unify_type(&declared, &value);
+                }
                 continue;
             };
             // The one case the argument fits is its type, so its literals

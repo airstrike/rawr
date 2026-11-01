@@ -36,6 +36,11 @@ pub struct Relation {
     /// The bound's trait, by its definition identity, whose impl headers
     /// fix what no case does (D604).
     trait_identity: Option<[u8; 32]>,
+    /// The associated type a projection's parameter stands for, by its
+    /// trait's definition identity and its name, as `P::State` of iced's
+    /// `Application<P>::subscription`: an opaque type that fills `P` gives
+    /// it from its own bound.
+    associated: Option<([u8; 32], ImmutableString)>,
 }
 
 /// One implementation of a [`Relation`]'s trait.
@@ -80,7 +85,21 @@ impl Relation {
             arguments,
             cases,
             trait_identity: None,
+            associated: None,
         }
+    }
+
+    /// The relation of a projection's parameter, which stands for the
+    /// associated type `name` of the trait whose identity is `identity`.
+    #[must_use]
+    pub fn of_associated(mut self, associated: Option<([u8; 32], ImmutableString)>) -> Self {
+        self.associated = associated;
+        self
+    }
+
+    #[cfg(feature = "rust-import")]
+    pub(crate) const fn associated(&self) -> Option<&([u8; 32], ImmutableString)> {
+        self.associated.as_ref()
     }
 
     /// The relation of the trait whose definition identity is `identity`.

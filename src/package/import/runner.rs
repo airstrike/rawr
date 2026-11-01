@@ -832,7 +832,7 @@ fn build(
             .map_err(|source| entry_error(facade.root(), ty.path(), source))?
             .into_boxed_slice();
         builder
-            .imported_type(
+            .imported_opaque_type(
                 ty.path(),
                 host::type_def::import::Identity::new(identity),
                 &crate::package::import::implemented([
@@ -848,6 +848,11 @@ fn build(
                 ]),
                 parameters,
                 defaults,
+                ty.associated()
+                    .map(|(identity, name, position)| {
+                        (identity, ImmutableString::from(name), position as usize)
+                    })
+                    .collect(),
                 shape,
                 allocation,
             )
@@ -1197,6 +1202,7 @@ fn signature(
                 .iter()
                 .map(|case| (case.this(), case.arguments())),
             relation.trait_identity(),
+            relation.associated(),
             |source| {
                 pattern(source, &|nominal| {
                     ty(nominal).ok().and_then(|ty| rooted(facade.root(), ty))
