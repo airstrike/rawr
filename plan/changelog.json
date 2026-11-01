@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"Errors about calls into crates speak about the program's code. A type the program passes is named as it was written, and an unknown one gets rustc's E0282. Moved values, mutable borrows, methods named without a call and associated functions read as rustc's E0382, E0596, E0615 and E0599. Rawr's placeholders such as `<host item>` are gone, and a condition only a rawr bug can cause panics and names its invariant.","issues":[523]},
+      {"text":"A rawr bug during a fresh build panics and names the invariant it broke, instead of printing an internal error. Stale cache entries still rebuild silently, and damaged ones rebuild with a note.","issues":[522]}
+    ]
   },
   "releases": [
     {
