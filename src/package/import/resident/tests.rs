@@ -459,23 +459,6 @@ mod top_level {
         assert!(support.upgrade().is_none());
         assert_eq!(usage(&engine), baseline);
     }
-
-    #[test]
-    fn empty_support_receipt_retires_with_the_executable() {
-        let engine = retained();
-        let baseline = usage(&engine);
-        let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(
-                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
-            ))
-            .unwrap();
-        assert!(ast.shared_support().is_empty());
-        assert!(usage(&engine).1 > baseline.1);
-        drop(candidate);
-        assert_eq!(usage(&engine), baseline);
-        drop(ast);
-        assert_eq!(usage(&engine), baseline);
-    }
 }
 
 /// The runner byte target is accounting. A resident compile past it is

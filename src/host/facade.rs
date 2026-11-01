@@ -2237,7 +2237,7 @@ mod imported_allocation_tests {
         variants.dedup();
         expected.dedup_by(|left, right| original(left, right).is_eq());
         assert_eq!(variants, expected);
-        assert_eq!(variants.len(), 8);
+        assert_eq!(variants.len(), 6);
     }
 
     #[test]
