@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]}
+    ]
   },
   "releases": [
     {

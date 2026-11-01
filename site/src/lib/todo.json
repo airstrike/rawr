@@ -5,7 +5,12 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A program that doesn't format with `Debug` no longer carries the generic `Debug` formatter, unless `rawr mcp inspect` is attached.","issues":[526]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.50",
@@ -1125,8 +1130,8 @@
     {"issue":522,"title":"Separate the importer's cache-rebuild signals from its failures","state":"open","category":"Importer"},
     {"issue":523,"title":"Errors about generated data still name rawr's internals","state":"open","category":"Divergences from rustc"},
     {"issue":524,"title":"Three rawr lib tests fail on main","state":"closed","category":"Health"},
-    {"issue":525,"title":"Resident support tests check what a program's support module holds","state":"open","category":"Health"},
-    {"issue":526,"title":"Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"open","category":"Health"},
+    {"issue":525,"title":"Resident support tests check what a program's support module holds","state":"closed","category":"Health"},
+    {"issue":526,"title":"Register the generic Debug op only when a program formats with Debug or a debugger is attached","state":"closed","category":"Health"},
     {"issue":527,"title":"?play answers an animated iced app with a GIF that plays once and holds its last frame","state":"open","category":"No glue (D593)"},
     {"issue":528,"title":"?play shows the text an iced program printed beside its frame","state":"open","category":"No glue (D593)"},
     {"issue":529,"title":"?play draws an iced frame at the program's own scale_factor","state":"open","category":"No glue (D593)"},
