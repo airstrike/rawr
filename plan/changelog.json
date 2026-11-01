@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A dependency resolution whose inputs change while `rawr check` uses it is rebuilt and the check continues, instead of failing with \"invalid stored baseline\".","issues":[609]},
-      {"text":"A rawr store missing one of its directories is cleared and rebuilt the next time it opens, instead of failing every check.","issues":[584]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.68",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A dependency resolution whose inputs change while `rawr check` uses it is rebuilt and the check continues, instead of failing with \"invalid stored baseline\".","issues":[609]},
+        {"text":"A rawr store missing one of its directories is cleared and rebuilt the next time it opens, instead of failing every check.","issues":[584]}
+      ]
+    },
     {
       "version": "0.3.67",
       "date": "2026-11-01",
