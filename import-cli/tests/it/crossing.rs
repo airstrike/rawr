@@ -847,6 +847,25 @@ fn a_closure_of_a_future_parameters_output_is_reported_at_the_call() {
     );
 }
 
+/// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`
+/// closure over the program's own native images, where `card` is written
+/// after the view and borrows the image and an `Option<&String>` an `if`
+/// chooses, behind `impl Widget<Message> + 'a`. The receiver of `boxed` is
+/// `card`'s opaque type, as rustc infers it. The output is `cargo run`'s.
+#[test]
+fn a_borrowing_opaque_widget_is_boxed_in_a_closure_before_its_function() {
+    let (rawr, cargo) = both_printed("crossing-gallery", "gallery.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 [Increment] pad 1 ...@16 ...@16")
+            && rawr.ends_with(
+                "last view pad 0 [Increment] pad 1 pad 2 pad 0 [image#0] preview0@16 \
+                 pad 2 [image#1] pad 2 pad 0 [image#2] preview2@16"
+            ),
+        "{rawr}"
+    );
+}
+
 /// iced's pick_list: `column!` boxes a string literal through the crate's
 /// impl of its trait for `&str`, and a choice takes an `Option` of a script
 /// enum, a script `&[T]` constant as its `L: Borrow<[T]>`, and the enum's

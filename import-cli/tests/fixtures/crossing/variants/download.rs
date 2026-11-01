@@ -26,6 +26,24 @@ impl events::Sip for Sizes {
     }
 }
 
+/// An image the gallery lists, as iced's gallery's `civitai::Image`.
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub id: u32,
+    pub url: String,
+}
+
+impl Image {
+    /// As many placeholders as the gallery shows before it has images.
+    pub const LIMIT: usize = 2;
+}
+
+impl std::fmt::Display for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.url, self.id)
+    }
+}
+
 /// The length of `url`, once the download is done, as a future.
 pub fn finished(url: impl AsRef<str>) -> impl Future<Output = u32> {
     let length = url.as_ref().len() as u32;
