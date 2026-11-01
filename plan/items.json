@@ -583,8 +583,12 @@
     {"t":"T580","issue":580,"title":"T580: An overload conflict in a crate's API fails the whole program with no span","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T581","issue":581,"title":"T581: Name why a crate call can't be built, not only that it can't","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T582","issue":582,"title":"T582: An associated function's one-shot closure that takes a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"b30eef56b","release":null},
-    {"t":"T583","issue":583,"title":"T583: bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T583","issue":583,"title":"T583: bezier_tool: Path::new's closure infers &mut &mut Builder through a hidden path","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"8d3c12c8d","release":null},
     {"t":"T584","issue":584,"title":"T584: A store missing its executions fails every check instead of rebuilding","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":["D664"],"commit":null,"release":null},
-    {"t":"T585","issue":585,"title":"T585: Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.60"}
+    {"t":"T585","issue":585,"title":"T585: Path::new and closures lent a &mut borrow","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.60"},
+    {"t":"T586","issue":586,"title":"T586: Check with_save, Cache::draw and the Renderer layer calls on the ordinary crossing path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T587","issue":587,"title":"T587: Retire the resolver's remaining iced path-keyed special cases","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":["D662"],"commit":null,"release":null},
+    {"t":"T588","issue":588,"title":"T588: Widget::_boxed through iced_widget's $crate::core::Widget has no self member","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T589","issue":589,"title":"T589: Crate trait impls for Option, Result and Vec","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
