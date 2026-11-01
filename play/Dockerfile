@@ -68,17 +68,21 @@ RUN . /cross.env && target="$(cat /target)" \
 # runner with no Cargo and no nightly. This stage runs on the target
 # platform, since the project's own Cargo builds the runner for the machine
 # it runs on. The universe keeps its build path, /universe, in the runtime
-# image: a snippet is compiled beside that Cargo.toml.
+# image: a snippet is compiled beside that Cargo.toml. The universe's own
+# toolchain is the extraction nightly, as it is on a machine whose default
+# is that nightly: a build script that reads the compiler's channel (libm's)
+# then gives the extraction and the runner one API.
 FROM rust:1.99.0-slim-bookworm AS universe
 ARG CARGO_BUILD_JOBS=2
+ENV RUSTUP_TOOLCHAIN=nightly-2026-07-11
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && rustup toolchain install nightly-2026-07-11 --profile minimal --component rustc-dev,rust-src --no-self-update
 WORKDIR /src
 COPY . .
-RUN cargo +nightly-2026-07-11 build --release --locked -p rawr-import-cli --bin rawr-import \
-    && cargo +nightly-2026-07-11 build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
+RUN cargo build --release --locked -p rawr-import-cli --bin rawr-import \
+    && cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
     && cp -r play/universe /universe \
     && RAWR_UNIVERSE_RUNNER=1 /src/target/release/rawr-import run /universe \
     && install -D -m 0755 /universe/target/rawr/runner/target/debug/play /out/universe/runner \
