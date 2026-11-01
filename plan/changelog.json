@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A method that lends a slice of strings or crate values from `&self`, as iced's `combo_box::State::options()` does, works in place with nothing copied: `.len()`, indexing, `for` loops and iterator methods read the native elements.","issues":[687]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.93",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A method that lends a slice of strings or crate values from `&self`, as iced's `combo_box::State::options()` does, works in place with nothing copied: `.len()`, indexing, `for` loops and iterator methods read the native elements.","issues":[687]}
+      ]
+    },
     {
       "version": "0.3.92",
       "date": "2026-11-01",
