@@ -7,7 +7,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::api::{identity, model};
 use crate::cargo;
-use crate::{Error, Result};
+use crate::Result;
 
 /// One independent capture: its crates' public exports with their targets,
 /// and their complete intrinsic fact payload. No API graph of the capture
@@ -120,31 +120,31 @@ impl Acquired {
         Ok(acquired)
     }
 
+    /// Seal facts extraction assembled. Facts that break their own
+    /// invariants are a bug in that assembly.
     pub(crate) fn authenticate(
         exports: Box<[(identity::Export, identity::Definition)]>,
         facts: Facts,
-    ) -> Result<Self> {
-        facts.validate()?;
+    ) -> Self {
+        if let Err(violation) = facts.validate() {
+            panic!("captured crate facts break their invariant: {violation}");
+        }
         let mut fingerprint = Sha256::new();
         fingerprint.update(b"rawr.import.intrinsic-inventory/v2");
-        let encoded = serde_json::to_vec(&exports)
-            .map_err(|_| invalid("intrinsic export encoding failed"))?;
-        fingerprint.update(encoded);
-        let encoded =
-            serde_json::to_vec(&facts).map_err(|_| invalid("intrinsic fact encoding failed"))?;
-        fingerprint.update(encoded);
-        Ok(Self {
+        fingerprint.update(serde_json::to_vec(&exports).expect("exports encode as JSON"));
+        fingerprint.update(serde_json::to_vec(&facts).expect("facts encode as JSON"));
+        Self {
             exports,
             facts,
             fingerprint: fingerprint.finalize().into(),
             scripts: super::store::Scripts::default(),
-        })
+        }
     }
 
     /// Synthetic corruption is available only to invariant tests. Production
     /// capture still has no constructor from caller-supplied canonical facts.
     #[cfg(test)]
-    pub(super) fn mutate_for_test(self, change: impl FnOnce(&mut Facts)) -> Result<Self> {
+    pub(super) fn mutate_for_test(self, change: impl FnOnce(&mut Facts)) -> Self {
         let Self {
             exports, mut facts, ..
         } = self;
@@ -213,35 +213,37 @@ pub struct Entry {
 }
 
 impl Entry {
-    fn seal(mut self) -> Result<Self> {
+    /// Whether this entry is one crate's whole facts, as `entries` makes it.
+    fn check(&self) -> std::result::Result<(), Box<str>> {
         self.facts.validate()?;
         if self.schema != ENTRY_SCHEMA
             || self.facts.partitions.len() != 1
             || self.facts.partitions[0].unit.crate_name() != self.crate_name.as_ref()
         {
-            return Err(invalid("shared crate entry differs from its one crate"));
+            return Err("the entry is not its one crate's facts".into());
         }
+        Ok(())
+    }
+
+    fn sealed(mut self) -> Self {
         let mut fingerprint = Sha256::new();
         fingerprint.update(b"rawr.import.intrinsic-entry/v1");
-        fingerprint.update(
-            serde_json::to_vec(&self).map_err(|_| invalid("shared entry encoding failed"))?,
-        );
+        fingerprint.update(self.encode());
         self.fingerprint = fingerprint.finalize().into();
-        Ok(self)
+        self
     }
 
-    /// Decode a stored entry; it must be the one its key names.
-    pub fn decode(bytes: &[u8], key: &[u8; 32]) -> Result<Self> {
-        let entry: Self =
-            serde_json::from_slice(bytes).map_err(|_| invalid("shared entry does not decode"))?;
-        if &entry.key != key {
-            return Err(invalid("shared entry is not the one its key names"));
-        }
-        entry.seal()
+    /// Decode a stored entry. One that does not decode, is not the one
+    /// `key` names, or does not hold together is absent.
+    #[must_use]
+    pub fn decode(bytes: &[u8], key: &[u8; 32]) -> Option<Self> {
+        let entry: Self = serde_json::from_slice(bytes).ok()?;
+        (&entry.key == key && entry.check().is_ok()).then(|| entry.sealed())
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|_| invalid("shared entry encoding failed"))
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("an entry encodes as JSON")
     }
 
     pub const fn key(&self) -> &[u8; 32] {
@@ -286,7 +288,8 @@ impl Entry {
 
     /// A copy of this entry under another key, as a project's entry is
     /// published to rawr's home under its machine-wide key.
-    pub fn clone_rekeyed(&self, key: [u8; 32]) -> Result<Self> {
+    #[must_use]
+    pub fn clone_rekeyed(&self, key: [u8; 32]) -> Self {
         Self {
             schema: self.schema,
             key,
@@ -296,7 +299,7 @@ impl Entry {
             scripts: self.scripts.clone(),
             fingerprint: [0; 32],
         }
-        .seal()
+        .sealed()
     }
 }
 
@@ -306,7 +309,12 @@ impl Acquired {
     /// dependencies and of crates no partition owns, such as the standard
     /// library's, go with each entry that may read them; identical copies
     /// join as one.
-    pub fn entries(&self, key: impl Fn(&str) -> Option<[u8; 32]>) -> Result<Vec<Entry>> {
+    ///
+    /// # Panics
+    ///
+    /// When `key` has no key for a crate this capture holds, as the
+    /// caller keys every crate of the closure it captured.
+    pub fn entries(&self, key: impl Fn(&str) -> Option<[u8; 32]>) -> Vec<Entry> {
         let owned = self
             .facts
             .partitions
@@ -316,14 +324,27 @@ impl Acquired {
         let mut entries = Vec::new();
         for partition in self.facts.partitions.iter() {
             let unit = &partition.unit;
-            let key = key(&partition.native_unit)
-                .ok_or_else(|| invalid("a captured crate has no shared key"))?;
+            let key = key(&partition.native_unit).unwrap_or_else(|| {
+                panic!(
+                    "captured crate `{}` has no key in the closure it was captured for",
+                    unit.crate_name()
+                )
+            });
             // A crate's facts read its dependencies' declarations, which
-            // its key covers too; its own implementations are its alone.
-            let readable = |owner: &identity::Unit| {
+            // its key covers too, and the trait members its implementations
+            // declare, which may come from a crate a dependency re-exports.
+            // Its own implementations are its alone.
+            let declarations = partition
+                .associated
+                .iter()
+                .filter_map(|link| link.declaration.as_ref())
+                .collect::<BTreeSet<_>>();
+            let readable = |definition: &identity::Definition| {
+                let owner = definition.unit();
                 owner == unit
                     || !owned.contains(owner)
                     || partition.dependencies.binary_search(owner).is_ok()
+                    || declarations.contains(definition)
             };
             let ours = |owner: &identity::Unit| owner == unit || !owned.contains(owner);
             let crate_name = unit.crate_name();
@@ -341,48 +362,75 @@ impl Acquired {
                 .collect::<Vec<_>>();
             exports.sort_unstable();
             exports.dedup();
-            entries.push(
-                Entry {
-                    schema: ENTRY_SCHEMA,
-                    key,
-                    crate_name: crate_name.into(),
-                    exports: exports.into_boxed_slice(),
-                    facts: Facts {
-                        definitions: self
-                            .facts
-                            .definitions
-                            .iter()
-                            .filter(|definition| readable(definition.id().unit()))
-                            .cloned()
-                            .collect(),
-                        implementations: self
-                            .facts
-                            .implementations
-                            .iter()
-                            .filter(|implementation| ours(implementation.id().unit()))
-                            .cloned()
-                            .collect(),
-                        partitions: Box::new([partition.clone()]),
-                    },
-                    scripts: self.scripts.clone(),
-                    fingerprint: [0; 32],
-                }
-                .seal()?,
-            );
+            let entry = Entry {
+                schema: ENTRY_SCHEMA,
+                key,
+                crate_name: crate_name.into(),
+                exports: exports.into_boxed_slice(),
+                facts: Facts {
+                    definitions: self
+                        .facts
+                        .definitions
+                        .iter()
+                        .filter(|definition| readable(definition.id()))
+                        .cloned()
+                        .collect(),
+                    implementations: self
+                        .facts
+                        .implementations
+                        .iter()
+                        .filter(|implementation| ours(implementation.id().unit()))
+                        .cloned()
+                        .collect(),
+                    partitions: Box::new([partition.clone()]),
+                },
+                scripts: self.scripts.clone(),
+                fingerprint: [0; 32],
+            };
+            if let Err(violation) = entry.check() {
+                panic!(
+                    "crate `{crate_name}`'s share of its capture breaks its invariant: {violation}"
+                );
+            }
+            entries.push(entry.sealed());
         }
-        Ok(entries)
+        entries
+    }
+}
+
+impl Partition {
+    /// List each of `unmodeled` this crate declares as unsupported: it
+    /// exists, and the facts hold no body for it.
+    pub(crate) fn mark_unsupported(&mut self, unmodeled: &BTreeSet<identity::Definition>) {
+        let mut unsupported = self.unsupported.to_vec();
+        unsupported.extend(
+            self.implementations
+                .iter()
+                .chain(
+                    self.inherent
+                        .iter()
+                        .flat_map(|domain| domain.implementations.iter()),
+                )
+                .filter(|id| unmodeled.contains(*id))
+                .cloned(),
+        );
+        unsupported.sort_unstable();
+        unsupported.dedup();
+        self.unsupported = unsupported.into_boxed_slice();
     }
 }
 
 impl Facts {
-    fn validate(&self) -> Result<()> {
+    /// Whether these facts hold together. The violation is rawr's own
+    /// wording, for a panic or a discarded stored entry.
+    fn validate(&self) -> std::result::Result<(), Box<str>> {
         if self.partitions.is_empty()
             || self
                 .partitions
                 .windows(2)
                 .any(|pair| pair[0].unit >= pair[1].unit)
         {
-            return Err(invalid(
+            return Err(violation(
                 "intrinsic unit domains are absent, unsorted or duplicated",
             ));
         }
@@ -395,7 +443,7 @@ impl Facts {
                 .windows(2)
                 .any(|pair| pair[0].id() >= pair[1].id())
         {
-            return Err(invalid("intrinsic facts are unsorted or duplicated"));
+            return Err(violation("intrinsic facts are unsorted or duplicated"));
         }
         let definitions = self
             .definitions
@@ -423,7 +471,7 @@ impl Facts {
                         .iter()
                         .any(|domain| domain.root.unit() == lookup.trait_id.unit())
                 {
-                    return Err(invalid(
+                    return Err(violation(
                         "intrinsic Deref domain has invalid trait or crate authority",
                     ));
                 }
@@ -433,7 +481,7 @@ impl Facts {
                         || domain.implementations.iter().any(|header| header.implementation.unit() != domain.root.unit()
                             || header.implementation.namespace() != identity::Namespace::Type
                             || matches!(&header.receiver,Receiver::Nominal(id) if id.namespace() != identity::Namespace::Type)) {
-                        return Err(invalid("intrinsic Deref headers differ from their exact upstream domain"));
+                        return Err(violation("intrinsic Deref headers differ from their exact upstream domain"));
                     }
                 }
             }
@@ -442,7 +490,7 @@ impl Facts {
                 .windows(2)
                 .any(|pair| pair[0].module >= pair[1].module)
             {
-                return Err(invalid(
+                return Err(violation(
                     "intrinsic prelude domains are unsorted or duplicated",
                 ));
             }
@@ -464,24 +512,27 @@ impl Facts {
                             || !ordered(&trait_.methods)
                     })
                 {
-                    return Err(invalid(
+                    return Err(violation(
                         "intrinsic prelude domain has invalid compiler authority or method names",
                     ));
                 }
             }
             if !ordered(&partition.dependencies) || !ordered(&partition.missing_dependencies) {
-                return Err(invalid(
+                return Err(violation(
                     "intrinsic dependency evidence is unsorted or duplicated",
                 ));
             }
             if !ordered(&partition.implementations)
                 || !ordered(&partition.unsupported)
-                || partition
-                    .unsupported
-                    .iter()
-                    .any(|id| partition.implementations.binary_search(id).is_err())
+                || partition.unsupported.iter().any(|id| {
+                    partition.implementations.binary_search(id).is_err()
+                        && !partition
+                            .inherent
+                            .iter()
+                            .any(|domain| domain.implementations.binary_search(id).is_ok())
+                })
             {
-                return Err(invalid(
+                return Err(violation(
                     "intrinsic trait domain or unsupported subset differs",
                 ));
             }
@@ -490,7 +541,7 @@ impl Facts {
                 .windows(2)
                 .any(|pair| pair[0].owner >= pair[1].owner)
             {
-                return Err(invalid(
+                return Err(violation(
                     "intrinsic inherent domains are unsorted or duplicated",
                 ));
             }
@@ -499,29 +550,34 @@ impl Facts {
                     || id.namespace() != identity::Namespace::Type
                     || !declared.insert(id)
                 {
-                    return Err(invalid(
+                    return Err(violation(
                         "intrinsic implementation has a different exact owning unit or is repeated",
                     ));
                 }
                 if partition.unsupported.binary_search(id).is_ok() {
                     if implementations.contains_key(id) {
-                        return Err(invalid("unsupported implementation also has a usable body"));
+                        return Err(violation(
+                            "unsupported implementation also has a usable body",
+                        ));
                     }
                     continue;
                 }
                 let implementation = implementations
                     .get(id)
-                    .ok_or_else(|| invalid("owned trait implementation is absent"))?;
+                    .ok_or_else(|| violation("owned trait implementation is absent"))?;
                 if !matches!(implementation.trait_ref(), model::Trait::Trait { .. }) {
-                    return Err(invalid("trait domain contains an inherent implementation"));
+                    return Err(violation(
+                        "trait domain contains an inherent implementation",
+                    ));
                 }
                 if implementation.key() != id.def_path_hash() {
-                    return Err(invalid("contextual application entered intrinsic facts"));
+                    return Err(violation("contextual application entered intrinsic facts"));
                 }
             }
             associations(
                 &partition.implementations,
                 &partition.associated,
+                &partition.unsupported,
                 &definitions,
                 &implementations,
             )?;
@@ -559,7 +615,7 @@ impl Facts {
                     .difference(&nominal_owners)
                     .map(|id| format!("{}:{}", id.def_path_hash(), id.namespace().as_str()))
                     .collect::<Vec<_>>();
-                return Err(invalid(format!("intrinsic inherent domains differ for {}: missing {missing:?}; extra {extra:?}",partition.unit.crate_name())));
+                return Err(violation(format!("intrinsic inherent domains differ for {}: missing {missing:?}; extra {extra:?}",partition.unit.crate_name())));
             }
             for domain in &partition.inherent {
                 if domain.owner.unit() != &partition.unit
@@ -573,7 +629,7 @@ impl Facts {
                         )
                     })
                 {
-                    return Err(invalid(
+                    return Err(violation(
                         "intrinsic inherent owner is absent or has another exact unit",
                     ));
                 }
@@ -582,16 +638,24 @@ impl Facts {
                         || id.namespace() != identity::Namespace::Type
                         || !declared.insert(id)
                     {
-                        return Err(invalid("intrinsic inherent implementation has another exact unit or is repeated"));
+                        return Err(violation("intrinsic inherent implementation has another exact unit or is repeated"));
+                    }
+                    if partition.unsupported.binary_search(id).is_ok() {
+                        if implementations.contains_key(id) {
+                            return Err(violation(
+                                "unsupported implementation also has a usable body",
+                            ));
+                        }
+                        continue;
                     }
                     let implementation = implementations
                         .get(id)
-                        .ok_or_else(|| invalid("inherent implementation is absent"))?;
+                        .ok_or_else(|| violation("inherent implementation is absent"))?;
                     if !matches!(implementation.trait_ref(), model::Trait::Inherent)
                         || !matches!(implementation.self_type(), model::Type::Definition { id, .. } if id == &domain.owner)
                         || implementation.key() != id.def_path_hash()
                     {
-                        return Err(invalid(
+                        return Err(violation(
                             "inherent implementation does not belong to its nominal domain",
                         ));
                     }
@@ -599,13 +663,14 @@ impl Facts {
                 associations(
                     &domain.implementations,
                     &domain.associated,
+                    &partition.unsupported,
                     &definitions,
                     &implementations,
                 )?;
             }
         }
         if implementations.keys().any(|id| !declared.contains(id)) {
-            return Err(invalid(
+            return Err(violation(
                 "intrinsic facts contain an undeclared implementation",
             ));
         }
@@ -613,52 +678,60 @@ impl Facts {
     }
 }
 
+/// Each link of `domain`'s implementations to its members. An unsupported
+/// implementation's links name its members, whose bodies are not read.
 fn associations(
     domain: &[identity::Definition],
     links: &[Association],
+    unsupported: &[identity::Definition],
     definitions: &BTreeMap<&identity::Definition, &model::Definition>,
     implementations: &BTreeMap<&identity::Definition, &model::Implementation>,
-) -> Result<()> {
+) -> std::result::Result<(), Box<str>> {
     if !ordered(links) {
-        return Err(invalid(
+        return Err(violation(
             "intrinsic associated links are unsorted or duplicated",
         ));
     }
     let mut actual = BTreeSet::new();
+    let mut checked = BTreeSet::new();
     for link in links {
         if domain.binary_search(&link.implementation).is_err()
             || !actual.insert((&link.implementation, &link.item))
         {
-            return Err(invalid(
+            return Err(violation(
                 "intrinsic associated link has another implementation or is repeated",
             ));
         }
+        if unsupported.binary_search(&link.implementation).is_ok() {
+            continue;
+        }
+        checked.insert((&link.implementation, &link.item));
         let definition = definitions
             .get(&link.item)
-            .ok_or_else(|| invalid("intrinsic associated item is absent"))?;
+            .ok_or_else(|| violation("intrinsic associated item is absent"))?;
         if !matches!(definition.owner(), model::Owner::Implementation(id) if id == &link.implementation)
         {
-            return Err(invalid("intrinsic associated item's exact owner differs"));
+            return Err(violation("intrinsic associated item's exact owner differs"));
         }
         let implementation = implementations
             .get(&link.implementation)
-            .ok_or_else(|| invalid("intrinsic associated implementation is absent"))?;
+            .ok_or_else(|| violation("intrinsic associated implementation is absent"))?;
         match (implementation.trait_ref(), &link.declaration) {
             (model::Trait::Trait { id, .. }, Some(declaration)) => {
                 let declaration = definitions
                     .get(declaration)
-                    .ok_or_else(|| invalid("intrinsic associated declaration is absent"))?;
+                    .ok_or_else(|| violation("intrinsic associated declaration is absent"))?;
                 if !matches!(declaration.owner(), model::Owner::Definition(owner) if owner == id)
                     || declaration.id().namespace() != link.item.namespace()
                 {
-                    return Err(invalid(
+                    return Err(violation(
                         "intrinsic associated declaration has another trait or namespace",
                     ));
                 }
             }
             (model::Trait::Inherent, None) => {}
             _ => {
-                return Err(invalid(
+                return Err(violation(
                     "intrinsic associated declaration correspondence differs",
                 ))
             }
@@ -673,8 +746,8 @@ fn associations(
                 .map(|item| (implementation.id(), item))
         })
         .collect::<BTreeSet<_>>();
-    if actual != expected {
-        return Err(invalid(
+    if checked != expected {
+        return Err(violation(
             "intrinsic associated domain does not match the implementation facts",
         ));
     }
@@ -685,9 +758,6 @@ fn ordered<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
-fn invalid(reason: impl Into<Box<str>>) -> Error {
-    Error::Extraction {
-        code: "intrinsic-inventory",
-        reason: reason.into(),
-    }
+fn violation(reason: impl Into<Box<str>>) -> Box<str> {
+    reason.into()
 }

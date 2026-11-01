@@ -160,8 +160,9 @@ pub enum Error {
     #[error("input allocation account has already refused work")]
     InputAccountRefused,
 
-    /// A compiler sidecar could not be transformed into canonical API evidence.
-    #[error("Rust API extraction rejected `{code}`: {reason}")]
+    /// rawr could not read what its rustc driver wrote: a bug in rawr,
+    /// never in the program, so it says so as rustc's own ICEs do.
+    #[error("internal error: rawr misread rustc's output (`{code}`): {reason}")]
     Extraction {
         /// Stable machine-readable rejection code.
         code: &'static str,

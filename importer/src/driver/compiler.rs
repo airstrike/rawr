@@ -82,7 +82,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // whose associated type a selected signature projects from a parameter.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 35;
+const PROTOCOL_SCHEMA: u32 = 36;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -4049,7 +4049,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             mir::UnevaluatedConst::new(definition, arguments),
             constant_ty,
         );
-        // A `bool` or unsigned constant is its value, typed.
+        // A `bool` or integer constant is its value, typed: zerocopy's
+        // derives name each field by an `i128` constant.
         if constant_ty != self.tcx.types.usize {
             let value = match constant_ty.kind() {
                 ty::Bool => unevaluated
@@ -4058,6 +4059,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 ty::Uint(_) => unevaluated
                     .try_eval_bits(self.tcx, typing_env)
                     .map(|value| value.to_string()),
+                ty::Int(_) => unevaluated
+                    .try_eval_scalar_int(self.tcx, typing_env)
+                    .map(|value| value.to_int(value.size()).to_string()),
                 _ => return self.unknown_constant("anonymous-constant:literal-type"),
             };
             let Some(value) = value else {

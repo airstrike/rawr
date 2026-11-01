@@ -247,15 +247,11 @@ fn acquire(
         let request = request(&closure.dependencies)?;
         let acquired =
             inventory::Acquired::capture(request, &native, limits).map_err(Error::other)?;
-        entries = acquired
-            .entries(|unit| keys.get(unit).map(|(key, ..)| *key))
-            .map_err(Error::other)?;
+        entries = acquired.entries(|unit| keys.get(unit).map(|(key, ..)| *key));
         for entry in &entries {
             let (unit, witness) = entry.native();
-            let Some((_, expected, directory, _)) = keys.get(unit) else {
-                complete = false;
-                continue;
-            };
+            // `entries` keyed every entry from `keys`.
+            let (_, expected, directory, _) = &keys[unit];
             // The nightly saw the inputs the project's build sees, or the
             // entry stays local to this run.
             let agrees = expected == witness;

@@ -354,9 +354,7 @@ impl Settlement {
         packages: &[Box<str>],
         entry: &crate::applicability::inventory::Entry,
     ) {
-        let Ok(entry) = entry.clone_rekeyed(*key) else {
-            return;
-        };
+        let entry = entry.clone_rekeyed(*key);
         self.rawr.get_or_insert_with(|| rawr.to_path_buf());
         self.entries.push(Settled::Inventory {
             home: home.to_path_buf(),

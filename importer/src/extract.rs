@@ -965,29 +965,26 @@ impl Publication {
         let mut partitions = Vec::new();
         allocation.reserve(&mut partitions, document.fragments.len())?;
         for fragment in &document.fragments {
-            let manifest = fragment.inventory.as_ref().ok_or_else(|| {
-                extraction(
-                    "intrinsic-inventory",
-                    "a demand-selected fragment is not a complete inventory",
-                )
-            })?;
-            if manifest.schema != 1 || manifest.owner != fragment.handshake.artifact.stable_crate_id
-            {
-                return Err(extraction(
-                    "intrinsic-inventory",
-                    "completion manifest differs from its authenticated fragment",
-                ));
-            }
+            // An inventory capture asks the driver for each crate's whole
+            // domain, which it gives for the crate it compiled.
+            let manifest = fragment
+                .inventory
+                .as_ref()
+                .expect("an inventory capture's fragment carries its crate's inventory");
+            assert!(
+                manifest.schema == 1
+                    && manifest.owner == fragment.handshake.artifact.stable_crate_id,
+                "crate `{}`'s inventory is another crate's",
+                fragment.handshake.crate_name
+            );
             let key = CompilerKey {
                 crate_name: fragment.handshake.crate_name.as_str().into(),
                 stable_crate_id: manifest.owner.as_str().into(),
             };
-            let unit = catalog.units.get(&key).ok_or_else(|| {
-                extraction(
-                    "intrinsic-inventory",
-                    "selected exact compiler unit is absent",
-                )
-            })?;
+            let unit = catalog
+                .units
+                .get(&key)
+                .expect("the catalog holds each fragment's own crate");
             allocation.unit(unit)?;
             let mut inherent = Vec::new();
             allocation.reserve(&mut inherent, manifest.inherent.len())?;
@@ -1031,12 +1028,10 @@ impl Publication {
                                 .as_str()
                                 .into(),
                         };
-                        let dependency = catalog.units.get(&key).ok_or_else(|| {
-                            extraction(
-                                "intrinsic-inventory",
-                                "dependency's canonical unit is absent",
-                            )
-                        })?;
+                        let dependency = catalog
+                            .units
+                            .get(&key)
+                            .expect("the catalog holds each fragment's own crate");
                         allocation.unit(dependency)?;
                         dependencies.push(dependency.clone());
                     }
@@ -1122,12 +1117,7 @@ impl Publication {
                 native_unit: allocation.owned(&fragment.handshake.unit_key)?,
                 native_inputs: input
                     .partition(&fragment.handshake.unit_key)
-                    .ok_or_else(|| {
-                        extraction(
-                            "intrinsic-inventory",
-                            "complete native input witness is absent",
-                        )
-                    })?,
+                    .expect("the input baseline witnesses each crate it captured"),
                 compiler: allocation.owned(&fragment.handshake.compiler_commit)?,
                 target: allocation.owned(&fragment.handshake.selected_target)?,
                 crate_hash: allocation.owned(&fragment.handshake.artifact.crate_hash)?,
@@ -1159,14 +1149,12 @@ impl Publication {
         partitions.sort_unstable_by(|left, right| left.unit.cmp(&right.unit));
         let candidate =
             Candidate::from_fragments(document.fragments, &catalog, limits, &mut allocation)?;
+        for partition in &mut partitions {
+            partition.mark_unsupported(&candidate.unmodeled);
+        }
         let (items, bytes) =
             api::intrinsic_usage(candidate.definitions.values(), &candidate.implementations)
-                .ok_or_else(|| {
-                    extraction(
-                        "intrinsic-inventory",
-                        "full intrinsic fact retention overflow",
-                    )
-                })?;
+                .expect("facts held in memory have a size that fits in memory");
         allocation.items(items)?;
         allocation.bytes(bytes)?;
         // An inventory is its crates' facts and each export's target, which
@@ -1196,7 +1184,10 @@ impl Publication {
         };
         // The inputs the capture read are the ones the build still sees.
         input.prove(limits)?;
-        inventory::Acquired::authenticate(exports.into_boxed_slice(), facts)
+        Ok(inventory::Acquired::authenticate(
+            exports.into_boxed_slice(),
+            facts,
+        ))
     }
 
     #[allow(
@@ -1441,6 +1432,10 @@ struct Candidate {
     definitions: BTreeMap<identity::Definition, model::Definition>,
     rejected: BTreeMap<identity::Definition, Rejected>,
     implementations: Vec<model::Implementation>,
+    /// Implementations whose shape the extractor cannot model, such as one
+    /// with a constant of a type it does not read. Each is unavailable by
+    /// itself, and its crate's inventory lists it as unsupported.
+    unmodeled: BTreeSet<identity::Definition>,
     scalar_predicate_proofs: Vec<model::ScalarPredicateProof>,
     implementation_index: BTreeMap<identity::Definition, Vec<usize>>,
     exports: BTreeMap<Key, Export>,
@@ -4001,6 +3996,7 @@ impl Candidate {
         let mut spellings = BTreeMap::new();
         let mut rejected = BTreeMap::new();
         let mut implementations = Vec::new();
+        let mut unmodeled = BTreeSet::new();
         let mut scalar_predicate_proofs = Vec::new();
         let mut exports = BTreeMap::new();
         let mut anonymous = BTreeSet::new();
@@ -4251,7 +4247,10 @@ impl Candidate {
                 // implementation of either stay available: one `impl Debug
                 // for f16` with an unknown constant must not take `Debug`
                 // and every type that implements it with it.
+                // Its crate's inventory lists it as unsupported, so no proof
+                // reads its trait's domain as complete.
                 let _ = (&relevance, &implementation_span);
+                let id = raw.id.clone();
                 match implementation(raw, catalog, limits, allocation) {
                     Ok(implementation) => {
                         allocation.reserve(&mut implementations, 1)?;
@@ -4261,7 +4260,10 @@ impl Candidate {
                         ShapeFailure::ExternalAuthorityUnavailable { .. }
                         | ShapeFailure::Unknown(_)
                         | ShapeFailure::UnnameablePrivate,
-                    ) => {}
+                    ) => {
+                        allocation.items(1)?;
+                        unmodeled.insert(catalog.id_bounded(id, limits, allocation)?);
+                    }
                     Err(ShapeFailure::Fatal(error)) => return Err(error),
                 }
             }
@@ -4342,6 +4344,7 @@ impl Candidate {
             definitions,
             rejected,
             implementations,
+            unmodeled,
             scalar_predicate_proofs,
             implementation_index,
             exports,
