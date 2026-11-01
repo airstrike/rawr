@@ -963,6 +963,22 @@ fn a_closure_takes_the_output_a_native_opaque_future_binds() {
     assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
 
+/// fount's loading program: iced's `Task::future(impl Future<Output = T>)`
+/// of an async block that awaits a crate's `async fn`, then a closure that
+/// takes the block's output and matches on it. The output is a `Result`
+/// holding the crate's own error, so it crosses as Rust's own type, made on
+/// the thread that holds the program's values (#652). The block also calls
+/// `std::fs::read` by its full path (#659). The output is `cargo run`'s.
+#[test]
+fn a_closure_takes_the_output_of_an_async_block_a_future_parameter_binds() {
+    let (rawr, cargo) = both_printed("crossing-loaded", "loaded.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(Loaded(7))\nSome(Failed(\"no font named \\\"\\\"\"))\nSome(Read(true))"
+    );
+}
+
 /// iced's gallery (#570): `card(image, preview, ..).boxed()` in a `map`
 /// closure over the program's own native images, where `card` is written
 /// after the view and borrows the image and an `Option<&String>` an `if`

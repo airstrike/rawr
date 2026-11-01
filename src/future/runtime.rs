@@ -114,6 +114,90 @@ impl Future {
             poller: Poller::from(&self),
         }
     }
+
+    /// Run this future as a std future of `T`, which `finish` makes from
+    /// its Rawr output on the owner thread, where the program's imported
+    /// values are stored: where native code takes a future of a type of
+    /// its own, as iced's `Task::future(impl Future<Output = T>)` does.
+    #[must_use]
+    pub fn into_native<T, F>(self, finish: F) -> Converted<T, F>
+    where
+        T: MaybeSend + 'static,
+        F: FnOnce(Dynamic) -> T + MaybeSend + 'static,
+    {
+        Converted {
+            script: self.into_script(),
+            finish: Some(finish),
+            output: None,
+        }
+    }
+}
+
+/// A Rawr future as a [`std::future::Future`] of the native value its
+/// output makes ([`Future::into_native`]).
+pub struct Converted<T, F> {
+    script: Script,
+    finish: Option<F>,
+    output: Option<Made<T>>,
+}
+
+/// The value a [`Converted`] gives, once the owner thread made it, and who
+/// waits for it.
+type Made<T> = Arc<Mutex<(Option<T>, Option<Waker>)>>;
+
+// Nothing is pinned in place: the script is polled through its own handle.
+impl<T, F> Unpin for Converted<T, F> {}
+
+impl<T, F> std::future::Future for Converted<T, F>
+where
+    T: MaybeSend + 'static,
+    F: FnOnce(Dynamic) -> T + MaybeSend + 'static,
+{
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> std::task::Poll<T> {
+        use std::task::Poll::{Pending, Ready};
+        let this = self.get_mut();
+        if let Some(output) = &this.output {
+            let mut state = lock(output);
+            return match state.0.take() {
+                Some(value) => Ready(value),
+                None => {
+                    state.1 = Some(cx.waker().clone());
+                    Pending
+                }
+            };
+        }
+        let value = match this.script.poller.poll(cx) {
+            Pending => return Pending,
+            Ready(Ok(value)) => value,
+            Ready(Err(error)) => panic!("{}", message(&error)),
+        };
+        let Some(finish) = this.finish.take() else {
+            panic!("rawr: a future was polled after it ended");
+        };
+        if owns() {
+            return Ready(finish(value));
+        }
+        let output = Arc::new(Mutex::new((None, Some(cx.waker().clone()))));
+        let shared = Arc::downgrade(&output);
+        this.output = Some(output);
+        on_owner(move || {
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let made = finish(value);
+            let waker = {
+                let mut state = lock(&shared);
+                state.0 = Some(made);
+                state.1.take()
+            };
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        });
+        Pending
+    }
 }
 
 /// A Rawr future as a [`std::future::Future`]. It is `Send` when the crate
