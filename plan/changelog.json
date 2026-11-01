@@ -4,15 +4,20 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A program's own function returning `impl Sipper` or `impl Straw`, as download_progress, gallery and websocket have, no longer crashes `rawr check`. Its return type is an ordinary `impl Trait` type.","issues":[561]},
-      {"text":"A crate call whose argument ends a line, as table's `text::success` does, no longer crashes `rawr check`, and source positions sent to the native build are no longer one character off. table now passes.","issues":[562]},
-      {"text":"A crate call whose one-shot closure takes a reference, such as canvas `Cache::draw(renderer, size, |frame| ..)`, no longer fails with \"surface instance arguments do not match the selected declaration\".","issues":[567]},
-      {"text":"Fixed undefined behaviour that Miri found in rawr's call path: a call that swaps its first argument froze the copy its callee wrote through. The debugger also reads a caller's bindings only through what the call site lends it, and a binding a running call holds reads as borrowed.","issues":[540]},
-      {"text":"While a debugger is attached, native calls no longer copy their arguments into the call stack.","issues":[513]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.59",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A program's own function returning `impl Sipper` or `impl Straw`, as download_progress, gallery and websocket have, no longer crashes `rawr check`. Its return type is an ordinary `impl Trait` type.","issues":[561]},
+        {"text":"A crate call whose argument ends a line, as table's `text::success` does, no longer crashes `rawr check`, and source positions sent to the native build are no longer one character off. table now passes.","issues":[562]},
+        {"text":"A crate call whose one-shot closure takes a reference, such as canvas `Cache::draw(renderer, size, |frame| ..)`, no longer fails with \"surface instance arguments do not match the selected declaration\".","issues":[567]},
+        {"text":"Fixed undefined behaviour that Miri found in rawr's call path: a call that swaps its first argument froze the copy its callee wrote through. The debugger also reads a caller's bindings only through what the call site lends it, and a binding a running call holds reads as borrowed.","issues":[540]},
+        {"text":"While a debugger is attached, native calls no longer copy their arguments into the call stack.","issues":[513]}
+      ]
+    },
     {
       "version": "0.3.58",
       "date": "2026-11-01",
