@@ -854,9 +854,12 @@ mod tests {
 
         fs::write(toolchain_root.join("lib/rustlib/components"), b"changed")
             .expect("the toolchain state fixture changes");
+        // A changed installation makes the toolchain entry stale for its
+        // consumer, so the consumer rebuilds it rather than failing (#609).
+        let action = retained.receipt().action();
         assert!(matches!(
             evaluator.revalidate_read_set(&proof),
-            Err(node::Error::Codec("toolchain installation state changed"))
+            Err(node::Error::StaleReadSet { action: stale }) if stale == action
         ));
         assert_eq!(snapshot(store.root()), sealed_store);
         fs::remove_dir_all(root).expect("the toolchain-read-set fixture retires");
