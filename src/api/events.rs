@@ -600,4 +600,18 @@ impl Engine {
         self.debugger_wake = Some(wake);
         self
     }
+    /// _(debugging)_ Run the debugger callback at each step whose position
+    /// is in `breaks`, with
+    /// [`DebuggerEvent::Break`][crate::debugger::DebuggerEvent::Break].
+    /// Another thread may change the positions while the program runs.
+    /// Exported under the `debugging` feature only.
+    #[cfg(feature = "debugging")]
+    #[inline(always)]
+    pub fn break_debugger_at(
+        &mut self,
+        breaks: std::sync::Arc<crate::debugger::BreakPositions>,
+    ) -> &mut Self {
+        self.debugger_breaks = Some(breaks);
+        self
+    }
 }

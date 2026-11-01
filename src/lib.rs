@@ -245,7 +245,7 @@ pub use value::Value;
 #[cfg(feature = "debugging")]
 pub mod debugger {
     pub use super::eval::CallStackFrame;
-    pub use super::eval::{BreakPoint, Debugger, DebuggerCommand, DebuggerEvent};
+    pub use super::eval::{BreakPoint, BreakPositions, Debugger, DebuggerCommand, DebuggerEvent};
 }
 
 /// _(internals)_ An identifier in Rawr.

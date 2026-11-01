@@ -2593,6 +2593,10 @@ fn locate(program: &Program) {
     {
         let located = std::sync::Arc::clone(located);
         inspector.locate_with(move |position| located.line(position));
+        // Its breakpoints move to this generation's lines (#489).
+        if let Some(ast) = &program.ast {
+            inspector.compiled(ast);
+        }
     }
 }
 

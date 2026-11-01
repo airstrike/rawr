@@ -18,8 +18,8 @@ pub use data_check::calc_data_sizes;
 pub use debugger::CallStackFrame;
 #[cfg(feature = "debugging")]
 pub use debugger::{
-    BreakPoint, Debugger, DebuggerCommand, DebuggerEvent, DebuggerStatus, OnDebuggerCallback,
-    OnDebuggingInit,
+    BreakPoint, BreakPositions, Debugger, DebuggerCommand, DebuggerEvent, DebuggerStatus,
+    OnDebuggerCallback, OnDebuggingInit,
 };
 pub use eval_context::{EvalContext, EvalContextFrameGuard};
 

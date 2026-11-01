@@ -106,6 +106,41 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         "{read}"
     );
 
+    // A breakpoint in the function the native loop calls pauses the loop
+    // there (#489). Paused, the same values read again.
+    let main_text = main.to_string_lossy().into_owned();
+    let set = ask(
+        &socket,
+        &json!({ "op": "break", "file": main_text, "line": 18, "timeout_ms": 5000 }),
+    );
+    assert_eq!(set["paused"]["line"], 18, "{set}");
+    assert_eq!(
+        set["paused"]["function"], "inspect_dependency::update",
+        "{set}"
+    );
+    let first = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
+    let again = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
+    assert_eq!(first["bindings"], again["bindings"], "{again}");
+    let step = ask(
+        &socket,
+        &json!({ "op": "step", "kind": "over", "timeout_ms": 5000 }),
+    );
+    assert_eq!(step["paused"]["line"], 19, "{step}");
+    // Past the function's end, the step pauses at the loop's next call.
+    let step = ask(
+        &socket,
+        &json!({ "op": "step", "kind": "over", "timeout_ms": 5000 }),
+    );
+    assert_eq!(step["paused"]["line"], 13, "{step}");
+    let next = ask(&socket, &json!({ "name": "tick", "timeout_ms": 5000 }));
+    assert_ne!(next["bindings"], first["bindings"], "{next}");
+    let continued = ask(&socket, &json!({ "op": "continue", "timeout_ms": 5000 }));
+    assert_eq!(continued["paused"]["line"], 18, "{continued}");
+    let cleared = ask(&socket, &json!({ "op": "clear" }));
+    assert_eq!(cleared["cleared"], 1, "{cleared}");
+    let continued = ask(&socket, &json!({ "op": "continue", "timeout_ms": 300 }));
+    assert!(continued["paused"].is_null(), "{continued}");
+
     fs::write(&stop, "").unwrap();
     let _ = fs::remove_dir_all(&directory);
 }

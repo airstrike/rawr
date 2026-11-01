@@ -86,6 +86,43 @@ pub enum DebuggerEvent<'a> {
     End,
     /// Another thread woke the debugger ([`Engine::wake_debugger_on`]).
     Wake,
+    /// A step at one of the engine's break positions
+    /// ([`Engine::break_debugger_at`]).
+    Break,
+}
+
+/// Positions in a program where the debugger callback runs, which another
+/// thread may change while the program runs ([`Engine::break_debugger_at`]).
+/// While it holds none, a step reads one flag.
+#[derive(Debug, Default)]
+pub struct BreakPositions {
+    any: std::sync::atomic::AtomicBool,
+    positions: std::sync::RwLock<std::collections::HashSet<Position>>,
+}
+
+impl BreakPositions {
+    /// Break at `positions` from now on, in place of the ones before.
+    pub fn set(&self, positions: impl IntoIterator<Item = Position>) {
+        let mut held = self
+            .positions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.clear();
+        held.extend(positions);
+        self.any
+            .store(!held.is_empty(), std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether a step at `position` breaks.
+    #[must_use]
+    pub fn contains(&self, position: Position) -> bool {
+        self.any.load(std::sync::atomic::Ordering::Acquire)
+            && self
+                .positions
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&position)
+    }
 }
 
 /// A break-point for debugging.
@@ -459,6 +496,7 @@ impl Engine {
                     Some(e) => e,
                     None => match dbg.is_break_point(global.source(), node) {
                         Some(bp) => DebuggerEvent::BreakPoint(bp),
+                        None if self.is_debugger_break(node.position()) => DebuggerEvent::Break,
                         None if self.is_debugger_woken() => DebuggerEvent::Wake,
                         None => return Ok(None),
                     },

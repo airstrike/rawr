@@ -208,6 +208,11 @@ pub struct Engine {
     /// ([`DebuggerEvent::Wake`][crate::debugger::DebuggerEvent::Wake]).
     #[cfg(feature = "debugging")]
     pub(crate) debugger_wake: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+
+    /// The positions where the debugger callback runs
+    /// ([`DebuggerEvent::Break`][crate::debugger::DebuggerEvent::Break]).
+    #[cfg(feature = "debugging")]
+    pub(crate) debugger_breaks: Option<std::sync::Arc<crate::eval::BreakPositions>>,
 }
 
 impl fmt::Debug for Engine {
@@ -254,6 +259,8 @@ impl fmt::Debug for Engine {
         f.field("debugger_interface", &self.debugger_interface.is_some());
         #[cfg(feature = "debugging")]
         f.field("debugger_wake", &self.debugger_wake.is_some());
+        #[cfg(feature = "debugging")]
+        f.field("debugger_breaks", &self.debugger_breaks.is_some());
 
         f.finish()
     }
@@ -339,6 +346,8 @@ impl Engine {
         debugger_interface: None,
         #[cfg(feature = "debugging")]
         debugger_wake: None,
+        #[cfg(feature = "debugging")]
+        debugger_breaks: None,
     };
 
     /// Create a new [`Engine`].
@@ -481,5 +490,16 @@ impl Engine {
         self.debugger_wake
             .as_ref()
             .is_some_and(|wake| wake.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// Whether the debugger breaks at `position`
+    /// ([`Engine::break_debugger_at`]).
+    #[cfg(feature = "debugging")]
+    #[inline(always)]
+    #[must_use]
+    pub(crate) fn is_debugger_break(&self, position: crate::Position) -> bool {
+        self.debugger_breaks
+            .as_ref()
+            .is_some_and(|breaks| breaks.contains(position))
     }
 }
