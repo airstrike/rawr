@@ -1229,8 +1229,10 @@
     {"issue":554,"title":"runner::account native_account tests fail with ForeignIdentity on main","state":"closed","category":"Health"},
     {"issue":555,"title":"An opaque type's binding that names a closure parameter can't be declared","state":"open","category":"No glue (D593)"},
     {"issue":556,"title":"An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)"},
-    {"issue":557,"title":"Delete the native account's counters and its account reports","state":"open","category":"Importer"},
-    {"issue":558,"title":"Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health"}
+    {"issue":557,"title":"Delete the native account's counters and its account reports","state":"closed","category":"Importer"},
+    {"issue":558,"title":"Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health"},
+    {"issue":559,"title":"Delete the item and byte figures host bindings pass to ImportAllocation","state":"open","category":"Importer"},
+    {"issue":560,"title":"Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer"}
   ],
   "groups": [
     {

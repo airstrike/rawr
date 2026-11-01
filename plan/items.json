@@ -557,7 +557,9 @@
     {"t":"T554","issue":554,"title":"T554: runner::account native_account tests fail with ForeignIdentity on main","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D670"],"commit":"68d7473c2","release":null},
     {"t":"T555","issue":555,"title":"T555: An opaque type's binding that names a closure parameter can't be declared","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T556","issue":556,"title":"T556: An opaque type's members and the function that gives it convert with different arguments","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T557","issue":557,"title":"T557: Delete the native account's counters and its account reports","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
-    {"t":"T558","issue":558,"title":"T558: Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T557","issue":557,"title":"T557: Delete the native account's counters and its account reports","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":"25ac22a69","release":null},
+    {"t":"T558","issue":558,"title":"T558: Compile the rust-import-driver-tests feature in hooks or CI","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T559","issue":559,"title":"T559: Delete the item and byte figures host bindings pass to ImportAllocation","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
+    {"t":"T560","issue":560,"title":"T560: Decide whether the importer's test-only metrics scalars stay","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null}
   ]
 }
