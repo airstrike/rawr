@@ -585,7 +585,11 @@ fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
 /// whose program sends its own messages. The crate's `map` gives `Map<Self,
 /// F, Message>`, naming the closure's type, and the runner writes the
 /// closure as `Box<dyn Fn(Curve) -> Message>` (T417). The runner's own
-/// bindings declare `map` as the check's do (T423). The output is `cargo
+/// bindings declare `map` as the check's do (T423). `column!` boxes the
+/// `Map` beside the controls through `impl<W, A, B, F, Theme, Renderer>
+/// Widget<B, Theme, Renderer> for Map<W, F, A>`, whose type names its
+/// parameters in another order than the impl declares them, and whose `F`
+/// is the boxed closure the receiver holds (T425). The output is `cargo
 /// run`'s.
 #[test]
 fn a_crate_method_whose_output_names_its_closure_type_runs() {
@@ -593,7 +597,7 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 message Curve(Drawn(\"Increment\"))")
-            && rawr.contains("last view pad 0 map canvas[primary curves 4#1]"),
+            && rawr.ends_with("last view pad 0 map canvas[primary curves 4#1] pad 0 4 curves@16"),
         "{rawr}"
     );
 }

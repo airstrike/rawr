@@ -12603,17 +12603,28 @@ fn render_container_path(
     }
     let partition = partition_generics(signature, substitutions, constants, container_parameters)?;
     // An impl that fixes some of its type's arguments, as pane_grid's
-    // `Content<'a, Message, Void, W, ..>`: that instance, its own
-    // parameters given their substitutions.
+    // `Content<'a, Message, Void, W, ..>`, or names its parameters in
+    // another order, as iced's `Map<W, F, A>` of `impl<W, A, B, F, ..>`:
+    // that instance, its own parameters given their substitutions. A
+    // callable one, as `Map`'s `F: Fn(A) -> B`, is the receiver's, which
+    // rustc infers, as a turbofish writes it.
     if let Some(instance) = signature.instance() {
+        let mut given = partition.container_types.iter();
         let mut types = partition
             .container_parameters
             .iter()
-            .filter(|parameter| {
-                parameter.kind() == crate::classify::representability::signature::Kind::Type
+            .filter_map(|parameter| {
+                use crate::classify::representability::signature::Kind;
+                match parameter.kind() {
+                    Kind::Type => given.next().map(|ty| (parameter.index(), ty)),
+                    Kind::Callable | Kind::Future => {
+                        Some((parameter.index(), &convert::Type::Inferred))
+                    }
+                    Kind::Constant => None,
+                }
             })
-            .map(|parameter| parameter.index())
-            .zip(partition.container_types.iter());
+            .collect::<Vec<_>>()
+            .into_iter();
         let substituted =
             instance_substituted(instance, &mut types).ok_or(request::Error::Drift {
                 field: "an impl's fixed instance names a parameter it does not declare",
@@ -15591,5 +15602,73 @@ mod tests {
             render_item_turbofish(&signature, &substitutions, &constants, 4, &mut Vec::new(),)
                 .is_err()
         );
+    }
+
+    /// An impl whose type names its parameters in another order than it
+    /// declares them, as iced's `impl<W, A, B, F, ..> Widget<B, ..> for
+    /// Map<W, F, A>`, is reached at its own instance, each parameter where
+    /// the type names it. A callable one stands as `_`, which rustc infers
+    /// from what the call takes (T425).
+    #[test]
+    fn a_reordered_instance_places_each_parameter_where_its_type_names_it() {
+        let map = crate::surface::identity::Definition::authenticated([7; 32]);
+        super::TYPE_PATHS.with_borrow_mut(|paths| {
+            paths.insert(*map.as_bytes(), "gallery_ui::Map".to_owned());
+        });
+        let instance = Type::Nominal {
+            definition: map,
+            arguments: Box::from([Type::Parameter(0), Type::Parameter(3), Type::Parameter(1)]),
+        };
+        let typed = Signature::new(
+            Box::from([
+                Parameter::new(0, "W".into(), Kind::Type),
+                Parameter::new(1, "A".into(), Kind::Type),
+                Parameter::new(3, "F".into(), Kind::Type),
+            ]),
+            Box::default(),
+            Type::Unit,
+        )
+        .with_instance(Some(instance.clone()));
+        let substitutions = Box::from([
+            Type::Builtin(Builtin::Bool),
+            Type::Builtin(Builtin::I64),
+            Type::Builtin(Builtin::String),
+        ]);
+        let mut ty = Vec::new();
+        render_container_path(
+            "gallery_ui::Map",
+            &typed,
+            &substitutions,
+            &[],
+            3,
+            true,
+            &mut ty,
+        )
+        .expect("a reordered instance renders");
+        assert_eq!(ty, b"gallery_ui::Map<bool, String, i64>");
+
+        let callable = Signature::new(
+            Box::from([
+                Parameter::new(0, "W".into(), Kind::Type),
+                Parameter::new(1, "A".into(), Kind::Type),
+                Parameter::new(3, "F".into(), Kind::Callable),
+            ]),
+            Box::default(),
+            Type::Unit,
+        )
+        .with_instance(Some(instance));
+        let mut expression = Vec::new();
+        render_container_path(
+            "gallery_ui::Map",
+            &callable,
+            &substitutions[..2],
+            &[],
+            3,
+            false,
+            &mut expression,
+        )
+        .expect("a callable parameter of an instance renders");
+        assert_eq!(expression, b"<gallery_ui::Map<bool, _, i64>>");
+        super::TYPE_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
     }
 }
