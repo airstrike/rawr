@@ -325,6 +325,53 @@ impl Evidence {
         Ok(directories.into_boxed_slice())
     }
 
+    /// The canonical paths of every artifact of the units `unit_key`
+    /// reaches through its dependencies, its own excluded: the crates whose
+    /// traits and impls its API can name (#672).
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn closure_artifacts(
+        &self,
+        graph: &cargo::unit::BuildGraph,
+        unit_key: &str,
+        allocation: &mut crate::extract::Allocation,
+    ) -> Result<Box<[Box<str>]>> {
+        let mut seen = std::collections::BTreeSet::from([unit_key]);
+        let mut queue = vec![unit_key];
+        let mut paths = Vec::new();
+        while let Some(key) = queue.pop() {
+            for output in graph
+                .artifacts()
+                .iter()
+                .filter(|output| output.semantic_key() == key)
+            {
+                for dependency in output.dependency_keys() {
+                    if seen.insert(dependency) {
+                        queue.push(dependency);
+                    }
+                }
+                if key == unit_key {
+                    continue;
+                }
+                for artifact in &self.artifacts {
+                    if compare_artifact(output, artifact) != Ordering::Equal {
+                        continue;
+                    }
+                    for path in &artifact.outputs {
+                        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                        let Some(text) = path.to_str() else {
+                            continue;
+                        };
+                        allocation.reserve(&mut paths, 1)?;
+                        paths.push(allocation.owned(text)?);
+                    }
+                }
+            }
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths.into_boxed_slice())
+    }
+
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn selected_artifacts(
         &self,
@@ -889,6 +936,16 @@ impl Build {
         allocation: &mut crate::extract::Allocation,
     ) -> Result<Box<[PathBuf]>> {
         self.evidence.probe_directories(graph, allocation)
+    }
+
+    #[cfg(feature = "rustc-driver")]
+    pub(crate) fn closure_artifacts(
+        &self,
+        graph: &cargo::unit::BuildGraph,
+        unit_key: &str,
+        allocation: &mut crate::extract::Allocation,
+    ) -> Result<Box<[Box<str>]>> {
+        self.evidence.closure_artifacts(graph, unit_key, allocation)
     }
 
     #[cfg(feature = "rustc-driver")]

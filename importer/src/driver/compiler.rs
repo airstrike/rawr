@@ -96,6 +96,10 @@ pub(super) struct Invocation {
     pub(super) demand: Vec<Vec<String>>,
     pub(super) unit_key: String,
     pub(super) dependencies: Vec<String>,
+    /// The artifacts of every crate the unit reaches through its
+    /// dependencies: what its API can name, whatever else the session
+    /// loaded (#672).
+    pub(super) closure: Vec<String>,
     pub(super) target: String,
     pub(super) target_kind: String,
     pub(super) target_kinds: Vec<String>,
@@ -178,6 +182,10 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
     /// The selected crate's public aliases that pass their own parameters
     /// on to a type, by that type (`passing_alias`).
     passing_aliases: HashMap<DefId, DefId>,
+    /// The crates the selected crate reaches, with the sysroot's, found
+    /// once (`reaches`): a member's traits and impls come from these alone,
+    /// so the crate's table is the crate's whatever else is selected.
+    scope: Option<std::collections::BTreeSet<CrateNum>>,
     budget: &'budget mut Budget,
     diagnostic: &'diagnostic mut Option<Diagnostic>,
 }
@@ -886,11 +894,6 @@ fn extract_all(
         _ => None,
     };
     let mut used = Vec::new();
-    let session = engine::session_key(
-        invocations
-            .iter()
-            .map(|invocation| invocation.unit_key.as_str()),
-    );
     // Each crate is extracted and published before the next, so each owns
     // its bytes alone: an intrinsic inventory reads every crate of a
     // closure as large as iced's in one run. The counts add up for the
@@ -918,6 +921,10 @@ fn extract_all(
                 invocation.crate_name.as_str(),
             )?;
         }
+        // A crate's units are the crate's alone: its members see only the
+        // traits of the crates it reaches (`Builder::reaches`), so its table
+        // replays in any program that selects it (#672).
+        let session = engine::session_key([invocation.unit_key.as_str()]);
         let crate_hash = budget.formatted(format_args!("{:?}", tcx.crate_hash(selected)))?;
         let stable_crate_id =
             budget.formatted(format_args!("{:016x}", tcx.stable_crate_id(selected)))?;
@@ -1265,6 +1272,7 @@ fn handshake(
         demand: _,
         unit_key,
         dependencies,
+        closure: _,
         target,
         target_kind,
         target_kinds,
@@ -2272,6 +2280,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut implementations = Vec::new();
             for impl_id in self.tcx.all_impls(obligation.trait_id) {
                 self.budget.edge(1)?;
+                if !self.reaches(impl_id.krate)? {
+                    continue;
+                }
                 let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
                     continue;
                 };
@@ -2298,6 +2309,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 return Ok(());
             }
             self.budget.edge(1)?;
+            // The selected crate's own relations: another selected crate's
+            // impls are its own table's (#672).
+            if !self.reaches(impl_id.krate)? {
+                continue;
+            }
             implementations
                 .try_reserve(1)
                 .map_err(|error| format!("relation implementation allocation failed: {error}"))?;
@@ -5884,6 +5900,7 @@ mod tests {
             demand: Vec::new(),
             unit_key: "unit".to_owned(),
             dependencies: Vec::new(),
+            closure: Vec::new(),
             target: "src/lib.rs".to_owned(),
             target_kind: "lib".to_owned(),
             target_kinds: Vec::new(),
