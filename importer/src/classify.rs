@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 84;
+const CLASSIFIER_VERSION: u32 = 85;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2404,6 +2404,48 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 continue;
             }
             let mut cases = Vec::new();
+            // `P: Into<T>` of a generic `T`, as iced's `center(impl
+            // Into<Element<'a, Message, Theme, Renderer>>)`: core's `impl<T,
+            // U: From<T>> Into<U> for T` makes each crate impl of `From<S>`
+            // for a crate type a case, `S` the self type that gives it, as
+            // `From<Text<'a, Theme, Renderer>> for Element<'a, Message,
+            // Theme, Renderer>` ties the text's theme and renderer to the
+            // element's. An `S` that is a bare parameter fits every argument
+            // and so ties nothing.
+            if let [Type::Nominal {
+                definition: into, ..
+            }] = &*converted
+                && self.is_core_trait(trait_id, "Into")
+            {
+                for implementation in self.core_implementations("From") {
+                    let model::Trait::Trait { id, arguments } = implementation.trait_ref() else {
+                        continue;
+                    };
+                    let [_, model::Argument::Type(source)] = arguments.as_ref() else {
+                        continue;
+                    };
+                    if implementation.polarity() != model::Polarity::Positive
+                        || !self.is_core_trait(id, "From")
+                    {
+                        continue;
+                    }
+                    let (Ok(target @ Type::Nominal { .. }), Ok(source)) = (
+                        self.convert(implementation.self_type()),
+                        self.convert(source),
+                    ) else {
+                        continue;
+                    };
+                    if !matches!(&target, Type::Nominal { definition, .. } if definition == into)
+                        || matches!(source, Type::Parameter(_))
+                    {
+                        continue;
+                    }
+                    cases.push(Case::new(marked(source), Box::new([marked(target)])));
+                    if cases.len() > CASES {
+                        break;
+                    }
+                }
+            }
             for implementation in self.graph.implementations_of(trait_id) {
                 let model::Trait::Trait {
                     id,

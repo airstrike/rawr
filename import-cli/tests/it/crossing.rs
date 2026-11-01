@@ -117,6 +117,36 @@ fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
     );
 }
 
+/// iced's counter with `Button<'a, Message, W, Theme>`, whose `Widget`
+/// impl holds when its content's does: the content is a string literal,
+/// whose impl for `&str` no facade header writes. The impl is chosen by
+/// its self type, as rustc chooses it, so the tile's theme is the one the
+/// view's `impl Widget<Message>` gives, and the tile lives in the view's
+/// region at that type. The output is `cargo run`'s.
+#[test]
+fn a_widget_whose_impl_bounds_its_contents_takes_the_views_theme() {
+    let (rawr, cargo) = both_printed("crossing-tiled", "tiled.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 20 <'Increment'> 0@50 <'Decrement'>\n1 message Increment"),
+        "{rawr}"
+    );
+}
+
+/// A view of text alone in iced's earlier widgets, `fn view(&self) ->
+/// Element<'_, Message>`, whose element is made by `Element::from` and by
+/// `.into()`: only the return type names the message, theme and renderer,
+/// as rustc infers them from it, and each value lives in the view's region
+/// at its full type. The output is `cargo run`'s.
+#[test]
+fn a_text_only_view_takes_its_types_from_its_return_type() {
+    for variant in ["classic.rs", "classic_into.rs"] {
+        let (rawr, cargo) = both_printed("crossing-classic", variant, "");
+        assert_eq!(rawr, cargo, "{variant}");
+        assert!(rawr.contains("1 view center hi"), "{variant}: {rawr}");
+    }
+}
+
 /// iced's `.boxed()`: a method of an extension trait no widget implements
 /// itself, which a blanket impl over the crate's own `Widget` gives every
 /// widget, on a button and on text of generic types. The output is `cargo

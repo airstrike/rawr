@@ -320,7 +320,9 @@ impl Case {
 }
 
 impl Parameter {
-    pub(crate) fn new(index: u32, name: Box<str>, kind: Kind) -> Self {
+    /// A type parameter at `index`, named `name`.
+    #[must_use]
+    pub fn new(index: u32, name: Box<str>, kind: Kind) -> Self {
         Self {
             index,
             name,

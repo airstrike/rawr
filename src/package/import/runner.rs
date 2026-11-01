@@ -1107,6 +1107,10 @@ fn pattern(
         {
             Pattern::Type(nominal(source)?)
         }
+        // A crate type that names the impl's own parameters, as `Text<'a,
+        // Theme, Renderer>` of `From<Text<..>> for Element<..>`: each is
+        // named as the case's variable.
+        facade::Type::Nominal { .. } => Pattern::Generic(nominal(source)?),
         _ => return None,
     })
 }
@@ -1175,8 +1179,11 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
         }
         facade::Type::Option(element) => host::type_ref::Type::option(ty(element)?),
         facade::Type::Range(element) => host::type_ref::Type::range(ty(element)?),
-        // Only a relation's case names an impl's own parameter.
-        facade::Type::Variable(_) => unreachable!("a generated signature names no impl parameter"),
+        // Only a relation's case names an impl's own parameter, as the
+        // parameter its variable is named in a `Pattern::Generic`.
+        facade::Type::Variable(index) => {
+            host::type_ref::Type::parameter(host::signature::case_variable(*index))?
+        }
         facade::Type::Result(ok, err) => host::type_ref::Type::result(ty(ok)?, ty(err)?),
         facade::Type::Array(element) => host::type_ref::Type::slice(ty(element)?),
         facade::Type::FixedArray { element, length } => host::type_ref::Type::array(
