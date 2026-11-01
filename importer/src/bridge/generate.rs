@@ -2648,9 +2648,11 @@ enum Compilation<'a> {
 }
 
 /// A new engine with this runner's generated bindings installed, which
-/// keeps their native account: what every program compiles against.
+/// keeps their native account: what every program compiles against. Its
+/// programs may reach `access` (D683.4).
 fn prepare_engine(
     mut native: __rawr_internal::package::import::runner::account::Native,
+    access: __rawr_internal::Access,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
 ) -> std::io::Result<(
     __rawr_internal::Shared<__rawr_internal::Engine>,
@@ -2658,6 +2660,7 @@ fn prepare_engine(
     __rawr_profile::ApplicationContract,
 )> {
     let mut engine = __rawr_internal::Engine::new();
+    engine.set_access(access);
     // Under `rawr mcp`, before the program compiles (#526).
     if let Some(inspector) = inspector() {
         inspector.attach(&mut engine);
@@ -2703,7 +2706,9 @@ fn compile_program(
         Compilation::Live(engine) => engine.reconstruct_imported_native(GENERATED_MANIFEST),
     };
     let native = native.map_err(|error| std::io::Error::other(error.to_string()))?;
-    let (engine, bindings, application_contract) = prepare_engine(native, &mut *progress)?;
+    // `rawr run` runs the program as Cargo builds it: with everything.
+    let (engine, bindings, application_contract) =
+        prepare_engine(native, __rawr_internal::Access::all(), &mut *progress)?;
     let (candidate, ast) = __rawr_profile::compile_initial(
         &engine,
         &snapshot,
@@ -3801,7 +3806,13 @@ fn run_play(root: std::path::PathBuf) -> ! {
         install_arena([0; 32]);
         let native = __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let (engine, bindings, application_contract) = prepare_engine(native, &mut |_| Ok(()))?;
+        let (engine, bindings, application_contract) = prepare_engine(
+            native,
+            // A snippet runs on a server whose files, environment and
+            // process are not its own: it reaches none of them.
+            __rawr_internal::Access::none(),
+            &mut |_| Ok(()),
+        )?;
         let bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]> = bindings.into();
         let runtime = imported_runtime(&engine, &bindings)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -15265,7 +15276,7 @@ mod tests {
             &[
                 "if !COMPILE_SNAPSHOT { return Ok(None); }",
                 "account::Native::decode(GENERATED_MANIFEST)",
-                "prepare_engine(native, &mut *progress)?",
+                "prepare_engine(native, __rawr_internal::Access::all(), &mut *progress)?",
                 "__rawr_profile::compile_initial(",
                 "Ok(Some(Program { engine,",
             ],

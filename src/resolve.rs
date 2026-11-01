@@ -286,17 +286,6 @@ pub(crate) fn lower_imported(
     lower_nominal::imported(engine, program, host, allocation)
 }
 
-/// Why programs in this process may read no file, once denied.
-static NO_FILES: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-
-/// Stop programs in this process from reading files. `include_str!` and
-/// `include_bytes!` then fail with `reason`, and the iced facade draws
-/// each image or svg path as a missing file. `?play` calls it, since its
-/// snippets run on a server whose files are not theirs.
-pub fn deny_files(reason: &'static str) {
-    let _ = NO_FILES.set(reason);
-}
-
 /// Files a host ships with the programs it runs, by the exact path a
 /// program's `include_bytes!` or `include_str!` names. `?play` ships its
 /// examples' assets this way.
@@ -305,7 +294,8 @@ static BUNDLED: std::sync::OnceLock<&'static [(&'static str, &'static [u8])]> =
 
 /// Ship `files` with this process's programs: `include_bytes!` and
 /// `include_str!` of exactly one of their paths give its bytes, read from
-/// no disk, even after [`deny_files`]. Every other path is read as before.
+/// no disk, even for an engine that grants no file (`Access`). Every
+/// other path is read as before.
 pub fn bundle_files(files: &'static [(&'static str, &'static [u8])]) {
     let _ = BUNDLED.set(files);
 }
@@ -375,13 +365,6 @@ pub fn bundle_module() -> crate::Module {
         module.set_var(format!("file_{index}"), value);
     }
     module
-}
-
-/// Why programs in this process may read no file, when [`deny_files`] was
-/// called.
-#[must_use]
-pub fn files_denied() -> Option<&'static str> {
-    NO_FILES.get().copied()
 }
 
 /// Resolve all item declarations and header types in a parsed unit.

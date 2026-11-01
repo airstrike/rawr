@@ -513,7 +513,12 @@ fn collector_capacity_failures_remain_surface_allocation_errors() {
     for kind in 0..3 {
         let runtime =
             crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-        let models = super::Models::new(&program, runtime, engine.host_registry.clone());
+        let models = super::Models::new(
+            &program,
+            runtime,
+            engine.host_registry.clone(),
+            engine.access().clone(),
+        );
         let mut allocation = host::TestImportAllocation::default();
         let mut failure = None;
         let mut uses = Vec::new();
@@ -616,7 +621,12 @@ fn empty_models() -> super::Models {
     let program = program(&engine, "");
     let runtime =
         crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
-    super::Models::new(&program, runtime, engine.host_registry.clone())
+    super::Models::new(
+        &program,
+        runtime,
+        engine.host_registry.clone(),
+        engine.access().clone(),
+    )
 }
 
 #[test]

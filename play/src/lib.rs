@@ -88,17 +88,12 @@ impl fmt::Display for PlayError {
 
 impl std::error::Error for PlayError {}
 
-/// Why a snippet reads no file: it runs on a server whose files are not
-/// its own. `include_str!`, `include_bytes!` and `std::fs` fail with this.
-const NO_FILES: &str = "?play has no files";
-
 /// Run one snippet: on the universe runner when the environment names one
 /// (`universe::ROOT`, as the image does), and else on the base language.
 pub fn run(source: &str, limits: &Limits) -> Result<Output, PlayError> {
     if let Some(universe) = universe::Universe::from_env() {
         return universe.run(source, limits);
     }
-    rawr::resolve::deny_files(NO_FILES);
     let deadline = Instant::now() + limits.time;
     let parsed = plain::Parsed::new(source, limits, deadline)?;
     parsed.run(source, limits)
@@ -163,6 +158,21 @@ mod tests {
             reason.contains("arrays and maps up to 65536 items"),
             "{reason}"
         );
+    }
+
+    /// A snippet runs on a server whose files, environment and process are
+    /// not its own (D683.4): `std::fs` is refused as the operating system
+    /// refuses, and `env!` finds no variable.
+    #[test]
+    fn run_plain_refuses_files_and_the_environment() {
+        let output = text(
+            "fn main() {\n    println!(\"{:?}\", std::fs::read_to_string(\"/etc/hosts\").map_err(|e| e.kind()));\n    println!(\"{:?}\", std::fs::write(\"/tmp/rawr-play\", \"x\").map_err(|e| e.kind()));\n    println!(\"{:?}\", option_env!(\"PATH\"));\n}\n",
+        );
+        assert_eq!(
+            output.text(),
+            "Err(PermissionDenied)\nErr(PermissionDenied)\nNone\n"
+        );
+        assert!(!std::path::Path::new("/tmp/rawr-play").exists());
     }
 
     #[test]

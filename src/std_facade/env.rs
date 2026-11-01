@@ -1,6 +1,7 @@
 //! std's `env::args()` for Rawr code (`resolve::std_reexport` sends
 //! `std::env` here): the process's own arguments, which `rawr run` sets to
 //! the program's name and the arguments after `--`, as `cargo run` does.
+//! A program its engine grants no environment (`Access::env`) has none.
 
 use crate::host::{self, facade, item, signature, type_ref};
 use crate::{Dynamic, ImmutableString};
@@ -19,14 +20,11 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
 /// Bind the module's items in the std facade.
 pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
     runtime
-        .bind(format!("{}::env::args", super::ROOT), |_| {
-            // A process that denies files to its programs, such as ?play,
-            // runs a snippet, not a command: its own arguments name server
-            // paths, so the snippet sees only its name.
-            if crate::resolve::files_denied().is_some() {
-                return Ok(Dynamic::from(vec![Dynamic::from(ImmutableString::from(
-                    "play",
-                ))]));
+        .bind_with_context(format!("{}::env::args", super::ROOT), |call, _| {
+            // A program without the environment is given no arguments, as
+            // a WASI module the host passes none.
+            if !call.access().env() {
+                return Ok(Dynamic::from(crate::Array::new()));
             }
             Ok(Dynamic::from(
                 std::env::args_os()

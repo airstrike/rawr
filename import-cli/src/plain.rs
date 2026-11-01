@@ -420,7 +420,11 @@ fn prepare(
                     |contract, _profile, _facade| {
                         // Async code compiles against the core's future
                         // (D513.3), whose facade the runner installs too.
-                        let demand = rawr::future::facade::engine()
+                        // `rawr run` and `rawr check` read the program as
+                        // Cargo builds it: with everything (D683.4).
+                        let mut engine = rawr::future::facade::engine();
+                        engine.set_access(rawr::Access::all());
+                        let demand = engine
                             .compile_imported_with_applications(contract, snapshot, &applications)
                             .map_err(Error::Rawr)?;
                         let checked = Checked(*demand.contract_fingerprint().as_bytes());

@@ -970,6 +970,7 @@ impl Registry {
         args: &mut [&mut Dynamic],
         invocation: Option<&invocation::Proof>,
         equal: Option<&Equal<'_>>,
+        access: &crate::Access,
     ) -> Result<Dynamic, Box<EvalAltResult>> {
         let binding = match requirement.bound.get(self.witness) {
             Some(binding) => binding,
@@ -1000,7 +1001,8 @@ impl Registry {
                 &requirement.output,
                 requirement.receiver,
             ),
-        };
+        }
+        .with_access(access);
         binding.invoke(&call, args)
     }
 

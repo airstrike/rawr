@@ -143,6 +143,9 @@ pub struct Engine {
     pub(crate) registered_enums: std::collections::BTreeMap<Identifier, EnumRegistration>,
     /// Host type paths available while resolving Rawr item headers.
     pub(crate) host_registry: crate::host::Registry,
+    /// What the programs this engine runs may reach outside it: none until
+    /// the embedder grants it (D683.4).
+    pub(crate) access: crate::Access,
     /// Native implementations of the app's exported items, which every
     /// evaluation this engine starts can call.
     pub(crate) host_runtime: Option<crate::Shared<crate::host::runtime::Registry>>,
@@ -231,7 +234,8 @@ impl fmt::Debug for Engine {
             "registered_enums",
             &self.registered_enums.keys().collect::<Vec<_>>(),
         )
-        .field("host_registry", &self.host_registry);
+        .field("host_registry", &self.host_registry)
+        .field("access", &self.access);
 
         f.field("custom_keywords", &self.custom_keywords).field(
             "custom_syntax",
@@ -310,6 +314,7 @@ impl Engine {
         disabled_symbols: BTreeSet::new(),
         registered_enums: std::collections::BTreeMap::new(),
         host_registry: crate::host::Registry::new(),
+        access: crate::Access::none(),
         host_runtime: None,
         exports_frozen: core::sync::atomic::AtomicBool::new(false),
         #[cfg(feature = "rust-import")]
@@ -501,5 +506,26 @@ impl Engine {
         self.debugger_breaks
             .as_ref()
             .is_some_and(|breaks| breaks.contains(position))
+    }
+}
+
+impl Engine {
+    /// Set what the programs this engine runs may reach outside it: files,
+    /// the environment, the process and the network (D683.4). An engine
+    /// starts with [`Access::none`](crate::Access::none), so a program's
+    /// `std::fs::read` fails with `PermissionDenied` until the embedder
+    /// grants it. `rawr run` grants [`Access::all`](crate::Access::all).
+    ///
+    /// This gates the program's own code. A native crate it imports calls
+    /// the operating system directly.
+    pub fn set_access(&mut self, access: crate::Access) -> &mut Self {
+        self.access = access;
+        self
+    }
+
+    /// What the programs this engine runs may reach outside it.
+    #[must_use]
+    pub const fn access(&self) -> &crate::Access {
+        &self.access
     }
 }
