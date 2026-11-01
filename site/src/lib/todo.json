@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr is secure by default. An `Engine` starts with no file, environment, process or network access, and `Engine::set_access(Access)` grants each, with file grants optionally limited to directories. Without a grant, `std::fs` returns `PermissionDenied`, `env!` is undefined, `env::args` is empty and `process::id` panics, as a sandboxed program sees them. `rawr run` and `rawr check` grant everything, as `cargo run` does. ?play and the playground grant nothing. A native crate's own code is not gated.","issues":[642]},
+        {"text":"`std::fs` gains `read`, `write`, `exists`, `create_dir`, `create_dir_all`, `remove_file`, `remove_dir`, `remove_dir_all`, `rename` and `copy` beside `read_to_string`. Each returns `io::Result` with the operating system's errors.","issues":[643]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.78",
@@ -1480,7 +1486,13 @@
     {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"open","category":"No glue (D593)"},
     {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
     {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"open","category":"Health"},
-    {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"}
+    {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
+    {"issue":642,"title":"An engine starts with no file, environment or process access","state":"open","category":"Platforms"},
+    {"issue":643,"title":"std::fs::read, write and the usual whole-file functions","state":"open","category":"Divergences from rustc"},
+    {"issue":644,"title":"std::io::Result<T> alias in rawr's std","state":"open","category":"Divergences from rustc"},
+    {"issue":645,"title":"std::env::var and VarError","state":"open","category":"Divergences from rustc"},
+    {"issue":646,"title":"std::fs::read_dir, metadata, File and OpenOptions","state":"open","category":"Divergences from rustc"},
+    {"issue":647,"title":"Decide whether stdin and stdout are granted like files","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
