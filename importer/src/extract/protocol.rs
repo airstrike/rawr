@@ -14,7 +14,17 @@ std::thread_local! {
 
 /// The driver's `PROTOCOL_SCHEMA` (`driver.rs`, `driver/compiler.rs`) and
 /// `cargo/toolchain.rs`'s `SUPPORTED_PROBE_PROTOCOL` are the same number.
-pub(crate) const SCHEMA: u32 = 37;
+pub(crate) const SCHEMA: u32 = 38;
+
+/// The compiler kind of an unsupported export that is a derive macro, as
+/// serde's `Serialize`: the driver's engine writes it (`engine::DERIVE_MACRO`).
+pub(crate) const DERIVE_MACRO: &str = "derive-macro";
+
+#[cfg(all(test, feature = "rustc-driver"))]
+#[test]
+fn the_derive_macro_kind_is_the_engines() {
+    assert_eq!(DERIVE_MACRO, super::engine::DERIVE_MACRO);
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(deny_unknown_fields)]

@@ -215,6 +215,30 @@ impl Span {
     pub const fn end(self) -> Position {
         self.end
     }
+    /// The text of `source` this span covers. Positions are lines and
+    /// 1-based character columns, the end exclusive.
+    #[must_use]
+    pub(crate) fn text(self, source: &str) -> &str {
+        fn offset(text: &str, position: Position) -> usize {
+            let (Some(line), Some(column)) = (position.line(), position.position()) else {
+                return text.len();
+            };
+            let mut start = 0;
+            for _ in 1..line {
+                match text[start..].find('\n') {
+                    Some(at) => start += at + 1,
+                    None => return text.len(),
+                }
+            }
+            text[start..]
+                .char_indices()
+                .nth(column.saturating_sub(1))
+                .map_or(text.len(), |(at, _)| start + at)
+        }
+        let start = offset(source, self.start);
+        let end = offset(source, self.end).max(start);
+        &source[start..end]
+    }
 }
 
 impl fmt::Display for Span {

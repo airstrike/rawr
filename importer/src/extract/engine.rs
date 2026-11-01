@@ -35,7 +35,12 @@ use model::{
 
 /// The format of a recorded unit table. A table of another format is not
 /// read; it is extracted again.
-pub(crate) const TABLE_SCHEMA: u32 = 6;
+pub(crate) const TABLE_SCHEMA: u32 = 7;
+
+/// The compiler kind of a derive macro's public path, as serde's
+/// `Serialize`: its export is unsupported with this kind, and the facade
+/// lists it as a derive a program may name (`protocol::DERIVE_MACRO`).
+pub(crate) const DERIVE_MACRO: &str = "derive-macro";
 
 const MAX_DEFINITIONS: usize = 500_000;
 const MAX_PACKAGES: usize = 4_096;
@@ -283,6 +288,9 @@ pub(crate) enum ChildTarget {
     Primitive {
         compiler_kind: String,
     },
+    /// A derive macro, as serde's `Serialize`: a path a program's
+    /// `#[derive(..)]` names, with no item Rawr can call.
+    Derive,
     Other {
         error: String,
     },
@@ -1447,6 +1455,15 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     None,
                     true,
                 ),
+                ChildTarget::Derive => (
+                    Namespace::Macro,
+                    ExportTarget::Unsupported {
+                        compiler_kind: DERIVE_MACRO.to_owned(),
+                    },
+                    Vec::new(),
+                    None,
+                    true,
+                ),
                 ChildTarget::Unnamespaced { error } | ChildTarget::Other { error } => {
                     return Err(Fault::Error(error.clone()));
                 }
@@ -2169,5 +2186,45 @@ mod tests {
                 .any(|path| path.starts_with("inner::outer::inner")),
             "{paths:?}"
         );
+    }
+
+    #[test]
+    fn a_derive_macro_is_an_unsupported_macro_export_of_its_kind() {
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        fixture.modules.get_mut(&hash(0)).unwrap().push(Child {
+            name: "Serialize".to_owned(),
+            landing: None,
+            export: Some(ChildExport {
+                binding: Binding::Nameable,
+                variant: None,
+                span: span(),
+                reexports: Vec::new(),
+                hops: Vec::new(),
+                target: ChildTarget::Derive,
+            }),
+        });
+        fixture
+            .units
+            .insert(Unit::Shape(key(1)), vec![definition(1)]);
+        let extracted = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&[])
+        .unwrap();
+        let derive = extracted
+            .reachable
+            .iter()
+            .find(|export| export.path == ["Serialize"])
+            .expect("the derive is a reachable path");
+        assert_eq!(derive.namespace, Namespace::Macro);
+        assert!(matches!(
+            &derive.target,
+            super::ExportTarget::Unsupported { compiler_kind }
+                if compiler_kind == super::DERIVE_MACRO
+        ));
     }
 }

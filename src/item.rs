@@ -316,10 +316,15 @@ pub(crate) fn is_attribute_path(path: &type_ref::Path, name: &str) -> bool {
 pub struct Attribute {
     /// Attribute path.
     pub path: type_ref::Path,
-    /// Comma-separated path arguments inside parentheses.
+    /// Comma-separated path arguments inside parentheses, as `derive`'s.
+    /// Empty when the arguments are other tokens, as `serde(rename_all =
+    /// "camelCase")`'s, and for a field's or variant's attribute.
     pub arguments: Box<[type_ref::Path]>,
     /// Complete `#[...]` source span.
     pub span: Span,
+    /// The source text between `#[` and `]`, word for word: the path and
+    /// its tokens, as `serde(rename_all = "camelCase")`.
+    pub text: ImmutableString,
 }
 
 /// A parsed top-level Rawr item.
@@ -582,6 +587,8 @@ pub struct Field {
     pub ty: type_ref::Type,
     /// Complete field span.
     pub span: Span,
+    /// The field's attributes, as `#[serde(default)]`, in source order.
+    pub attributes: Box<[Attribute]>,
 }
 
 /// A nominal enum declaration shell.
@@ -617,6 +624,12 @@ pub struct Variant {
     pub discriminant: Option<crate::INT>,
     /// Complete variant span.
     pub span: Span,
+    /// The variant's attributes, as `#[serde(rename = "all")]` or
+    /// `#[default]`, in source order.
+    pub attributes: Box<[Attribute]>,
+    /// Each payload field's attributes, one list per payload type, as
+    /// `V { #[serde(skip)] x: i64 }` or `V(#[serde(with = "m")] T)` has.
+    pub field_attributes: Box<[Box<[Attribute]>]>,
 }
 
 /// An inherent or trait implementation block shell.

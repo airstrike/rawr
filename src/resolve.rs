@@ -482,7 +482,9 @@ fn resolve_with_evidence_and_namespace(
         )?);
     }
 
-    let definitions = symbols.finish(&items).map_err(LocatedError::into_error)?;
+    let definitions = symbols
+        .finish(&items, host)
+        .map_err(LocatedError::into_error)?;
     let (methods, builtin_methods) =
         resolve_methods(&mut items, &definitions, host).map_err(LocatedError::into_error)?;
     resolve_functions(&mut items).map_err(LocatedError::into_error)?;
@@ -865,9 +867,13 @@ impl Symbols {
         self.uses[source_index].as_ref()
     }
 
-    fn finish(self, items: &[item::Shell]) -> Result<Vec<type_def::Definition>, LocatedError> {
+    fn finish(
+        self,
+        items: &[item::Shell],
+        host: &host::Registry,
+    ) -> Result<Vec<type_def::Definition>, LocatedError> {
         let mut schemas = BTreeMap::new();
-        let capabilities = crate::capability::resolve(items)?;
+        let capabilities = crate::capability::resolve(items, host)?;
 
         for shell in items {
             match &shell.kind {
@@ -1424,6 +1430,8 @@ fn resolve_import_binding(
         None if let Some(owner) = host.enum_variant(&qualified) => {
             item::Import::HostVariant { owner }
         }
+        // A crate's derive macro, as `use serde::Deserialize;`.
+        None if host.derive_macro(&qualified) => item::Import::Derive,
         // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
         // and `use tokio::join;`, a macro Rawr expands.
         None if std_fmt_import(&qualified)
@@ -1998,6 +2006,7 @@ fn resolve_item(
                         native,
                     )?,
                     span: field.span,
+                    attributes: field.attributes,
                 });
             }
 
@@ -2064,6 +2073,8 @@ fn resolve_item(
                     default: variant.default,
                     discriminant: variant.discriminant,
                     span: variant.span,
+                    attributes: variant.attributes,
+                    field_attributes: variant.field_attributes,
                 });
             }
 

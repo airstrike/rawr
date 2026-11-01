@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hash::{StableHash, StableHasher};
-use rustc_hir::def::{CtorOf, DefKind, Res};
+use rustc_hir::def::{CtorOf, DefKind, MacroKinds, Res};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::{CrateNum, DefId};
@@ -1266,6 +1266,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             Binding::Nameable
         };
         let target = match res {
+            // A derive macro, as serde's `Serialize` from serde_derive: its
+            // crate is a proc macro, so it has no item to extract.
+            Res::Def(DefKind::Macro(kinds), _) if kinds.contains(MacroKinds::DERIVE) => {
+                engine::ChildTarget::Derive
+            }
             Res::Def(kind, def_id) => match kind.ns().map(namespace) {
                 None => engine::ChildTarget::Unnamespaced {
                     error: format!("external reachable definition has no namespace: {kind:?}"),

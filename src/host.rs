@@ -166,6 +166,8 @@ pub struct Registry {
     /// impls (D604).
     trait_headers: Vec<facade::TraitHeader>,
     impl_headers: Vec<facade::ImplHeader>,
+    /// The crates' derive macros, sorted by path (`serde::Serialize`).
+    derives: Vec<path::Path>,
     /// Roots an app exported with `#[rawr::export]`. Their types keep
     /// fields and methods apart, as Rust does.
     exported: Vec<ImmutableString>,
@@ -242,6 +244,7 @@ impl Registry {
             type_aliases: Vec::new(),
             trait_headers: Vec::new(),
             impl_headers: Vec::new(),
+            derives: Vec::new(),
             exported: Vec::new(),
         }
     }
@@ -424,6 +427,13 @@ impl Registry {
         for header in &self.impl_headers {
             clone.impl_headers.push(header.try_clone()?);
         }
+        clone
+            .derives
+            .try_reserve_exact(self.derives.len())
+            .map_err(|_| rawr_import::surface::Error::Allocation)?;
+        for path in &self.derives {
+            clone.derives.push(path.try_clone()?);
+        }
         clone.exported.clone_from(&self.exported);
         Ok(clone)
     }
@@ -557,6 +567,11 @@ impl Registry {
             .try_reserve(parts.impl_headers.len())
             .map_err(|_| Error::Allocation)?;
         self.impl_headers.extend(parts.impl_headers);
+        self.derives
+            .try_reserve(parts.derives.len())
+            .map_err(|_| Error::Allocation)?;
+        self.derives.extend(parts.derives);
+        self.derives.sort();
         let facade_index = self
             .facades
             .binary_search_by(|facade| facade.root().cmp(dependency.root()))
@@ -1152,6 +1167,16 @@ impl Registry {
                 .map(|index| &self.type_aliases[index])
         };
         found(path).or_else(|| found(&self.canonical(path)?))
+    }
+
+    /// Whether `qualified` names a crate's derive macro, as
+    /// `serde::Serialize`, directly or through a facade re-export.
+    pub(crate) fn derive_macro(&self, qualified: &str) -> bool {
+        let Ok(path) = path::Path::parse(qualified) else {
+            return false;
+        };
+        let found = |path: &path::Path| self.derives.binary_search(path).is_ok();
+        found(&path) || self.canonical(&path).is_some_and(|path| found(&path))
     }
 
     #[cfg(feature = "rust-import")]

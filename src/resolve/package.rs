@@ -571,8 +571,8 @@ impl<'a> Resolver<'a> {
             ));
         }
 
-        let definitions =
-            finish_definitions(self.type_declarations, &shells).map_err(Failure::from_located)?;
+        let definitions = finish_definitions(self.type_declarations, &shells, self.host)
+            .map_err(Failure::from_located)?;
         let (methods, builtin_methods) =
             super::resolve_methods(&mut shells, &definitions, self.host)
                 .map_err(Failure::from_located)?;
@@ -1013,6 +1013,13 @@ impl<'a> Resolver<'a> {
                             identity,
                         },
                     )
+                });
+                // A crate's derive macro and nothing else at its path, as
+                // `use serde::Deserialize;`.
+                let variant = variant.or_else(|| {
+                    let qualified = super::std_reexport(&path.join("::"), self.host);
+                    (self.host.entry(&qualified).is_none() && self.host.derive_macro(&qualified))
+                        .then_some(item::Import::Derive)
                 });
                 let target = match variant {
                     Some(_) => Target::Module,
@@ -2099,9 +2106,10 @@ fn collect_type_paths<'a>(
 fn finish_definitions(
     declarations: Vec<type_def::Declaration>,
     items: &[item::Shell],
+    host: &crate::host::Registry,
 ) -> Result<Vec<type_def::Definition>, LocatedError> {
     let mut schemas = BTreeMap::new();
-    let capabilities = crate::capability::resolve(items)?;
+    let capabilities = crate::capability::resolve(items, host)?;
     for shell in items {
         match &shell.kind {
             item::Kind::Struct(item) => {

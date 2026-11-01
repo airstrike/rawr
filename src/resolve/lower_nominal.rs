@@ -4402,7 +4402,8 @@ impl Models {
                     | item::Import::ModuleItem { .. }
                     | item::Import::Type { .. }
                     | item::Import::Item { .. }
-                    | item::Import::Alias => {}
+                    | item::Import::Alias
+                    | item::Import::Derive => {}
                 }
             }
         }

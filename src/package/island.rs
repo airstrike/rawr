@@ -24,7 +24,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::item::{self, type_ref};
-use crate::{ImmutableString, Position, Span};
+use crate::{ImmutableString, Span};
 
 /// The module of the shadow crate's root that holds the island's runtime
 /// support. The Rawr root calls its `main` to start the program.
@@ -879,29 +879,9 @@ fn path_of(modules: &[ImmutableString], name: &str) -> String {
         .join("::")
 }
 
-/// The text `span` covers: positions are lines and 1-based character
-/// columns, the end exclusive.
+/// The text `span` covers.
 fn slice(text: &str, span: Span) -> &str {
-    let start = offset(text, span.start());
-    let end = offset(text, span.end()).max(start);
-    &text[start..end]
-}
-
-fn offset(text: &str, position: Position) -> usize {
-    let (Some(line), Some(column)) = (position.line(), position.position()) else {
-        return text.len();
-    };
-    let mut start = 0;
-    for _ in 1..line {
-        match text[start..].find('\n') {
-            Some(at) => start += at + 1,
-            None => return text.len(),
-        }
-    }
-    text[start..]
-        .char_indices()
-        .nth(column.saturating_sub(1))
-        .map_or(text.len(), |(at, _)| start + at)
+    span.text(text)
 }
 
 /// `text` without the attributes only Rawr reads (`#[preview]`,

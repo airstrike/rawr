@@ -30,7 +30,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 10;
+const FORMAT: u32 = 11;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`) and the
@@ -464,15 +464,17 @@ macro_rules! record {
 record! {
     item::Name { text, span }
     item::Header { attributes, visibility, span }
-    item::Attribute { path, arguments, span }
+    item::Attribute { path, arguments, span, text }
     item::Module { header, name, span, inline }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default }
     item::Struct { header, name, generics, lifetimes, fields, form, span }
-    item::Field { name, ty, span }
+    item::Field { name, ty, span, attributes }
     item::Enum { header, name, generics, lifetimes, variants, span }
-    item::Variant { name, payload, fields, default, discriminant, span }
+    item::Variant {
+        name, payload, fields, default, discriminant, span, attributes, field_attributes,
+    }
     item::Impl { header, generics, lifetimes, trait_, owner, functions, associated, span }
     item::Trait {
         header, name, functions, provided, associated, associated_bounds, associated_projections,
