@@ -73,8 +73,36 @@ fn explicit_and_home_fallback_cargo_homes_resolve_only_to_canonical_v1_stores() 
     );
 }
 
+/// Cargo follows a symlinked project or Cargo home; rawr resolves both to
+/// the directories they name.
+#[cfg(unix)]
 #[test]
-fn missing_empty_relative_and_symlinked_cargo_home_authority_rejects_before_store_creation() {
+fn symlinked_project_and_cargo_home_resolve_to_their_directories() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new("symlinks");
+    let project = fixture.root.join("project-link");
+    let cargo_home = fixture.root.join("cargo-home-link");
+    symlink(&fixture.project, &project).expect("the project symlink exists");
+    symlink(&fixture.cargo_home, &cargo_home).expect("the Cargo-home symlink exists");
+    let environment = cargo::config::Environment::from_pairs([(
+        "CARGO_HOME",
+        cargo_home.to_str().expect("the fixture path is Unicode"),
+    )])
+    .expect("the symlink environment seals");
+    let context = Context::capture(
+        &project,
+        environment,
+        "aarch64-apple-darwin",
+        &cargo::Limits::standard(),
+    )
+    .expect("a symlinked project and Cargo home seal");
+    assert_eq!(context.project(), fixture.project);
+    assert_eq!(context.cargo_home(), fixture.cargo_home);
+}
+
+#[test]
+fn missing_empty_and_relative_cargo_home_authority_rejects_before_store_creation() {
     let fixture = Fixture::new("cargo-home-rejection");
     assert!(matches!(
         Context::capture(
@@ -99,30 +127,6 @@ fn missing_empty_relative_and_symlinked_cargo_home_authority_rejects_before_stor
         ));
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-
-        let link = fixture.root.join("cargo-home-link");
-        symlink(&fixture.cargo_home, &link).expect("the Cargo-home symlink exists");
-        let environment = cargo::config::Environment::from_pairs([(
-            "CARGO_HOME",
-            link.to_str().expect("the fixture path is Unicode"),
-        )])
-        .expect("the symlink environment seals");
-        assert!(matches!(
-            Context::capture(
-                &fixture.project,
-                environment,
-                "target",
-                &cargo::Limits::standard(),
-            ),
-            Err(Error::Path {
-                field: "Cargo home",
-                ..
-            })
-        ));
-    }
     assert!(!fixture.cargo_home.join("rawr").exists());
 }
 

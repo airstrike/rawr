@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rawr_import::cargo::config::{Dependency, Environment, Role};
+use rawr_import::cargo::config::{Dependency, Environment, GitReference, Role};
 use rawr_import::cargo::{Limits, Request};
 use rawr_import::extract::Policy;
 use rawr_import::process::Native;
@@ -116,27 +116,27 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
 }
 
 #[test]
-fn unsupported_target_and_nonexact_git_revision_reject_while_roles_stay_canonical() {
+fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
     let _turn = rawr_import::store::test_turn();
     let project = Project::new("validation");
     let limits = Limits::standard();
-    let error = match Dependency::git("catalog", "https://example.invalid/catalog", "abc", &limits)
-    {
-        Ok(_) => panic!("a short Git revision is never exact"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        Error::Request { ref reason }
-            if reason.starts_with("the git revision `abc` of dependency `catalog`")
-    ));
-    Dependency::git(
-        "catalog",
-        "https://example.invalid/catalog",
-        GIT_REV,
-        &limits,
-    )
-    .expect("a full Git revision seals");
+    // Cargo accepts a branch, a tag, a short or full rev and the default
+    // branch; its `Cargo.lock` pins the commit each resolves to.
+    for reference in [
+        GitReference::Rev("abc".into()),
+        GitReference::Rev(GIT_REV.into()),
+        GitReference::Branch("main".into()),
+        GitReference::Tag("v1.0.0".into()),
+        GitReference::DefaultBranch,
+    ] {
+        Dependency::git(
+            "catalog",
+            "https://example.invalid/catalog",
+            reference,
+            &limits,
+        )
+        .expect("each Git reference Cargo accepts seals");
+    }
     Dependency::registry("catalog", "1", &limits)
         .expect("Cargo's shorthand registry requirement seals semantically");
 

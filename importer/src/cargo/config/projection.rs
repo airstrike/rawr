@@ -50,6 +50,10 @@ const PROFILE_SUFFIXES: [&str; 10] = [
     "SPLIT_DEBUGINFO",
     "STRIP",
 ];
+/// Profile fields Cargo reads that can change what it builds, beyond the
+/// keyed suffixes above. `PACKAGE_*` overrides are unmodeled too.
+const UNMODELED_PROFILE_FIELDS: [&str; 4] =
+    ["CODEGEN_BACKEND", "INHERITS", "RUSTFLAGS", "TRIM_PATHS"];
 const BUILD_OVERRIDE_SUFFIXES: [&str; 7] = [
     "CODEGEN_UNITS",
     "DEBUG",
@@ -170,17 +174,20 @@ impl Projection {
             limits,
             allocation,
         )?;
+        // Cargo reads only the profile it builds, so a variable for another
+        // profile changes nothing. Of the built profile's own keys, those
+        // Cargo reads but the projection does not key reject.
         for (key, _) in environment.entries() {
-            if !key.starts_with("CARGO_PROFILE_") {
+            let Some(suffix) = key.strip_prefix(&profile_prefix) else {
                 continue;
-            }
-            let allowed = key.strip_prefix(&profile_prefix).is_some_and(|suffix| {
-                PROFILE_SUFFIXES.contains(&suffix)
-                    || suffix
-                        .strip_prefix("BUILD_OVERRIDE_")
-                        .is_some_and(|suffix| BUILD_OVERRIDE_SUFFIXES.contains(&suffix))
-            });
-            if !allowed {
+            };
+            let field = suffix.strip_prefix("BUILD_OVERRIDE_").unwrap_or(suffix);
+            let unmodeled = UNMODELED_PROFILE_FIELDS.contains(&field)
+                || field.starts_with("PACKAGE_")
+                || (suffix.starts_with("BUILD_OVERRIDE_")
+                    && PROFILE_SUFFIXES.contains(&field)
+                    && !BUILD_OVERRIDE_SUFFIXES.contains(&field));
+            if unmodeled {
                 return Err(Error::Request {
                     reason: format!(
                         "rawr can't build Rust with the environment variable `{key}` set"
@@ -1070,12 +1077,39 @@ mod tests {
     }
 
     #[test]
-    fn unmodeled_and_dynamic_profile_environment_rejects() {
+    fn other_profiles_environment_changes_nothing() {
+        let limits = Limits::standard();
+        let baseline = Projection::derive(
+            &Environment::empty(),
+            "aarch64-apple-darwin",
+            "dev",
+            &limits,
+        )
+        .expect("baseline projection derives");
         for key in [
             "CARGO_PROFILE_CUSTOM_INHERITS",
-            "CARGO_PROFILE_DEV_PACKAGE_EXAMPLE_OPT_LEVEL",
-            "CARGO_PROFILE_DEV_UNKNOWN",
             "CARGO_PROFILE_RELEASE_OPT_LEVEL",
+            "CARGO_PROFILE_RELEASE_LTO",
+            "CARGO_PROFILE_RELEASE_PACKAGE_EXAMPLE_OPT_LEVEL",
+            "CARGO_PROFILE_DEV_UNKNOWN",
+            "CARGO_PROFILE_DEV_INCREMENTAL",
+        ] {
+            let environment =
+                Environment::from_pairs([(key, "3")]).expect("profile environment entry seals");
+            let projection =
+                Projection::derive(&environment, "aarch64-apple-darwin", "dev", &limits)
+                    .unwrap_or_else(|error| panic!("Cargo ignores `{key}` for dev: {error}"));
+            assert_eq!(projection, baseline, "{key}");
+        }
+    }
+
+    #[test]
+    fn unmodeled_and_dynamic_profile_environment_rejects() {
+        for key in [
+            "CARGO_PROFILE_DEV_PACKAGE_EXAMPLE_OPT_LEVEL",
+            "CARGO_PROFILE_DEV_TRIM_PATHS",
+            "CARGO_PROFILE_DEV_CODEGEN_BACKEND",
+            "CARGO_PROFILE_DEV_BUILD_OVERRIDE_RUSTFLAGS",
         ] {
             let environment = Environment::from_pairs([(key, "dev")])
                 .expect("profile environment entry seals before semantic classification");

@@ -42,13 +42,60 @@ pub(crate) enum Source {
     Registry {
         version: String,
     },
+    /// A Git repository at a branch, a tag, a rev or its default branch.
+    /// The crate's `Cargo.lock` pins the commit.
     Git {
         url: String,
-        rev: String,
+        reference: GitReference,
     },
     /// `{ workspace = true }` in a runner's snapshot, which does not ask
     /// Cargo. The runner reads only the alias.
     Workspace,
+}
+
+/// What a Git dependency names in its repository, as its manifest spells it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GitReference {
+    Branch(String),
+    Tag(String),
+    Rev(String),
+    DefaultBranch,
+}
+
+impl GitReference {
+    /// The manifest key and value that declare this reference.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn key_value(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Self::Branch(name) => Some(("branch", name)),
+            Self::Tag(name) => Some(("tag", name)),
+            Self::Rev(name) => Some(("rev", name)),
+            Self::DefaultBranch => None,
+        }
+    }
+
+    /// Split a Cargo Git source id, `git+<url>[?<kind>=<name>][#<commit>]`,
+    /// as `cargo metadata` prints it, into its URL and reference.
+    pub(crate) fn parse_source(source: &str) -> Option<(&str, Self)> {
+        let location = source.strip_prefix("git+")?;
+        let location = location
+            .split_once('#')
+            .map_or(location, |(location, _)| location);
+        let Some((url, query)) = location.split_once('?') else {
+            return Some((location, Self::DefaultBranch));
+        };
+        let mut reference = Self::DefaultBranch;
+        for pair in query.split('&') {
+            let (key, value) = pair.split_once('=')?;
+            reference = match key {
+                "branch" => Self::Branch(value.to_owned()),
+                "tag" => Self::Tag(value.to_owned()),
+                "rev" => Self::Rev(value.to_owned()),
+                _ => continue,
+            };
+        }
+        Some((url, reference))
+    }
 }
 
 struct Specification<'a> {
@@ -71,7 +118,15 @@ impl<'a> Specification<'a> {
         for (key, value) in table.iter() {
             if !matches!(
                 key,
-                "package" | "path" | "version" | "git" | "rev" | "features" | "default-features"
+                "package"
+                    | "path"
+                    | "version"
+                    | "git"
+                    | "branch"
+                    | "tag"
+                    | "rev"
+                    | "features"
+                    | "default-features"
             ) {
                 return Err(Error {
                     message: format!("unknown key `{key}` for Rust dependency `{alias}`").into(),
@@ -259,34 +314,49 @@ impl Source {
         let path = optional_dependency_string(text, alias, table, "path")?;
         let version = optional_dependency_string(text, alias, table, "version")?;
         let git = optional_dependency_string(text, alias, table, "git")?;
+        let branch = optional_dependency_string(text, alias, table, "branch")?;
+        let tag = optional_dependency_string(text, alias, table, "tag")?;
         let rev = optional_dependency_string(text, alias, table, "rev")?;
-        match (path, version, git, rev) {
+        let reference = match (branch, tag, rev) {
+            (None, None, None) => None,
+            (Some(branch), None, None) => Some(("branch", GitReference::Branch(branch.into()))),
+            (None, Some(tag), None) => Some(("tag", GitReference::Tag(tag.into()))),
+            (None, None, Some(rev)) => Some(("rev", GitReference::Rev(rev.into()))),
+            _ => {
+                return Err(Error {
+                    message: format!(
+                        "dependency ({alias}) specification is ambiguous. Only one of \
+                         `branch`, `tag` or `rev` is allowed."
+                    )
+                    .into(),
+                    span: item_span(text, item),
+                });
+            }
+        };
+        match (path, version, git, reference) {
             (Some(path), None, None, None) => Ok(Self::Path(root.join(path))),
             (None, Some(version), None, None) => Ok(Self::Registry {
                 version: version.to_owned(),
             }),
-            (None, None, Some(url), Some(rev)) => Ok(Self::Git {
+            (None, None, Some(url), reference) => Ok(Self::Git {
                 url: url.to_owned(),
-                rev: rev.to_owned(),
+                reference: reference
+                    .map_or(GitReference::DefaultBranch, |(_, reference)| reference),
             }),
-            (None, None, Some(_), None) => Err(Error {
-                message: format!("Rust dependency `{alias}` with `git` also requires `rev`").into(),
-                span: inline_value_span(text, table, "git"),
-            }),
-            (None, None, None, Some(_)) => Err(Error {
-                message: format!("Rust dependency `{alias}` has `rev` without `git`").into(),
-                span: inline_value_span(text, table, "rev"),
+            (None, None, None, Some((key, _))) => Err(Error {
+                message: format!("Rust dependency `{alias}` has `{key}` without `git`").into(),
+                span: inline_value_span(text, table, key),
             }),
             (None, None, None, None) => Err(Error {
                 message: format!(
-                    "Rust dependency `{alias}` requires exactly one of `path`, `version`, or `git` + `rev`"
+                    "Rust dependency `{alias}` requires exactly one of `path`, `version`, or `git`"
                 )
                 .into(),
                 span: item_span(text, item),
             }),
             _ => Err(Error {
                 message: format!(
-                    "Rust dependency `{alias}` must use exactly one of `path`, `version`, or `git` + `rev`"
+                    "Rust dependency `{alias}` must use exactly one of `path`, `version`, or `git`"
                 )
                 .into(),
                 span: item_span(text, item),

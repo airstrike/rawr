@@ -343,24 +343,21 @@ fn retain_bytes(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes);
 }
 
+/// The directory `path` names, its symlinks resolved as Cargo follows them.
 fn canonical_directory(field: &'static str, path: &Path) -> Result<PathBuf, Error> {
-    let metadata = fs::symlink_metadata(path).map_err(|source| Error::Io {
-        operation: "read directory",
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(Error::Path {
-            field,
-            path: path.to_path_buf(),
-            reason: "is missing or is a symbolic link",
-        });
-    }
-    fs::canonicalize(path).map_err(|source| Error::Io {
+    let canonical = fs::canonicalize(path).map_err(|source| Error::Io {
         operation: "resolve directory",
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    if !canonical.is_dir() {
+        return Err(Error::Path {
+            field,
+            path: path.to_path_buf(),
+            reason: "is not a directory",
+        });
+    }
+    Ok(canonical)
 }
 
 /// Independent sealed-context capture failure.
