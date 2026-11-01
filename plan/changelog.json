@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"Rawr no longer counts graph work on every charge, and no longer records or warns when a build passes an accounting figure. Allocation failures, checked overflow and physical limits still refuse.","issues":[479]},
+      {"text":"Generating a runner for a program whose closures cross as slots, such as a mapped iced widget, no longer stops with \"rawr's generated Rust agrees with the crates on a slot's input\". This regression shipped in 0.3.56.","issues":[549]}
+    ]
   },
   "releases": [
     {

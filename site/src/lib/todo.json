@@ -5,7 +5,13 @@
   "examples": {"running":12,"total":56,"note":"The rest stop at recorded gaps"},
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Rawr no longer counts graph work on every charge, and no longer records or warns when a build passes an accounting figure. Allocation failures, checked overflow and physical limits still refuse.","issues":[479]},
+        {"text":"Generating a runner for a program whose closures cross as slots, such as a mapped iced widget, no longer stops with \"rawr's generated Rust agrees with the crates on a slot's input\". This regression shipped in 0.3.56.","issues":[549]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.56",
@@ -1132,7 +1138,7 @@
     {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","release":"0.3.42"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)"},
     {"issue":478,"title":"pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"closed","category":"No glue (D593)","release":"0.3.44"},
-    {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":479,"title":"Accounting republishes its exceedance record on every charge past its target","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":480,"title":"Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"closed","category":"Importer","release":"0.3.41"},
     {"issue":481,"title":"Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer","release":"0.3.44"},
     {"issue":482,"title":"A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer"},
@@ -1199,7 +1205,10 @@
     {"issue":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)"},
     {"issue":544,"title":"Arity errors for functions and closures read as rustc's E0061","state":"open","category":"Divergences from rustc"},
     {"issue":545,"title":"Refuse a closure whose output type Rust can't name before generation","state":"open","category":"Importer"},
-    {"issue":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer"}
+    {"issue":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer"},
+    {"issue":547,"title":"RequestAllocation counts items and bytes that nothing reads","state":"open","category":"Importer"},
+    {"issue":548,"title":"Remove the limit figures that no longer bound anything","state":"open","category":"Importer"},
+    {"issue":549,"title":"Generator panicked on every program whose closures cross as slots","state":"open","category":"Importer"}
   ],
   "groups": [
     {

@@ -479,7 +479,7 @@
     {"t":"T476","issue":476,"title":"T476: The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"504143388","release":"0.3.42"},
     {"t":"T477","issue":477,"title":"T477: bezier_tool: no Path::new on canvas Path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T478","issue":478,"title":"T478: pick_list and custom_widget stop at 'owned trait implementation is absent'","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"de8051e15","release":"0.3.44"},
-    {"t":"T479","issue":479,"title":"T479: Accounting republishes its exceedance record on every charge past its target","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T479","issue":479,"title":"T479: Accounting republishes its exceedance record on every charge past its target","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":null,"decisions":[],"commit":"688274615","release":null},
     {"t":"T480","issue":480,"title":"T480: Importer errors in Cargo's and rustc's words; rawr invariants panic","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.41"},
     {"t":"T481","issue":481,"title":"T481: Inventory and extraction errors report rawr's invariants as 'Rust API extraction rejected'","state":"closed","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":"de8051e15","release":"0.3.44"},
     {"t":"T482","issue":482,"title":"T482: A hard semantic-API byte cap refuses real programs","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -546,6 +546,9 @@
     {"t":"T543","issue":543,"title":"T543: ?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T544","issue":544,"title":"T544: Arity errors for functions and closures read as rustc's E0061","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T545","issue":545,"title":"T545: Refuse a closure whose output type Rust can't name before generation","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T546","issue":546,"title":"T546: Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T546","issue":546,"title":"T546: Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T547","issue":547,"title":"T547: RequestAllocation counts items and bytes that nothing reads","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":["D674"],"commit":null,"release":null},
+    {"t":"T548","issue":548,"title":"T548: Remove the limit figures that no longer bound anything","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T549","issue":549,"title":"T549: Generator panicked on every program whose closures cross as slots","state":"open","category":"Importer","labels":["importer"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
