@@ -111,6 +111,10 @@ codes!(Resolve;
     (RESOLVE_UNSUPPORTED_SYNTAX, "RAWR-RESOLVE-UNSUPPORTED-SYNTAX", "A construct that isn't supported yet."),
     (RESOLVE_JUMP_IN_WHILE_CONDITION, "E0590", "A `break` or `continue` with no label in a `while` condition, as rustc reports it."),
     (RESOLVE_ASYNC_MAIN, "E0752", "An `async fn main` with no runtime's entry, as rustc reports it."),
+    (RESOLVE_UNRESOLVED_IMPORT, "E0432", "A `use` of a path that doesn't exist, as rustc reports it."),
+    (RESOLVE_FAILED_PATH, "E0433", "A path through a module or type that doesn't exist, as rustc reports it."),
+    (RESOLVE_UNSTABLE, "E0658", "A use of an unstable library item, as rustc reports it."),
+    (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
@@ -182,5 +186,15 @@ pub(crate) fn borrow(rustc: &str) -> Code {
         "E0508" => BORROW_MOVE_ELEMENT,
         "E0509" => BORROW_MOVE_DROP,
         _ => BORROW_LIFETIME,
+    }
+}
+
+/// The code of rustc's error `rustc` for a std path (`resolve::std_path`).
+pub(crate) fn std_path(rustc: &str) -> Code {
+    match rustc {
+        "E0432" => RESOLVE_UNRESOLVED_IMPORT,
+        "E0433" => RESOLVE_FAILED_PATH,
+        "E0425" => RESOLVE_NOT_IN_MODULE,
+        _ => RESOLVE_UNSTABLE,
     }
 }

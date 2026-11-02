@@ -10,6 +10,9 @@ pub(crate) mod macro_rules;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
 pub(crate) mod package;
+pub(crate) mod std_path;
+#[cfg(test)]
+mod std_shadow_tests;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};

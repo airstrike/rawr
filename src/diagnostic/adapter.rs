@@ -510,6 +510,7 @@ fn primary_label(
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
+        resolve::Error::StdPath { label, .. } => label.clone(),
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
@@ -602,6 +603,11 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_UNEXPECTED,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
+        resolve::Category::StdPath => match error {
+            resolve::Error::StdPath { code, .. } => code::std_path(code),
+            _ => unreachable!("a std path's category"),
+        },
+        resolve::Category::NotYet => code::RESOLVE_NOT_YET,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
         resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
         resolve::Category::ArgumentSignature => code::RESOLVE_ARGUMENT_SIGNATURE,
@@ -636,6 +642,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownImport { path, .. } => builder.help(format!(
             "`{path}` isn't available in Rawr yet, or the path is misspelled"
         )),
+        resolve::Error::StdPath {
+            note: Some(note), ..
+        } => builder.note(note.clone()),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("import it with `use {path};`")),
@@ -890,6 +899,8 @@ fn resolution_message(error: &resolve::Error) -> String {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
+        resolve::Error::StdPath { message, .. } => message.to_string(),
+        resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")
         }

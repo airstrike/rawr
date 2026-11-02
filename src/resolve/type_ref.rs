@@ -644,15 +644,7 @@ fn resolve_path(
         }
     }
 
-    let prelude = match name.as_str() {
-        "Option" | "Vec" | "Box" => Some(1),
-        "Result" | "HashMap" | "BTreeMap" => Some(2),
-        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Cell" | "Rc" | "Arc"
-        | "RangeInclusive" => Some(1),
-        item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
-        name if item::type_ref::array_length(name).is_some() => Some(1),
-        _ => None,
-    };
+    let prelude = hand_arity(name.as_str());
     if let (Target::Builtin, Some(expected)) = (&target, prelude) {
         let actual = arguments
             .iter()
@@ -1181,6 +1173,19 @@ fn std_fmt_type(parsed: &item::type_ref::Path) -> Option<Path> {
         arguments,
         span: parsed.span,
     })
+}
+
+/// The type arity of rawr's builtin generic `name`, by hand.
+pub(crate) fn hand_arity(name: &str) -> Option<usize> {
+    match name {
+        "Option" | "Vec" | "Box" => Some(1),
+        "Result" | "HashMap" | "BTreeMap" => Some(2),
+        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Cell" | "Rc" | "Arc"
+        | "RangeInclusive" => Some(1),
+        item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
+        name if item::type_ref::array_length(name).is_some() => Some(1),
+        _ => None,
+    }
 }
 
 /// `Option<T>` and `Result<T, E>`: Rust's prelude enums, builtin generics;

@@ -1,0 +1,507 @@
+//! std's own paths, kinds, stability and generics, read from the sysroot of
+//! the pinned toolchain (D711 step 1, D714.2).
+//!
+//! The table is two sorted, tab-separated files that rawr embeds, which
+//! `scripts/std-table.sh` writes with the importer's driver:
+//!
+//! - `paths.tsv`: `path  namespace  kind  stability  definition`, one line
+//!   for every path a program can write into `std`, `core` and `alloc`,
+//!   through every re-export. The namespace is `t`ype, `v`alue or `m`acro.
+//!   The definition is `=` when the path is the item's own.
+//! - `items.tsv`: `definition  kind  stability  extra`, one line for each
+//!   definition and each of its members (a trait's items, a type's inherent
+//!   items, an enum's variants, a primitive's methods as `i64::pow`). For a
+//!   type, trait or function, `extra` is its generics; for a trait's member,
+//!   `provided` or `required`.
+//!
+//! A stability is `s`, or `u feature issue reason` with `-` for no issue
+//! or reason. What differs by target (`arch`, `simd`, `os`) is left out.
+//!
+//! Nothing is decoded ahead of a lookup: each lookup is a binary search of
+//! the embedded text, so a program pays only for the paths it names.
+// Shadow mode (D711): only the shadow tests read it until the switch.
+#![allow(dead_code)]
+
+const PATHS: &str = include_str!("std_table/paths.tsv");
+const ITEMS: &str = include_str!("std_table/items.tsv");
+
+/// The pinned toolchain and the target the table was taken for.
+pub(crate) const TOOLCHAIN: &str = include_str!("std_table/TOOLCHAIN");
+
+/// The namespace a path is in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Namespace {
+    Type,
+    Value,
+    Macro,
+}
+
+impl Namespace {
+    const ALL: [Self; 3] = [Self::Type, Self::Value, Self::Macro];
+
+    fn letter(self) -> &'static str {
+        match self {
+            Self::Type => "t",
+            Self::Value => "v",
+            Self::Macro => "m",
+        }
+    }
+}
+
+/// Whether a path or an item may be named on stable Rust.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Stability {
+    Stable,
+    Unstable {
+        feature: &'static str,
+        issue: Option<&'static str>,
+        reason: Option<&'static str>,
+    },
+}
+
+impl Stability {
+    fn parse(text: &'static str) -> Self {
+        let Some(rest) = text.strip_prefix("u ") else {
+            return Self::Stable;
+        };
+        let mut parts = rest.splitn(3, ' ');
+        let feature = parts.next().unwrap_or_default();
+        let some = |part: Option<&'static str>| part.filter(|part| *part != "-");
+        let issue = some(parts.next());
+        let reason = some(parts.next());
+        Self::Unstable {
+            feature,
+            issue,
+            reason,
+        }
+    }
+}
+
+/// A path's line in `paths.tsv`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Path {
+    pub path: &'static str,
+    pub namespace: Namespace,
+    /// `mod`, `struct`, `enum`, `union`, `trait`, `type`, `fn`, `const`,
+    /// `static`, `macro`, `variant`, `primitive`, ..
+    pub kind: &'static str,
+    /// The path's own: unstable when a module on the way or the item is.
+    pub stability: Stability,
+    /// The definition the path names: `alloc::vec::Vec` for `std::vec::Vec`.
+    pub definition: &'static str,
+}
+
+impl Path {
+    /// Whether the path names a type, as a type position may write it.
+    pub(crate) fn is_type(&self) -> bool {
+        matches!(
+            self.kind,
+            "struct" | "enum" | "union" | "type" | "primitive" | "foreign-type"
+        )
+    }
+}
+
+/// An item's line in `items.tsv`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Item {
+    pub definition: &'static str,
+    pub kind: &'static str,
+    pub stability: Stability,
+    extra: &'static str,
+}
+
+/// A generic parameter of a type, trait or function.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Parameter {
+    pub name: &'static str,
+    pub kind: ParameterKind,
+    /// The default type, as rustc prints it: `std::hash::RandomState`.
+    pub default: Option<&'static str>,
+    /// The feature that gates naming it, as `allocator_api` gates `Vec`'s
+    /// `A`.
+    pub unstable: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ParameterKind {
+    Lifetime,
+    Type,
+    Const,
+}
+
+impl Item {
+    /// The item's generic parameters, in order (empty for a member).
+    pub(crate) fn generics(&self) -> impl Iterator<Item = Parameter> {
+        let generics = match self.kind {
+            "struct" | "enum" | "union" | "trait" | "type" | "fn" => self.extra,
+            _ => "",
+        };
+        generics
+            .split(' ')
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                let (text, unstable) = match text.split_once('?') {
+                    Some((text, feature)) => (text, Some(feature)),
+                    None => (text, None),
+                };
+                let (text, default) = match text.split_once('=') {
+                    Some((text, default)) => (text, Some(default)),
+                    None => (text, None),
+                };
+                let (name, kind) = if let Some(name) = text.strip_prefix('\'') {
+                    (name, ParameterKind::Lifetime)
+                } else if let Some(name) = text.strip_prefix("const:") {
+                    (name, ParameterKind::Const)
+                } else {
+                    (text, ParameterKind::Type)
+                };
+                Parameter {
+                    name,
+                    kind,
+                    default,
+                    unstable,
+                }
+            })
+    }
+
+    /// The type arity a path to the item may write: the parameters with no
+    /// default, and every one stable Rust may name.
+    pub(crate) fn type_arity(&self) -> (usize, usize) {
+        let mut required = 0;
+        let mut stable = 0;
+        for parameter in self.generics() {
+            if parameter.kind != ParameterKind::Type || parameter.unstable.is_some() {
+                continue;
+            }
+            stable += 1;
+            if parameter.default.is_none() {
+                required += 1;
+            }
+        }
+        (required, stable)
+    }
+
+    /// Whether a trait's member has a default.
+    pub(crate) fn provided(&self) -> bool {
+        self.extra == "provided"
+    }
+}
+
+/// The line of `text` whose key (what comes before its `fields`th tab) is
+/// `key`, by binary search over the sorted text.
+fn find(text: &'static str, key: &str, fields: usize) -> Option<&'static str> {
+    let key_of = |line: &'static str| -> &'static str {
+        let mut end = 0;
+        for _ in 0..fields {
+            match line[end..].find('\t') {
+                Some(tab) => end += tab + 1,
+                None => return line,
+            }
+        }
+        &line[..end.saturating_sub(1)]
+    };
+    let bytes = text.as_bytes();
+    let line_at = |position: usize| -> (usize, &'static str) {
+        let start = bytes[..position]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| start + newline);
+        (start, &text[start..end])
+    };
+    let (mut low, mut high) = (0, bytes.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let (start, line) = line_at(middle);
+        match key_of(line).cmp(key) {
+            std::cmp::Ordering::Equal => return Some(line),
+            std::cmp::Ordering::Less => low = start + line.len() + 1,
+            std::cmp::Ordering::Greater => high = start,
+        }
+    }
+    None
+}
+
+fn path_line(line: &'static str) -> Path {
+    let mut fields = line.split('\t');
+    let path = fields.next().unwrap_or_default();
+    let namespace = match fields.next() {
+        Some("v") => Namespace::Value,
+        Some("m") => Namespace::Macro,
+        _ => Namespace::Type,
+    };
+    let kind = fields.next().unwrap_or_default();
+    let stability = Stability::parse(fields.next().unwrap_or("s"));
+    let definition = match fields.next() {
+        Some("=") | None => path,
+        Some(definition) => definition,
+    };
+    Path {
+        path,
+        namespace,
+        kind,
+        stability,
+        definition,
+    }
+}
+
+/// The path `path` in `namespace`, as a program writes it:
+/// `std::collections::HashMap`.
+pub(crate) fn path(path: &str, namespace: Namespace) -> Option<Path> {
+    find(PATHS, &format!("{path}\t{}", namespace.letter()), 2).map(path_line)
+}
+
+/// The path in any namespace: a type's first, then a value's, then a
+/// macro's.
+pub(crate) fn any(path: &str) -> Option<Path> {
+    Namespace::ALL
+        .into_iter()
+        .find_map(|namespace| self::path(path, namespace))
+}
+
+/// Whether `path` is a module.
+pub(crate) fn is_module(path: &str) -> bool {
+    self::path(path, Namespace::Type).is_some_and(|found| found.kind == "mod")
+}
+
+/// The definition `definition`, or a member of one: `alloc::vec::Vec`,
+/// `alloc::vec::Vec::push`, `i64::pow`.
+pub(crate) fn item(definition: &str) -> Option<Item> {
+    let line = find(ITEMS, definition, 1)?;
+    let mut fields = line.split('\t');
+    let definition = fields.next().unwrap_or_default();
+    let kind = fields.next().unwrap_or_default();
+    let stability = Stability::parse(fields.next().unwrap_or("s"));
+    let extra = fields.next().unwrap_or_default();
+    Some(Item {
+        definition,
+        kind,
+        stability,
+        extra,
+    })
+}
+
+/// Whether `name` is a crate of the table: `std`, `core` or `alloc`.
+pub(crate) fn is_root(name: &str) -> bool {
+    matches!(name, "std" | "core" | "alloc")
+}
+
+/// The paths one level under `module`, in every namespace: what
+/// `use module::*;` binds.
+pub(crate) fn children(module: &str) -> impl Iterator<Item = Path> {
+    let prefix = format!("{module}::");
+    // The first line at or after the prefix.
+    let bytes = PATHS.as_bytes();
+    let (mut low, mut high) = (0, bytes.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = bytes[..middle]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| start + newline);
+        if PATHS[start..end] < *prefix.as_str() {
+            low = end + 1;
+        } else {
+            high = start;
+        }
+    }
+    PATHS[low.min(PATHS.len())..]
+        .lines()
+        .take_while(move |line| line.starts_with(&prefix))
+        .map(path_line)
+        .filter(move |found| !found.path[module.len() + 2..].contains("::"))
+}
+
+/// What a path names, through its owner for an associated item:
+/// `std::string::String::from_utf8` is `alloc::string::String::from_utf8`,
+/// and `std::primitive::i64::pow` is `i64::pow`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Resolved {
+    /// A path of `paths.tsv`.
+    Path(Path),
+    /// A member of the type or trait `owner` names.
+    Member { owner: Path, member: Item },
+}
+
+impl Resolved {
+    pub(crate) fn stability(&self) -> Stability {
+        match self {
+            Self::Path(path) => path.stability,
+            Self::Member { owner, member } => match owner.stability {
+                Stability::Stable => member.stability,
+                unstable => unstable,
+            },
+        }
+    }
+
+    /// The definition: `alloc::vec::Vec`, `alloc::vec::Vec::new`.
+    pub(crate) fn definition(&self) -> &'static str {
+        match self {
+            Self::Path(path) => path.definition,
+            Self::Member { member, .. } => member.definition,
+        }
+    }
+}
+
+/// Why a path into std does not resolve, as rustc's resolver says it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Missing {
+    /// The segments that resolve, as written: `core`.
+    pub found: Vec<String>,
+    /// The first segment that doesn't: `thread`.
+    pub segment: String,
+    /// Whether it is the path's last segment.
+    pub last: bool,
+}
+
+/// The path `segments` names, from a root of the table, preferring the
+/// namespace `last` for its last segment. A path through a type or trait
+/// to a member resolves to that member.
+pub(crate) fn resolve(segments: &[&str], last: Namespace) -> Result<Resolved, Missing> {
+    let missing = |index: usize| Missing {
+        found: segments[..index]
+            .iter()
+            .map(|segment| (*segment).to_owned())
+            .collect(),
+        segment: segments[index].to_owned(),
+        last: index + 1 == segments.len(),
+    };
+    if segments.first().is_none_or(|root| !is_root(root)) {
+        return Err(missing(0));
+    }
+    let mut written = segments[0].to_owned();
+    for (index, segment) in segments.iter().enumerate().skip(1) {
+        written.push_str("::");
+        written.push_str(segment);
+        let is_last = index + 1 == segments.len();
+        let found = if is_last {
+            path(&written, last).or_else(|| any(&written))
+        } else {
+            path(&written, Namespace::Type)
+        };
+        if let Some(found) = found {
+            if is_last {
+                return Ok(Resolved::Path(found));
+            }
+            if found.kind == "mod" {
+                continue;
+            }
+            // A type, trait or primitive: the rest is one of its members.
+            let owner = found;
+            if index + 2 != segments.len() {
+                return Err(missing(index + 1));
+            }
+            let member = segments[index + 1];
+            return match item(&format!("{}::{member}", owner.definition)) {
+                Some(member) => Ok(Resolved::Member { owner, member }),
+                None => Err(missing(index + 1)),
+            };
+        }
+        return Err(missing(index));
+    }
+    any(&written).map(Resolved::Path).ok_or_else(|| missing(0))
+}
+
+/// The prelude of `edition` (`2015`, `2018`, `2021`, `2024`): the names
+/// every module of a crate of that edition sees.
+pub(crate) fn prelude(edition: &str) -> impl Iterator<Item = Path> {
+    children(match edition {
+        "2015" => "std::prelude::rust_2015",
+        "2018" => "std::prelude::rust_2018",
+        "2021" => "std::prelude::rust_2021",
+        _ => "std::prelude::rust_2024",
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn std_table_paths_resolve_through_reexports() {
+        let map = path("std::collections::HashMap", Namespace::Type).expect("HashMap");
+        assert_eq!(map.kind, "struct");
+        assert_eq!(map.stability, Stability::Stable);
+        assert_eq!(map.definition, "std::collections::hash::map::HashMap");
+        let vec = path("std::vec::Vec", Namespace::Type).expect("Vec");
+        assert_eq!(vec.definition, "alloc::vec::Vec");
+        // `std::vec` is a module and a macro.
+        assert_eq!(
+            path("std::vec", Namespace::Type).map(|p| p.kind),
+            Some("mod")
+        );
+        assert_eq!(
+            path("std::vec", Namespace::Macro).map(|p| p.kind),
+            Some("macro")
+        );
+        assert!(any("core::collections").is_none());
+        assert!(any("core::time::Instant").is_none());
+        assert!(any("std::time::Instant").is_some());
+    }
+
+    #[test]
+    fn std_table_items_carry_generics_with_defaults() {
+        let map = item("std::collections::hash::map::HashMap").expect("HashMap");
+        let names = map.generics().map(|p| p.name).collect::<Vec<_>>();
+        assert_eq!(names, ["K", "V", "S", "A"]);
+        assert_eq!(map.type_arity(), (2, 3));
+        let s = map.generics().nth(2).expect("S");
+        assert_eq!(s.default, Some("std::hash::RandomState"));
+        let a = map.generics().nth(3).expect("A");
+        assert_eq!(a.unstable, Some("allocator_api"));
+        assert_eq!(
+            item("alloc::vec::Vec").map(|v| v.type_arity()),
+            Some((1, 1))
+        );
+        assert_eq!(
+            item("core::result::Result").map(|v| v.type_arity()),
+            Some((2, 2))
+        );
+    }
+
+    #[test]
+    fn std_table_stability_and_members() {
+        let transmute = path("std::intrinsics::transmute", Namespace::Value).expect("transmute");
+        let Stability::Unstable { feature, .. } = transmute.stability else {
+            panic!("transmute is unstable");
+        };
+        assert_eq!(feature, "core_intrinsics");
+        match resolve(&["std", "string", "String", "from_utf8"], Namespace::Value) {
+            Ok(Resolved::Member { member, .. }) => {
+                assert_eq!(member.definition, "alloc::string::String::from_utf8");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            resolve(&["core", "thread", "sleep"], Namespace::Value),
+            Err(Missing {
+                found: vec!["core".into()],
+                segment: "thread".into(),
+                last: false
+            })
+        );
+        assert!(item("i64::pow").is_some());
+        assert!(item("core::fmt::Display::fmt").is_some_and(|fmt| !fmt.provided()));
+    }
+
+    #[test]
+    fn std_table_children_and_preludes() {
+        let names = children("std::cmp").map(|p| p.path).collect::<Vec<_>>();
+        assert!(names.contains(&"std::cmp::Ordering"));
+        assert!(names.contains(&"std::cmp::max"));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("std::cmp::Ordering::")));
+        let names = prelude("2021").map(|p| p.path).collect::<Vec<_>>();
+        assert!(names.contains(&"std::prelude::rust_2021::TryFrom"));
+        assert!(!prelude("2018").any(|p| p.path.ends_with("::TryFrom")));
+        assert!(prelude("2024").any(|p| p.path.ends_with("::Future")));
+    }
+}

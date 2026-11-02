@@ -46,6 +46,10 @@ mod units;
 #[path = "compiler/std_catalog.rs"]
 pub(super) mod std_catalog;
 
+/// D711 step 1's std table rawr embeds (`--std-table`).
+#[path = "compiler/std_table.rs"]
+pub(super) mod std_table;
+
 use engine::model::{
     Authority, Binding, Id, Namespace, Reexport, ReexportEvidence, ReexportId, ReexportKind,
     Scalar, ScalarPredicateOutcome, ScalarPredicateProof, Span,

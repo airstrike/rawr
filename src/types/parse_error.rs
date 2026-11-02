@@ -449,6 +449,10 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::AsyncMain { .. } => {
                     f.write_str(crate::resolve::ASYNC_MAIN)
                 }
+                crate::resolve::Error::StdPath { message, .. } => f.write_str(message),
+                crate::resolve::Error::NotYet { path, .. } => {
+                    write!(f, "rawr doesn't run `{path}` yet")
+                }
                 crate::resolve::Error::TypeAnnotationsNeeded { parameter, .. } => write!(
                     f,
                     "Type annotations needed: cannot infer the type of the type parameter '{parameter}'"

@@ -140,6 +140,9 @@ fn execute() -> Result<ExitCode, String> {
     {
         return std_catalog(&arguments);
     }
+    if arguments.get(1).is_some_and(|mode| mode == "--std-table") {
+        return std_table(&arguments);
+    }
     if !(6..=7).contains(&arguments.len()) {
         return Err(
             "usage: rawr-import-driver (--probe|--diagnostic-probe) RUSTC PLAN PROTOCOL_DIRECTORY PROBE_SOURCE [REUSE_DIRECTORY]".to_owned(),
@@ -373,6 +376,47 @@ fn std_catalog(arguments: &[String]) -> Result<ExitCode, String> {
             }
         }
         _ => Err(usage()),
+    }
+}
+
+/// D711 step 1: `--std-table RUSTC OUT TARGET` writes the std table rawr
+/// embeds, `OUT/paths.tsv` and `OUT/items.tsv` (`scripts/std-table.sh`).
+fn std_table(arguments: &[String]) -> Result<ExitCode, String> {
+    let [_, _, rustc, out, target] = arguments else {
+        return Err("usage: rawr-import-driver --std-table RUSTC OUT TARGET".to_owned());
+    };
+    let rustc = PathBuf::from(rustc);
+    let out = PathBuf::from(out);
+    let sysroot = rustc
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "pinned rustc has no sysroot parent".to_owned())?;
+    let scratch = std::env::temp_dir().join(format!("rawr-std-table-{}", std::process::id()));
+    fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&out).map_err(|error| error.to_string())?;
+    let source = scratch.join("probe.rs");
+    fs::write(&source, "pub fn probe() {}\n").map_err(|error| error.to_string())?;
+    let compiler_arguments = vec![
+        rustc.display().to_string(),
+        "--crate-name=rawr_std_table".to_owned(),
+        "--edition=2024".to_owned(),
+        "--crate-type=rlib".to_owned(),
+        format!("--target={target}"),
+        format!("--sysroot={}", sysroot.display()),
+        "--emit=metadata".to_owned(),
+        format!("--out-dir={}", scratch.display()),
+        "--cap-lints=allow".to_owned(),
+        source.display().to_string(),
+    ];
+    let mut callbacks = compiler::std_table::StdTable { out, result: None };
+    let exit = rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::run_compiler(&compiler_arguments, &mut callbacks);
+    });
+    let _ = fs::remove_dir_all(&scratch);
+    match callbacks.result {
+        Some(Err(error)) => Err(error),
+        Some(Ok(())) => Ok(ExitCode::SUCCESS),
+        None => Ok(exit),
     }
 }
 

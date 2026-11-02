@@ -672,6 +672,18 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    /// rawr's embedded std table was taken with the pinned toolchain
+    /// (D711): a bump of `CHANNEL` reruns `scripts/std-table.sh`.
+    #[test]
+    fn the_std_table_is_for_the_pinned_toolchain() {
+        let stamp = include_str!("../../../src/std_table/TOOLCHAIN");
+        assert_eq!(
+            stamp.split_whitespace().next(),
+            Some(super::CHANNEL),
+            "src/std_table is for another toolchain; run scripts/std-table.sh"
+        );
+    }
+
     #[test]
     fn executable_identity_rejects_an_alternate_path_with_identical_bytes() {
         let digest = [7_u8; 32];
