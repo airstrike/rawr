@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A provided trait method that lends `Self` to a closure, as `renderer.with_translation(v, |renderer| ..)`, no longer panics a debug build during a cold check's miss-gathering pass (first bad #661–#663, 775663c7c; fixed in 6e794f02c). (#754)
+- A guard-returning method's mutable place reads compile again in the generated runner: two byte-string templates had kept `{copy}` as written (first bad #653, 8810b6fb5; fixed in 651ef5b8f, generator 127). (#755)
+- quick-xml's `read_event_into` loop with attributes runs under `rawr run` as `cargo run` does: a borrowing call's receiver isn't moved by its frame binding, a closure's parameters are given their value at each body entry, lifetime-carrying types are read from the arena instead of cloned out of an accessor, and a frame's `&mut Vec` goes back into the place it came from. It had failed since 30b8a530c (2026-10-26). (#756)
 
 ## 0.3.104 (2026-11-01)
 
