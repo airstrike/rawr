@@ -8375,8 +8375,9 @@ enum Ty {
     Float(Float),
     String,
     /// `&str`: a borrowed string, the same text as a `String` at runtime.
-    /// It is `Copy`, so a use never moves it. It unifies with `String`, as
-    /// Rawr has always taken a `&str` where a `String` is declared.
+    /// It is `Copy`, so a use never moves it. It is a distinct type from
+    /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
+    /// coercion.
     Str,
     InclusiveRange,
     /// `a..=b` of floats: Rust's `RangeInclusive<f64>`, bounds only.
@@ -17533,8 +17534,6 @@ impl<'a> Parser<'a> {
         let mut matched = None;
         let mut matched_stringy = false;
         let mut match_count = 0;
-        let mut matched_exact = false;
-        let mut exact_count = 0_usize;
         for item in items {
             let checkpoint = self.inference.checkpoint();
             let signature =
@@ -17567,36 +17566,14 @@ impl<'a> Parser<'a> {
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;
-                // rustc picks the impl by the argument's exact type: a
-                // literal is a `&'static str`, a `String` value is not,
-                // as iced's `Id::from` of each takes.
-                let exact = repeated
-                    || signature
-                        .inputs
-                        .iter()
-                        .zip(arguments)
-                        .all(|(expected, argument)| {
-                            !matches!(
-                                (
-                                    self.inference.resolve(expected),
-                                    self.inference.resolve(&argument.ty)
-                                ),
-                                (Ty::Str, Ty::String) | (Ty::String, Ty::Str)
-                            )
-                        });
-                exact_count += usize::from(exact);
                 // A form taking a string comes first for an argument whose
                 // type is not known yet.
                 let stringy = signature
                     .inputs
                     .iter()
                     .any(|input| self.inference.resolve(input).is_text());
-                if matched.is_none()
-                    || exact && !matched_exact
-                    || exact == matched_exact && stringy && !matched_stringy
-                {
+                if matched.is_none() || stringy && !matched_stringy {
                     matched_stringy = stringy;
-                    matched_exact = exact;
                     matched = Some((item.clone(), signature, self.inference.patch(checkpoint)));
                 }
             }
@@ -17650,14 +17627,6 @@ impl<'a> Parser<'a> {
             1 => {
                 let (item, signature, patch) =
                     matched.expect("the one form that matched is kept as the match");
-                self.inference.apply(patch);
-                Ok((item, signature))
-            }
-            // Several forms take the arguments, and one takes each string
-            // as the form it is written in.
-            _ if exact_count == 1
-                && let Some((item, signature, patch)) = matched =>
-            {
                 self.inference.apply(patch);
                 Ok((item, signature))
             }
@@ -25639,7 +25608,7 @@ impl<'a> Parser<'a> {
             (&expected, actual),
             (Ty::Int(_), Ty::Int(_))
                 | (Ty::Char, Ty::Char)
-                | (Ty::String | Ty::Str, Ty::String | Ty::Str)
+                | (Ty::Str, Ty::Str)
                 | (Ty::Bool, Ty::Bool)
                 | (Ty::Float(_), Ty::Float(_))
                 | (Ty::Ordering, Ty::Ordering)
@@ -30425,12 +30394,7 @@ impl<'a> Parser<'a> {
                 ][..],
                 Some(Ty::Bool),
             ),
-            // `String + &str` concatenates; Rawr spells both as `String`.
-            Token::Plus => (
-                "+",
-                &[Ty::Int(Int::I64), Ty::Float(Float::F64), Ty::String][..],
-                None,
-            ),
+            Token::Plus => ("+", NUMBERS, None),
             Token::Minus => ("-", NUMBERS, None),
             Token::Multiply => ("*", NUMBERS, None),
             Token::Divide => ("/", NUMBERS, None),
@@ -30466,8 +30430,10 @@ impl<'a> Parser<'a> {
         if let Some(value) = self.time_binary(symbol, lhs.clone(), rhs.clone())? {
             return Ok(value);
         }
-        if symbol == "+" {
-            self.strip_string_reference(&mut rhs);
+        // `impl Add<&str> for String`: a `&String` derefs to the `&str`.
+        if symbol == "+" && self.inference.resolve(&lhs.ty) == Ty::String {
+            self.coerce_expr(&Ty::Str, &mut rhs)?;
+            return Ok(self.binary(lhs, symbol, rhs, Ty::String));
         }
         if matches!(symbol, "<" | ">" | "<=" | ">=")
             && let Some(value) = self.partial_ord_operator(symbol, &lhs, &mut rhs)?
@@ -31480,9 +31446,9 @@ impl<'a> Parser<'a> {
                     None => refused,
                 }
             }
-            (Compared::Ty(Ty::String), Compared::Ty(Ty::String | Ty::Str)) => {
-                Ok(PartialEqImpl::Own)
-            }
+            (Compared::Ty(Ty::String), Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Own),
+            // `impl PartialEq<&str> for String`.
+            (Compared::Ty(Ty::String), Compared::Ty(Ty::Str)) => Ok(PartialEqImpl::Between),
             // `impl PartialEq<str> for String` and `PartialEq<String> for str`.
             (Compared::Ty(Ty::String), Compared::Str)
             | (Compared::Str, Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
@@ -33516,13 +33482,13 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let mut operands = vec![value.rendered_source(), code.to_string().into()];
-                for argument in &arguments {
+                for argument in &mut arguments {
                     let expected = match (name, self.inference.resolve(&argument.ty)) {
                         ("repeat" | "is_char_boundary", _) => Ty::Int(Int::Usize),
                         (_, Ty::Char) => Ty::Char,
-                        _ => Ty::String,
+                        _ => Ty::Str,
                     };
-                    self.require_type(&expected, &argument.ty, argument.span)?;
+                    self.coerce_expr(&expected, argument)?;
                     operands.push(argument.rendered_source());
                 }
                 operands.resize_with(4, || "()".into());
@@ -33559,7 +33525,7 @@ impl<'a> Parser<'a> {
                 for (index, argument) in arguments.iter_mut().enumerate() {
                     let expected = match (member.as_str(), index) {
                         ("insert", 1) => Ty::Char,
-                        ("insert_str", 1) => Ty::String,
+                        ("insert_str", 1) => Ty::Str,
                         _ => Ty::Int(Int::Usize),
                     };
                     self.coerce_expr(&expected, argument)?;
@@ -33590,9 +33556,9 @@ impl<'a> Parser<'a> {
                     self.coerce_expr(&Ty::Int(Int::Usize), count)?;
                     let expected = match self.inference.resolve(&pattern.ty) {
                         Ty::Char => Ty::Char,
-                        _ => Ty::String,
+                        _ => Ty::Str,
                     };
-                    self.require_type(&expected, &pattern.ty, pattern.span)?;
+                    self.coerce_expr(&expected, pattern)?;
                     operands.push(count.rendered_source());
                     operands.push(pattern.rendered_source());
                 }
@@ -33620,13 +33586,14 @@ impl<'a> Parser<'a> {
                 let pieces = self.operator_expr(pieces, array, expression);
                 return Ok(self.array_iterator(&pieces, item, end));
             }
-            ("push_str" | "push", [argument]) => {
+            ("push_str" | "push", [_]) => {
                 let expected = if member.as_str() == "push" {
                     Ty::Char
                 } else {
-                    Ty::String
+                    Ty::Str
                 };
-                self.require_type(&expected, &argument.ty, argument.span)?;
+                self.coerce_expr(&expected, &mut arguments[0])?;
+                let argument = &arguments[0];
                 let Some(Lvalue::Binding { binding, .. }) = &value.lvalue else {
                     // A field, an element or a nested place: changed in
                     // place and stored back like the other `String` changes.
@@ -34312,8 +34279,7 @@ impl<'a> Parser<'a> {
                         span(value.span.start(), end),
                     ));
                 };
-                self.strip_string_reference(text);
-                self.require_type(&Ty::String, &text.ty, text.span)?;
+                self.coerce_expr(&Ty::Str, text)?;
                 let mut source = origin::Fragment::plain("{ ");
                 source.push(value.rendered_source());
                 source.push_text(" += (");
@@ -36826,8 +36792,7 @@ impl<'a> Parser<'a> {
             let [name] = arguments.as_mut_slice() else {
                 return Err(self.unsupported("a debug builder without its one name"));
             };
-            self.strip_string_reference(name);
-            self.require_type(&Ty::String, &name.ty, name.span)?;
+            self.coerce_expr(&Ty::Str, name)?;
             name.rendered_source().surrounded("(", ")")
         };
         let mut parts = Vec::new();
@@ -36848,8 +36813,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 ("debug_struct", "field", [name, field]) => {
-                    self.strip_string_reference(name);
-                    self.require_type(&Ty::String, &name.ty, name.span)?;
+                    self.coerce_expr(&Ty::Str, name)?;
                     let debug =
                         self.debug_source(&field.ty, field.rendered_source(), field.span)?;
                     let mut part = name.rendered_source().surrounded("(", ")");
@@ -39311,8 +39275,7 @@ impl<'a> Parser<'a> {
             }
             "expect" => {
                 arity(1, &arguments)?;
-                self.strip_string_reference(&mut arguments[0]);
-                self.require_type(&Ty::String, &arguments[0].ty, arguments[0].span)?;
+                self.coerce_expr(&Ty::Str, &mut arguments[0])?;
                 let expected = self.prelude_op(
                     PreludeOp::Expect,
                     [o.as_str().into(), arguments[0].rendered_source()],
@@ -39890,8 +39853,7 @@ impl<'a> Parser<'a> {
             }
             "expect" | "expect_err" => {
                 arity(1, &arguments)?;
-                self.strip_string_reference(&mut arguments[0]);
-                self.require_type(&Ty::String, &arguments[0].ty, arguments[0].span)?;
+                self.coerce_expr(&Ty::Str, &mut arguments[0])?;
                 let (op, other, ty) = if member.as_str() == "expect" {
                     (PreludeOp::ExpectOk, &err, ok.clone())
                 } else {
@@ -40962,7 +40924,7 @@ impl<'a> Parser<'a> {
                 }
                 let separator = match arguments.first_mut() {
                     Some(separator) => {
-                        self.coerce_expr(&Ty::String, separator)?;
+                        self.coerce_expr(&Ty::Str, separator)?;
                         separator.rendered_source()
                     }
                     None => "\"\"".into(),
@@ -44475,15 +44437,16 @@ impl<'a> Parser<'a> {
             && let [argument] = arguments.as_mut_slice()
         {
             let source = self.inference.resolve(&argument.ty);
-            // `String::from(&str)`, also of a `String`.
-            if builtin == Ty::String {
-                let mut stripped = argument.clone();
-                self.strip_string_reference(&mut stripped);
-                if self.unifies(&Ty::String, &stripped.ty) {
-                    self.require_type(&Ty::String, &stripped.ty, stripped.span)?;
-                    let source = stripped.rendered_source();
-                    return Ok(self.operator_expr(source, Ty::String, expression));
+            // `String`'s `From<&str>`, `From<&String>` and `From<String>`.
+            if builtin == Ty::String
+                && match &source {
+                    Ty::Str | Ty::String => true,
+                    Ty::Reference { target, .. } => self.inference.resolve(target) == Ty::String,
+                    _ => false,
                 }
+            {
+                let source = argument.rendered_source();
+                return Ok(self.operator_expr(source, Ty::String, expression));
             }
             if let Some((definition, from, _)) =
                 owner.and_then(|id| self.select_conversion(id, None, &source, expression))
@@ -47199,9 +47162,9 @@ impl<'a> Parser<'a> {
             };
             value.ty = source.clone();
         }
-        // Deref coercion: `&String`, or `&Arc<String>`, where `&str`
-        // (`String`) is expected.
-        if target.is_text()
+        // Deref coercion: `&String`, or `&Arc<String>`, where `&str` is
+        // expected.
+        if target == Ty::Str
             && let Some((unboxed, _)) = self.unbox(&source)
         {
             source = unboxed;
@@ -47209,13 +47172,14 @@ impl<'a> Parser<'a> {
         }
         // `&&String` and `&&&str` deref to `&str` through every reference.
         let mut stripped = source.clone();
-        while target.is_text()
+        while target == Ty::Str
             && let Ty::Reference { target: from, .. } = &stripped
             && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
         {
             stripped = inner;
         }
-        if target.is_text() && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
+        if target == Ty::Str
+            && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
         {
             source = Ty::Str;
             value.ty = Ty::Str;
@@ -47691,8 +47655,11 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        // Text converts into a `String`, through `From<&str>` or
+        // `From<T> for T` (or into a boxed error, `box_returned_error`).
         if source.is_text() {
             self.text_into.push(value.span);
+            value.ty = Ty::String;
         }
         Ok(value.retain_origin())
     }
@@ -48199,9 +48166,6 @@ impl<'a> Parser<'a> {
             return true;
         }
         match (&expected, &actual) {
-            // Rawr takes a `&str` where a `String` is declared, and the
-            // other way round.
-            (Ty::String, Ty::Str) | (Ty::Str, Ty::String) => true,
             (Ty::Infer(id), _) => {
                 self.inference.bind(*id, actual);
                 true
@@ -54172,7 +54136,7 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             .unwrap();
 
         for input in [
-            type_ref::Type::builtin(type_ref::Builtin::String),
+            type_ref::Type::reference(false, type_ref::Type::builtin(type_ref::Builtin::String)),
             type_ref::Type::builtin(type_ref::Builtin::I64),
             type_ref::Type::builtin(type_ref::Builtin::Bool),
         ] {

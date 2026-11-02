@@ -178,8 +178,16 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         )?)?;
         Ok::<_, host::Error>(())
     };
-    function(format!("{ERROR}::new"), vec![kind()?, string()], error()?)?;
-    function(format!("{ERROR}::other"), vec![string()], error()?)?;
+    // `impl Into<Box<dyn Error + Send + Sync>>`: a `&str` or a `String`.
+    let text = || Type::reference(false, string());
+    for message in [text(), string()] {
+        function(
+            format!("{ERROR}::new"),
+            vec![kind()?, message.clone()],
+            error()?,
+        )?;
+        function(format!("{ERROR}::other"), vec![message], error()?)?;
+    }
     function(format!("{ERROR}::from"), vec![kind()?], error()?)?;
     let mut method = |path: String, inputs: Vec<Type>, output: Type| {
         builder.item(item::Definition::method(

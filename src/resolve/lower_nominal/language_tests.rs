@@ -1724,7 +1724,7 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
             match w { Some("x") => 1, Some(other) => other.len() as i64, None => 0 }
         }
         fn owned(w: Option<String>) -> i64 {
-            if let Some("hi") = w { 1 } else { 0 }
+            if let Some("hi") = w.as_deref() { 1 } else { 0 }
         }
         fn shape(s: Shape) -> i64 {
             match s { Shape::Circle(1.0) => 1, Shape::Circle(_) => 2, Shape::Square(n @ (4 | 9)) => n, Shape::Square(..=0) => -1, Shape::Square(_) | Shape::Dot => 0 }
@@ -1796,6 +1796,12 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
     );
     rejected("pub fn run() -> i64 { let (a, b) = (1, 2, 3); a } run()");
     rejected("pub fn run() -> i64 { let &x = 1; x } run()");
+    // A string literal is a `&str`, never a `String`: rustc's E0308,
+    // expected `String`, found `&str`.
+    let owned = rejected(
+        r#"fn f(w: Option<String>) -> i64 { if let Some("hi") = w { 1 } else { 0 } } pub fn run() -> i64 { 0 } run()"#,
+    );
+    assert!(owned.contains("expected 'String', found '&str'"), "{owned}");
 }
 
 #[test]
@@ -11975,4 +11981,63 @@ main();
         error.contains("expected '(&str, i64)', found '(&String, {integer})'"),
         "{error}"
     );
+}
+
+/// `String` and `&str` are two types, as rustc types them (#706). A
+/// `&String` becomes a `&str` only by deref coercion at a coercion site,
+/// `String::from` takes a `&str`, a `&String` or a `String`, and
+/// `.to_string()` and `.into()` make the `String` a declaration needs.
+/// rustc prints `ANN ANN ann ann`, `bo cy diannann annannann`, `3 2` and
+/// `true true`.
+#[test]
+fn language_string_and_str_are_distinct_types() {
+    assert_eq!(
+        printed(
+            r#"
+struct Label { text: String }
+fn shout(name: &str) -> String { name.to_uppercase() }
+fn keep(name: String) -> usize { name.len() }
+fn main() {
+    let s = String::from("ann");
+    let r: &String = &s;
+    let copy = String::from(&s);
+    let again = String::from(r);
+    let owned: String = "bo".into();
+    let label = Label { text: "cy".into() };
+    let t = "di".to_string() + &s + r;
+    let mut u = s.clone();
+    u += &copy;
+    u.push_str(&again);
+    println!("{} {} {} {}", shout(&s), shout(r), copy, again);
+    println!("{} {} {} {}", owned, label.text, t, u);
+    println!("{} {}", keep(s.to_string()), keep("ed".into()));
+    println!("{} {}", s == "ann", "ann" == s);
+}
+main();
+"#
+        ),
+        "ANN ANN ann ann\nbo cy diannann annannann\n3 2\ntrue true\n"
+    );
+    // rustc's E0308 for each: expected `String`, found `&str`.
+    for source in [
+        r#"fn greet(name: String) -> usize { name.len() } fn main() { greet("Ann"); } main();"#,
+        r#"fn main() { let s: String = "x"; } main();"#,
+        r#"struct Label { text: String } fn main() { let l = Label { text: "x" }; } main();"#,
+    ] {
+        let error = rejected(source);
+        assert!(error.contains("expected 'String', found '&str'"), "{error}");
+    }
+    // A `&String` is no `String`: expected `String`, found `&String`.
+    let error = rejected(
+        r#"fn keep(name: String) -> usize { name.len() } fn main() { let s = String::from("a"); keep(&s); } main();"#,
+    );
+    assert!(
+        error.contains("expected 'String', found '&String'"),
+        "{error}"
+    );
+    // `String + String`: `Add` takes a `&str`, expected `&str`, found `String`.
+    let error = rejected(
+        r#"fn main() { let s = String::from("a"); let t = String::from("b"); let u = s + t; } main();"#,
+    );
+    assert!(error.contains("expected '&str', found 'String'"), "{error}");
 }
