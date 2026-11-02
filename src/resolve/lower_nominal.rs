@@ -18,6 +18,7 @@ use places::PlacePattern;
 mod reborrow;
 mod reverse;
 mod std_impl;
+mod std_method;
 
 #[cfg(test)]
 mod argument_count_tests;
@@ -36,6 +37,8 @@ mod placeholder_tests;
 mod rust_meaning_tests;
 #[cfg(test)]
 mod std_impl_tests;
+#[cfg(test)]
+mod std_method_tests;
 
 use super::borrowck::{
     record,
@@ -6780,124 +6783,6 @@ const FLOAT_BINARY_METHODS: &[(&str, &str)] = &[
     ("div_euclid", "div_euclid"),
 ];
 
-/// Whether a builtin type has an inherent method `member` of its own:
-/// Rust's method lookup finds it before any trait's function of
-/// that name, so `s.len()` stays `String::len` under a crate `len`.
-fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
-    match ty {
-        Ty::Int(_) => matches!(member, "pow" | "to_string" | "abs" | "signum"),
-        Ty::Float(_) => {
-            matches!(member, "powi" | "powf")
-                || FLOAT_UNARY_METHODS.iter().any(|(name, _)| *name == member)
-                || FLOAT_BINARY_METHODS.iter().any(|(name, _)| *name == member)
-        }
-        Ty::Char => member == "to_string" || CHAR_METHODS.iter().any(|(name, _)| *name == member),
-        Ty::Bool => member == "to_string",
-        Ty::String | Ty::Str => matches!(
-            member,
-            "len"
-                | "is_empty"
-                | "to_string"
-                | "clone"
-                | "as_str"
-                | "to_uppercase"
-                | "to_lowercase"
-                | "contains"
-                | "starts_with"
-                | "ends_with"
-                | "push_str"
-                | "push"
-                | "pop"
-                | "clear"
-                | "insert"
-                | "insert_str"
-                | "remove"
-                | "truncate"
-                | "split_off"
-                | "bytes"
-                | "as_bytes"
-                | "into_bytes"
-                | "char_indices"
-                | "splitn"
-                | "rsplitn"
-                | "retain"
-        ),
-        Ty::Array { .. } => matches!(
-            member,
-            "len"
-                | "is_empty"
-                | "capacity"
-                | "iter"
-                | "clone"
-                | "to_vec"
-                | "contains"
-                | "push"
-                | "sort"
-                | "sort_by"
-                | "sort_by_key"
-                | "sort_unstable"
-                | "sort_unstable_by"
-                | "sort_unstable_by_key"
-        ),
-        Ty::Option(_) => matches!(
-            member,
-            "is_some"
-                | "is_none"
-                | "unwrap"
-                | "expect"
-                | "unwrap_or"
-                | "unwrap_or_default"
-                | "unwrap_or_else"
-                | "map"
-                | "and_then"
-                | "map_or"
-                | "is_some_and"
-                | "is_none_or"
-                | "filter"
-                | "or"
-                | "xor"
-                | "or_else"
-                | "and"
-                | "zip"
-                | "ok_or"
-                | "ok_or_else"
-                | "as_ref"
-                | "as_mut"
-                | "as_deref"
-                | "as_deref_mut"
-                | "copied"
-                | "cloned"
-                | "clone"
-                | "take"
-                | "replace"
-        ),
-        Ty::Result(..) => matches!(
-            member,
-            "is_ok"
-                | "is_err"
-                | "is_ok_and"
-                | "is_err_and"
-                | "ok"
-                | "err"
-                | "unwrap"
-                | "unwrap_err"
-                | "expect"
-                | "expect_err"
-                | "unwrap_or"
-                | "unwrap_or_default"
-                | "unwrap_or_else"
-                | "map"
-                | "and_then"
-                | "map_err"
-                | "or_else"
-                | "as_ref"
-                | "as_mut"
-                | "clone"
-        ),
-        _ => false,
-    }
-}
-
 /// The step of Rust's method probe a receiver mode is found at: by value
 /// (`self`), then by `&`, then by `&mut`.
 fn receiver_rank(mode: receiver::Mode) -> u8 {
@@ -6930,35 +6815,6 @@ fn probe_rank(receiver: &Ty, mode: receiver::Mode) -> u8 {
         ],
     };
     order.iter().position(|step| *step == mode).unwrap_or(0) as u8
-}
-
-/// The probe step of a builtin's inherent method `member` (one
-/// `builtin_inherent_method` lists): `i64::pow` and `Option::unwrap`
-/// take `self`, `String::len` takes `&self`, `Vec::push` `&mut self`.
-fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
-    match ty {
-        Ty::Int(_) => match member {
-            "pow" => 0,
-            _ => 1,
-        },
-        Ty::Float(_) => 0,
-        Ty::String | Ty::Str | Ty::Array { .. } => match member {
-            "push" | "push_str" | "pop" | "clear" | "insert" | "insert_str" | "remove"
-            | "truncate" | "split_off" | "retain" => 2,
-            _ => 1,
-        },
-        Ty::Option(_) => match member {
-            "is_some" | "is_none" | "as_ref" | "as_deref" | "clone" => 1,
-            "as_mut" | "as_deref_mut" | "take" | "replace" => 2,
-            _ => 0,
-        },
-        Ty::Result(..) => match member {
-            "is_ok" | "is_err" | "as_ref" | "clone" => 1,
-            "as_mut" => 2,
-            _ => 0,
-        },
-        _ => 1,
-    }
 }
 
 /// The impl-owner id of a type: a script type's definition, a builtin
@@ -10613,6 +10469,9 @@ struct PendingConversion {
     /// A facade value's `.into()`: its type's own `into` forms, chosen by
     /// their output, or the target's `from` of it.
     host: Option<HostInto>,
+    /// `.try_into()`: the error type of the `Result` it gives, the target's
+    /// `TryFrom::Error` (#757).
+    try_from: Option<Ty>,
 }
 
 /// The `into` forms of a facade value's type, and the value's span.
@@ -11435,6 +11294,10 @@ struct Parser<'a> {
     /// the position of the method it was rewritten to (`path_method_call`):
     /// a text receiver takes the method the trait's impl for `&str` gives.
     spliced_traits: BTreeMap<Position, ImmutableString>,
+    /// Each method call's native receiver type, by its member's position:
+    /// what a method std declares and rawr doesn't run yet is looked up
+    /// on (`inherent_not_yet`).
+    std_probed: BTreeMap<Position, Ty>,
     /// The turbofish of the host function call whose signature is being
     /// instantiated (`rand::random::<f64>()`).
     host_turbofish: Option<Vec<Ty>>,
@@ -11730,6 +11593,7 @@ impl<'a> Parser<'a> {
             generics: BTreeMap::new(),
             pending_turbofish: None,
             spliced_traits: BTreeMap::new(),
+            std_probed: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
@@ -15575,27 +15439,6 @@ impl<'a> Parser<'a> {
                 tokens.extend(without_reference(right));
                 tokens.extend([(Token::RightParen, close), (Token::RightParen, close)]);
             }
-            // `Clone::clone_from(&mut a, &b)`: std's provided body,
-            // `*self = source.clone()`, which is `a = b.clone()`.
-            ("Clone", "clone_from") => {
-                let (place, rest) = split_first_argument(arguments);
-                let (source, extra) = split_first_argument(rest);
-                if source.is_empty() || !extra.is_empty() {
-                    return Err(expects(2));
-                }
-                tokens = vec![(Token::LeftBrace, start)];
-                tokens.extend(without_borrow(place));
-                tokens.extend([(Token::Equals, close), (Token::LeftParen, close)]);
-                tokens.extend(without_reference(source));
-                tokens.extend([
-                    (Token::RightParen, close),
-                    (Token::Period, close),
-                    (identifier("clone"), close),
-                    (Token::Unit, close),
-                    (Token::SemiColon, close),
-                    (Token::RightBrace, close),
-                ]);
-            }
             // `FromStr::from_str(s)` is `s.parse()`, which is std's own
             // `FromStr` lookup by the expected type.
             ("FromStr", "from_str") => {
@@ -16305,6 +16148,194 @@ impl<'a> Parser<'a> {
         fits
     }
 
+    /// The program's `impl TryFrom<S> for T` functions: each `try_from`
+    /// with the type it takes, its impl's parameters fresh.
+    fn program_try_froms(&mut self) -> Vec<(method::Definition, Ty, Ty)> {
+        let definitions = self
+            .models
+            .trait_methods
+            .iter()
+            .filter(|((_, member), _)| member.as_str() == "try_from")
+            .flat_map(|(_, definitions)| definitions.iter())
+            .filter(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| name == "TryFrom")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        definitions
+            .into_iter()
+            .filter_map(|definition| {
+                let parameter = definition.parameters().first()?.ty.clone();
+                let probe = definition
+                    .generics()
+                    .iter()
+                    .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+                    .collect();
+                let from = instantiate(&Ty::from_resolved(&parameter), &probe);
+                let owner = impl_self_ty(&definition, &probe);
+                Some((definition, from, owner))
+            })
+            .collect()
+    }
+
+    /// Whether some `impl TryFrom<S>` of the program takes a `source`.
+    fn program_try_from(&mut self, source: &Ty) -> bool {
+        self.program_try_froms()
+            .into_iter()
+            .any(|(_, from, _)| self.unifies(&from, source))
+    }
+
+    /// `value.try_into()` where a program's `TryFrom` may take it: a
+    /// `Result` of the target the use site needs, through that target's
+    /// `try_from` (`finish_conversions`).
+    fn parse_try_into(&mut self, value: ParsedExpr, end: Position) -> ParsedExpr {
+        let source = self.inference.resolve(&value.ty);
+        let expression = span(value.span.start(), end);
+        let placeholder = conversion_placeholder(self.pending_conversions.len());
+        let width = placeholder.len() + 1;
+        let placeholder = format!("{placeholder:_<width$}");
+        let target = self.inference.fresh();
+        let error = self.inference.fresh();
+        self.pending_conversions.push(PendingConversion {
+            placeholder: placeholder.clone(),
+            source,
+            target: target.clone(),
+            span: expression,
+            host: None,
+            try_from: Some(error.clone()),
+        });
+        let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+        rendered.push_text(")");
+        self.operator_expr(
+            rendered,
+            Ty::Result(Box::new(target), Box::new(error)),
+            expression,
+        )
+    }
+
+    /// The helper of `source.try_into()` into `target`: the program's
+    /// `TryFrom<source>` for it, its `Error` the call's `error`.
+    fn try_from_helper(
+        &mut self,
+        target: &Ty,
+        source: &Ty,
+        error: &Ty,
+        call: Span,
+    ) -> Result<String, Error> {
+        for (definition, from, owner) in self.program_try_froms() {
+            let checkpoint = self.inference.checkpoint();
+            if !(self.unify_type(&owner, target) && self.unify_type(&from, source)) {
+                self.inference.rollback(checkpoint);
+                continue;
+            }
+            self.inference.commit(checkpoint);
+            let declared = self.inference.resolve(&Ty::Projection(
+                Box::new(target.clone()),
+                "TryFrom".into(),
+                "Error".into(),
+            ));
+            if !matches!(declared, Ty::Projection(..)) {
+                self.unify_type(error, &declared);
+            }
+            return Ok(method_name(definition.id()));
+        }
+        let (source, target) = (source.name(&self.models), target.name(&self.models));
+        Err(Error::MissingCapability {
+            owner: target.clone(),
+            capability: format!("TryFrom<{source}>").into(),
+            operation: call,
+            derive: false,
+            required_by: None,
+        })
+    }
+
+    /// Whether `value.clone_from(..)` is `Clone`'s provided method: the
+    /// value's type is `Clone` and declares no `clone_from` of its own.
+    fn provided_clone_from(&mut self, value: &ParsedExpr) -> bool {
+        let ty = self.inference.resolve(&value.ty);
+        let ty = without_references(&ty).clone();
+        if let Ty::Script(id, _) = &ty
+            && self.own_member(*id, "clone_from")
+        {
+            return false;
+        }
+        self.type_provides(&ty, capability::Kind::Clone)
+    }
+
+    /// `place.clone_from(&source)`: std's provided body, `*self =
+    /// source.clone()`, into the receiver's place.
+    fn parse_clone_from(
+        &mut self,
+        mut value: ParsedExpr,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        // `Clone::clone_from(&mut a, &b)` is `(a).clone_from(&b)`: `a`'s
+        // place.
+        if value.lvalue.is_none()
+            && let Some(name) = variable_name(
+                value
+                    .source
+                    .as_str()
+                    .trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace()),
+            )
+            && self.bindings.contains_key(name.as_str())
+        {
+            value.lvalue = Some(Lvalue::Binding {
+                binding: name,
+                ty: value.ty.clone(),
+            });
+        }
+        let (arguments, close) = self.take_argument_tokens()?;
+        let (source, extra) = split_first_argument(arguments);
+        let call = span(value.span.start(), close);
+        if source.is_empty() || !extra.is_empty() {
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified("Clone", "clone_from").to_string(),
+                1,
+                usize::from(!source.is_empty()) + usize::from(!extra.is_empty()),
+                call,
+            ));
+        }
+        if let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue
+            && !matches!(self.inference.resolve(&value.ty), Ty::Reference { .. })
+            && let Some(binding) = self.mutation_binding(name)
+            && !binding.mutable
+            && matches!(binding.kind, BindingKind::Local | BindingKind::Invocation)
+        {
+            return Err(Error::BorrowConflict {
+                code: "E0596",
+                message: format!(
+                    "cannot borrow `{name}` as mutable, as it is not declared as mutable"
+                )
+                .into(),
+                access: value.span,
+                borrow: Span::NONE,
+            });
+        }
+        let identifier = |name: &str| Token::Identifier(Box::new(name.into()));
+        let mut tokens = vec![(Token::LeftParen, member_span.start())];
+        tokens.extend(without_reference(source));
+        tokens.extend([
+            (Token::RightParen, close),
+            (Token::Period, close),
+            (identifier("clone"), close),
+            (Token::Unit, close),
+        ]);
+        self.splice_tokens(tokens);
+        let mut cloned = self.parse_expr()?;
+        let target = without_references(&self.inference.resolve(&value.ty)).clone();
+        self.coerce_expr(&target, &mut cloned)?;
+        let mut source = origin::Fragment::plain("{ ");
+        source.push(self.keyed_place(&value)?);
+        source.push_text(" = ");
+        source.push(cloned.rendered_source());
+        source.push_text("; }");
+        Ok(self.operator_expr(source, Ty::Unit, call))
+    }
+
     /// Whether some `impl From<T>` could take a value of type `source`.
     fn converts_from(&mut self, source: &Ty) -> bool {
         // The prelude's `From<bool>` and `From<char>`.
@@ -16372,6 +16403,7 @@ impl<'a> Parser<'a> {
             target: target.clone(),
             span: expression,
             host: None,
+            try_from: None,
         });
         // `placeholder(value))`: the placeholder becomes `helper(`, or
         // `dispatcher(witness, ` for a generic target.
@@ -16433,6 +16465,7 @@ impl<'a> Parser<'a> {
                 owner,
                 receiver: value.span,
             }),
+            try_from: None,
         });
         let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
         rendered.push_text(")");
@@ -16568,7 +16601,9 @@ impl<'a> Parser<'a> {
         let pending = std::mem::take(&mut self.pending_conversions);
         for conversion in pending {
             let target = self.inference.resolve(&conversion.target);
-            let helper = if matches!(target, Ty::Infer(_)) {
+            let helper = if let Some(error) = &conversion.try_from {
+                self.try_from_helper(&target, &conversion.source, error, conversion.span)?
+            } else if matches!(target, Ty::Infer(_)) {
                 let source = conversion.source.name(&self.models);
                 return Err(Error::InvalidMethodCall {
                     owner: source.clone(),
@@ -34166,7 +34201,30 @@ impl<'a> Parser<'a> {
     }
 
     /// The postfix operations after the primary `value`.
-    fn parse_postfix_of(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
+    fn parse_postfix_of(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
+        self.parse_postfix_steps(value)
+            .map_err(|error| self.inherent_not_yet(error))
+    }
+
+    /// A method std declares on a native type that rawr doesn't run yet
+    /// resolves, and fails at its use (D712.1): `v.dedup_by_key(f)` is
+    /// `Vec::dedup_by_key`'s not-yet error, never an unknown member.
+    fn inherent_not_yet(&self, error: Error) -> Error {
+        if let Error::UnknownMember {
+            member, reference, ..
+        } = &error
+            && let Some(ty) = self.std_probed.get(&reference.start())
+            && let Some(found) = std_method::inherent(ty, member)
+        {
+            return Error::NotYet {
+                path: std_method::path(&found).into(),
+                reference: *reference,
+            };
+        }
+        error
+    }
+
+    fn parse_postfix_steps(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
         // `b.clone()` on a `Box<T>` clones the box: the type to give back.
         let mut rebox: Option<Ty> = None;
         // The method call the last step made, whose value is `value` now.
@@ -34385,6 +34443,25 @@ impl<'a> Parser<'a> {
                         .any(|name| name == "Into")
                 })
             };
+            // `a.clone_from(&b)`: `Clone`'s provided method, which std's
+            // body runs as `*self = source.clone()` (#759).
+            if member == "clone_from"
+                && matches!(self.peek(), Token::LeftParen)
+                && self.provided_clone_from(&value)
+            {
+                value = self.parse_clone_from(value, member_span)?;
+                continue;
+            }
+            // `x.try_into()` into a program type: its `TryFrom` impl, chosen
+            // once the target is known, as `into` is (#757).
+            if member == "try_into"
+                && matches!(self.peek(), Token::Unit)
+                && self.program_try_from(&self.inference.resolve(&value.ty))
+            {
+                let end = self.next().1;
+                value = self.parse_try_into(value, end);
+                continue;
+            }
             if member == "into" && matches!(self.peek(), Token::Unit) && !bounded_into {
                 let end = self.next().1;
                 let source = self.inference.resolve(&value.ty);
@@ -34538,6 +34615,52 @@ impl<'a> Parser<'a> {
                 && let inner @ Ty::Reference { .. } = self.inference.resolve(target)
             {
                 builtin = inner;
+            }
+            self.std_probed
+                .insert(member_span.start(), without_references(&builtin).clone());
+            // std's `&mut self` method on a local not declared `mut`
+            // (rustc's E0596), as its declaration takes its receiver.
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && !matches!(builtin, Ty::Reference { .. } | Ty::Str)
+                && let Some(Lvalue::Binding { binding: name, .. }) = &value.lvalue
+                && let Some(binding) = self.mutation_binding(name)
+                && !binding.mutable
+                && matches!(binding.kind, BindingKind::Local | BindingKind::Invocation)
+                && std_method::inherent(&builtin, &member)
+                    .is_some_and(|found| found.mode == receiver::Mode::Mutable)
+                && !owner_id(&builtin).is_some_and(|owner| {
+                    self.models
+                        .trait_methods
+                        .contains_key(&(owner, member.clone()))
+                })
+            {
+                return Err(Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                });
+            }
+            // std's method of a `String`, `Vec` or map that takes `self`
+            // moves it out of its place (`s.into_bytes()`).
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && matches!(
+                    builtin,
+                    Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
+                )
+                && std_method::inherent(&builtin, &member).is_some_and(|found| {
+                    found.mode == receiver::Mode::Owned && found.owner != "slice"
+                })
+                && !owner_id(&builtin).is_some_and(|owner| {
+                    self.models
+                        .trait_methods
+                        .contains_key(&(owner, member.clone()))
+                })
+            {
+                self.move_local(&mut value.clone())?;
             }
             // `Trait::method(value, ..)` of a crate's trait on an `Option`,
             // `Result` or `Vec` the crate implements it for, as `column!`'s
@@ -34715,12 +34838,14 @@ impl<'a> Parser<'a> {
                                     .min()
                             })
                             .is_some_and(|rank| {
-                                rank < builtin_inherent_receiver_rank(&receiver, &member)
+                                std_method::inherent(&receiver, &member)
+                                    .is_some_and(|found| rank < found.rank)
                             })
                 };
                 if let Some(owner) = owner_id(&receiver)
                     && (owner.builtin_code().is_some() || matches!(receiver, Ty::Host { .. }))
-                    && (!builtin_inherent_method(&receiver, &member) || by_value_first(self, owner))
+                    && (std_method::inherent(&receiver, &member).is_none()
+                        || by_value_first(self, owner))
                     && self
                         .models
                         .trait_methods

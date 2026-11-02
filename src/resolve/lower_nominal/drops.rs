@@ -1601,38 +1601,10 @@ impl Parser<'_> {
         arguments: &[ParsedExpr],
         at: Span,
     ) -> Result<(), Error> {
-        let by_reference = matches!(
-            member,
-            "is_some"
-                | "is_none"
-                | "is_ok"
-                | "is_err"
-                | "as_ref"
-                | "as_mut"
-                | "as_deref"
-                | "as_deref_mut"
-                | "iter"
-                | "iter_mut"
-                | "take"
-                | "take_if"
-                | "replace"
-                | "insert"
-                | "get_or_insert"
-                | "get_or_insert_default"
-                | "get_or_insert_with"
-                | "clone"
-                | "eq"
-                | "ne"
-                | "as_slice"
-                | "to_owned"
-                | "cmp"
-                | "partial_cmp"
-                | "lt"
-                | "le"
-                | "gt"
-                | "ge"
-                | "hash"
-        );
+        // How std's declaration takes the receiver (D711 step 4).
+        let owner = self.inference.resolve(&value.ty);
+        let by_reference = super::std_method::receiver_mode(without_references(&owner), member)
+            .is_some_and(|mode| mode != crate::receiver::Mode::Owned);
         // `r.unwrap()` of an `&Option<String>`: a method that takes the
         // value moves it out from behind the reference, rustc's E0507.
         if let Ty::Reference { mutable, target } = self.inference.resolve(&value.ty) {

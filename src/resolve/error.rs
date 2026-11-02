@@ -326,7 +326,7 @@ pub enum Error {
     /// borrow checker reports it.
     BorrowConflict {
         /// rustc's code: E0106, E0373, E0499, E0500, E0501, E0502, E0503,
-        /// E0505, E0506, E0515, E0524, E0597, E0621 or E0716, or `lifetime`
+        /// E0505, E0506, E0515, E0524, E0596, E0597, E0621 or E0716, or `lifetime`
         /// for rustc's "lifetime may not live long enough", which has none.
         code: &'static str,
         /// rustc's message.

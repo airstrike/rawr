@@ -1140,7 +1140,11 @@ impl Parser<'_> {
         let output = self.inference.resolve(&value.ty);
         let summary = match self.call_summaries.remove(&end) {
             Some(summary) => summary,
-            None => builtin_summary(&receiver.ty, &output, member).unwrap_or_else(Summary::unknown),
+            // std's inherent method's, from its declaration (D711 step
+            // 4), else a std trait method's rawr binds.
+            None => super::std_method::summary(&receiver.ty, &output, member)
+                .or_else(|| builtin_summary(&receiver.ty, &output, member))
+                .unwrap_or_else(Summary::unknown),
         };
         // A `&mut self` call whose lowering recorded no borrow of its place
         // (`o.take()`): its two-phase borrow, reserved where the receiver
@@ -1697,11 +1701,13 @@ struct CallInputs<'a> {
     taken: Option<Option<Held>>,
 }
 
-/// What std's method `member` on a builtin value of type `receiver`, whose
-/// value has type `output`, keeps of its receiver and arguments, position by
-/// position, as its signature says, or `None` for one not listed. A method
-/// whose value holds no borrow needs no entry unless it stores its
-/// arguments.
+/// What a std trait method rawr binds (`clone`, `as_ref`, `into_iter`,
+/// `extend`, an iterator's adapters), or a `VecDeque` method, on a builtin
+/// value of type `receiver`, whose value has type `output`, keeps of its
+/// receiver and arguments, position by position, as its signature says, or
+/// `None` for one not listed. An inherent method's comes from its
+/// declaration (`std_method::summary`, D711 step 4). A method whose value
+/// holds no borrow needs no entry unless it stores its arguments.
 ///
 /// The receiver is as the method takes it: for `&self`, `[Own]` is the
 /// borrow and `Self` is below `[Arg(0)]`.
@@ -1726,11 +1732,10 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
     let entry =
         |mode, output: Vec<Tap>, stores: Vec<Tap>| Some(Summary::taps(Some(mode), output, stores));
     // All of the receiver, borrow and all, at every position: a value
-    // whose regions are all the borrow's (`s.trim()`).
+    // whose regions are all the borrow's (`s.as_ref()`).
     let all = || vec![tap(&[], own(&[O]))];
     // All of what `&self` refers to, without the borrow, at every position:
-    // a value these facts don't place (`v.remove(i)` of a `Vec` or a
-    // `VecDeque`).
+    // a value these facts don't place (`d.remove(i)` of a `VecDeque`).
     let inner = || vec![tap(&[], own(&[A0, O]))];
     // `&'a T` of what `&'a self` refers to at `at`, placed at `into`.
     let reference = |into: &[Step], at: &[Step]| {
@@ -1750,112 +1755,37 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
     };
     let map = |arguments: &[Ty]| arguments.len() == 2;
     match ty {
+        // `Vec`'s and `[T]`'s own are std's; a `VecDeque`, which is rawr's
+        // `Vec` too, has its own here.
         Ty::Array { .. } => match member {
-            // `v.get(1..3)` gives a slice.
-            "get" | "get_mut"
-                if matches!(output, Ty::Option(item)
-                    if matches!(&**item, Ty::Reference { target, .. }
-                        if matches!(&**target, Ty::Array { .. }))) =>
-            {
-                entry(Shared, vec![tap(&[A0], own(&[]))], Vec::new())
-            }
-            "first" | "last" | "get" | "front" | "back" => {
-                entry(Shared, reference(&[A0], &[A0]), Vec::new())
-            }
-            "get_mut" | "first_mut" | "last_mut" | "front_mut" | "back_mut" => {
-                entry(Mutable, reference(&[A0], &[A0]), Vec::new())
-            }
-            "iter" => entry(Shared, iter(&[A0]), Vec::new()),
-            "iter_mut" => entry(Mutable, iter(&[A0]), Vec::new()),
-            "as_slice" | "as_ref" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
-            "as_mut_slice" | "as_mut" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
-            "split_at" => entry(
-                Shared,
-                vec![tap(&[A0], own(&[])), tap(&[A1], own(&[]))],
-                Vec::new(),
-            ),
-            "split_at_mut" => entry(
-                Mutable,
-                vec![tap(&[A0], own(&[])), tap(&[A1], own(&[]))],
-                Vec::new(),
-            ),
-            "windows" | "chunks" | "chunks_exact" | "rchunks" | "range" => entry(
+            "front" | "back" => entry(Shared, reference(&[A0], &[A0]), Vec::new()),
+            "front_mut" | "back_mut" => entry(Mutable, reference(&[A0], &[A0]), Vec::new()),
+            "range" => entry(
                 Shared,
                 vec![tap(&[O], own(&[O])), tap(&[A0], own(&[]))],
                 Vec::new(),
             ),
-            "split_first" | "split_last" => entry(Shared, all(), Vec::new()),
-            "chunks_mut" | "split_first_mut" | "split_last_mut" => {
-                entry(Mutable, all(), Vec::new())
-            }
-            "drain" => entry(
-                Mutable,
-                vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
-                Vec::new(),
-            ),
-            "to_vec" | "clone" | "to_owned" => {
-                entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new())
-            }
+            "as_ref" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
+            "as_mut" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
+            "clone" | "to_owned" => entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new()),
             "concat" => entry(Shared, inner(), Vec::new()),
-            "pop" | "pop_front" | "pop_back" => {
+            "pop_front" | "pop_back" => {
                 entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
             }
-            "remove" | "swap_remove" => entry(Mutable, inner(), Vec::new()),
-            "split_off" => entry(Mutable, vec![tap(&[], own(&[A0]))], Vec::new()),
             "into_iter" if references > 0 => entry(Owned, iter(&[A0]), Vec::new()),
             "into_iter" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
-            "push" | "push_back" | "push_front" | "fill" => {
+            "push_back" | "push_front" => {
                 entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[]))])
             }
-            "insert" | "resize" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(1, &[]))]),
             "extend" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[O]))]),
-            "append" | "extend_from_slice" => entry(
-                Mutable,
-                Vec::new(),
-                vec![tap(&[A0], argument(0, &[A0, A0]))],
-            ),
             _ => None,
         },
         Ty::String | Ty::Str => match member {
-            "as_str"
-            | "as_bytes"
-            | "chars"
-            | "bytes"
-            | "char_indices"
-            | "lines"
-            | "split_whitespace"
-            | "split_ascii_whitespace"
-            | "trim"
-            | "trim_start"
-            | "trim_end"
-            | "trim_matches"
-            | "trim_start_matches"
-            | "trim_end_matches"
-            | "strip_prefix"
-            | "strip_suffix"
-            | "split_once"
-            | "rsplit_once"
-            | "get"
-            | "as_ref"
-            | "split_at" => entry(Shared, all(), Vec::new()),
-            // `Split<'a, P>` keeps its pattern.
-            "split" | "rsplit" | "split_terminator" | "split_inclusive" | "matches"
-            | "match_indices" => {
-                let mut taps = all();
-                taps.push(tap(&[], argument(0, &[O])));
-                entry(Shared, taps, Vec::new())
-            }
-            "splitn" | "rsplitn" => {
-                let mut taps = all();
-                taps.push(tap(&[], argument(1, &[O])));
-                entry(Shared, taps, Vec::new())
-            }
+            "as_ref" => entry(Shared, all(), Vec::new()),
             _ => None,
         },
         Ty::Keyed(_, arguments) => {
             let map = map(arguments);
-            // Where a map keeps its values, or a set its keys.
-            let values: &[Step] = if map { &[A1] } else { &[A0] };
             // `(&'a K, &'a V)` of a map's entry, or `&'a K` of a set's.
             let entry_ref = |into: &[Step]| {
                 if map {
@@ -1871,48 +1801,6 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
                 }
             };
             match member {
-                "get" | "first" | "last" => entry(Shared, reference(&[A0], values), Vec::new()),
-                "get_mut" => entry(Mutable, reference(&[A0], values), Vec::new()),
-                "get_key_value" | "first_key_value" | "last_key_value" if map => {
-                    entry(Shared, entry_ref(&[A0]), Vec::new())
-                }
-                "iter" | "range" => {
-                    let mut taps = vec![tap(&[O], own(&[O]))];
-                    taps.extend(entry_ref(&[A0]));
-                    entry(Shared, taps, Vec::new())
-                }
-                "iter_mut" => {
-                    let mut taps = vec![tap(&[O], own(&[O]))];
-                    taps.extend(entry_ref(&[A0]));
-                    entry(Mutable, taps, Vec::new())
-                }
-                "keys" => entry(Shared, iter(&[A0]), Vec::new()),
-                "values" => entry(Shared, iter(values), Vec::new()),
-                "values_mut" => entry(Mutable, iter(values), Vec::new()),
-                "union" | "intersection" | "difference" | "symmetric_difference" => {
-                    let mut taps = iter(&[A0]);
-                    taps.push(tap(&[O], argument(0, &[O])));
-                    taps.push(tap(&[A0, O], argument(0, &[O])));
-                    taps.push(tap(&[A0, A0], argument(0, &[A0, A0])));
-                    entry(Shared, taps, Vec::new())
-                }
-                "remove" | "take" => {
-                    let mut at = vec![A0];
-                    at.extend_from_slice(values);
-                    entry(Mutable, vec![tap(&[A0], own(&at))], Vec::new())
-                }
-                "remove_entry" | "pop_first" | "pop_last" if map => {
-                    entry(Mutable, vec![tap(&[A0], own(&[A0]))], Vec::new())
-                }
-                "pop_first" | "pop_last" => {
-                    entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
-                }
-                "insert" if map => entry(
-                    Mutable,
-                    vec![tap(&[A0], own(&[A0, A1]))],
-                    vec![tap(&[A0], argument(0, &[])), tap(&[A1], argument(1, &[]))],
-                ),
-                "insert" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[]))]),
                 "extend" | "push" => entry(Mutable, Vec::new(), vec![tap(&[], argument(0, &[O]))]),
                 "clone" => entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new()),
                 "into_iter" if references > 0 => {
@@ -1922,114 +1810,7 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
                 }
                 // A map's `(K, V)` items are where its arguments are.
                 "into_iter" if map => entry(Owned, vec![tap(&[A0], own(&[]))], Vec::new()),
-                "into_iter" | "into_keys" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
-                "into_values" => entry(Owned, vec![tap(&[A0], own(&[A1]))], Vec::new()),
-                _ => None,
-            }
-        }
-        Ty::Option(_) | Ty::Result(..) => {
-            let result = matches!(ty, Ty::Result(..));
-            // A `Result`'s error stays where it is.
-            let error = |mut taps: Vec<Tap>| {
-                if result {
-                    taps.push(tap(&[A1], own(&[A1])));
-                }
-                taps
-            };
-            match member {
-                "unwrap" | "expect" | "unwrap_or_default" | "unwrap_unchecked" | "flatten" => {
-                    entry(Owned, vec![tap(&[], own(&[A0]))], Vec::new())
-                }
-                "unwrap_err" | "expect_err" => entry(Owned, vec![tap(&[], own(&[A1]))], Vec::new()),
-                "ok" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
-                "err" => entry(Owned, vec![tap(&[A0], own(&[A1]))], Vec::new()),
-                "filter" | "inspect" => entry(Owned, vec![tap(&[], own(&[]))], Vec::new()),
-                "unwrap_or" => entry(
-                    Owned,
-                    vec![tap(&[], own(&[A0])), tap(&[], argument(0, &[]))],
-                    Vec::new(),
-                ),
-                "ok_or" => entry(
-                    Owned,
-                    vec![tap(&[A0], own(&[A0])), tap(&[A1], argument(0, &[]))],
-                    Vec::new(),
-                ),
-                "or" | "xor" => entry(
-                    Owned,
-                    vec![tap(&[], own(&[])), tap(&[], argument(0, &[]))],
-                    Vec::new(),
-                ),
-                "zip" => entry(
-                    Owned,
-                    vec![
-                        tap(&[A0, A0], own(&[A0])),
-                        tap(&[A0, A1], argument(0, &[A0])),
-                    ],
-                    Vec::new(),
-                ),
-                "and" => entry(Owned, vec![tap(&[], argument(0, &[]))], Vec::new()),
-                "as_ref" | "as_mut" => {
-                    let mut taps = reference(&[A0], &[A0]);
-                    if result {
-                        taps.extend(reference(&[A1], &[A1]));
-                    }
-                    entry(
-                        if member == "as_ref" { Shared } else { Mutable },
-                        taps,
-                        Vec::new(),
-                    )
-                }
-                "as_deref" => entry(Shared, all(), Vec::new()),
-                "as_deref_mut" => entry(Mutable, all(), Vec::new()),
-                "iter" => entry(Shared, iter(&[A0]), Vec::new()),
-                "iter_mut" => entry(Mutable, iter(&[A0]), Vec::new()),
-                "get_or_insert" | "insert" => entry(
-                    Mutable,
-                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
-                    vec![tap(&[A0], argument(0, &[]))],
-                ),
-                // What it stores is its closure's value.
-                "get_or_insert_with" => entry(
-                    Mutable,
-                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
-                    vec![tap(&[A0], call(0))],
-                ),
-                "take" => entry(Mutable, vec![tap(&[], own(&[A0]))], Vec::new()),
-                "replace" => entry(
-                    Mutable,
-                    vec![tap(&[], own(&[A0]))],
-                    vec![tap(&[A0], argument(0, &[]))],
-                ),
-                "copied" | "cloned" => {
-                    entry(Owned, error(vec![tap(&[A0], own(&[A0, A0]))]), Vec::new())
-                }
-                "map" => entry(Owned, error(vec![tap(&[A0], call(0))]), Vec::new()),
-                "and_then" => entry(Owned, error(vec![tap(&[], call(0))]), Vec::new()),
-                "unwrap_or_else" => entry(
-                    Owned,
-                    vec![tap(&[], own(&[A0])), tap(&[], call(0))],
-                    Vec::new(),
-                ),
-                "map_or" => entry(
-                    Owned,
-                    vec![tap(&[], argument(0, &[])), tap(&[], call(1))],
-                    Vec::new(),
-                ),
-                "map_or_else" => entry(
-                    Owned,
-                    vec![tap(&[], call(0)), tap(&[], call(1))],
-                    Vec::new(),
-                ),
-                "ok_or_else" | "map_err" => entry(
-                    Owned,
-                    vec![tap(&[A0], own(&[A0])), tap(&[A1], call(0))],
-                    Vec::new(),
-                ),
-                "or_else" => entry(
-                    Owned,
-                    vec![tap(&[], own(&[])), tap(&[], call(0))],
-                    Vec::new(),
-                ),
+                "into_iter" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
                 _ => None,
             }
         }

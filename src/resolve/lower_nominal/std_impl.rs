@@ -37,7 +37,7 @@ const DEPTH: usize = 16;
 /// arguments: `alloc::string::String`, `alloc::vec::Vec` of a `Vec<T>` (or
 /// a slice, which rawr's type also is), `i64`. `None` for a type std
 /// doesn't declare, and for a literal whose kind is still to be inferred.
-fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
+pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
     let one = |ty: &Ty| vec![ty.clone()];
     Some(match ty {
         Ty::Bool => ("bool", Vec::new()),
