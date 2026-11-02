@@ -495,7 +495,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     /// An implementation's own fields and the requests reading them makes.
-    fn implementation_base(&mut self, impl_id: DefId) -> Result<(), String> {
+    pub(super) fn implementation_base(&mut self, impl_id: DefId) -> Result<(), String> {
         match implementation_crate_authority(self.is_sysroot_crate(impl_id.krate)?) {
             ImplementationCrateAuthority::Sysroot => self.register_sysroot(impl_id.krate)?,
             ImplementationCrateAuthority::External => self.register_external(impl_id.krate)?,
