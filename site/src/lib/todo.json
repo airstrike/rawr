@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-02",
-  "version": "0.3.107",
+  "version": "0.3.108",
   "examples": {
     "running": 25,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A method a blanket impl gives through another trait, whose input is the associated type that impl sets, as palette's `hsl.darken(0.075)`, resolves at that type.","issues":[727]},
-        {"text":"A crate function with several callable parameters takes a capturing closure in each, as iced's `Task::sip(sipper, Message::Progress.with(id), Message::Done.with(id))` does, and a closure input that holds a crate value, such as `Result<Bytes, String>`, crosses.","issues":[728]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.108",
+        "date": "2026-11-02",
+        "entries": [
+          {"text":"A method a blanket impl gives through another trait, whose input is the associated type that impl sets, as palette's `hsl.darken(0.075)`, resolves at that type.","issues":[727]},
+          {"text":"A crate function with several callable parameters takes a capturing closure in each, as iced's `Task::sip(sipper, Message::Progress.with(id), Message::Done.with(id))` does, and a closure input that holds a crate value, such as `Result<Bytes, String>`, crosses.","issues":[728]}
+        ]
+      },
       {
         "version": "0.3.107",
         "date": "2026-11-02",
@@ -1798,8 +1800,8 @@
     {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
     {"issue":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"},
-    {"issue":727,"title":"A blanket impl's method whose input is its associated type, set through another trait's projection, has a binding","state":"closed","category":"No glue (D593)"},
-    {"issue":728,"title":"A variant constructor's `.with(x)` fills a callable parameter","state":"closed","category":"No glue (D593)"},
+    {"issue":727,"title":"A blanket impl's method whose input is its associated type, set through another trait's projection, has a binding","state":"closed","category":"No glue (D593)","release":"0.3.108"},
+    {"issue":728,"title":"A variant constructor's `.with(x)` fills a callable parameter","state":"closed","category":"No glue (D593)","release":"0.3.108"},
     {"issue":729,"title":"Task::future of a script future whose output holds no crate value keeps its type for a later method","state":"open","category":"No glue (D593)"},
     {"issue":730,"title":"A native future value passed where a script function expects a future is refused at check time","state":"open","category":"No glue (D593)"},
     {"issue":731,"title":"#[rawr::export] declares a &T parameter as &T, not an owned T","state":"open","category":"Divergences from rustc"},
