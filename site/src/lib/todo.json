@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.95",
+  "version": "0.3.96",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
-        {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.96",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
+          {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
+        ]
+      },
       {
         "version": "0.3.95",
         "date": "2026-11-01",
@@ -1610,8 +1612,8 @@
     {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)","release":"0.3.78"},
     {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
     {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"},
-    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"closed","category":"No glue (D593)"},
-    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"closed","category":"No glue (D593)"},
+    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"closed","category":"No glue (D593)","release":"0.3.96"},
+    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"closed","category":"No glue (D593)","release":"0.3.96"},
     {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
     {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"closed","category":"Health"},
     {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
