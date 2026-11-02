@@ -242,7 +242,17 @@ impl Parser<'_> {
 
     /// What `subject`, begun at `start`, is to the patterns matched on it.
     pub(super) fn matched(&self, subject: &ParsedExpr, start: ValueStart) -> Matched {
-        let place = subject.lvalue.is_some() || self.flow().is_place(subject.span);
+        // A local is the place its use names. The binding a scope frame's
+        // call is read through (`scoped_call`) is the call's value, which
+        // starts where the call's receiver does but is no use of it.
+        let named = match &subject.lvalue {
+            Some(Lvalue::Binding { binding, .. }) => self
+                .flow()
+                .mentioned_local(subject.span.start())
+                .is_some_and(|(mentioned, _)| mentioned == *binding),
+            lvalue => lvalue.is_some(),
+        };
+        let place = named || self.flow().is_place(subject.span);
         let matched = self
             .flow()
             .matched(subject.span.start(), subject.span, place, start);

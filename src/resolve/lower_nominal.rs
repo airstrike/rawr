@@ -21708,7 +21708,17 @@ impl<'a> Parser<'a> {
         {
             scope.consumed.insert(name.clone());
         }
-        self.flow().moved(value.span.start());
+        // The use starting here is the local's own: the binding a scope
+        // frame's call is read through (`scoped_call`) starts where the
+        // call's receiver does, and moving it moves no receiver.
+        let start = value.span.start();
+        if self
+            .flow()
+            .mentioned_local(start)
+            .is_some_and(|(mentioned, _)| mentioned == name)
+        {
+            self.flow().moved(start);
+        }
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             binding.available = false;
         }
