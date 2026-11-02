@@ -3310,8 +3310,14 @@ impl Types {
                 Self::convert_charged(element, parameters)?,
                 usize::try_from(*length).expect("an array length fits in usize"),
             ),
+            // A crate's `[T]`, whose elements a call copies, or its `Vec<T>`.
+            Type::Sequence {
+                element,
+                owned: false,
+                ..
+            } => host::type_ref::Type::slice(Self::convert_charged(element, parameters)?),
             Type::Sequence { element, .. } => {
-                host::type_ref::Type::slice(Self::convert_charged(element, parameters)?)
+                host::type_ref::Type::vec(Self::convert_charged(element, parameters)?)
             }
             Type::Tuple(members) => host::type_ref::Type::tuple(
                 members

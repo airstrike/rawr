@@ -126,7 +126,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>Out-of-range literals such as <code>let x: u8 = 300</code> are accepted.</li>
   <li><code>Sync</code> bounds are not checked. A <code>Send</code> bound refuses an <code>Rc</code>, an <code>Arc</code> of a <code>RefCell</code> and what holds one, and accepts every other type.</li>
 
-  <li><code>VecDeque&lt;T&gt;</code> and <code>Vec&lt;T&gt;</code> are one type to the checker. A <code>Vec</code> takes <code>push_front</code>, and a <code>VecDeque</code> takes <code>sort</code>.</li>
   <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>Returning a field of <code>&amp;self</code> by value, as in <code>fn name(&amp;self) -&gt; String { self.name }</code>, is accepted. rustc reports E0507.</li>

@@ -619,7 +619,7 @@ impl Type {
         }
         // A `Vec` is an array, a `Box` its value, and a map or set an array
         // sorted by key: `(key, value)` pairs or keys.
-        if let Some(element) = ty.vec_element() {
+        if let Some(element) = ty.sequence_element() {
             return Ok(Self::array(
                 Self::from_resolved_in(element, model, parameters)?,
                 None,

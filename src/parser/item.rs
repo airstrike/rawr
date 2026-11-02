@@ -2709,7 +2709,8 @@ fn where_other_type(
     lifetimes: &[crate::item::Name],
 ) -> ParseResult<()> {
     let unsized_path = matches!(predicate, type_ref::Type::Path(path)
-        if unsized_start == Some("[_]") && path.segments[0].name.text == "Vec"
+        if unsized_start == Some("[_]")
+            && path.segments[0].name.text == type_ref::SLICE_TYPE
             || matches!(unsized_start, Some("str" | "dyn _")));
     let other = bounds
         .iter()
@@ -3294,7 +3295,7 @@ fn parse_type_split(
                 }
             }
         } else {
-            "Vec".into()
+            type_ref::SLICE_TYPE.into()
         };
         let end = expect(
             input,

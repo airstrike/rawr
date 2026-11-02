@@ -94,6 +94,17 @@ impl Builtin {
     }
 }
 
+/// Which of Rust's sequence types a host's array is.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Sequence {
+    /// `[T; N]`, of its length.
+    Array(usize),
+    /// `Vec<T>`.
+    Vec,
+    /// `[T]`, whose elements a call copies.
+    Slice,
+}
+
 /// A validated structural type in a static host signature.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Type(Shape);
@@ -102,10 +113,11 @@ pub struct Type(Shape);
 pub(crate) enum Shape {
     Unit,
     Tuple(Box<[Type]>),
-    /// `[T; N]`, or a slice `&[T]` without a length: an array at runtime.
+    /// `[T; N]`, `Vec<T>` or `[T]`, as `sequence` says: an array at
+    /// runtime.
     Array {
         element: Box<Type>,
-        length: Option<usize>,
+        sequence: Sequence,
     },
     /// Rust's `Option<T>`, Rawr's builtin generic enum.
     Option(Box<Type>),
@@ -233,9 +245,9 @@ impl Type {
         Ok(Self(match &self.0 {
             Shape::Unit => Shape::Unit,
             Shape::Tuple(types) => Shape::Tuple(slice(types)?),
-            Shape::Array { element, length } => Shape::Array {
+            Shape::Array { element, sequence } => Shape::Array {
                 element: Box::new(element.try_clone()?),
-                length: *length,
+                sequence: *sequence,
             },
             Shape::Option(element) => Shape::Option(Box::new(element.try_clone()?)),
             Shape::Reference { mutable, target } => Shape::Reference {
@@ -299,16 +311,25 @@ impl Type {
     pub fn array(element: Self, length: usize) -> Self {
         Self(Shape::Array {
             element: Box::new(element),
-            length: Some(length),
+            sequence: Sequence::Array(length),
         })
     }
 
-    /// Construct a slice `&[element]` of any length: an array at runtime.
+    /// Construct a `Vec<element>`: an array at runtime.
+    #[must_use]
+    pub fn vec(element: Self) -> Self {
+        Self(Shape::Array {
+            element: Box::new(element),
+            sequence: Sequence::Vec,
+        })
+    }
+
+    /// Construct a slice `[element]` of any length: an array at runtime.
     #[must_use]
     pub fn slice(element: Self) -> Self {
         Self(Shape::Array {
             element: Box::new(element),
-            length: None,
+            sequence: Sequence::Slice,
         })
     }
 
@@ -488,9 +509,9 @@ impl Type {
             Shape::Tuple(members) => Ok(Self(Shape::Tuple(resolve_types(
                 members, root, types, parameters, _imported, item,
             )?))),
-            Shape::Array { element, length } => Ok(Self(Shape::Array {
+            Shape::Array { element, sequence } => Ok(Self(Shape::Array {
                 element: Box::new(element.resolve(root, types, parameters, _imported, item)?),
-                length: *length,
+                sequence: *sequence,
             })),
             Shape::Reference { mutable, target } => Ok(Self::reference(
                 *mutable,
@@ -870,10 +891,14 @@ impl crate::digest::Write for Type {
                 writer.tag(0x2302);
                 write_slice(writer, members)?;
             }
-            Shape::Array { element, length } => {
+            Shape::Array { element, sequence } => {
                 writer.tag(0x230b);
                 element.write(writer)?;
-                writer.text(&length.map_or_else(|| "_".into(), |length| length.to_string()));
+                writer.text(&match sequence {
+                    Sequence::Array(length) => length.to_string(),
+                    Sequence::Vec => "_".into(),
+                    Sequence::Slice => "[]".into(),
+                });
             }
             Shape::Option(element) => {
                 writer.tag(0x230c);

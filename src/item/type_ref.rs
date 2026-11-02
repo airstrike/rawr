@@ -27,8 +27,12 @@ pub(crate) const INTO_ITER_TYPE: &str = "impl IntoIterator";
 
 /// The builtin path name of an array type `[T; N]` is this prefix, then
 /// the length and `]` (`[_; 9]`), which no Rust path can spell; its one type
-/// argument is the element. A slice `[T]` is `Vec<T>`.
+/// argument is the element.
 pub(crate) const ARRAY_PREFIX: &str = "[_; ";
+
+/// The builtin path name of a slice type `[T]`, which no Rust path can
+/// spell; its one type argument is the element.
+pub(crate) const SLICE_TYPE: &str = "[_]";
 
 /// The builtin path name of `[T; length]`.
 pub(crate) fn array_name(length: usize) -> String {

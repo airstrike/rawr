@@ -3124,7 +3124,9 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
                 "bool" => -5,
                 "char" => -6,
                 "Option" => -7,
-                "Vec" => -8,
+                // A slice's impl is its `Vec`'s: both are an array at
+                // runtime.
+                "Vec" | crate::item::type_ref::SLICE_TYPE => -8,
                 "Result" => -10,
                 _ => return None,
             }

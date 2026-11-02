@@ -40,7 +40,7 @@ fn text() -> type_ref::Type {
 }
 
 fn bytes() -> type_ref::Type {
-    type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::U8))
+    type_ref::Type::vec(type_ref::Type::builtin(type_ref::Builtin::U8))
 }
 
 fn boolean() -> type_ref::Type {

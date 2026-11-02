@@ -14,7 +14,6 @@ mod keyed;
 mod location;
 mod origin;
 mod places;
-#[cfg(feature = "rust-import")]
 mod sequence;
 use places::PlacePattern;
 mod reborrow;
@@ -682,15 +681,13 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
         Ty::Time(time) => builtin(time.name(), Vec::new()),
         Ty::Option(element) => builtin("Option", vec![named(element)?]),
         Ty::Result(ok, err) => builtin("Result", vec![named(ok)?, named(err)?]),
-        Ty::Array {
-            element,
-            length: None,
-        } => builtin("Vec", vec![named(element)?]),
-        Ty::Array {
-            element,
-            length: Some(length),
-        } => builtin(
-            &crate::item::type_ref::array_name(*length),
+        Ty::Array { element, kind } => builtin(
+            &match kind {
+                sequence::Kind::Array(length) => crate::item::type_ref::array_name(*length),
+                sequence::Kind::Vec => "Vec".into(),
+                sequence::Kind::Slice => crate::item::type_ref::SLICE_TYPE.into(),
+                sequence::Kind::Deque => "VecDeque".into(),
+            },
             vec![named(element)?],
         ),
         Ty::Boxed(target) => builtin("Box", vec![named(target)?]),
@@ -1860,7 +1857,7 @@ fn impl_surface_type(
         ),
         Ty::Array {
             element,
-            length: None,
+            kind: sequence::Kind::Vec,
         } => Type::Sequence {
             element: Box::new(impl_surface_type(models, element, generics)?),
             owned: true,
@@ -5183,7 +5180,7 @@ impl Models {
             Ty::Cell(..) | Ty::Counted(..) | Ty::Weak(..) => false,
             Ty::Array {
                 element,
-                length: Some(_),
+                kind: sequence::Kind::Array(_),
             } => self.default_folds(element, visiting),
             Ty::Tuple(members) => members
                 .iter()
@@ -6971,7 +6968,12 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
         Ty::Bool => -5,
         Ty::Char => -6,
         Ty::Option(_) => -7,
-        Ty::Array { length: None, .. } => -8,
+        // A program's impl for `[T]` is its impl for `Vec<T>`: both are
+        // an array at runtime.
+        Ty::Array {
+            kind: sequence::Kind::Vec | sequence::Kind::Slice,
+            ..
+        } => -8,
         Ty::Unit => -9,
         Ty::Result(..) => -10,
         Ty::Boxed(inner) => return builtin_code(inner),
@@ -8351,11 +8353,11 @@ enum Ty {
         inputs: Box<[Ty]>,
         output: Box<Ty>,
     },
-    /// `[T; N]` with a length, or `Vec<T>` (and a slice `[T]`) without:
-    /// an array at runtime.
+    /// `[T; N]`, `Vec<T>`, `[T]` or `VecDeque<T>`, as `kind` says: an
+    /// array at runtime.
     Array {
         element: Box<Ty>,
-        length: Option<usize>,
+        kind: sequence::Kind,
     },
     /// `(A, B, ..)`: an array at runtime.
     Tuple(Box<[Ty]>),
@@ -8465,6 +8467,14 @@ enum Ty {
 }
 
 impl Ty {
+    /// The sequence `kind` of `element`: `Vec<T>`, `[T]`, ..
+    fn sequence(kind: sequence::Kind, element: Ty) -> Self {
+        Self::Array {
+            element: Box::new(element),
+            kind,
+        }
+    }
+
     /// Whether this is text: a `String` or a `&str`.
     fn is_text(&self) -> bool {
         matches!(self, Self::String | Self::Str)
@@ -8562,17 +8572,8 @@ impl Ty {
         if let Some(element) = ty.option_element() {
             return Self::Option(Box::new(Self::from_resolved(element)));
         }
-        if let Some(element) = ty.vec_element() {
-            return Self::Array {
-                element: Box::new(Self::from_resolved(element)),
-                length: None,
-            };
-        }
-        if let Some((element, length)) = ty.array_element() {
-            return Self::Array {
-                element: Box::new(Self::from_resolved(element)),
-                length: Some(length),
-            };
+        if let Some((element, kind)) = sequence::Kind::of(ty) {
+            return Self::sequence(kind, Self::from_resolved(element));
         }
         if let Some((pointer, element)) = ty.pointer_element() {
             return Pointer::named(pointer).ty(Self::from_resolved(element));
@@ -8751,11 +8752,16 @@ impl Ty {
                 }
                 name.into()
             }
-            Self::Array {
-                element,
-                length: Some(length),
-            } => format!("[{}; {length}]", element.name(models)).into(),
-            Self::Array { element, .. } => format!("Vec<{}>", element.name(models)).into(),
+            Self::Array { element, kind } => {
+                let element = element.name(models);
+                match kind {
+                    sequence::Kind::Array(length) => format!("[{element}; {length}]"),
+                    sequence::Kind::Vec => format!("Vec<{element}>"),
+                    sequence::Kind::Slice => format!("[{element}]"),
+                    sequence::Kind::Deque => format!("VecDeque<{element}>"),
+                }
+                .into()
+            }
             Self::Option(element) => format!("Option<{}>", element.name(models)).into(),
             Self::Result(ok, err) => {
                 format!("Result<{}, {}>", ok.name(models), err.name(models)).into()
@@ -9528,9 +9534,9 @@ impl Inference {
                 inputs: inputs.iter().map(|input| self.resolve(input)).collect(),
                 output: Box::new(self.resolve(output)),
             },
-            Ty::Array { element, length } => Ty::Array {
+            Ty::Array { element, kind } => Ty::Array {
                 element: Box::new(self.resolve(element)),
-                length: *length,
+                kind: *kind,
             },
             Ty::Tuple(members) => {
                 Ty::Tuple(members.iter().map(|member| self.resolve(member)).collect())
@@ -10719,9 +10725,9 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
             Box::new(instantiate(ok, substitution)),
             Box::new(instantiate(err, substitution)),
         ),
-        Ty::Array { element, length } => Ty::Array {
+        Ty::Array { element, kind } => Ty::Array {
             element: Box::new(instantiate(element, substitution)),
-            length: *length,
+            kind: *kind,
         },
         Ty::Tuple(members) => Ty::Tuple(each(members)),
         Ty::Reference { mutable, target } => Ty::Reference {
@@ -11668,12 +11674,6 @@ impl<'a> Parser<'a> {
         let mut tokens = lex_rust(engine, source);
         if models.imports_variants() {
             tokens = expand_imported_variants(&models, tokens);
-        }
-        if models.get("VecDeque").is_none() {
-            let imported = models
-                .import("VecDeque")
-                .is_some_and(|binding| crate::resolve::std_vec_deque(&binding.qualified));
-            vec_deque_as_vec(&mut tokens, imported);
         }
         let associated = Shared::clone(&models.associated);
 
@@ -12855,15 +12855,10 @@ impl<'a> Parser<'a> {
                 let mut next = || inner.next().map(Box::new).ok_or_else(unsupported);
                 if output.option_element().is_some() {
                     Ty::Option(next()?)
-                } else if output.vec_element().is_some() {
+                } else if let Some((_, kind)) = sequence::Kind::of(output) {
                     Ty::Array {
                         element: next()?,
-                        length: None,
-                    }
-                } else if let Some((_, length)) = output.array_element() {
-                    Ty::Array {
-                        element: next()?,
-                        length: Some(length),
+                        kind,
                     }
                 } else if let Some((pointer, _)) = output.pointer_element() {
                     let target = next()?;
@@ -16552,7 +16547,7 @@ impl<'a> Parser<'a> {
             || matches!(
                 self.inference.resolve(source),
                 Ty::Array {
-                    length: Some(_),
+                    kind: sequence::Kind::Array(_),
                     ..
                 }
             )
@@ -16897,11 +16892,11 @@ impl<'a> Parser<'a> {
             } else if let (
                 Ty::Array {
                     element,
-                    length: None,
+                    kind: sequence::Kind::Vec,
                 },
                 Ty::Array {
                     element: from,
-                    length: Some(_),
+                    kind: sequence::Kind::Array(_),
                 },
             ) = (&target, self.inference.resolve(&conversion.source))
                 && self.unifies(element, &from)
@@ -17372,8 +17367,8 @@ impl<'a> Parser<'a> {
                 _ => false,
             },
             // `[T; N]` is `Copy` when `T` is; `Vec<T>` is only `Clone`.
-            Ty::Array { element, length } => {
-                (capability != capability::Kind::Copy || length.is_some())
+            Ty::Array { element, kind } => {
+                (capability != capability::Kind::Copy || kind.length().is_some())
                     && self.type_provides(&element, capability)
             }
             Ty::Tuple(members) => members
@@ -17554,8 +17549,8 @@ impl<'a> Parser<'a> {
                 self.proven_type(&output, operation, span)?,
                 *item,
             ),
-            Ty::Array { element, length } => {
-                intrinsic::Type::array(self.proven_type(&element, operation, span)?, length)
+            Ty::Array { element, kind } => {
+                intrinsic::Type::array(self.proven_type(&element, operation, span)?, kind.length())
             }
             // An iterator a host gives is the array of its items.
             Ty::Iter(element) => {
@@ -18244,18 +18239,22 @@ impl<'a> Parser<'a> {
         if items.iter().any(|item| item.imported_identity().is_some()) {
             return Ok(());
         }
-        let slice = |index: usize| {
-            items.iter().any(|item| {
-                item.signature()
-                    .parameters()
-                    .get(index)
-                    .is_some_and(|parameter| {
-                        matches!(
-                            parameter.shape(),
-                            crate::host::type_ref::Shape::Array { length: None, .. }
-                        )
-                    })
-            })
+        // The sequence a facade's parameter at `index` takes, other than
+        // an array of a length.
+        let sequence = |index: usize| {
+            items.iter().find_map(
+                |item| match item.signature().parameters().get(index)?.shape() {
+                    crate::host::type_ref::Shape::Array {
+                        sequence: crate::host::type_ref::Sequence::Vec,
+                        ..
+                    } => Some(sequence::Kind::Vec),
+                    crate::host::type_ref::Shape::Array {
+                        sequence: crate::host::type_ref::Sequence::Slice,
+                        ..
+                    } => Some(sequence::Kind::Slice),
+                    _ => None,
+                },
+            )
         };
         // A number passed as an item's type parameter, as `Task::done`'s,
         // keeps its type, as a function passed to it does.
@@ -18288,14 +18287,14 @@ impl<'a> Parser<'a> {
                 ) =>
                 {
                     argument.ty = match *target {
-                        // `&[T; N]`, as `b"…"`, where the facade takes a slice.
+                        // `&[T; N]`, as `b"…"`, `&Vec<T>` or `&[T]` where
+                        // the facade takes the sequence its elements copy
+                        // to.
                         Ty::Array {
                             element,
-                            length: Some(_),
-                        } if slice(index) => Ty::Array {
-                            element,
-                            length: None,
-                        },
+                            kind:
+                                sequence::Kind::Array(_) | sequence::Kind::Vec | sequence::Kind::Slice,
+                        } if let Some(kind) = sequence(index) => Ty::Array { element, kind },
                         target => target,
                     };
                 }
@@ -18450,100 +18449,105 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let inputs = item
-            .signature()
-            .parameters()
-            .iter()
-            .enumerate()
-            .map(|(index, ty)| {
-                let originating = argument_origins
-                    .get(index)
-                    .and_then(Option::as_ref)
-                    .or(associated_origin.as_ref());
-                // A crate's `RangeInclusive<T>` takes the argument's range,
-                // of floats or of integers, and `T` that kind of number, as
-                // rustc infers `T` from `1.0..=30.0`.
-                if let Some(element) = range_inclusive_element(ty)
-                    && let Some(float) = arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .and_then(|argument| match self.inference.resolve(&argument.ty) {
-                            Ty::FloatRange => Some(true),
-                            Ty::InclusiveRange => Some(false),
-                            _ => None,
-                        })
-                {
-                    let element = self.instantiate_host_type(
-                        element,
-                        &mut parameters,
-                        &item_path,
-                        operation,
-                        item_owner.as_ref(),
-                        originating,
-                    )?;
-                    return Ok(self.inclusive_range_of(&element, Some(float)));
-                }
-                // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
-                // as an array of `T`, takes a shared borrow of an array too,
-                // as `table(columns, &self.events)` passes `&Vec<Event>`,
-                // whose items the columns' `|event: &Event|` read.
-                #[cfg(feature = "rust-import")]
-                if let crate::host::type_ref::Shape::Array {
-                    element,
-                    length: None,
-                } = ty.shape()
-                    && matches!(element.shape(), crate::host::type_ref::Shape::Parameter(_))
-                    && item.imported_identity().is_some()
-                    && arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .is_some_and(|argument| {
-                            matches!(
-                                self.inference.resolve(&argument.ty),
-                                Ty::Reference { mutable: false, target }
-                                    if matches!(*target, Ty::Array { length: None, .. })
-                            )
-                        })
-                {
-                    let item = self.instantiate_host_type(
-                        element,
-                        &mut parameters,
-                        &item_path,
-                        operation,
-                        item_owner.as_ref(),
-                        originating,
-                    )?;
-                    let borrowed = arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .map(|argument| self.inference.resolve(&argument.ty))
-                        .unwrap_or(Ty::Unknown);
-                    // Its items are borrows of the array's elements; one
-                    // that can't be `T` is the mismatch rustc reports.
-                    if let Ty::Reference { target, .. } = &borrowed
-                        && let Ty::Array { element, .. } = target.as_ref()
-                        && self.unify_type(
-                            &item,
-                            &Ty::Reference {
-                                mutable: false,
-                                target: element.clone(),
-                            },
-                        )
+        let inputs =
+            item.signature()
+                .parameters()
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    let originating = argument_origins
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .or(associated_origin.as_ref());
+                    // A crate's `RangeInclusive<T>` takes the argument's range,
+                    // of floats or of integers, and `T` that kind of number, as
+                    // rustc infers `T` from `1.0..=30.0`.
+                    if let Some(element) = range_inclusive_element(ty)
+                        && let Some(float) = arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .and_then(|argument| match self.inference.resolve(&argument.ty) {
+                                Ty::FloatRange => Some(true),
+                                Ty::InclusiveRange => Some(false),
+                                _ => None,
+                            })
                     {
-                        return Ok(borrowed);
+                        let element = self.instantiate_host_type(
+                            element,
+                            &mut parameters,
+                            &item_path,
+                            operation,
+                            item_owner.as_ref(),
+                            originating,
+                        )?;
+                        return Ok(self.inclusive_range_of(&element, Some(float)));
                     }
-                    return Ok(Ty::Array {
-                        element: Box::new(item),
-                        length: None,
-                    });
-                }
-                self.instantiate_host_type(
-                    ty,
-                    &mut parameters,
-                    &item_path,
-                    operation,
-                    item_owner.as_ref(),
-                    originating,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
+                    // as an array of `T`, takes a shared borrow of an array too,
+                    // as `table(columns, &self.events)` passes `&Vec<Event>`,
+                    // whose items the columns' `|event: &Event|` read.
+                    #[cfg(feature = "rust-import")]
+                    if let crate::host::type_ref::Shape::Array {
+                        element,
+                        sequence:
+                            crate::host::type_ref::Sequence::Vec
+                            | crate::host::type_ref::Sequence::Slice,
+                    } = ty.shape()
+                        && matches!(element.shape(), crate::host::type_ref::Shape::Parameter(_))
+                        && item.imported_identity().is_some()
+                        && arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .is_some_and(|argument| {
+                                matches!(
+                                    self.inference.resolve(&argument.ty),
+                                    Ty::Reference { mutable: false, target }
+                                        if matches!(
+                                            *target,
+                                            Ty::Array {
+                                                kind: sequence::Kind::Vec | sequence::Kind::Slice,
+                                                ..
+                                            }
+                                        )
+                                )
+                            })
+                    {
+                        let item = self.instantiate_host_type(
+                            element,
+                            &mut parameters,
+                            &item_path,
+                            operation,
+                            item_owner.as_ref(),
+                            originating,
+                        )?;
+                        let borrowed = arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .map(|argument| self.inference.resolve(&argument.ty))
+                            .unwrap_or(Ty::Unknown);
+                        // Its items are borrows of the array's elements; one
+                        // that can't be `T` is the mismatch rustc reports.
+                        if let Ty::Reference { target, .. } = &borrowed
+                            && let Ty::Array { element, .. } = target.as_ref()
+                            && self.unify_type(
+                                &item,
+                                &Ty::Reference {
+                                    mutable: false,
+                                    target: element.clone(),
+                                },
+                            )
+                        {
+                            return Ok(borrowed);
+                        }
+                        return Ok(Ty::sequence(sequence::Kind::Vec, item));
+                    }
+                    self.instantiate_host_type(
+                        ty,
+                        &mut parameters,
+                        &item_path,
+                        operation,
+                        item_owner.as_ref(),
+                        originating,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         #[cfg(feature = "rust-import")]
         let output_origin = match item.signature().output().shape() {
             crate::host::type_ref::Shape::Imported { identity, .. } => receiver_origin
@@ -18614,7 +18618,7 @@ impl<'a> Parser<'a> {
         ty: &Ty,
     ) -> Option<u32> {
         let Ty::Array {
-            length: Some(length),
+            kind: sequence::Kind::Array(length),
             ..
         } = self.inference.resolved_ref(ty)
         else {
@@ -18632,7 +18636,7 @@ impl<'a> Parser<'a> {
                         if matches!(
                             this.shape(),
                             crate::host::type_ref::Shape::Array {
-                                length: Some(case_length),
+                                sequence: crate::host::type_ref::Sequence::Array(case_length),
                                 ..
                             } if case_length == length
                         )
@@ -19348,7 +19352,7 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             ),
-            Shape::Array { element, length } => Ty::Array {
+            Shape::Array { element, sequence } => Ty::Array {
                 element: Box::new(self.instantiate_host_type(
                     element,
                     parameters,
@@ -19357,7 +19361,13 @@ impl<'a> Parser<'a> {
                     owner,
                     originating,
                 )?),
-                length: *length,
+                kind: match sequence {
+                    crate::host::type_ref::Sequence::Array(length) => {
+                        sequence::Kind::Array(*length)
+                    }
+                    crate::host::type_ref::Sequence::Vec => sequence::Kind::Vec,
+                    crate::host::type_ref::Sequence::Slice => sequence::Kind::Slice,
+                },
             },
             // A tuple is an array at runtime, as `event::listen_with`'s
             // `(Event, Status, window::Id)`.
@@ -19767,10 +19777,13 @@ impl<'a> Parser<'a> {
             // `pick_list(.., options: impl Borrow<[T]>, ..)`: Rust's
             // unsized coercion, or the array's own `Borrow<[T]>`.
             if let (
-                Ty::Array { length: None, .. },
+                Ty::Array {
+                    kind: sequence::Kind::Vec,
+                    ..
+                },
                 Ty::Array {
                     element,
-                    length: Some(_),
+                    kind: sequence::Kind::Array(_),
                 },
             ) = (
                 self.inference.resolve(expected),
@@ -19778,7 +19791,7 @@ impl<'a> Parser<'a> {
             ) {
                 argument.ty = Ty::Array {
                     element,
-                    length: None,
+                    kind: sequence::Kind::Vec,
                 };
             }
             // A lazy iterator where the host takes an iterable, as iced's
@@ -19786,7 +19799,13 @@ impl<'a> Parser<'a> {
             // = Element>`: its items, collected where the call takes them.
             // rustc's check of the crate holds the parameter to one that
             // takes an iterator.
-            if let (Ty::Array { length: None, .. }, Ty::Iter(item)) = (
+            if let (
+                Ty::Array {
+                    kind: sequence::Kind::Vec,
+                    ..
+                },
+                Ty::Iter(item),
+            ) = (
                 self.inference.resolve(expected),
                 self.inference.resolve(&argument.ty),
             ) {
@@ -19795,7 +19814,7 @@ impl<'a> Parser<'a> {
                     source,
                     Ty::Array {
                         element: item,
-                        length: None,
+                        kind: sequence::Kind::Vec,
                     },
                     argument.span,
                 );
@@ -21251,10 +21270,13 @@ impl<'a> Parser<'a> {
             // iced's `fonts([..])` takes `impl IntoIterator`, as a
             // function's argument is (`call_host_function`).
             if let (
-                Ty::Array { length: None, .. },
+                Ty::Array {
+                    kind: sequence::Kind::Vec,
+                    ..
+                },
                 Ty::Array {
                     element,
-                    length: Some(_),
+                    kind: sequence::Kind::Array(_),
                 },
             ) = (
                 self.inference.resolve(expected),
@@ -21262,7 +21284,7 @@ impl<'a> Parser<'a> {
             ) {
                 argument.ty = Ty::Array {
                     element,
-                    length: None,
+                    kind: sequence::Kind::Vec,
                 };
             }
             self.coerce_expr(expected, argument)?;
@@ -22649,7 +22671,7 @@ impl<'a> Parser<'a> {
             Ty::Tuple(members) => members.into_vec(),
             Ty::Array {
                 element,
-                length: Some(_),
+                kind: sequence::Kind::Array(_),
             }
             | Ty::Option(element)
             | Ty::Reverse(element) => vec![*element],
@@ -24636,9 +24658,9 @@ impl<'a> Parser<'a> {
         let (element, length) = match ty {
             Ty::Array {
                 element,
-                length: Some(length),
+                kind: sequence::Kind::Array(length),
             } => (element, *length),
-            Ty::Array { length: None, .. } => {
+            Ty::Array { .. } => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a refutable pattern in a binding: a slice pattern on a slice \
                                 of unknown length; use `if let` or `match`"
@@ -24692,7 +24714,7 @@ impl<'a> Parser<'a> {
             self.trace_unmodeled("a slice pattern binding its middle", *span);
             let middle = Ty::Array {
                 element: element.clone(),
-                length: Some(length - fixed),
+                kind: sequence::Kind::Array(length - fixed),
             };
             let binding = PatternSyntax::Binding {
                 name: name.clone(),
@@ -26001,7 +26023,7 @@ impl<'a> Parser<'a> {
                 after,
                 span,
             } => {
-                let Ty::Array { element, length } = &expected else {
+                let Ty::Array { element, kind } = &expected else {
                     return Err(Error::InvalidMatch {
                         owner: owner.into(),
                         reason: format!(
@@ -26012,9 +26034,8 @@ impl<'a> Parser<'a> {
                         pattern: *span,
                     });
                 };
-                // A `Vec` matched by value is no slice (rustc's E0529); one
-                // behind a reference may be a `&[T]`, which Rawr types alike.
-                if length.is_none() && self.binding_mode.get().is_none() {
+                // A `Vec` or a `VecDeque` is no slice (rustc's E0529).
+                if matches!(kind, sequence::Kind::Vec | sequence::Kind::Deque) {
                     return Err(Error::InvalidMatch {
                         owner: owner.into(),
                         reason: format!(
@@ -26026,11 +26047,12 @@ impl<'a> Parser<'a> {
                         pattern: *span,
                     });
                 }
+                let length = kind.length();
                 let fixed = before.len() + after.len();
                 self.slice_arity.set(self.slice_arity.get().max(fixed));
                 // Rust's E0527 and E0528.
                 match length {
-                    Some(length) if rest.is_none() && fixed != *length => {
+                    Some(length) if rest.is_none() && fixed != length => {
                         return Err(Error::InvalidMatch {
                             owner: owner.into(),
                             reason: format!(
@@ -26040,7 +26062,7 @@ impl<'a> Parser<'a> {
                             pattern: *span,
                         })
                     }
-                    Some(length) if fixed > *length => {
+                    Some(length) if fixed > length => {
                         return Err(Error::InvalidMatch {
                             owner: owner.into(),
                             reason: format!(
@@ -26061,7 +26083,7 @@ impl<'a> Parser<'a> {
                     let mut coverage = Vec::with_capacity(members.len());
                     for (index, member) in members.iter().enumerate() {
                         let step =
-                            borrows::slice_element(index, members.len(), after, fixed, *length);
+                            borrows::slice_element(index, members.len(), after, fixed, length);
                         let path = self.trace_enter(step);
                         let (proof, member_coverage) = self.resolve_child_pattern(
                             member,
@@ -26089,7 +26111,10 @@ impl<'a> Parser<'a> {
                     }) => {
                         let middle = Ty::Array {
                             element: element.clone(),
-                            length: length.map(|length| length - fixed),
+                            kind: match length {
+                                Some(length) => sequence::Kind::Array(length - fixed),
+                                None => sequence::Kind::Slice,
+                            },
                         };
                         let binding = PatternSyntax::Binding {
                             name: name.clone(),
@@ -26621,13 +26646,13 @@ impl<'a> Parser<'a> {
             }
             // An array's one length; a slice's lengths up to the longest
             // slice pattern seen, then every longer one at once.
-            Ty::Array { element, length } => {
+            Ty::Array { element, kind } => {
                 let constructor = |length, open| CoverageConstructor {
                     key: CoverageKey::SliceLength { length, open },
                     name: if open { "[..]" } else { "[]" }.into(),
                     payload: vec![(*element).clone(); length].into(),
                 };
-                return Some(match length {
+                return Some(match kind.length() {
                     Some(length) => vec![constructor(length, false)],
                     None => {
                         let longest = self.slice_arity.get();
@@ -34060,7 +34085,7 @@ impl<'a> Parser<'a> {
                     pieces,
                     Ty::Array {
                         element: Box::new(Ty::Str),
-                        length: None,
+                        kind: sequence::Kind::Vec,
                     },
                     expression,
                 );
@@ -34177,7 +34202,7 @@ impl<'a> Parser<'a> {
                 };
                 let array = Ty::Array {
                     element: Box::new(item.clone()),
-                    length: None,
+                    kind: sequence::Kind::Vec,
                 };
                 if member.as_str() == "into_bytes" {
                     return Ok(self.operator_expr(pieces, array, expression));
@@ -34185,7 +34210,7 @@ impl<'a> Parser<'a> {
                 if member.as_str() == "as_bytes" {
                     let slice = Ty::Reference {
                         mutable: false,
-                        target: Box::new(array),
+                        target: Box::new(Ty::sequence(sequence::Kind::Slice, item)),
                     };
                     return Ok(self.operator_expr(pieces, slice, expression));
                 }
@@ -35043,7 +35068,12 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
                 && matches!(
                     builtin,
-                    Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
+                    Ty::String
+                        | Ty::Array {
+                            kind: sequence::Kind::Vec | sequence::Kind::Deque,
+                            ..
+                        }
+                        | Ty::Keyed(..)
                 )
                 && std_method::inherent(&builtin, &member).is_some_and(|found| {
                     found.mode == receiver::Mode::Owned && found.owner != "slice"
@@ -36175,9 +36205,9 @@ impl<'a> Parser<'a> {
         }
         self.require_type(&Ty::Int(Int::Usize), &index.ty, index.span)?;
         let (element, length) = match self.inference.resolve(&value.ty) {
-            Ty::Array { element, length } => (*element, length),
+            Ty::Array { element, kind } => (*element, kind.length()),
             Ty::Reference { target, .. } => match *target {
-                Ty::Array { element, length } => (*element, length),
+                Ty::Array { element, kind } => (*element, kind.length()),
                 ty => {
                     return Err(Error::TypeMismatch {
                         expected: "an array, Vec or slice".into(),
@@ -36277,9 +36307,22 @@ impl<'a> Parser<'a> {
             peeled = self.inference.resolve(&target);
         }
         let ty = match peeled {
+            // std has no `Index<Range<usize>>` for a `VecDeque`.
+            Ty::Array {
+                kind: sequence::Kind::Deque,
+                ..
+            } => {
+                return Err(Error::MissingCapability {
+                    owner: peeled.name(&self.models),
+                    capability: "Index<Range<usize>>".into(),
+                    operation: span(value.span.start(), end),
+                    derive: false,
+                    required_by: None,
+                })
+            }
             Ty::Array { element, .. } => Ty::Array {
                 element,
-                length: None,
+                kind: sequence::Kind::Slice,
             },
             Ty::String | Ty::Str => Ty::Str,
             ty => {
@@ -36896,35 +36939,32 @@ impl<'a> Parser<'a> {
         if let Some(kind) = self.keyed_path(&name) {
             return self.parse_keyed_constructor(kind, name_span);
         }
-        if name.as_str() == "Vec"
-            && matches!(self.peek(), Token::DoubleColon)
-            && self.models.get(&name).is_none()
-            && self.models.import(&name).is_none()
-        {
+        if let Some(kind) = self.growable_path(&name) {
             self.next();
             let (member, member_span) = self.expect_member_name()?;
-            let (arguments, end) = self.parse_call_arguments("`Vec` arguments")?;
-            // `impl<T, const N: usize> From<[T; N]> for Vec<T>`.
+            let (arguments, end) = self.parse_call_arguments(&format!("`{name}` arguments"))?;
+            // `Vec<T>` from `[T; N]`, or `VecDeque<T>` from a `Vec<T>` or
+            // `[T; N]`, as std's `From` impls say: the same array at
+            // runtime.
             if member.as_str() == "from"
                 && let [value] = &arguments[..]
             {
                 let call = span(name_span.start(), end);
-                let element = match self.inference.resolve(&value.ty) {
-                    Ty::Array { element, .. } => *element,
-                    ty => {
-                        return Err(Error::MissingCapability {
-                            owner: "Vec<T>".into(),
-                            capability: format!("From<{}>", ty.name(&self.models)).into(),
-                            operation: call,
-                            derive: false,
-                            required_by: None,
-                        });
+                let ty = Ty::sequence(kind, self.inference.fresh());
+                if self.std_conversion(&ty, &value.ty).is_none() {
+                    let source = self.inference.resolve(&value.ty);
+                    if let Some(error) = self.conversion_not_yet(&ty, &source, call) {
+                        return Err(error);
                     }
-                };
-                let ty = Ty::Array {
-                    element: Box::new(element),
-                    length: None,
-                };
+                    return Err(Error::MissingCapability {
+                        owner: format!("{name}<T>").into(),
+                        capability: format!("From<{}>", source.name(&self.models)).into(),
+                        operation: call,
+                        derive: false,
+                        required_by: None,
+                    });
+                }
+                let ty = self.inference.resolve(&ty);
                 return Ok(self.operator_expr(value.rendered_source(), ty, call));
             }
             let mut arguments = arguments;
@@ -36938,10 +36978,7 @@ impl<'a> Parser<'a> {
                 let mut source = origin::Fragment::plain(format!("{helper}([], {code}, "));
                 source.push(capacity.rendered_source());
                 source.push_text(", (), false)");
-                let ty = Ty::Array {
-                    element: Box::new(self.inference.fresh()),
-                    length: None,
-                };
+                let ty = Ty::sequence(kind, self.inference.fresh());
                 let at = span(name_span.start(), end);
                 #[cfg(feature = "rust-import")]
                 let source =
@@ -36949,15 +36986,12 @@ impl<'a> Parser<'a> {
                 return Ok(self.operator_expr(source, ty, at));
             } else if member.as_str() != "new" || !arguments.is_empty() {
                 return Err(Error::UnknownMember {
-                    owner: "Vec".into(),
+                    owner: name,
                     member,
                     reference: member_span,
                 });
             }
-            let ty = Ty::Array {
-                element: Box::new(self.inference.fresh()),
-                length: None,
-            };
+            let ty = Ty::sequence(kind, self.inference.fresh());
             let at = span(name_span.start(), end);
             #[cfg(feature = "rust-import")]
             let source = self.sequence_source(&ty, at, "0".into(), "()".into(), 0);
@@ -39659,7 +39693,7 @@ impl<'a> Parser<'a> {
             .collect();
         let array_ty = Ty::Array {
             element: Box::new(element.clone()),
-            length: None,
+            kind: sequence::Kind::Vec,
         };
         self.compose(span(open, end), &array_ty, &parts);
         let source = match (repeat, counted) {
@@ -39719,15 +39753,11 @@ impl<'a> Parser<'a> {
                 source
             }
         };
-        let length = array.map(|_| repeat.unwrap_or(elements.len()));
-        Ok(self.operator_expr(
-            source,
-            Ty::Array {
-                element: Box::new(element),
-                length,
-            },
-            span(open, end),
-        ))
+        let kind = match array {
+            Some(_) => sequence::Kind::Array(repeat.unwrap_or(elements.len())),
+            None => sequence::Kind::Vec,
+        };
+        Ok(self.operator_expr(source, Ty::sequence(kind, element), span(open, end)))
     }
 
     /// An array length or repeat count: an integer literal, or a `const`
@@ -41004,10 +41034,14 @@ impl<'a> Parser<'a> {
             Ty::Int(_) => "0".into(),
             Ty::Float(_) => "0.0".into(),
             Ty::String | Ty::Str => "\"\"".into(),
-            Ty::Array { length: None, .. } | Ty::Keyed(..) => "[]".into(),
+            Ty::Array {
+                kind: sequence::Kind::Vec | sequence::Kind::Deque,
+                ..
+            }
+            | Ty::Keyed(..) => "[]".into(),
             Ty::Array {
                 element,
-                length: Some(length),
+                kind: sequence::Kind::Array(length),
             } => {
                 let element = self.default_source(element, span)?;
                 origin::Fragment::join(vec![element; *length], ", ").surrounded("[", "]")
@@ -41593,14 +41627,36 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        // A `VecDeque` is a `Vec` (`vec_deque_as_vec`): its back is the
-        // `Vec`'s end.
-        let member: ImmutableString = match member.as_str() {
-            "push_back" => "push".into(),
-            "pop_back" => "pop".into(),
-            "front" => "first".into(),
-            "back" => "last".into(),
-            _ => member,
+        let receiver_ty = self.inference.resolve(&value.ty);
+        // A method of another sequence type, as `push` of a `&[T]`.
+        if std_method::foreign_sequence_method(&receiver_ty, &member) {
+            return Err(Error::UnknownMember {
+                owner: receiver_ty.name(&self.models),
+                member,
+                reference: member_span,
+            });
+        }
+        let kind = match without_references(&receiver_ty) {
+            Ty::Array { kind, .. } => *kind,
+            _ => sequence::Kind::Vec,
+        };
+        // A `VecDeque` is an array at runtime, whose back is its end: its
+        // methods `DEQUE_METHODS` names run as the `Vec`'s, and the others
+        // std has are not run yet.
+        let member: ImmutableString = if kind == sequence::Kind::Deque {
+            let Some((_, runs)) = DEQUE_METHODS
+                .iter()
+                .find(|(name, _)| *name == member.as_str())
+            else {
+                return Err(Error::UnknownMember {
+                    owner: receiver_ty.name(&self.models),
+                    member,
+                    reference: member_span,
+                });
+            };
+            (*runs).into()
+        } else {
+            member
         };
         // `v.as_mut_slice()` is the place `v`, whose parts a pattern reaches.
         let whole = (member.as_str() == "as_mut_slice")
@@ -41702,7 +41758,7 @@ impl<'a> Parser<'a> {
         // `[T; N]::map(f)`: `[U; N]`, each element passed by value.
         if member.as_str() == "map"
             && let Ty::Array {
-                length: Some(length),
+                kind: sequence::Kind::Array(length),
                 ..
             } = self.inference.resolve(&value.ty)
         {
@@ -41735,7 +41791,7 @@ impl<'a> Parser<'a> {
             source.push_text(format!("); }} {items} }}"));
             let ty = Ty::Array {
                 element: Box::new(output),
-                length: Some(length),
+                kind: sequence::Kind::Array(length),
             };
             return Ok(self.operator_expr(
                 source.surrounded("(", ")"),
@@ -41874,7 +41930,7 @@ impl<'a> Parser<'a> {
                 self.prelude_op(PreludeOp::ValueClone, [receiver]),
                 Ty::Array {
                     element: Box::new(element),
-                    length: None,
+                    kind: sequence::Kind::Vec,
                 },
             ),
             // `[String]::join(sep)`, `concat()`: Rust's `Join` for strings
@@ -41909,10 +41965,7 @@ impl<'a> Parser<'a> {
                 receiver,
                 Ty::Reference {
                     mutable: member.as_str() == "as_mut_slice",
-                    target: Box::new(Ty::Array {
-                        element: Box::new(element),
-                        length: None,
-                    }),
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
                 },
             ),
             // `windows(n)`, `chunks(n)` and the other `SLICE_CHUNKS`: an
@@ -41925,10 +41978,7 @@ impl<'a> Parser<'a> {
                     PreludeOp::SliceChunks,
                     [receiver, size.rendered_source(), code.into()],
                 );
-                let slice = Ty::Array {
-                    element: Box::new(element),
-                    length: None,
-                };
+                let slice = Ty::sequence(sequence::Kind::Slice, element);
                 let item = Ty::Reference {
                     mutable: false,
                     target: Box::new(slice.clone()),
@@ -41937,24 +41987,21 @@ impl<'a> Parser<'a> {
                     slices,
                     Ty::Array {
                         element: Box::new(item.clone()),
-                        length: None,
+                        kind: sequence::Kind::Vec,
                     },
                     expression,
                 );
                 return Ok(self.array_iterator(&slices, item, end));
             }
-            // `v.split_off(at)`: the elements from `at` on, as a new `Vec`.
+            // `v.split_off(at)`: the elements from `at` on, as a new `Vec`
+            // (or `VecDeque`).
             ("split_off", [at]) => {
                 self.coerce_expr(&Ty::Int(Int::Usize), at)?;
                 let code = vec_method_code("split_off").to_string();
                 let operands = vec![code.into(), at.rendered_source(), "()".into(), "()".into()];
                 let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
                 let source = self.mutation_call(&value, &helper, operands)?;
-                let ty = Ty::Array {
-                    element: Box::new(element),
-                    length: None,
-                };
-                (source, ty)
+                (source, Ty::sequence(kind, element))
             }
             // `first`, `last` and `get(i)`: an `Option<&T>`.
             ("first" | "last", []) | ("get", [_]) => {
@@ -41983,10 +42030,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Ty::Reference {
                         mutable: false,
-                        target: Box::new(Ty::Array {
-                            element: Box::new(element),
-                            length: None,
-                        }),
+                        target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
                     }
                 };
                 self.coerce_expr(&expected, argument)?;
@@ -42214,10 +42258,7 @@ impl<'a> Parser<'a> {
                 let source = self.prelude_op(PreludeOp::SplitAt, [receiver, mid.rendered_source()]);
                 let half = Ty::Reference {
                     mutable: false,
-                    target: Box::new(Ty::Array {
-                        element: Box::new(element),
-                        length: None,
-                    }),
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
                 };
                 (source, Ty::Tuple(Box::new([half.clone(), half])))
             }
@@ -42257,10 +42298,7 @@ impl<'a> Parser<'a> {
             ("append", [other]) => {
                 let expected = Ty::Reference {
                     mutable: true,
-                    target: Box::new(Ty::Array {
-                        element: Box::new(element),
-                        length: None,
-                    }),
+                    target: Box::new(Ty::sequence(kind, element)),
                 };
                 self.coerce_expr(&expected, other)?;
                 let places = self.mutable_arguments(std::slice::from_ref(other), [0])?;
@@ -44862,7 +44900,7 @@ impl<'a> Parser<'a> {
                     mutable: false,
                     target: Box::new(Ty::Array {
                         element: Box::new(Ty::Int(Int::U8)),
-                        length: Some(bytes.len()),
+                        kind: sequence::Kind::Array(bytes.len()),
                     }),
                 };
                 return Ok(self.literal(crate::resolve::bundled_constant(index), ty, at));
@@ -44887,7 +44925,7 @@ impl<'a> Parser<'a> {
             mutable: false,
             target: Box::new(Ty::Array {
                 element: Box::new(Ty::Int(Int::U8)),
-                length: Some(bytes.len()),
+                kind: sequence::Kind::Array(bytes.len()),
             }),
         };
         self.literal(source, ty, at)
@@ -45416,7 +45454,7 @@ impl<'a> Parser<'a> {
         {
             let expected = Ty::Array {
                 element: Box::new(Ty::Int(Int::U8)),
-                length: None,
+                kind: sequence::Kind::Vec,
             };
             self.coerce_expr(&expected, bytes)?;
             let code = STR_PIECES
@@ -45723,7 +45761,7 @@ impl<'a> Parser<'a> {
                     values,
                     Ty::Array {
                         element: Box::new(item.clone()),
-                        length: Some(arguments.len()),
+                        kind: sequence::Kind::Array(arguments.len()),
                     },
                     call,
                 );
@@ -47239,7 +47277,8 @@ impl<'a> Parser<'a> {
                     None
                 };
                 self.expect(Token::RightBracket, "']' after an array type")?;
-                return Ok(Ty::Array { element, length });
+                let kind = length.map_or(sequence::Kind::Slice, sequence::Kind::Array);
+                return Ok(Ty::Array { element, kind });
             }
             Token::Fn => {
                 self.next();
@@ -47445,6 +47484,11 @@ impl<'a> Parser<'a> {
             {
                 return self.parse_range_type(range);
             }
+            if let Some(kind) = self.growable_named(&name)
+                && matches!(self.peek(), Token::LessThan)
+            {
+                return self.parse_growable_type(kind, &name, name_span);
+            }
             // A host type named through an imported module or in full; a
             // path into a `.rs` module through the app crate.
             let rust = self
@@ -47576,15 +47620,11 @@ impl<'a> Parser<'a> {
         {
             return self.parse_range_type(range);
         }
-        if name.as_str() == "Vec" && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
-            self.next();
-            let element = Box::new(self.parse_local_type()?);
-            self.unstable_argument("Vec", 1, name_span)?;
-            self.expect_close_angle("'>' after `Vec<T`")?;
-            return Ok(Ty::Array {
-                element,
-                length: None,
-            });
+        if let Some(kind) = self.growable_named(&name)
+            && matches!(self.peek(), Token::LessThan)
+            && qualified.is_none()
+        {
+            return self.parse_growable_type(kind, &name, name_span);
         }
         let mut arguments = Vec::new();
         let mut generic = false;
@@ -48125,10 +48165,12 @@ impl<'a> Parser<'a> {
         // Arrays of two lengths: rustc's label for them.
         if let (
             Ty::Array {
-                length: Some(want), ..
+                kind: sequence::Kind::Array(want),
+                ..
             },
             Ty::Array {
-                length: Some(have), ..
+                kind: sequence::Kind::Array(have),
+                ..
             },
         ) = (&expected, &actual)
             && want != have
@@ -48285,7 +48327,8 @@ impl<'a> Parser<'a> {
             value.source.cover(value.span);
             source = value.ty.clone();
         }
-        // Unsized coercion: `&[T; N]` where `&[T]` is expected.
+        // Unsized coercion: `&[T; N]` where `&[T]` is expected, or where a
+        // host's slice, which crosses as a `Vec`, is.
         if let (
             Ty::Reference { target: to, .. },
             Ty::Reference {
@@ -48294,19 +48337,19 @@ impl<'a> Parser<'a> {
             },
         ) = (&target, &source)
             && let (
-                Ty::Array { length: None, .. },
+                Ty::Array {
+                    kind: kind @ (sequence::Kind::Slice | sequence::Kind::Vec),
+                    ..
+                },
                 Ty::Array {
                     element,
-                    length: Some(_),
+                    kind: sequence::Kind::Array(_),
                 },
             ) = (self.inference.resolve(to), self.inference.resolve(from))
         {
             source = Ty::Reference {
                 mutable: *mutable,
-                target: Box::new(Ty::Array {
-                    element,
-                    length: None,
-                }),
+                target: Box::new(Ty::Array { element, kind }),
             };
             value.ty = source.clone();
         }
@@ -48518,7 +48561,7 @@ impl<'a> Parser<'a> {
     ) -> Result<bool, Error> {
         let Ty::Array {
             element: target_element,
-            length: None,
+            kind: sequence::Kind::Vec,
         } = target
         else {
             return Ok(false);
@@ -48531,7 +48574,7 @@ impl<'a> Parser<'a> {
         let fixed = matches!(
             source,
             Ty::Array {
-                length: Some(_),
+                kind: sequence::Kind::Array(_),
                 ..
             }
         );
@@ -49320,15 +49363,13 @@ impl<'a> Parser<'a> {
             (
                 Ty::Array {
                     element: expected_element,
-                    length: expected_length,
+                    kind: expected_kind,
                 },
                 Ty::Array {
                     element: actual_element,
-                    length: actual_length,
+                    kind: actual_kind,
                 },
-            ) if expected_length == actual_length => {
-                self.unify_type(expected_element, actual_element)
-            }
+            ) if expected_kind == actual_kind => self.unify_type(expected_element, actual_element),
             (
                 Ty::Script(expected_id, expected_arguments),
                 Ty::Script(actual_id, actual_arguments),
@@ -51388,7 +51429,7 @@ fn debug_typed(
         }
         (_, Union::Array(values, ..))
             if let Some(element) = ty
-                .vec_element()
+                .sequence_element()
                 .or_else(|| ty.array_element().map(|(element, _)| element)) =>
         {
             format!(
@@ -52665,7 +52706,7 @@ fn primitive_size(ty: &Ty) -> Option<u64> {
         Ty::Float(_) => 8,
         Ty::Array {
             element,
-            length: Some(length),
+            kind: sequence::Kind::Array(length),
         } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
         _ => return None,
     })
@@ -52712,48 +52753,38 @@ const VEC_METHODS: &[&str] = &[
     "extend_clone",
 ];
 
-/// `std::collections::VecDeque` in a body, by its path or as imported
-/// (`imported`), is `Vec`: Rawr's `Vec` is an array, which takes a
-/// deque's `push_front` and `pop_front` too (`parse_array_method`), and
-/// prints as a deque does.
-fn vec_deque_as_vec(tokens: &mut Vec<(Token, Position)>, imported: bool) {
-    let named = |token: &Token, name: &str| matches!(token, Token::Identifier(text) if text.as_str() == name);
-    let mut index = 0;
-    while index < tokens.len() {
-        if !named(&tokens[index].0, "VecDeque") {
-            index += 1;
-            continue;
-        }
-        // `std::collections::VecDeque` or `collections::VecDeque`.
-        let mut start = index;
-        if start >= 2
-            && named(&tokens[start - 2].0, "collections")
-            && tokens[start - 1].0 == Token::DoubleColon
-        {
-            start -= 2;
-            if start >= 2
-                && (named(&tokens[start - 2].0, "std")
-                    || named(&tokens[start - 2].0, "alloc")
-                    || named(&tokens[start - 2].0, "core"))
-                && tokens[start - 1].0 == Token::DoubleColon
-            {
-                start -= 2;
-            }
-        }
-        let qualified = start < index;
-        let after_path = index > 0 && !qualified && tokens[index - 1].0 == Token::DoubleColon;
-        if (qualified || imported) && !after_path {
-            let position = tokens[start].1;
-            tokens.splice(
-                start..=index,
-                [(Token::Identifier(Box::new("Vec".into())), position)],
-            );
-            index = start + 1;
-        } else {
-            index += 1;
-        }
-    }
-}
+/// The `VecDeque` methods rawr runs, each as the `Vec` method of an array
+/// whose back is its end. std's others are not run yet (D712.1).
+const DEQUE_METHODS: &[(&str, &str)] = &[
+    ("push_back", "push"),
+    ("pop_back", "pop"),
+    ("push_front", "push_front"),
+    ("pop_front", "pop_front"),
+    ("front", "first"),
+    ("back", "last"),
+    ("front_mut", "first_mut"),
+    ("back_mut", "last_mut"),
+    ("len", "len"),
+    ("is_empty", "is_empty"),
+    ("iter", "iter"),
+    ("iter_mut", "iter_mut"),
+    ("into_iter", "into_iter"),
+    ("get", "get"),
+    ("get_mut", "get_mut"),
+    ("contains", "contains"),
+    ("insert", "insert"),
+    ("swap", "swap"),
+    ("clear", "clear"),
+    ("truncate", "truncate"),
+    ("retain", "retain"),
+    ("extend", "extend"),
+    ("append", "append"),
+    ("split_off", "split_off"),
+    ("drain", "drain"),
+    ("resize", "resize"),
+    ("resize_with", "resize_with"),
+    ("clone", "clone"),
+];
 
 /// A `VEC_METHODS` code by name.
 fn vec_method_code(name: &str) -> usize {

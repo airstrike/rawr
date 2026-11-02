@@ -958,8 +958,8 @@ impl Parser<'_> {
     }
 
     /// `or_insert_with(f)`: `f()`, called only for a vacant entry; a
-    /// constructor path (`Vec::new`, `String::new`, `HashMap::new`) is the
-    /// value type's default.
+    /// constructor path (`Vec::new`, `VecDeque::new`, `String::new`,
+    /// `HashMap::new`) is the value type's default.
     fn parse_entry_maker(
         &mut self,
         value_ty: &Ty,
@@ -971,7 +971,7 @@ impl Parser<'_> {
             .collect();
         if tokens[0] == Token::LeftParen
             && matches!(&tokens[1], Token::Identifier(owner)
-                if matches!(owner.as_str(), "Vec" | "String" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"))
+                if matches!(owner.as_str(), "Vec" | "VecDeque" | "String" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"))
             && tokens[2] == Token::DoubleColon
             && matches!(&tokens[3], Token::Identifier(name) if matches!(name.as_str(), "new" | "default"))
             && tokens[4] == Token::RightParen

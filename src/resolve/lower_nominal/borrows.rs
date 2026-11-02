@@ -1018,7 +1018,12 @@ impl Parser<'_> {
         }
         matches!(
             ty,
-            Ty::String | Ty::Array { length: None, .. } | Ty::Keyed(..)
+            Ty::String
+                | Ty::Array {
+                    kind: sequence::Kind::Vec | sequence::Kind::Deque,
+                    ..
+                }
+                | Ty::Keyed(..)
         ) || self.flow().computed(span)
     }
 
@@ -1416,13 +1421,18 @@ impl Parser<'_> {
     }
 
     /// `value[i]`: an element of an array is a place below it; `Index` on a
-    /// `Vec`, a `String` or a map borrows all of it.
+    /// `Vec`, a `VecDeque`, a `String` or a map borrows all of it.
     pub(super) fn indexed(&self, value: &ParsedExpr) {
         if value.lvalue.is_none() {
             return;
         }
         match self.inference.resolve(&value.ty) {
-            Ty::Array { length: None, .. } | Ty::String | Ty::Keyed(..) => {
+            Ty::Array {
+                kind: sequence::Kind::Vec | sequence::Kind::Deque,
+                ..
+            }
+            | Ty::String
+            | Ty::Keyed(..) => {
                 self.flow().overloaded_index(value.span.start(), value.span);
             }
             _ => self.project_place(value, Projection::Index),
@@ -1704,9 +1714,9 @@ struct CallInputs<'a> {
 }
 
 /// What a std trait method rawr binds (`clone`, `as_ref`, `into_iter`,
-/// `extend`, an iterator's adapters), or a `VecDeque` method, on a builtin
-/// value of type `receiver`, whose value has type `output`, keeps of its
-/// receiver and arguments, position by position, as its signature says, or
+/// `extend`, an iterator's adapters) on a builtin value of type
+/// `receiver`, whose value has type `output`, keeps of its receiver and
+/// arguments, position by position, as its signature says, or
 /// `None` for one not listed. An inherent method's comes from its
 /// declaration (`std_method::summary`, D711 step 4). A method whose value
 /// holds no borrow needs no entry unless it stores its arguments.
@@ -1737,7 +1747,7 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
     // whose regions are all the borrow's (`s.as_ref()`).
     let all = || vec![tap(&[], own(&[O]))];
     // All of what `&self` refers to, without the borrow, at every position:
-    // a value these facts don't place (`d.remove(i)` of a `VecDeque`).
+    // a value these facts don't place (`<[T] as Concat<T>>::Output`).
     let inner = || vec![tap(&[], own(&[A0, O]))];
     // `&'a T` of what `&'a self` refers to at `at`, placed at `into`.
     let reference = |into: &[Step], at: &[Step]| {
@@ -1757,28 +1767,14 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
     };
     let map = |arguments: &[Ty]| arguments.len() == 2;
     match ty {
-        // `Vec`'s and `[T]`'s own are std's; a `VecDeque`, which is rawr's
-        // `Vec` too, has its own here.
+        // Inherent methods are std's own (`std_method::summary`).
         Ty::Array { .. } => match member {
-            "front" | "back" => entry(Shared, reference(&[A0], &[A0]), Vec::new()),
-            "front_mut" | "back_mut" => entry(Mutable, reference(&[A0], &[A0]), Vec::new()),
-            "range" => entry(
-                Shared,
-                vec![tap(&[O], own(&[O])), tap(&[A0], own(&[]))],
-                Vec::new(),
-            ),
             "as_ref" => entry(Shared, vec![tap(&[], own(&[]))], Vec::new()),
             "as_mut" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
             "clone" | "to_owned" => entry(Shared, vec![tap(&[], own(&[A0]))], Vec::new()),
             "concat" => entry(Shared, inner(), Vec::new()),
-            "pop_front" | "pop_back" => {
-                entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
-            }
             "into_iter" if references > 0 => entry(Owned, iter(&[A0]), Vec::new()),
             "into_iter" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
-            "push_back" | "push_front" => {
-                entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[]))])
-            }
             "extend" => entry(Mutable, Vec::new(), vec![tap(&[A0], argument(0, &[O]))]),
             _ => None,
         },

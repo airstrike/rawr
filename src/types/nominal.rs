@@ -142,7 +142,7 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
             None => false,
         };
     }
-    if let Some(element) = ty.vec_element() {
+    if let Some(element) = ty.sequence_element() {
         return value
             .as_array_ref()
             .is_ok_and(|array| array.iter().all(|value| matches_type(value, element)));

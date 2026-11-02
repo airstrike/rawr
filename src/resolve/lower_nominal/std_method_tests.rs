@@ -269,3 +269,133 @@ main();
         "new new [7, 8, 9] Even(4)\nOk(Even(8)) Err(\"7 is odd\")\n"
     );
 }
+
+#[test]
+fn language_a_vec_derefs_to_its_slice_which_is_its_own_type() {
+    // `&Vec<T>` and `&[T; N]` coerce to `&[T]` (#769); a range of a `Vec`
+    // is a `[T]`, which a slice pattern matches.
+    let source = r#"
+fn total(xs: &[i64]) -> i64 {
+    xs.iter().sum()
+}
+
+fn head(xs: &[i64]) -> &[i64] {
+    &xs[..2]
+}
+
+fn main() {
+    let v = vec![3, 1, 2];
+    let a = [4, 5, 6];
+    let s: &[i64] = &v;
+    println!("{} {} {:?} {:?} {}", total(&v), total(&a), head(&v), s.to_vec(), s.len());
+    match &v[..] {
+        [first, .., last] => println!("{first} {last}"),
+        _ => {}
+    }
+    match v.as_slice() {
+        [] => println!("empty"),
+        [one, rest @ ..] => println!("{one} {:?}", rest),
+    }
+}
+main();
+"#;
+    assert_eq!(printed(source), "6 15 [3, 1] [3, 1, 2] 3\n3 2\n3 [1, 2]\n");
+}
+
+#[test]
+fn language_a_slice_has_only_the_slices_methods() {
+    // rustc's E0599: `push` is `Vec<T>`'s, which a `&mut [T]` doesn't have.
+    let report = refused(
+        r#"
+fn add(xs: &mut [i64]) {
+    xs.push(1);
+}
+fn main() {
+    let mut v = vec![1];
+    add(&mut v);
+}
+main();
+"#,
+    );
+    assert!(
+        report.contains("no method named `push` found for `&mut [i64]`"),
+        "{report}"
+    );
+    // A `Vec` is no slice to a pattern (E0529).
+    let report = refused(
+        r#"
+fn main() {
+    let v: Vec<i64> = vec![1, 2];
+    match &v {
+        [a, b] => println!("{a} {b}"),
+        _ => {}
+    }
+}
+main();
+"#,
+    );
+    assert!(report.contains("E0529"), "{report}");
+}
+
+#[test]
+fn language_a_vec_deque_has_its_own_methods() {
+    let source = r#"
+use std::collections::VecDeque;
+
+fn main() {
+    let mut d: VecDeque<i64> = VecDeque::from(vec![2, 3]);
+    d.push_front(1);
+    d.push_back(4);
+    let front = d.front().copied();
+    if let Some(back) = d.back_mut() {
+        *back += 10;
+    }
+    println!("{:?} {:?} {} {:?}", d, front, d.len(), d.get(1));
+    let v: Vec<i64> = d.iter().map(|x| x * 2).collect();
+    let e: VecDeque<i64> = v.iter().copied().collect();
+    println!("{:?} {:?} {}", v, e.back(), d == VecDeque::from([1, 2, 3, 14]));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[1, 2, 3, 14] Some(1) 4 Some(2)\n[2, 4, 6, 28] Some(28) true\n"
+    );
+}
+
+#[test]
+fn language_vec_and_vec_deque_methods_are_each_their_own() {
+    // rustc's E0599 for another sequence's method.
+    let deque =
+        "use std::collections::VecDeque;\nfn main() { let mut d: VecDeque<i64> = VecDeque::new(); ";
+    for (source, method, owner) in [
+        (
+            "fn main() { let mut v: Vec<i64> = Vec::new(); v.push_back(1); }\nmain();\n"
+                .to_string(),
+            "push_back",
+            "Vec<i64>",
+        ),
+        (
+            format!("{deque}d.push(1); }}\nmain();\n"),
+            "push",
+            "VecDeque<i64>",
+        ),
+        (
+            format!("{deque}d.sort(); }}\nmain();\n"),
+            "sort",
+            "VecDeque<i64>",
+        ),
+    ] {
+        let report = refused(&source);
+        assert!(
+            report.contains(&format!("no method named `{method}` found for `{owner}`")),
+            "{report}"
+        );
+    }
+    // std's own `VecDeque` method rawr doesn't run yet (D712.1).
+    let report = refused(&format!("{deque}d.rotate_left(1); }}\nmain();\n"));
+    assert!(
+        report.contains("rawr doesn't run `VecDeque::rotate_left` yet"),
+        "{report}"
+    );
+}

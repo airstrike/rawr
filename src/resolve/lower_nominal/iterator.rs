@@ -1347,13 +1347,15 @@ impl Parser<'_> {
                             target,
                         )
                     }
-                    Some(target @ Ty::Array { .. }) => {
-                        let vec = Ty::Array {
-                            element: Box::new(item),
-                            length: None,
+                    // `FromIterator` of a `Vec` or a `VecDeque`.
+                    Some(target @ Ty::Array { kind, .. }) => {
+                        let kind = match kind {
+                            sequence::Kind::Deque => sequence::Kind::Deque,
+                            _ => sequence::Kind::Vec,
                         };
-                        self.require_type(&target, &vec, expression)?;
-                        (self.materialized(&pipeline), vec)
+                        let collected = Ty::sequence(kind, item);
+                        self.require_type(&target, &collected, expression)?;
+                        (self.materialized(&pipeline), collected)
                     }
                     // Decided by inference: a `Vec`, or a `String` it
                     // concatenates (`-> String { s.chars().rev().collect() }`).
@@ -1752,10 +1754,7 @@ impl Parser<'_> {
                 let sink = origin::Fragment::plain(format!(
                     "{lefts}.push({x}[0]); {rights}.push({x}[1]); "
                 ));
-                let vec = |element: &Ty| Ty::Array {
-                    element: Box::new(element.clone()),
-                    length: None,
-                };
+                let vec = |element: &Ty| Ty::sequence(sequence::Kind::Vec, element.clone());
                 let source = self.consume(
                     &pipeline,
                     &format!("let {lefts} = []; let {rights} = [];"),
@@ -1775,10 +1774,7 @@ impl Parser<'_> {
                 let sink = origin::Fragment::plain(format!(
                     "if {f}.call({x}) {{ {yes}.push({x}); }} else {{ {no}.push({x}); }} "
                 ));
-                let vec = Ty::Array {
-                    element: Box::new(item),
-                    length: None,
-                };
+                let vec = Ty::sequence(sequence::Kind::Vec, item);
                 let source = self.consume(
                     &pipeline,
                     &format!("let {yes} = []; let {no} = [];"),
