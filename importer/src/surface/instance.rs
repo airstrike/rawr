@@ -50,6 +50,23 @@ impl Slot {
         }
     }
 
+    /// The slot a script closure that captures fills at the call's input
+    /// `position`: a Rust closure holding what it captured, which the call
+    /// takes as a value, so every closure there shares one instance.
+    #[must_use]
+    pub fn closure(position: u32) -> Self {
+        Self {
+            position,
+            key: closure_key(),
+        }
+    }
+
+    /// Whether a closure that captures fills the slot ([`Slot::closure`]).
+    #[must_use]
+    pub fn is_closure(&self) -> bool {
+        self.key == closure_key()
+    }
+
     /// The input the slot fills.
     #[must_use]
     pub const fn position(&self) -> u32 {
@@ -61,6 +78,11 @@ impl Slot {
     pub const fn key(&self) -> &[u8; 32] {
         &self.key
     }
+}
+
+fn closure_key() -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(b"rawr.instance.slot.closure/v1").into()
 }
 
 pub(super) struct Parts {

@@ -10901,18 +10901,44 @@ struct Crossed<'a> {
 }
 
 impl<'a> Crossed<'a> {
+    /// The call of the callable parameter at input `position` that a
+    /// script closure that captures fills ([`Slot::closure`]): a Rust
+    /// closure holding what it captured, as each of iced's `Task::sip`'s
+    /// callables takes one.
+    ///
+    /// [`Slot::closure`]: crate::surface::instance::Slot::closure
+    fn closure_at(
+        &self,
+        position: usize,
+        ty: &convert::Type,
+    ) -> Option<&'a crate::classify::representability::callable::Call> {
+        self.find(position, ty, true)
+    }
+
     /// The call of the slot at input `position`, when one fills it.
     fn slot_at(
         &self,
         position: usize,
         ty: &convert::Type,
     ) -> Option<&'a crate::classify::representability::callable::Call> {
+        self.find(position, ty, false)
+    }
+
+    fn find(
+        &self,
+        position: usize,
+        ty: &convert::Type,
+        closure: bool,
+    ) -> Option<&'a crate::classify::representability::callable::Call> {
         let convert::Type::Parameter(parameter) = ty else {
             return None;
         };
         self.slots
             .iter()
-            .any(|slot| usize::try_from(slot.position()).ok() == Some(position))
+            .any(|slot| {
+                usize::try_from(slot.position()).ok() == Some(position)
+                    && slot.is_closure() == closure
+            })
             .then(|| {
                 self.crossings
                     .iter()
@@ -11304,8 +11330,9 @@ fn render_function_arguments(
             _ => {
                 if let Some(slot) = crossed.slot_at(position, ty) {
                     render_slot(position, runtime, slot, signature, substitutions, output)?;
-                } else if let Some(call) =
-                    call.filter(|call| *ty == convert::Type::Parameter(call.parameter()))
+                } else if let Some(call) = call
+                    .filter(|call| *ty == convert::Type::Parameter(call.parameter()))
+                    .or_else(|| crossed.closure_at(position, ty))
                 {
                     render_take_callable(
                         position,
@@ -12346,7 +12373,11 @@ fn render_callable_closure(
         convert::Type::Borrowed { ty, .. } => !by_value(ty),
         ty => !by_value(ty),
     };
-    let native_inputs = inputs.iter().any(native);
+    // An input that holds a native value, as a `Result<Bytes, String>`
+    // does, inserts it into the arena too.
+    let native_inputs = inputs
+        .iter()
+        .any(|input| native(input) || holds_native(input));
     let native_output = !by_value(&returned) || holds_native(&returned);
     let mut parameters = Vec::new();
     let mut values = Vec::new();
@@ -12403,7 +12434,8 @@ fn render_callable_closure(
         render_to_dynamic(input, &format!("input_{position}"), 0, &mut converted)?;
         // A native value takes the closure parameter's witness, so script
         // code reads it as its type, as a `match` on an imported enum does.
-        if native(input) {
+        // So does a value that holds one, as a slot's input does.
+        if native(input) || holds_native(input) {
             converted = format!(
                 "({converted}).and_then(|value| attest_input(arguments.arena, value, witnesses.get({position})))"
             );

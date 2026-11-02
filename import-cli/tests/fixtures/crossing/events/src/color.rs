@@ -283,3 +283,27 @@ impl<S> Lighten for Hsl<S, f32> {
         }
     }
 }
+
+/// Darkening by a factor, as palette's `Darken`, which every `Lighten`
+/// type implements through one blanket impl whose `Scalar` is the
+/// `Lighten` impl's.
+pub trait Darken {
+    /// The type of the darken modifier.
+    type Scalar;
+
+    /// The color darkened by `factor`.
+    #[must_use]
+    fn darken(self, factor: Self::Scalar) -> Self;
+}
+
+impl<T> Darken for T
+where
+    T: Lighten,
+    T::Scalar: std::ops::Neg<Output = T::Scalar>,
+{
+    type Scalar = T::Scalar;
+
+    fn darken(self, factor: Self::Scalar) -> Self {
+        self.lighten(-factor)
+    }
+}

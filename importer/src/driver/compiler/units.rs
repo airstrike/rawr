@@ -22,8 +22,8 @@ use super::{
     associated_path_kind, canonical_path, crate_segment, defaulted_instance, hex,
     implementation_crate_authority, name_index, namespace, projected_alias_instance, safety,
     AssociatedDemandKind, AssociatedObligation, AssociatedPathKind, Binding, Budget, Builder,
-    Diagnostic, ExternalCrate, Generics, ImplementationCrateAuthority, Invocation, Namespace,
-    Polarity, Sysroot, Trait, TraitObligation,
+    Definition, Diagnostic, Explicit, ExternalCrate, Generics, Id, ImplementationCrateAuthority,
+    Invocation, Namespace, Owner, Polarity, Shape, Sysroot, Trait, TraitObligation, Visibility,
 };
 
 /// A value as the protocol writes it, kept verbatim.
@@ -1077,7 +1077,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         let mut id = self.id(base, Namespace::Type)?;
         id.def_path_hash = key.clone();
-        let associated =
+        let mut associated =
             self.expand_associated_obligations(implementation, identity, &[obligation], &id, true)?;
         self.ensure(adt, Namespace::Type)?;
         self.ensure(instantiated.def_id, Namespace::Type)?;
@@ -1094,10 +1094,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 self.arguments(instantiated.args, base, 0)?,
                 self.type_of(instantiated.self_ty(), base, 0)?,
                 self.generics(base)?,
+                self.applied_associated_types(implementation, arguments, base, &id)?,
             ))
         })();
         self.reowned = previous;
-        let (trait_arguments, self_type, generics) = parts?;
+        let (trait_arguments, self_type, generics, types) = parts?;
+        associated.extend(types);
+        associated.sort_unstable();
+        associated.dedup();
         let header = tcx.impl_trait_header(implementation);
         let record = engine::model::Implementation {
             key,
@@ -1157,8 +1161,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         let mut id = self.id(implementation, Namespace::Type)?;
         id.def_path_hash = key.clone();
-        let associated =
+        let mut associated =
             self.expand_associated_obligations(implementation, identity, &[obligation], &id, true)?;
+        associated.extend(self.applied_associated_types(
+            implementation,
+            instantiated.args,
+            adt,
+            &id,
+        )?);
+        associated.sort_unstable();
+        associated.dedup();
         self.ensure(adt, Namespace::Type)?;
         self.ensure(instantiated.def_id, Namespace::Type)?;
         // The ledger keeps relevance in identity order.
@@ -1195,6 +1207,85 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             implementation: Box::new(record),
         });
         Ok(())
+    }
+
+    /// Each associated type of the blanket implementation `implementation`
+    /// at `arguments`, as a definition of its application `id`: the type the
+    /// blanket implementation gives it, as rustc normalizes it in `context`,
+    /// the implementation the application goes through or the type it
+    /// applies to. palette's `impl<T: Lighten> Darken for T { type Scalar =
+    /// T::Scalar; }` applied to `Hsl<S, f32>` through its `Lighten` impl
+    /// gives `Scalar` that impl's `f32`, so `<Hsl<S, f32> as
+    /// Darken>::Scalar` resolves as rustc resolves it (#727). Each
+    /// application of one implementation has its own definitions, so an
+    /// application emitted again for another member emits the same ones.
+    fn applied_associated_types(
+        &mut self,
+        implementation: DefId,
+        arguments: ty::GenericArgsRef<'tcx>,
+        context: DefId,
+        id: &Id,
+    ) -> Result<Vec<Id>, String> {
+        let tcx = self.tcx;
+        let items = tcx
+            .associated_items(implementation)
+            .in_definition_order()
+            .filter(|item| {
+                item.is_type()
+                    && !item.is_impl_trait_in_trait()
+                    && tcx.generics_of(item.def_id).own_params.is_empty()
+            })
+            .filter_map(|item| Some((item.def_id, item.trait_item_def_id()?)))
+            .collect::<Vec<_>>();
+        self.edge(items.len())?;
+        let mut ids = Vec::new();
+        for (item, declaration) in items {
+            let mut digest = Sha256::new();
+            digest.update(b"rawr.applied-associated-type/v1");
+            digest.update(id.def_path_hash.as_bytes());
+            digest.update(tcx.def_path_hash(item).to_raw_def_path_hash().0);
+            let digest = digest.finalize();
+            let hash: Hash = digest[..16]
+                .try_into()
+                .map_err(|_| "applied associated type digest is short".to_owned())?;
+            let mut item_id = self.id(item, Namespace::Type)?;
+            item_id.def_path_hash = hex(&hash)?;
+            let value = tcx
+                .type_of(item)
+                .instantiate(tcx, arguments)
+                .skip_norm_wip();
+            self.charge_id(id)?;
+            let definition = Definition {
+                id: item_id.clone(),
+                display_path: self.definition_path(item)?,
+                owner: Owner::Implementation { id: id.clone() },
+                visibility: Visibility::Public,
+                shape: Shape::AssociatedType {
+                    bounds: self.item_bounds(declaration, declaration)?,
+                    default: Explicit::Present {
+                        value: self.type_of(value, context, 0)?,
+                    },
+                    generics: Generics {
+                        parameters: Vec::new(),
+                        predicates: Vec::new(),
+                    },
+                },
+                span: self.span(tcx.def_span(item))?,
+                origin: self.origin(tcx.def_span(item))?,
+            };
+            self.budget.items(1)?;
+            self.emissions.push(Emission::Definition {
+                key: Key {
+                    hash,
+                    namespace: Namespace::Type,
+                },
+                id: item_id.clone(),
+                value: raw(&definition)?,
+                alias: None,
+            });
+            ids.push(item_id);
+        }
+        Ok(ids)
     }
 
     /// A module's public children, as a demanded path and a public walk

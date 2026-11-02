@@ -1108,6 +1108,37 @@ fn a_method_takes_its_traits_associated_type_of_the_receiver() {
     assert!(rawr.starts_with("hue 220 85"), "{rawr}");
 }
 
+/// iced's color_palette (#727): `hsl.shift_hue(-105.0).darken(0.075)`,
+/// where palette's blanket `impl<T: Lighten> Darken for T { type Scalar =
+/// T::Scalar; }` applies to `Hsl` through its own `Lighten` impl. The
+/// application keeps `Scalar`, resolved in that impl's context, so the
+/// factor is `<Hsl as Lighten>::Scalar`, as rustc normalizes it. The output
+/// is `cargo run`'s.
+#[test]
+fn a_blanket_impls_associated_type_resolves_through_the_impl_it_applies_by() {
+    let (rawr, cargo) = both_printed("crossing-darkened", "darkened.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "hsl 115 1 0.596875");
+}
+
+/// iced's gallery (#728): `Task::sip(image.download(..),
+/// Message::BlurhashDecoded.with(id), Message::ThumbnailDownloaded.with(id))`
+/// passes two closures that capture `id`. An item of several callable
+/// parameters takes a capturing closure in each, by that parameter's own
+/// call, and beside a script function that fills one as a slot. The
+/// closure's `Result<Bytes, String>` input holds a native value, which
+/// crosses through the arena. The output is `cargo run`'s.
+#[test]
+fn capturing_closures_fill_each_of_several_callable_parameters() {
+    let (rawr, cargo) = both_printed("crossing-withed", "withed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(ThumbnailDownloaded(4, Ok(Bytes(21))))\nSome(Failed(Err(\"empty\")))\n\
+         Some(ThumbnailAllocated(4, 9))"
+    );
+}
+
 /// fount's loading program: iced's `Task::future(impl Future<Output = T>)`
 /// of an async block that awaits a crate's `async fn`, then a closure that
 /// takes the block's output and matches on it. The output is a `Result`
