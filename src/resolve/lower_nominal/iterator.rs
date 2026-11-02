@@ -520,6 +520,20 @@ impl Parser<'_> {
         Some((self.materialized(&pipeline), item))
     }
 
+    /// Why `value` has no chain: for a crate type that implements
+    /// `Iterator`, the miss of its `next`, which the importer answers by
+    /// bringing the member as it brings any other (#709); else `fallback`.
+    pub(super) fn pipeline_error(&mut self, value: &ParsedExpr, fallback: Error) -> Error {
+        let ty = self.inference.resolve(&value.ty);
+        if matches!(ty, Ty::Host { .. })
+            && self.type_implements(&ty, "Iterator")
+            && let Err(error) = self.user_pipeline(value, None)
+        {
+            return error;
+        }
+        fallback
+    }
+
     /// The chain of `value` and its item type, when it is an iterator or
     /// something Rust's `IntoIterator` walks (an array, `&Vec`, a range).
     fn pipeline_of(&mut self, value: &ParsedExpr) -> Option<(Pipeline, Ty)> {
@@ -783,9 +797,10 @@ impl Parser<'_> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let (mut pipeline, item) = self
-            .pipeline_of(&value)
-            .expect("iterator receivers have a chain");
+        let Some((mut pipeline, item)) = self.pipeline_of(&value) else {
+            let fallback = self.unsupported("an iterator method on a value without a chain");
+            return Err(self.pipeline_error(&value, fallback));
+        };
         // Items with drop glue may only go on to an owner: a container, or
         // a closure's parameter.
         if !matches!(member.as_str(), "collect" | "for_each" | "map" | "fold")

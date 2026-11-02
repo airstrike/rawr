@@ -28368,7 +28368,10 @@ impl<'a> Parser<'a> {
                             return Err(self.unsupported("`for` over a value that is not iterable"))
                         }
                     },
-                    _ => return Err(self.unsupported("`for` over a value that is not iterable")),
+                    _ => {
+                        let fallback = self.unsupported("`for` over a value that is not iterable");
+                        return Err(self.pipeline_error(&lhs, fallback));
+                    }
                 };
                 // `for x in v` takes `v`: a later use is rustc's E0382.
                 let mut lhs = lhs;
