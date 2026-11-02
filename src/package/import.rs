@@ -2356,7 +2356,9 @@ fn build(
                 .checked_add(selector)
         });
         allocation.retain_checked(Some(1), bytes)?;
-        let receiver = types.convert(
+        // The impl's `Self` is `&str`, which a `&String` reaches only by
+        // deref coercion, as in Rust.
+        let receiver = types.convert_input(
             &representability::convert::Type::Builtin(
                 representability::convert::Builtin::StaticStr,
             ),

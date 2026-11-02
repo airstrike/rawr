@@ -1045,7 +1045,12 @@ impl Plan {
                     inputs
                         .try_reserve_exact(item.signature.inputs.len() + 1)
                         .map_err(|_| super::Error::Allocation)?;
-                    inputs.push(Type::String);
+                    // The impl's `Self`, `&str`, as the program's checker
+                    // reads it.
+                    inputs.push(Type::Reference {
+                        mutable: false,
+                        target: Box::new(Type::String),
+                    });
                     inputs.extend(std::mem::take(&mut item.signature.inputs).into_vec());
                     item.signature.inputs = inputs.into_boxed_slice();
                     let mut items = std::mem::take(&mut facade.items).into_vec();
@@ -3833,7 +3838,9 @@ fn defaults(
 
 /// An item's input. A `&str` or `&'static str` is a shared reference to
 /// the string, as rustc sees it, so it stays apart from a `String` input:
-/// iced's `Id::from` has both, and the argument picks one.
+/// iced's `Id::from` has both, and the argument picks one. A `&str` an
+/// input holds, as a future's `Option<&str>` or `(&str, &Catalog)` does,
+/// is a borrow there too (#677), as the program's checker reads it.
 fn input_ty(
     source: &representability::convert::Type,
     parameters: &[representability::signature::Parameter],
@@ -3844,6 +3851,17 @@ fn input_ty(
             mutable: false,
             target: Box::new(Type::String),
         },
+        Source::Option(element) => Type::Option(Box::new(input_ty(element, parameters)?)),
+        Source::Tuple(members) => {
+            let mut converted = Vec::new();
+            converted
+                .try_reserve_exact(members.len())
+                .map_err(|_| super::Error::Allocation)?;
+            for member in members {
+                converted.push(input_ty(member, parameters)?);
+            }
+            Type::Tuple(converted.into_boxed_slice())
+        }
         source => ty(source, parameters)?,
     })
 }
