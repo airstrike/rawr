@@ -2055,7 +2055,7 @@ fn imported_surface_type(
         }
         // A `Box<T>`: alloc's, which a crate's signature names (D711
         // step 5).
-        Ty::Boxed(Pointer::Box, inner) => Type::Nominal {
+        Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),
             arguments: Box::new([imported_surface_type(
                 inference, models, inner, operation, imported,
@@ -2414,7 +2414,7 @@ fn instance_surface_type(
                 .map(|argument| instance_surface_type(inference, models, argument))
                 .collect::<Option<_>>()?,
         },
-        Ty::Boxed(Pointer::Box, inner) => Type::Nominal {
+        Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
         },
@@ -17590,7 +17590,7 @@ impl<'a> Parser<'a> {
             }
             // A `Box` is its value at runtime (D492.3), which a crate's
             // `Box<T>` boxes where it takes it.
-            Ty::Boxed(Pointer::Box, inner) => self.proven_type(&inner, operation, span)?,
+            Ty::Boxed(inner) => self.proven_type(&inner, operation, span)?,
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
@@ -17741,7 +17741,6 @@ impl<'a> Parser<'a> {
             Ty::Never
             | Ty::Param(_)
             | Ty::Projection(..)
-            | Ty::Boxed(..)
             | Ty::Counted(..)
             | Ty::Weak(..)
             | Ty::Dyn(..) => {
@@ -19307,17 +19306,14 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             },
-            Shape::Boxed(element) => Ty::Boxed(
-                Pointer::Box,
-                Box::new(self.instantiate_host_type(
-                    element,
-                    parameters,
-                    operation,
-                    span,
-                    owner,
-                    originating,
-                )?),
-            ),
+            Shape::Boxed(element) => Ty::Boxed(Box::new(self.instantiate_host_type(
+                element,
+                parameters,
+                operation,
+                span,
+                owner,
+                originating,
+            )?)),
             Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
                 element,
                 parameters,

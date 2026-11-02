@@ -49,7 +49,8 @@ pub(crate) enum Std {
     Clone, Copy, Debug, serde::Deserialize, Eq, Ord, PartialEq, PartialOrd, serde::Serialize,
 )]
 pub enum Unrun {
-    /// `std::rc::Rc`, a real pointer at rawr's runtime with #748.
+    /// `std::rc::Rc`, rawr's real counted pointer (#748, `Ty::Counted`):
+    /// passing one to a crate as the native pointer is still to come.
     Rc,
     /// `std::sync::Arc`, as `Rc` is.
     Arc,
