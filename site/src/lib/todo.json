@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, \"type mismatch in closure arguments\", naming both signatures.","issues":[722]},
+        {"text":"An `.into()` whose target nothing fixes is refused with rustc's \"type annotations needed\" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected.","issues":[723]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.98",
@@ -1713,8 +1719,8 @@
     {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
     {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
     {"issue":721,"title":"Generated-runtime invariant errors (TypeMismatch, StaleHandle, NotClone) panic as rawr bugs or read in Rust terms","state":"closed","category":"Health","release":"0.3.98"},
-    {"issue":722,"title":"A closure written |x: T| where Fn(&T) is expected is E0631, not accepted by dropping the reference","state":"open","category":"Divergences from rustc"},
-    {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"open","category":"Divergences from rustc"},
+    {"issue":722,"title":"A closure written |x: T| where Fn(&T) is expected is E0631, not accepted by dropping the reference","state":"closed","category":"Divergences from rustc"},
+    {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"closed","category":"Divergences from rustc"},
     {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
     {"issue":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"},
@@ -1726,7 +1732,9 @@
     {"issue":732,"title":"Text .into() takes its target from the use site: &str, Box<str>, Arc<str>, PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":733,"title":"`&str + &str` reports rustc's E0369, not a type mismatch","state":"open","category":"Divergences from rustc"},
     {"issue":734,"title":"The generated runtime's Stale error panics as a rawr bug or reads in Rust terms","state":"open","category":"Health"},
-    {"issue":735,"title":"`cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health"}
+    {"issue":735,"title":"`cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health"},
+    {"issue":736,"title":"A String's .into() with no target is E0283, not accepted as itself","state":"open","category":"Divergences from rustc"},
+    {"issue":737,"title":"An array of Elements widens to a slice only at an IntoIterator parameter","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

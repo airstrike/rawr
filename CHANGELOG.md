@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, "type mismatch in closure arguments", naming both signatures. (#722)
+- An `.into()` whose target nothing fixes is refused with rustc's "type annotations needed" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected. (#723)
 
 ## 0.3.98 (2026-11-01)
 
