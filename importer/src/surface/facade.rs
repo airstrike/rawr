@@ -3838,7 +3838,9 @@ fn defaults(
 
 /// An item's input. A `&str` or `&'static str` is a shared reference to
 /// the string, as rustc sees it, so it stays apart from a `String` input:
-/// iced's `Id::from` has both, and the argument picks one.
+/// iced's `Id::from` has both, and the argument picks one. A `&str` an
+/// input holds, as a future's `Option<&str>` or `(&str, &Catalog)` does,
+/// is a borrow there too (#677), as the program's checker reads it.
 fn input_ty(
     source: &representability::convert::Type,
     parameters: &[representability::signature::Parameter],
@@ -3849,6 +3851,17 @@ fn input_ty(
             mutable: false,
             target: Box::new(Type::String),
         },
+        Source::Option(element) => Type::Option(Box::new(input_ty(element, parameters)?)),
+        Source::Tuple(members) => {
+            let mut converted = Vec::new();
+            converted
+                .try_reserve_exact(members.len())
+                .map_err(|_| super::Error::Allocation)?;
+            for member in members {
+                converted.push(input_ty(member, parameters)?);
+            }
+            Type::Tuple(converted.into_boxed_slice())
+        }
         source => ty(source, parameters)?,
     })
 }
