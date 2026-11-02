@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, \"type mismatch in closure arguments\", naming both signatures.","issues":[722]},
-      {"text":"An `.into()` whose target nothing fixes is refused with rustc's \"type annotations needed\" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected.","issues":[723]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.99",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, \"type mismatch in closure arguments\", naming both signatures.","issues":[722]},
+        {"text":"An `.into()` whose target nothing fixes is refused with rustc's \"type annotations needed\" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected.","issues":[723]}
+      ]
+    },
     {
       "version": "0.3.98",
       "date": "2026-11-01",
