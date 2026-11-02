@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-02",
-  "version": "0.3.111",
+  "version": "0.3.112",
   "examples": {
     "running": 25,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A std type in a crate's signature is rawr's own type in every position: functions take tuples and `Range<usize>`, and take and give `Box<T>`, read from std's own table. A std type rawr can't pass to a crate yet, such as `Rc`, `Arc` or `HashMap`, reports \"rawr doesn't run `X` yet\" where the function is called.","issues":[746,707]},
-        {"text":"A crate type's `Index`, `FromStr` and `Iterator` impls work as its own trait impls do: `grid[i]`, `\"1,2\".parse::<Coords>()` and a `for` loop over it call them.","issues":[709]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.112",
+        "date": "2026-11-02",
+        "entries": [
+          {"text":"A std type in a crate's signature is rawr's own type in every position: functions take tuples and `Range<usize>`, and take and give `Box<T>`, read from std's own table. A std type rawr can't pass to a crate yet, such as `Rc`, `Arc` or `HashMap`, reports \"rawr doesn't run `X` yet\" where the function is called.","issues":[746,707]},
+          {"text":"A crate type's `Index`, `FromStr` and `Iterator` impls work as its own trait impls do: `grid[i]`, `\"1,2\".parse::<Coords>()` and a `for` loop over it call them.","issues":[709]}
+        ]
+      },
       {
         "version": "0.3.111",
         "date": "2026-11-02",
@@ -1808,9 +1810,9 @@
     {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
     {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc","release":"0.3.97"},
-    {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"closed","category":"Divergences from rustc"},
+    {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"closed","category":"Divergences from rustc","release":"0.3.112"},
     {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
-    {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
+    {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"closed","category":"Divergences from rustc","release":"0.3.112"},
     {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
     {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
@@ -1847,7 +1849,7 @@
     {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"closed","category":"Divergences from rustc","release":"0.3.110"},
-    {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"closed","category":"Divergences from rustc"},
+    {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"closed","category":"Divergences from rustc","release":"0.3.112"},
     {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
     {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"closed","category":"Divergences from rustc","release":"0.3.111"},
     {"issue":749,"title":"The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc"},

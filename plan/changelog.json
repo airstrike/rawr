@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A std type in a crate's signature is rawr's own type in every position: functions take tuples and `Range<usize>`, and take and give `Box<T>`, read from std's own table. A std type rawr can't pass to a crate yet, such as `Rc`, `Arc` or `HashMap`, reports \"rawr doesn't run `X` yet\" where the function is called.","issues":[746,707]},
-      {"text":"A crate type's `Index`, `FromStr` and `Iterator` impls work as its own trait impls do: `grid[i]`, `\"1,2\".parse::<Coords>()` and a `for` loop over it call them.","issues":[709]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.112",
+      "date": "2026-11-02",
+      "entries": [
+        {"text":"A std type in a crate's signature is rawr's own type in every position: functions take tuples and `Range<usize>`, and take and give `Box<T>`, read from std's own table. A std type rawr can't pass to a crate yet, such as `Rc`, `Arc` or `HashMap`, reports \"rawr doesn't run `X` yet\" where the function is called.","issues":[746,707]},
+        {"text":"A crate type's `Index`, `FromStr` and `Iterator` impls work as its own trait impls do: `grid[i]`, `\"1,2\".parse::<Coords>()` and a `for` loop over it call them.","issues":[709]}
+      ]
+    },
     {
       "version": "0.3.111",
       "date": "2026-11-02",
