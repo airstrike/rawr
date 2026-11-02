@@ -1382,7 +1382,7 @@ impl Arena {
         // reads a value while it is borrowed shared.
         if handle.epoch == self.epoch
             && let Some(nonce) = LENDERS
-                .with_borrow(|lenders| lenders.get(&(handle.slot, handle.generation)).copied())
+                .with_borrow(|lenders| lenders.get(&(handle.epoch, handle.slot, handle.generation)).copied())
         {
             return __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| call(value))
                 .map_err(|error| Error::Lent(std::any::type_name::<T>(), error));
@@ -1945,14 +1945,14 @@ impl<T: 'static> __rawr_internal::scope::Family for LenderF<T> {
 
 thread_local! {
     /// The arena slots a lent slice's operation has claimed on this
-    /// thread, by slot and generation: a nested operation on a slice the
+    /// thread, by arena, slot and generation: a nested operation on a slice the
     /// same value lends shares the claim, as Rust's shared borrows do.
-    static LENDERS: RefCell<std::collections::BTreeMap<(u32, u64), __rawr_internal::scope::Nonce>> =
+    static LENDERS: RefCell<std::collections::BTreeMap<([u8; 32], u32, u64), __rawr_internal::scope::Nonce>> =
         const { RefCell::new(std::collections::BTreeMap::new()) };
 }
 
 #[allow(dead_code)]
-struct Lending((u32, u64));
+struct Lending(([u8; 32], u32, u64));
 
 impl Drop for Lending {
     fn drop(&mut self) {
@@ -1965,7 +1965,7 @@ impl Drop for Lending {
 #[allow(dead_code)]
 fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
     let handle = value.read_lock::<NativeHandle>()?;
-    LENDERS.with_borrow(|lenders| lenders.get(&(handle.slot, handle.generation)).copied())
+    LENDERS.with_borrow(|lenders| lenders.get(&(handle.epoch, handle.slot, handle.generation)).copied())
 }
 
 /// Reach the receiver `lender` names, shared, for one operation on the
@@ -1995,7 +1995,7 @@ fn reach_lender<T: 'static>(
         __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| visit(value))
             .map_err(|error| place_error(Error::Value(error.to_string())))?
     }
-    let key = (handle.slot, handle.generation);
+    let key = (handle.epoch, handle.slot, handle.generation);
     if let Some(nonce) = LENDERS.with_borrow(|lenders| lenders.get(&key).copied()) {
         return claimed(nonce, visit);
     }
