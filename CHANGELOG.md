@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A method a blanket impl gives through another trait, whose input is the associated type that impl sets, as palette's `hsl.darken(0.075)`, resolves at that type. (#727)
+- A crate function with several callable parameters takes a capturing closure in each, as iced's `Task::sip(sipper, Message::Progress.with(id), Message::Done.with(id))` does, and a closure input that holds a crate value, such as `Result<Bytes, String>`, crosses. (#728)
 
 ## 0.3.107 (2026-11-02)
 
