@@ -9698,12 +9698,15 @@ fn render_guard(
             call_again("arena.held", "receiver.clone()", "arena, receiver", output)?;
             output
                 .write_all(
-                    b"
+                    format!(
+                        "
                         let output = {copy}!(&*guard)?;
-                        let value = {
+                        let value = {{
                             #[allow(unused_variables)]
-                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
-",
+                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
+"
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)?;
             indented(&give, "                        ", output)?;
@@ -9797,12 +9800,15 @@ fn render_guard(
             call("arena.held", "receiver.clone()", "arena, receiver", output)?;
             output
                 .write_all(
-                    b"
+                    format!(
+                        "
                         let output = {copy}!(&*guard)?;
-                        let value = {
+                        let value = {{
                             #[allow(unused_variables)]
-                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
-",
+                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
+"
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)?;
             indented(&give, "                        ", output)?;
