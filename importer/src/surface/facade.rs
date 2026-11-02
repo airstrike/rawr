@@ -2004,6 +2004,18 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
 /// typed plan, so it is always at the current schema.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn runner_native_fixture() -> Box<[u8]> {
+    runner_fixture(false)
+}
+
+/// The runner fixture with `Source` declared by `target`, so `native`'s
+/// `produce` resolves through a facade after it in root order.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn runner_foreign_fixture() -> Box<[u8]> {
+    runner_fixture(true)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+fn runner_fixture(foreign: bool) -> Box<[u8]> {
     use super::identity::{Definition, Form as Selected, Selector};
     let unit = |path: &str,
                 identity: [u8; 32],
@@ -2077,23 +2089,24 @@ pub(crate) fn runner_native_fixture() -> Box<[u8]> {
         sources: Box::default(),
         abis: Box::default(),
         operations: Box::default(),
-        facades: Box::from([
-            facade(
-                "native",
-                Box::from([unit(
-                    "Source",
-                    source,
-                    &[],
-                    Some(Selector::StructConstructor(Selected::Unit)),
-                )]),
-                Box::from([produce]),
-            ),
-            facade(
-                "target",
-                Box::from([unit("Event", [12; 32], &["Message"], None)]),
-                Box::default(),
-            ),
-        ]),
+        facades: {
+            let source = unit(
+                "Source",
+                source,
+                &[],
+                Some(Selector::StructConstructor(Selected::Unit)),
+            );
+            let event = unit("Event", [12; 32], &["Message"], None);
+            let (native, target) = if foreign {
+                (Box::default(), Box::from([event, source]))
+            } else {
+                (Box::from([source]), Box::from([event]))
+            };
+            Box::from([
+                facade("native", native, Box::from([produce])),
+                facade("target", target, Box::default()),
+            ])
+        },
     };
     plan.validate().expect("the runner fixture is canonical");
     serde_json::to_vec(&plan)
