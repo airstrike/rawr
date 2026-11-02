@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"Inherent methods of `Option`, `Result`, `char`, floats, ints, `String`/`str`, `Vec`/`[T]` and maps come from std's declarations: their receiver modes (`into_bytes` moves, `sort` takes `&mut self`, a program trait comes before a method a Deref step away) and what each call keeps of its inputs. A std `&mut self` method on a local not declared `mut` is rustc's E0596, and a std method rawr doesn't run yet is the not-yet error.","issues":[745]},
+      {"text":"`x.try_into()` into a program type uses its `TryFrom` impl, and `x.clone_from(&y)` works on any `Clone` type through method lookup.","issues":[757]}
+    ]
   },
   "releases": [
     {

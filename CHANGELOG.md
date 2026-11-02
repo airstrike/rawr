@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- Inherent methods of `Option`, `Result`, `char`, floats, ints, `String`/`str`, `Vec`/`[T]` and maps come from std's declarations: their receiver modes (`into_bytes` moves, `sort` takes `&mut self`, a program trait comes before a method a Deref step away) and what each call keeps of its inputs. A std `&mut self` method on a local not declared `mut` is rustc's E0596, and a std method rawr doesn't run yet is the not-yet error. (#745)
+- `x.try_into()` into a program type uses its `TryFrom` impl, and `x.clone_from(&y)` works on any `Clone` type through method lookup. (#757)
 
 ## 0.3.109 (2026-11-02)
 
