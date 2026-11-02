@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.97",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
+      ]
+    },
     {
       "version": "0.3.96",
       "date": "2026-11-01",

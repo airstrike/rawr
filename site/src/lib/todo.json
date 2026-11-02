@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.96",
+  "version": "0.3.97",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.97",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
+        ]
+      },
       {
         "version": "0.3.96",
         "date": "2026-11-01",
@@ -1686,7 +1688,7 @@
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
     {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"},
     {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"open","category":"Divergences from rustc"},
-    {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc"},
+    {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc","release":"0.3.97"},
     {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"open","category":"Divergences from rustc"},
     {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
     {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
