@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.94",
+  "version": "0.3.95",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused.","issues":[691]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.95",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused.","issues":[691]}
+        ]
+      },
       {
         "version": "0.3.94",
         "date": "2026-11-01",
@@ -1656,7 +1658,7 @@
     {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
-    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.95"},
     {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"open","category":"Divergences from rustc"},
     {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},

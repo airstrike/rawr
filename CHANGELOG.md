@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.95 (2026-11-01)
+
 - rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused. (#691)
 
 ## 0.3.94 (2026-11-01)
