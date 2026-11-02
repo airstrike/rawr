@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A crate macro whose `$crate` path points into a path dependency expands under `rawr run`, a struct built through a type alias constructs correctly, and moving a field out of a borrowed variant reports E0507 as rustc does.","issues":[778]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.112",
@@ -1881,7 +1886,7 @@
     {"issue":775,"title":"An Rc or Arc of a crate value crosses to a crate as the pointer itself","state":"open","category":"No glue (D593)"},
     {"issue":776,"title":"Rc::make_mut clones a RefCell inside the value as a new cell","state":"open","category":"Divergences from rustc"},
     {"issue":777,"title":"HashMap, HashSet, BTreeMap and BTreeSet in a crate's signature cross as rawr's keyed collections","state":"open","category":"No glue (D593)"},
-    {"issue":778,"title":"rawr-import's integration suite runs at importer merges and in the health sweep","state":"open","category":"Health"}
+    {"issue":778,"title":"rawr-import's integration suite runs at importer merges and in the health sweep","state":"closed","category":"Health"}
   ],
   "groups": [
     {
