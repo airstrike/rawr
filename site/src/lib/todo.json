@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A `Vec` of crate values given to a crate function moves its elements, as Rust does, instead of cloning each one.","issues":[698]},
+        {"text":"A crate call's `&mut String` or `&mut Vec` is the program's own value, lent in place: room a call reserves is still there at the next call, and `+=` appends to it where it is.","issues":[716]},
+        {"text":"A crate trait implemented for `&str` takes a `&str` receiver, borrowed at the call's or view's lifetime, and binds even when the impl has no type parameters.","issues":[717]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.101",
@@ -1713,7 +1720,7 @@
     {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
     {"issue":696,"title":"node::tests::native::uncached_scope_owns_installation_… fails","state":"open","category":"Health"},
     {"issue":697,"title":"resident runner test retirement_read_shutdown_… hangs in a parallel run","state":"open","category":"Health"},
-    {"issue":698,"title":"A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"open","category":"No glue (D593)"},
+    {"issue":698,"title":"A `Vec` of crate values passed to a crate function moves its elements instead of cloning each","state":"closed","category":"No glue (D593)"},
     {"issue":699,"title":"`==` and comparisons resolve through PartialEq/PartialOrd impls, including `&String == &str`","state":"closed","category":"Divergences from rustc","release":"0.3.94"},
     {"issue":700,"title":"A program's `impl PartialEq<Rhs> for T` with Rhs other than Self is accepted and chosen by `==`","state":"open","category":"Divergences from rustc"},
     {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"open","category":"Divergences from rustc"},
@@ -1731,8 +1738,8 @@
     {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
     {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
     {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)","release":"0.3.101"},
-    {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
-    {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
+    {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"closed","category":"Divergences from rustc"},
+    {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"closed","category":"Divergences from rustc"},
     {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
     {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
     {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
@@ -1763,7 +1770,8 @@
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"open","category":"Divergences from rustc"},
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc"},
     {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
-    {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"open","category":"Divergences from rustc"}
+    {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"open","category":"Divergences from rustc"},
+    {"issue":749,"title":"The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

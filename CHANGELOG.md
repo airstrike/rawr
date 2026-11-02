@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A `Vec` of crate values given to a crate function moves its elements, as Rust does, instead of cloning each one. (#698)
+- A crate call's `&mut String` or `&mut Vec` is the program's own value, lent in place: room a call reserves is still there at the next call, and `+=` appends to it where it is. (#716)
+- A crate trait implemented for `&str` takes a `&str` receiver, borrowed at the call's or view's lifetime, and binds even when the impl has no type parameters. (#717)
 
 ## 0.3.101 (2026-11-01)
 
