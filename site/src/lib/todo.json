@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.103",
+  "version": "0.3.104",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"std, core and alloc paths resolve as rustc resolves them, through every re-export and glob, from std's own table for the pinned toolchain. A path std doesn't have gets rustc's error (E0432, E0433, E0425), an unstable item gets E0658, and an item rawr can't run yet fails where it is used with \"rawr doesn't run `X` yet\". `HashMap<K, V, S>` and `HashSet<T, S>` take their hasher, and `core::collections`, `core::thread::sleep`, `core::time::Instant`, `core::rc::Rc`, `core::sync::Arc` and `core::string::FromUtf8Error` are refused, as rustc refuses them.","issues":[742,712]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.104",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"std, core and alloc paths resolve as rustc resolves them, through every re-export and glob, from std's own table for the pinned toolchain. A path std doesn't have gets rustc's error (E0432, E0433, E0425), an unstable item gets E0658, and an item rawr can't run yet fails where it is used with \"rawr doesn't run `X` yet\". `HashMap<K, V, S>` and `HashSet<T, S>` take their hasher, and `core::collections`, `core::thread::sleep`, `core::time::Instant`, `core::rc::Rc`, `core::sync::Arc` and `core::string::FromUtf8Error` are refused, as rustc refuses them.","issues":[742,712]}
+        ]
+      },
       {
         "version": "0.3.103",
         "date": "2026-11-01",
@@ -1748,7 +1750,7 @@
     {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
     {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
     {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"open","category":"Divergences from rustc"},
-    {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"closed","category":"Divergences from rustc"},
+    {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
     {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
     {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)","release":"0.3.101"},
@@ -1778,7 +1780,7 @@
     {"issue":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health"},
     {"issue":740,"title":"&mut String and &mut Vec<T> inside an Option, Result or tuple an async fn takes are leased","state":"open","category":"Divergences from rustc"},
     {"issue":741,"title":"&String, &Vec<T>, &[u8] and &u32 a crate call or future borrows are lent without building a copy","state":"open","category":"Divergences from rustc"},
-    {"issue":742,"title":"std paths and type arities come from the shipped std table (D711 step 1)","state":"closed","category":"Divergences from rustc"},
+    {"issue":742,"title":"std paths and type arities come from the shipped std table (D711 step 1)","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"open","category":"Divergences from rustc"},
     {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"open","category":"Divergences from rustc"},
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"open","category":"Divergences from rustc"},
