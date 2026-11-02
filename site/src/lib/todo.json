@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.99",
+  "version": "0.3.100",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"The ?play universe runner starts again: a generated runner installs each crate's bindings after those of the crates whose types they use, so iced no longer waits on iced_test's bindings.","issues":[738]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.100",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"The ?play universe runner starts again: a generated runner installs each crate's bindings after those of the crates whose types they use, so iced no longer waits on iced_test's bindings.","issues":[738]}
+        ]
+      },
       {
         "version": "0.3.99",
         "date": "2026-11-01",
@@ -1742,7 +1744,7 @@
     {"issue":735,"title":"`cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health"},
     {"issue":736,"title":"A String's .into() with no target is E0283, not accepted as itself","state":"open","category":"Divergences from rustc"},
     {"issue":737,"title":"An array of Elements widens to a slice only at an IntoIterator parameter","state":"open","category":"Divergences from rustc"},
-    {"issue":738,"title":"A runner installs each crate's bindings after the facades whose types they name","state":"open","category":"Health"},
+    {"issue":738,"title":"A runner installs each crate's bindings after the facades whose types they name","state":"closed","category":"Health","release":"0.3.100"},
     {"issue":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health"}
   ],
   "groups": [

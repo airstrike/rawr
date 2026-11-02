@@ -738,7 +738,7 @@
     {"t":"T735","issue":735,"title":"T735: `cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T736","issue":736,"title":"T736: A String's .into() with no target is E0283, not accepted as itself","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T737","issue":737,"title":"T737: An array of Elements widens to a slice only at an IntoIterator parameter","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T738","issue":738,"title":"T738: A runner installs each crate's bindings after the facades whose types they name","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T738","issue":738,"title":"T738: A runner installs each crate's bindings after the facades whose types they name","state":"closed","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.100"},
     {"t":"T739","issue":739,"title":"T739: A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
