@@ -29606,27 +29606,14 @@ impl<'a> Parser<'a> {
             None if binds(self, &native) => Some(crate::host::structural::Kind::Take),
             Some(false) if binds(self, &unclonable) => Some(crate::host::structural::Kind::Lend),
             _ => None,
-        }
-        .filter(|kind| {
-            self.models
-                .host
-                .structural(&path, selector, *kind, None)
-                .is_some()
-        });
+        };
         let part = match kind {
             Some(kind) => {
                 let output = Ty::Tuple(fields.clone().into_boxed_slice());
                 let moves = kind == crate::host::structural::Kind::Take;
-                let lend = crate::host::structural::Kind::Lend;
                 // A guard binds what the arm moves by reference.
-                let lent = if moves
-                    && self
-                        .models
-                        .host
-                        .structural(&path, selector, lend, None)
-                        .is_some()
-                {
-                    let lent = operation(lend, output.clone());
+                let lent = if moves {
+                    let lent = operation(crate::host::structural::Kind::Lend, output.clone());
                     let lender = self.push_imported_op(&path, selector, Some(lent), at)?;
                     Some(origin::Fragment::call(&lender, [value.clone()]))
                 } else {

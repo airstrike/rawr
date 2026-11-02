@@ -5225,34 +5225,23 @@ fn assemble<B: crate::surface::Runner>(
         &entries,
         key.profile.value(),
     )?;
-    // Each variant's matchers and each field's store, after the entries the
-    // inventory pairs with plans one to one. Which matchers a variant has
-    // depends on its facade's types, read as the adapters read them.
-    let facade = key
-        .request
-        .facade_plan()
-        .map(|bytes| {
-            crate::surface::facade::Plan::decode(bytes)
-                .map_err(|_| request::drift("generated profile bindings plan"))
-        })
-        .transpose()?;
-    {
-        let _type_paths = TypePaths::install(facade.as_ref());
-        for plan in &key.request.plans {
-            for matcher in matchers(plan) {
-                entries.push(crate::runner::manifest::Entry::new(
-                    matcher.identity(plan),
-                    signature(plan)?,
-                    1,
-                ));
-            }
-            if has_store(plan) {
-                entries.push(crate::runner::manifest::Entry::new(
-                    store_identity(plan),
-                    signature(plan)?,
-                    2,
-                ));
-            }
+    // Each variant's matchers, after the entries the inventory pairs with
+    // plans one to one.
+    for plan in &key.request.plans {
+        for matcher in matchers(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                matcher.identity(plan),
+                signature(plan)?,
+                1,
+            ));
+        }
+        // Each field's store, after them.
+        if has_store(plan) {
+            entries.push(crate::runner::manifest::Entry::new(
+                store_identity(plan),
+                signature(plan)?,
+                2,
+            ));
         }
     }
     let generated = crate::runner::manifest::GeneratedManifest::with_coverage(
@@ -6738,10 +6727,11 @@ impl Matcher {
     }
 }
 
-/// The matchers of a variant of a non-generic enum. A value in an arena
-/// slot, or lent by native code, also has its fields moved or lent where a
-/// pattern binds them, as rustc binds them; a value whose type carries a
-/// lifetime has them copied, as `Clone` reads them.
+/// The matchers of a variant of a non-generic enum: one that copies its
+/// fields and its test, and, with fields, one that moves them and one that
+/// lends them. The set depends on the plan alone, so the runner's manifest
+/// and its rows name the same adapters; how each reaches the fields is
+/// decided where it is rendered (`render_matcher`).
 fn matchers(plan: &Plan) -> Vec<Matcher> {
     let Operation::EnumVariant {
         parameters, fields, ..
@@ -6752,20 +6742,18 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
     if !parameters.is_empty() {
         return Vec::new();
     }
-    let mut matchers = vec![Matcher::Copy, Matcher::Test];
+    if fields.is_empty() {
+        return vec![Matcher::Copy, Matcher::Test];
+    }
+    vec![Matcher::Copy, Matcher::Test, Matcher::Take, Matcher::Lend]
+}
+
+/// Whether the value of the variant `plan` builds is held where its fields
+/// can be moved or lent: in an arena slot, or lent by native code, not in a
+/// scope frame's region with a lifetime its fields may carry.
+fn reaches_fields(plan: &Plan) -> bool {
     let path = rust_path(plan);
-    if fields.is_empty() || carries_lifetimes(&path) || container_family(&path, &path).is_some() {
-        return matchers;
-    }
-    matchers.push(Matcher::Take);
-    if fields.iter().any(|field| lendable(field.ty()))
-        && fields
-            .iter()
-            .all(|field| plain_value(field.ty()) || lendable(field.ty()))
-    {
-        matchers.push(Matcher::Lend);
-    }
-    matchers
+    !carries_lifetimes(&path) && container_family(&path, &path).is_none()
 }
 
 /// Whether a variant's field of type `ty` is lent where a pattern borrows
@@ -6827,11 +6815,23 @@ fn render_matcher(
     else {
         return Ok(());
     };
+    let lent = |field: &crate::surface::adapter::Field| lendable(field.ty());
     let fields = match matcher {
         Matcher::Copy => &**fields,
         Matcher::Test => &[],
-        Matcher::Take => return render_moved_fields(plan, name, *form, fields, output),
-        Matcher::Lend => return render_lent_fields(plan, name, *form, fields, output),
+        Matcher::Take if reaches_fields(plan) => {
+            return render_moved_fields(plan, name, *form, fields, output);
+        }
+        Matcher::Lend
+            if reaches_fields(plan)
+                && fields.iter().any(lent)
+                && fields
+                    .iter()
+                    .all(|field| plain_value(field.ty()) || lent(field)) =>
+        {
+            return render_lent_fields(plan, name, *form, fields, output);
+        }
+        Matcher::Take | Matcher::Lend => return render_copied_fields(plan, matcher, output),
     };
     let path = rust_path(plan);
     let bound = (0..fields.len())
@@ -6958,6 +6958,29 @@ fn render_matcher(
     output
         .write_all(b"    Ok(__rawr_internal::option::some(Dynamic::from_array(values)))\n}\n\n")
         .map_err(request::unwritable)
+}
+
+/// The matcher `matcher` of a variant whose value can't give its fields up
+/// where they are: a type that carries a lifetime, or a field that is
+/// neither Rawr's own value nor lent by its type. It gives the fields as
+/// the copying matcher reads them, as `Clone` reads a value with a
+/// lifetime. The pattern's test has already chosen the variant.
+fn render_copied_fields(
+    plan: &Plan,
+    matcher: Matcher,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let mut copied = {}(arguments)?;
+    __rawr_internal::option::take(&mut copied).flatten().ok_or(Error::TypeMismatch)
+}}
+",
+        matcher.name(plan),
+        Matcher::Copy.name(plan)
+    )
+    .map_err(request::unwritable)
 }
 
 /// The fields of the variant `name`, moved out of the value the first
