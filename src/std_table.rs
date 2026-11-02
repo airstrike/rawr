@@ -19,7 +19,11 @@
 //!   supertraits (`Eq + PartialOrd`), and each member's declaration as a
 //!   program writes it (`fn from_str(s: &str) -> Result<Self, Self::Err>`,
 //!   `type IntoIter: Iterator<Item = Self::Item>`), naming types by their
-//!   public paths, bare for the prelude's.
+//!   public paths, bare for the prelude's. A type's inherent function
+//!   (D711 step 4) has its impl's self type in `extra` where it isn't the
+//!   type's own (`Option<&T>` of `copied`), and its declaration with its
+//!   lifetimes and its impl's bounds: `fn iter(&self) -> std::slice::Iter<'_,
+//!   T>`, `fn sort(&mut self) where T: Ord`.
 //!
 //! - `impls.tsv` (D711 step 3): `trait  key  self  arguments  generics
 //!   where  associated`, one line per impl of a stable trait that stable
@@ -236,6 +240,8 @@ impl Item {
         for (index, c) in declaration.char_indices() {
             match c {
                 '<' => depth += 1,
+                // `->` closes nothing.
+                '>' if index > 0 && declaration.as_bytes()[index - 1] == b'-' => {}
                 '>' => depth = depth.saturating_sub(1),
                 '(' if depth == 0 => {
                     open = Some(index);
@@ -246,11 +252,27 @@ impl Item {
         }
         let inputs = &declaration[open? + 1..];
         let first = inputs.split([',', ')']).next()?.trim();
-        match first {
-            "&self" | "&mut self" | "self" => Some(first),
+        // `&'a self` takes `self` as `&self` does.
+        let unnamed = match first.strip_prefix("&'") {
+            Some(rest) => rest.split_once(' ').map_or(first, |(_, rest)| rest),
+            None => first.strip_prefix('&').unwrap_or(first),
+        };
+        match (first.starts_with('&'), unnamed) {
+            (true, "self") => Some("&self"),
+            (true, "mut self") => Some("&mut self"),
+            (false, "self") => Some("self"),
             _ if first.starts_with("self:") => Some("self"),
             _ => None,
         }
+    }
+
+    /// An inherent function's impl's self type, where it isn't its owner's
+    /// own: `Option<&T>` of `Option::copied`, `[u8]` of `slice::is_ascii`.
+    pub(crate) fn impl_self(&self) -> Option<&'static str> {
+        (self.kind == "assoc-fn"
+            && !self.extra.is_empty()
+            && !matches!(self.extra, "provided" | "required"))
+        .then_some(self.extra)
     }
 
     /// The type arity a path to the item may write: the parameters with no
@@ -409,6 +431,29 @@ pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
             !rest.split('\t').next().unwrap_or_default().contains("::")
         })
         .map(item_line)
+}
+
+/// The stable functions named `name` of std's stable traits: `clone` of
+/// `core::clone::Clone`, `eq` of `core::cmp::PartialEq`. One pass over the
+/// table, for the method probe's traits.
+pub(crate) fn trait_functions(name: &str) -> Vec<Item> {
+    let suffix = format!("::{name}\tassoc-fn\ts\t");
+    ITEMS
+        .lines()
+        .filter(|line| {
+            line.find(&suffix).is_some_and(|at| {
+                let rest = &line[at + suffix.len()..];
+                !line[..at].contains('\t')
+                    && (rest.starts_with("provided\t") || rest.starts_with("required\t"))
+            })
+        })
+        .map(item_line)
+        .filter(|member| {
+            let owner = &member.definition[..member.definition.len() - name.len() - 2];
+            item(owner)
+                .is_some_and(|owner| owner.kind == "trait" && owner.stability == Stability::Stable)
+        })
+        .collect()
 }
 
 /// The stable std trait a program names by `path` (`std::str::FromStr`),
@@ -641,7 +686,7 @@ impl Impl {
 }
 
 /// The first `pattern` in `text` outside brackets.
-fn top_level(text: &str, pattern: &str) -> Option<usize> {
+pub(crate) fn top_level(text: &str, pattern: &str) -> Option<usize> {
     let mut depth = 0usize;
     for (index, c) in text.char_indices() {
         match c {

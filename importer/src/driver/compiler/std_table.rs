@@ -192,6 +192,13 @@ struct Table<'tcx> {
     traits: Vec<(DefId, String)>,
     /// `impls.tsv`'s lines (D711 step 3).
     impls: BTreeSet<String>,
+    /// Each inherent function's line, with its definition and its impl,
+    /// whose declarations are written once every public path is known
+    /// (D711 step 4).
+    inherent: BTreeMap<String, (DefId, DefId)>,
+    /// Whether `ty` writes lifetimes: an inherent function's declaration
+    /// does, for its borrow summary.
+    lifetimes: std::cell::Cell<bool>,
 }
 
 fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
@@ -216,6 +223,8 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         prelude: HashSet::new(),
         traits: Vec::new(),
         impls: BTreeSet::new(),
+        inherent: BTreeMap::new(),
+        lifetimes: std::cell::Cell::new(false),
     };
     for (krate, name) in &roots {
         let root = krate.as_def_id();
@@ -309,6 +318,8 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
             .items
             .insert(name.to_owned(), "primitive\ts\t".to_owned());
     }
+    // Each inherent function's declaration (D711 step 4).
+    table.inherent_signatures();
     write_sorted(out.join("paths.tsv"), &table.paths)?;
     write_sorted(out.join("items.tsv"), &table.items)?;
     let mut text = String::new();
@@ -487,6 +498,11 @@ impl<'tcx> Table<'tcx> {
             match self.items.get(&key) {
                 Some(line) if line.split('\t').nth(1) == Some("s") => {}
                 _ => {
+                    if kind == "assoc-fn" {
+                        self.inherent.insert(key.clone(), (*member, implementation));
+                    } else {
+                        self.inherent.remove(&key);
+                    }
                     self.items.insert(key, format!("{kind}\t{stability}\t"));
                 }
             }
@@ -566,9 +582,37 @@ impl<'tcx> Table<'tcx> {
             .filter_map(|arg| match arg.kind() {
                 ty::GenericArgKind::Type(ty) => Some(self.ty(ty)),
                 ty::GenericArgKind::Const(constant) => Some(constant.to_string()),
+                ty::GenericArgKind::Lifetime(region) if self.lifetimes.get() => {
+                    Some(self.region(region).unwrap_or_else(|| "'_".to_owned()))
+                }
                 ty::GenericArgKind::Lifetime(_) => None,
             })
             .collect()
+    }
+
+    /// A region's name as a signature writes it (`'a`, `'static`), or
+    /// `None` for an elided one.
+    fn region(&self, region: ty::Region<'tcx>) -> Option<String> {
+        let name = match region.kind() {
+            ty::ReStatic => return Some("'static".to_owned()),
+            ty::ReEarlyParam(parameter) => Some(parameter.name),
+            ty::ReBound(_, bound) => bound.kind.get_name(self.tcx),
+            ty::ReLateParam(parameter) => parameter.kind.get_name(self.tcx),
+            _ => None,
+        }?;
+        let name = name.as_str().trim_start_matches('\'');
+        (name != "_" && !name.is_empty()).then(|| format!("'{name}"))
+    }
+
+    /// `'a ` of a reference whose region is named, when lifetimes are
+    /// written.
+    fn region_prefix(&self, region: ty::Region<'tcx>) -> String {
+        self.lifetimes
+            .get()
+            .then(|| self.region(region))
+            .flatten()
+            .map(|name| format!("{name} "))
+            .unwrap_or_default()
     }
 
     fn ty(&self, ty: ty::Ty<'tcx>) -> String {
@@ -598,8 +642,9 @@ impl<'tcx> Table<'tcx> {
                 if mutability.is_mut() { "mut" } else { "const" },
                 self.ty(*target)
             ),
-            ty::Ref(_, target, mutability) => format!(
-                "&{}{}",
+            ty::Ref(region, target, mutability) => format!(
+                "&{}{}{}",
+                self.region_prefix(*region),
                 if mutability.is_mut() { "mut " } else { "" },
                 self.ty(*target)
             ),
@@ -844,6 +889,13 @@ impl<'tcx> Table<'tcx> {
     /// `fn name<T: Bound>(&self, a: A) -> R`, a trait function's
     /// declaration.
     fn function(&self, def_id: DefId, name: &str) -> String {
+        self.declare(def_id, name, None)
+    }
+
+    /// `fn name<'a, T: Bound>(&'a self, a: A) -> R where U: Bound`, a
+    /// function's declaration; an inherent one's receiver is its impl's
+    /// self type `owner`.
+    fn declare(&self, def_id: DefId, name: &str, owner: Option<ty::Ty<'tcx>>) -> String {
         let tcx = self.tcx;
         let signature = tcx
             .fn_sig(def_id)
@@ -858,8 +910,56 @@ impl<'tcx> Table<'tcx> {
             .collect::<Vec<_>>();
         let generics = tcx.generics_of(def_id);
         let mut parameters = Vec::new();
+        if self.lifetimes.get() {
+            let mut add = |name: &str| {
+                let name = format!("'{}", name.trim_start_matches('\''));
+                if name != "'_" && !parameters.contains(&name) {
+                    parameters.push(name);
+                }
+            };
+            for parameter in &generics.own_params {
+                if matches!(parameter.kind, GenericParamDefKind::Lifetime) {
+                    add(parameter.name.as_str());
+                }
+            }
+            for variable in tcx
+                .fn_sig(def_id)
+                .instantiate_identity()
+                .skip_norm_wip()
+                .bound_vars()
+            {
+                if let ty::BoundVariableKind::Region(region) = variable
+                    && let Some(name) = region.get_name(tcx)
+                {
+                    add(name.as_str());
+                }
+            }
+        }
+        let own_types = generics
+            .own_params
+            .iter()
+            .filter(|parameter| matches!(parameter.kind, GenericParamDefKind::Type { .. }))
+            .map(|parameter| parameter.index)
+            .collect::<Vec<_>>();
+        // An inherent function's `impl Trait` argument is written in its
+        // place, as std declares it.
+        let synthetic = |index: u32| {
+            owner.is_some()
+                && generics.own_params.iter().any(|parameter| {
+                    parameter.index == index
+                        && matches!(
+                            parameter.kind,
+                            GenericParamDefKind::Type {
+                                synthetic: true,
+                                ..
+                            }
+                        )
+                })
+        };
         for parameter in &generics.own_params {
-            if !matches!(parameter.kind, GenericParamDefKind::Type { .. }) {
+            if !matches!(parameter.kind, GenericParamDefKind::Type { .. })
+                || synthetic(parameter.index)
+            {
                 continue;
             }
             let ty = ty::Ty::new_param(tcx, parameter.index, parameter.name);
@@ -873,18 +973,20 @@ impl<'tcx> Table<'tcx> {
         }
         let names = tcx.fn_arg_idents(def_id);
         let method = tcx.associated_item(def_id).is_method();
-        let is_self = |ty: ty::Ty<'tcx>| matches!(ty.kind(), ty::Param(parameter) if parameter.name == kw::SelfUpper);
+        let is_self = |ty: ty::Ty<'tcx>| {
+            matches!(ty.kind(), ty::Param(parameter) if parameter.name == kw::SelfUpper)
+                || owner == Some(ty)
+        };
         let mut inputs = Vec::new();
         for (index, input) in signature.inputs().iter().enumerate() {
             if method && index == 0 {
                 inputs.push(match input.kind() {
                     _ if is_self(*input) => "self".to_owned(),
-                    ty::Ref(_, target, mutability) if is_self(*target) => if mutability.is_mut() {
-                        "&mut self"
-                    } else {
-                        "&self"
-                    }
-                    .to_owned(),
+                    ty::Ref(region, target, mutability) if is_self(*target) => format!(
+                        "&{}{}self",
+                        self.region_prefix(*region),
+                        if mutability.is_mut() { "mut " } else { "" },
+                    ),
                     _ => format!("self: {}", self.ty(*input)),
                 });
                 continue;
@@ -896,7 +998,18 @@ impl<'tcx> Table<'tcx> {
                 .map(|ident| ident.name.to_string())
                 .filter(|name| name != "_" && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
                 .unwrap_or_else(|| format!("a{index}"));
-            inputs.push(format!("{name}: {}", self.ty(*input)));
+            let written = match input.kind() {
+                ty::Param(parameter) if synthetic(parameter.index) => {
+                    let bounds = self
+                        .bounds(*input, &clauses)
+                        .into_iter()
+                        .filter(|bound| bound != "?Sized")
+                        .collect::<Vec<_>>();
+                    format!("impl {}", bounds.join(" + "))
+                }
+                _ => self.ty(*input),
+            };
+            inputs.push(format!("{name}: {written}"));
         }
         let mut text = format!("fn {name}");
         if !parameters.is_empty() {
@@ -906,7 +1019,79 @@ impl<'tcx> Table<'tcx> {
         if !signature.output().is_unit() {
             let _ = write!(text, " -> {}", self.ty(signature.output()));
         }
+        // An inherent function's bounds on its impl's parameters: `where
+        // T: Ord` of `sort`.
+        if owner.is_some() {
+            let mut subjects = Vec::new();
+            for clause in &clauses {
+                if let ty::ClauseKind::Trait(predicate) = clause.kind().skip_binder() {
+                    let subject = predicate.self_ty();
+                    let own = matches!(subject.kind(), ty::Param(parameter)
+                        if own_types.contains(&parameter.index));
+                    if !own && !subjects.contains(&subject) {
+                        subjects.push(subject);
+                    }
+                }
+            }
+            let wheres = subjects
+                .into_iter()
+                .filter_map(|subject| {
+                    let bounds = self
+                        .bounds(subject, &clauses)
+                        .into_iter()
+                        .filter(|bound| bound != "?Sized")
+                        .collect::<Vec<_>>();
+                    (!bounds.is_empty())
+                        .then(|| format!("{}: {}", self.ty(subject), bounds.join(" + ")))
+                })
+                .collect::<Vec<_>>();
+            if !wheres.is_empty() {
+                let _ = write!(text, " where {}", wheres.join(", "));
+            }
+        }
         text
+    }
+
+    /// Each inherent function's line: the impl's self type when it isn't
+    /// the owner's own (`Option<&T>` of `copied`, `[u8]` of `is_ascii`),
+    /// then its declaration with its lifetimes (D711 step 4).
+    fn inherent_signatures(&mut self) {
+        let tcx = self.tcx;
+        self.lifetimes.set(true);
+        let inherent = std::mem::take(&mut self.inherent);
+        for (key, (member, implementation)) in &inherent {
+            let owner = tcx
+                .type_of(*implementation)
+                .instantiate_identity()
+                .skip_norm_wip();
+            let identity = match owner.kind() {
+                ty::Adt(_, args) => args.iter().enumerate().all(|(index, arg)| match arg.kind() {
+                    ty::GenericArgKind::Type(ty) => {
+                        matches!(ty.kind(), ty::Param(parameter) if parameter.index as usize == index)
+                    }
+                    ty::GenericArgKind::Lifetime(region) => {
+                        matches!(region.kind(), ty::ReEarlyParam(parameter) if parameter.index as usize == index)
+                    }
+                    ty::GenericArgKind::Const(_) => true,
+                }),
+                ty::Slice(element) | ty::Array(element, _) => matches!(element.kind(), ty::Param(_)),
+                _ => true,
+            };
+            let name = key.rsplit("::").next().unwrap_or_default();
+            let declaration = self.declare(*member, name, Some(owner));
+            let shown = if identity {
+                String::new()
+            } else {
+                self.ty(owner)
+            };
+            if let Some(line) = self.items.get_mut(key) {
+                let mut fields = line.split('\t');
+                let kind = fields.next().unwrap_or_default().to_owned();
+                let stability = fields.next().unwrap_or("s").to_owned();
+                *line = format!("{kind}\t{stability}\t{shown}\t{}", clean(&declaration));
+            }
+        }
+        self.lifetimes.set(false);
     }
 }
 
