@@ -23,6 +23,9 @@ pub trait Owner<T: 'static>: crate::func::SendSync + 'static {
     ) -> RawrResultOf<R>;
     /// Move ownership out once, invalidating all aliases of the carrier.
     fn take(stored: &Self::Stored) -> RawrResultOf<T>;
+    /// Give the carrier a value again, as Rust's assignment gives a moved
+    /// place one: every alias of the carrier reaches it.
+    fn restore(stored: &Self::Stored, value: T) -> RawrResultOf<()>;
 }
 
 /// Direct ownership for a native Send value; sharing the handle grants no
@@ -71,5 +74,10 @@ impl<T: Send + 'static> Owner<T> for Native {
         lock(&stored.0)?
             .take()
             .ok_or_else(|| failure("the owned native place has already moved"))
+    }
+
+    fn restore(stored: &Self::Stored, value: T) -> RawrResultOf<()> {
+        *lock(&stored.0)? = Some(value);
+        Ok(())
     }
 }

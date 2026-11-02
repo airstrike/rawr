@@ -226,6 +226,28 @@ pub fn take<P: Policy>(value: &Place, witness: &Witness) -> RawrResultOf<P::Valu
     }
 }
 
+/// Give a native owned carrier its value again, after [`take`] moved it
+/// out for a call that changed it: each handle of the place reaches the
+/// value where it was. A borrowed place is never moved out.
+pub fn restore<P: Policy>(value: &Place, witness: &Witness, owned: P::Value) -> RawrResultOf<()> {
+    if !value.witness.same_native_type(witness) || !P::accepts(witness) {
+        return Err(failure(
+            "a restored native value has the wrong logical type",
+        ));
+    }
+    let source = value
+        .storage
+        .as_any()
+        .downcast_ref::<Source<P>>()
+        .ok_or_else(|| failure("a restored native value has the wrong concrete type"))?;
+    match source {
+        Source::Owned(stored) => P::Owner::restore(stored, owned),
+        Source::Borrowed(_) => Err(failure(
+            "cannot restore a native value into its borrowed place",
+        )),
+    }
+}
+
 pub(super) fn access<P: Policy, R>(
     place: &Place,
     witness: &Witness,
