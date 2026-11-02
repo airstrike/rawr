@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-02",
-  "version": "0.3.108",
+  "version": "0.3.109",
   "examples": {
     "running": 25,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters.","issues":[597]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.109",
+        "date": "2026-11-02",
+        "entries": [
+          {"text":"`Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters.","issues":[597]}
+        ]
+      },
       {
         "version": "0.3.108",
         "date": "2026-11-02",
@@ -1675,7 +1677,7 @@
     {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"closed","category":"No glue (D593)","release":"0.3.67"},
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"closed","category":"Divergences from rustc","release":"0.3.67"},
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
-    {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"closed","category":"No glue (D593)"},
+    {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"closed","category":"No glue (D593)","release":"0.3.109"},
     {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
     {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"closed","category":"No glue (D593)","release":"0.3.70"},
     {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},

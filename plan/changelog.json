@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters.","issues":[597]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.109",
+      "date": "2026-11-02",
+      "entries": [
+        {"text":"`Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters.","issues":[597]}
+      ]
+    },
     {
       "version": "0.3.108",
       "date": "2026-11-02",
