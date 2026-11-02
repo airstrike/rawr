@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- std, core and alloc paths resolve as rustc resolves them, through every re-export and glob, from std's own table for the pinned toolchain. A path std doesn't have gets rustc's error (E0432, E0433, E0425), an unstable item gets E0658, and an item rawr can't run yet fails where it is used with "rawr doesn't run `X` yet". `HashMap<K, V, S>` and `HashSet<T, S>` take their hasher, and `core::collections`, `core::thread::sleep`, `core::time::Instant`, `core::rc::Rc`, `core::sync::Arc` and `core::string::FromUtf8Error` are refused, as rustc refuses them. (#742, #712)
 
 ## 0.3.103 (2026-11-01)
 
