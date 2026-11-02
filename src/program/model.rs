@@ -617,6 +617,14 @@ impl Model {
             type_ref::Type::Path(_) if let Some(inner) = ty.box_element() => {
                 self.default_for_type(inner, active)
             }
+            // `Rc<T>` and `Arc<T>`: a new allocation of `T`'s default; a
+            // `Weak`, `Weak::new()`.
+            type_ref::Type::Path(_) if let Some(inner) = ty.counted_element() => self
+                .default_for_type(inner, active)
+                .map(crate::resolve::lower_nominal::counted::new),
+            type_ref::Type::Path(_) if ty.weak_element().is_some() => {
+                Ok(crate::resolve::lower_nominal::counted::weak())
+            }
             type_ref::Type::Path(_) if let Some((element, length)) = ty.array_element() => (0
                 ..length)
                 .map(|_| self.default_for_type(element, active))
@@ -808,6 +816,25 @@ impl Model {
         if let Some(element) = expected.box_element() {
             return self.validate_type(value, element, shared);
         }
+        // An `Rc`'s or `Arc`'s value was checked where it was made.
+        let pointer = if expected.counted_element().is_some() {
+            Some(crate::resolve::lower_nominal::counted::value(value).is_some())
+        } else if expected.weak_element().is_some() {
+            Some(crate::resolve::lower_nominal::counted::is_weak(value))
+        } else {
+            None
+        };
+        if let Some(pointer) = pointer {
+            return if pointer {
+                Ok(())
+            } else {
+                Err(construction::Error::ValueType {
+                    expected: type_name(expected),
+                    actual: value.type_name().into(),
+                })
+            };
+        }
+
         // A `RefCell`'s value is checked where it is stored.
         if expected.cell_element().is_some() {
             return if crate::resolve::lower_nominal::is_cell(value) {

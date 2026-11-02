@@ -813,7 +813,19 @@ pub(crate) fn type_supports(
                 _ => type_supports(element, capability, resolved),
             }
         }
+        // A `Weak` is `Clone`, `Debug` and `Default` for any `T`, and
+        // compares, orders or hashes nothing; std's `sync::Weak` crosses
+        // threads as its `T` does, and `rc::Weak` never.
+        type_ref::Type::Path(_) if let Some((weak, element)) = ty.weak_element() => {
+            match (weak, capability) {
+                (_, Kind::Clone | Kind::Debug | Kind::Default) => true,
+                ("Weak", Kind::Send) => false,
+                (_, Kind::Send | Kind::Static) => type_supports(element, capability, resolved),
+                _ => false,
+            }
+        }
         // A function type is `Copy`, `Clone`, `Debug` and the marker `Eq`;
+
         // Rawr does not compare, hash or default function values.
         type_ref::Type::Path(_) if ty.fn_signature().is_some() => {
             matches!(
