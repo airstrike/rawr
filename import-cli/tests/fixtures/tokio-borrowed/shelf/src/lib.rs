@@ -68,3 +68,43 @@ pub mod google {
         }
     }
 }
+
+/// Async functions whose futures borrow std's types and Rust's own, as an
+/// app's `async fn save(path: &Path, data: &[u8])` does: each input is
+/// leased to the future by what it borrows (#714).
+pub mod store {
+    use std::path::Path;
+
+    /// What saving `data` to `path` would write, after a yield.
+    pub async fn save(path: &Path, data: &[u8]) -> String {
+        tokio::task::yield_now().await;
+        format!("{} bytes to {}", data.len(), path.display())
+    }
+
+    /// `text` upper-cased, after a yield.
+    pub async fn shout(text: &String) -> String {
+        tokio::task::yield_now().await;
+        text.to_uppercase()
+    }
+
+    /// The sum of `values`, after a yield.
+    pub async fn total(values: &Vec<u32>) -> u32 {
+        tokio::task::yield_now().await;
+        values.iter().sum()
+    }
+
+    /// Twice `value`, after a yield.
+    pub async fn doubled(value: &u32) -> u32 {
+        tokio::task::yield_now().await;
+        value * 2
+    }
+
+    /// The font's family, or the error, after a yield.
+    pub async fn family(font: Result<&super::Font, String>) -> String {
+        tokio::task::yield_now().await;
+        match font {
+            Ok(font) => font.family.clone(),
+            Err(error) => error,
+        }
+    }
+}

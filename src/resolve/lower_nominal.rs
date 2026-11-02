@@ -2042,10 +2042,7 @@ fn imported_surface_type(
             }
         }
         Ty::Host { proof, arguments } => {
-            let identity = proof
-                .definition
-                .identity()
-                .imported()
+            let definition = host_surface_definition(&proof.definition)
                 .ok_or_else(|| unsupported_type_argument(ty.name(models), operation))?;
             let mut converted = imported.entries(arguments.len())?;
             for argument in arguments.iter() {
@@ -2054,9 +2051,7 @@ fn imported_surface_type(
                 )?);
             }
             Type::Nominal {
-                definition: rawr_import::surface::identity::Definition::authenticated(
-                    *identity.as_bytes(),
-                ),
+                definition,
                 arguments: converted.into_boxed_slice(),
             }
         }
@@ -2181,6 +2176,27 @@ fn imported_surface_type(
         }
         other => return Err(unsupported_type_argument(other.name(models), operation)),
     })
+}
+
+/// A host type's identity in the runner: an imported crate's own, or one
+/// of std's types Rawr's std holds as its Rust value, as `PathBuf` is
+/// std's native `PathBuf` (D683.3).
+#[cfg(feature = "rust-import")]
+fn host_surface_definition(
+    definition: &crate::host::type_def::Definition,
+) -> Option<rawr_import::surface::identity::Definition> {
+    use rawr_import::surface::identity::Definition;
+    if let Some(identity) = definition.identity().imported() {
+        return Some(Definition::authenticated(*identity.as_bytes()));
+    }
+    let path = definition.path();
+    let std = Definition::std(
+        path.strip_prefix(crate::std_facade::ROOT)?
+            .strip_prefix("::")?,
+    );
+    Definition::std_path(std.as_bytes())
+        .is_some()
+        .then_some(std)
 }
 
 /// A type the program gives a crate's generic item that Rawr can't pass
@@ -2384,9 +2400,7 @@ fn instance_surface_type(
             payload: Box::new(instance_surface_type(inference, models, payload)?),
         },
         Ty::Host { proof, arguments } => Type::Nominal {
-            definition: rawr_import::surface::identity::Definition::authenticated(
-                *proof.definition.identity().imported()?.as_bytes(),
-            ),
+            definition: host_surface_definition(&proof.definition)?,
             arguments: arguments
                 .iter()
                 .map(|argument| instance_surface_type(inference, models, argument))
@@ -42254,6 +42268,21 @@ impl<'a> Parser<'a> {
                         lifted_parameters.push(name.clone());
                         captures.push(origin::Fragment::call(
                             crate::engine::KEYWORD_MOVE,
+                            [origin::Fragment::plain(name.as_str())],
+                        ));
+                    } else if !moved
+                        && !scope.asynchronous
+                        && !self.aliases.contains_key(name.as_str())
+                    {
+                        // A closure that isn't `move` borrows what it
+                        // captures, as one native code calls only during
+                        // its call does, as image's `from_fn(w, h, |x, y|
+                        // { calls += 1; .. })`: the local is lent, its
+                        // shared handle and not a copy, so a change the
+                        // closure makes is the local's own.
+                        lifted_parameters.push(name.clone());
+                        captures.push(origin::Fragment::call(
+                            crate::engine::KEYWORD_LEND,
                             [origin::Fragment::plain(name.as_str())],
                         ));
                     } else {

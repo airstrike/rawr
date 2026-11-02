@@ -86,7 +86,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // environment, as `Self::Scalar` in an impl that sets it.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 41;
+const PROTOCOL_SCHEMA: u32 = 42;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3819,6 +3819,17 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             ty::FnPtr(signature, header) => {
                 self.budget.items(1)?;
+                // A function pointer implements `Fn`, and the classifier
+                // reads one as its `Fn(..) -> R` bound, whatever else the
+                // crate names.
+                let lang = self.tcx.lang_items();
+                if let (Some(callable), Some(once), Some(output)) =
+                    (lang.fn_trait(), lang.fn_once_trait(), lang.fn_once_output())
+                {
+                    self.ensure(callable, Namespace::Type)?;
+                    self.ensure(once, Namespace::Type)?;
+                    self.ensure(output, Namespace::Type)?;
+                }
                 Type::FunctionPointer {
                     signature: Box::new(self.poly_signature(
                         signature.with(*header),

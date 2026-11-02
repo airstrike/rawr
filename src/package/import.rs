@@ -2994,13 +2994,15 @@ fn callable_generic(plan: &representability::callable::Item) -> bool {
         // `F: FnMut(..) -> R + 'static`, as Freya's `EventHandler` holds.
         // A closure that takes a `&mut` borrow, as iced's `Path::new(impl
         // FnOnce(&mut Builder))` gives one, is described by its crossing,
-        // as it is for a generic type's `Cache::draw`.
+        // as it is for a generic type's `Cache::draw`. An `Fn` or `FnMut`
+        // with no `'static` bound, as image's `ImageBuffer::from_fn(w, h,
+        // |x, y| ..)` takes, is borrowed for the call alone.
         Some(
             rawr_import::surface::callable::Class::Once(_)
             | rawr_import::surface::callable::Class::Shared(_)
-            | rawr_import::surface::callable::Class::Mutable(_),
+            | rawr_import::surface::callable::Class::Mutable(_)
+            | rawr_import::surface::callable::Class::Borrowed(_),
         ) => plan.call().is_some() || !plan.crossings().is_empty(),
-        Some(_) => false,
     };
     kinds && writes_declared(plan.signature(), plan.call(), plan.crossings())
 }

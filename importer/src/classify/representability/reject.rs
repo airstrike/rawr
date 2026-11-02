@@ -17,7 +17,6 @@ pub enum Kind {
     ForeignAbi,
     HigherRankedBinder,
     EscapingBorrow,
-    NonStaticCallable,
     CallableProtocol,
     ExplicitReceiver,
     UnsafeImplementation,
@@ -86,7 +85,6 @@ impl Kind {
             Self::EscapingBorrow => {
                 "its return type borrows at a lifetime that none of its arguments has"
             }
-            Self::NonStaticCallable => "it takes a closure that isn't `'static`",
             Self::CallableProtocol => "it takes a closure whose type isn't supported",
             Self::ExplicitReceiver => "its receiver has an explicit type (`self: Type`)",
             Self::UnsafeImplementation => "it is an `unsafe impl`",
@@ -208,7 +206,6 @@ mod tests {
             Kind::ForeignAbi,
             Kind::HigherRankedBinder,
             Kind::EscapingBorrow,
-            Kind::NonStaticCallable,
             Kind::CallableProtocol,
             Kind::ExplicitReceiver,
             Kind::UnsafeImplementation,
