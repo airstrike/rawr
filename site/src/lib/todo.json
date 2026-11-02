@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.105",
+  "version": "0.3.106",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A program implements any stable std trait Rust lets it implement (`FromStr`, `AsRef`, `AsMut`, `Borrow`, `Deref`, `TryFrom`, `IntoIterator`, `Extend`, `Sum`, `fmt::Write`, `io::Write` and the rest), declared as std declares it, from std's own table. A missing item is rustc's E0046 and a trait nothing brings into scope is E0405; where rawr can't run a trait's machinery yet, the use fails with \"rawr doesn't run `X` yet\".","issues":[743,705]},
-        {"text":"`s.parse()` finds a program's `impl FromStr` by the turbofish or the expected type, with the impl's `Err` as the error, a `for` loop takes a program's `IntoIterator`, and `write!` writes through a program's `fmt::Write`.","issues":[705]},
-        {"text":"Trait functions called by path resolve through std's table and method lookup instead of a list: `Iterator::next(&mut it)`, `Clone::clone_from(&mut a, &b)` and `std::cmp::max_by_key(a, b, f)` and its kin.","issues":[711]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.106",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A program implements any stable std trait Rust lets it implement (`FromStr`, `AsRef`, `AsMut`, `Borrow`, `Deref`, `TryFrom`, `IntoIterator`, `Extend`, `Sum`, `fmt::Write`, `io::Write` and the rest), declared as std declares it, from std's own table. A missing item is rustc's E0046 and a trait nothing brings into scope is E0405; where rawr can't run a trait's machinery yet, the use fails with \"rawr doesn't run `X` yet\".","issues":[743,705]},
+          {"text":"`s.parse()` finds a program's `impl FromStr` by the turbofish or the expected type, with the impl's `Err` as the error, a `for` loop takes a program's `IntoIterator`, and `write!` writes through a program's `fmt::Write`.","issues":[705]},
+          {"text":"Trait functions called by path resolve through std's table and method lookup instead of a list: `Iterator::next(&mut it)`, `Clone::clone_from(&mut a, &b)` and `std::cmp::max_by_key(a, b, f)` and its kin.","issues":[711]}
+        ]
+      },
       {
         "version": "0.3.105",
         "date": "2026-11-01",
@@ -1759,13 +1761,13 @@
     {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
     {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"},
-    {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"closed","category":"Divergences from rustc"},
+    {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc","release":"0.3.97"},
     {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"open","category":"Divergences from rustc"},
     {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
     {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
     {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
-    {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"closed","category":"Divergences from rustc"},
+    {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
     {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
@@ -1797,7 +1799,7 @@
     {"issue":740,"title":"&mut String and &mut Vec<T> inside an Option, Result or tuple an async fn takes are leased","state":"open","category":"Divergences from rustc"},
     {"issue":741,"title":"&String, &Vec<T>, &[u8] and &u32 a crate call or future borrows are lent without building a copy","state":"open","category":"Divergences from rustc"},
     {"issue":742,"title":"std paths and type arities come from the shipped std table (D711 step 1)","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
-    {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"closed","category":"Divergences from rustc"},
+    {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"open","category":"Divergences from rustc"},
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"open","category":"Divergences from rustc"},
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc"},

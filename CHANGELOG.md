@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.106 (2026-11-01)
+
 - A program implements any stable std trait Rust lets it implement (`FromStr`, `AsRef`, `AsMut`, `Borrow`, `Deref`, `TryFrom`, `IntoIterator`, `Extend`, `Sum`, `fmt::Write`, `io::Write` and the rest), declared as std declares it, from std's own table. A missing item is rustc's E0046 and a trait nothing brings into scope is E0405; where rawr can't run a trait's machinery yet, the use fails with "rawr doesn't run `X` yet". (#743, #705)
 - `s.parse()` finds a program's `impl FromStr` by the turbofish or the expected type, with the impl's `Err` as the error, a `for` loop takes a program's `IntoIterator`, and `write!` writes through a program's `fmt::Write`. (#705)
 - Trait functions called by path resolve through std's table and method lookup instead of a list: `Iterator::next(&mut it)`, `Clone::clone_from(&mut a, &b)` and `std::cmp::max_by_key(a, b, f)` and its kin. (#711)

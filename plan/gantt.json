@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-01",
-  "version": "0.3.105",
+  "version": "0.3.106",
   "examples": {
     "running": 23,
     "total": 56,
