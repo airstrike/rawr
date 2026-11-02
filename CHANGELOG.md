@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.101 (2026-11-01)
+
 - A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied. (#713)
 - An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future. (#714)
 - A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions. (#715)

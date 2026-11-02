@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.100",
+  "version": "0.3.101",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied.","issues":[713]},
-        {"text":"An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future.","issues":[714]},
-        {"text":"A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions.","issues":[715]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.101",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied.","issues":[713]},
+          {"text":"An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future.","issues":[714]},
+          {"text":"A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions.","issues":[715]}
+        ]
+      },
       {
         "version": "0.3.100",
         "date": "2026-11-01",
@@ -1726,9 +1728,9 @@
     {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
     {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"open","category":"Divergences from rustc"},
     {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"open","category":"Divergences from rustc"},
-    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc"},
-    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc"},
-    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)"},
+    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
+    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
+    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)","release":"0.3.101"},
     {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
     {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
     {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
