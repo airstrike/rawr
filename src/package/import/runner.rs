@@ -256,7 +256,14 @@ fn install_decoded(
             .map_err(|source| entry_error(facade.root(), "", source.into()))?;
         built[index] = Some(definition);
     }
-    definitions.extend(built.into_iter().flatten());
+    // In build order: a runtime registry installs each facade after those
+    // whose types it names, as cargo builds a dependency before its user.
+    definitions.extend(
+        resolution
+            .order()
+            .iter()
+            .filter_map(|&index| built[index].take()),
+    );
     Ok(definitions.into_boxed_slice())
 }
 
