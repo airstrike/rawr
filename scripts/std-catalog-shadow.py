@@ -16,7 +16,6 @@ catalog = json.load(open(sys.argv[1]))
 repo = sys.argv[2]
 resolve = open(f"{repo}/src/resolve.rs").read()
 nominal = open(f"{repo}/src/resolve/lower_nominal.rs").read()
-type_ref = open(f"{repo}/src/resolve/type_ref.rs").read()
 
 items = catalog["items"]
 impls = catalog["implementations"]
@@ -105,56 +104,8 @@ for name, functions in re.findall(r'\("(\w+)", &\[([^\]]*)\]\)', body.group(1)):
     if missing or extra:
         print(f"  {name}: not listed {missing}; listed but not members {extra}")
 
-# 3. std_fmt_import
-section("std_fmt_import (src/resolve.rs)")
-body = re.search(r"pub\(crate\) fn std_fmt_import\(path: &str\) -> bool \{(.*?)\n\}", resolve, re.S)
-# The literal paths of its `matches!(rest, Some(..))`; the `ops` arm and
-# the parse-error and float-constant helpers are checked by hand.
-literal = re.search(r"matches!\(\s*rest,\s*Some\((.*?)\)\s*\)", body.group(1), re.S)
-allowed = re.findall(r'"([\w:]+)"', literal.group(1))
-for rest in allowed:
-    for root in ("std", "core"):
-        path = f"{root}::{rest}"
-        if not stable_path(path):
-            state = "unstable" if path in paths else "absent"
-            print(f"  accepted but {state} in rustc: {path}")
-errors = re.search(r"pub\(crate\) fn std_parse_error\(path: &str\).*?let \(expected, error\) = match name \{(.*?)\n    \};", resolve, re.S)
-for module, name in re.findall(r'=> \("(\w+)", "(\w+)"\)', errors.group(1)):
-    for root in ("std", "core"):
-        path = f"{root}::{module}::{name}"
-        if not stable_path(path):
-            print(f"  std_parse_error accepts, rustc has no stable {path}")
-stable_std = [p for p in paths if p.startswith("std::") and stable_path(p)]
-print(f"stable std:: paths: {len(stable_std)}; the allow-list names {len(allowed)} (x2 roots)")
-
-# 4. Arities
-section("Type arities (type_ref.rs prelude table, prelude_arity)")
-table = {}
-body = re.search(r"let prelude = match name\.as_str\(\) \{(.*?)\n    \};", type_ref, re.S).group(1)
-for names, count in re.findall(r'((?:"\w+"\s*\|?\s*)+)=> Some\((\d)\)', body):
-    for name in re.findall(r'"(\w+)"', names):
-        table[name] = int(count)
-for name, expected in sorted(table.items()):
-    found = [i for i in items if i["kind"] in ("struct", "enum") and i["path"][-1] == name
-             and i["effective"] == "stable"]
-    if not found:
-        print(f"  {name}: no stable std type")
-        continue
-    params = [p for p in found[0]["shape"]["generics"]["parameters"]
-              if p["parameter_kind"]["kind"] == "type"]
-    required = sum(1 for p in params if p["parameter_kind"]["default"]["kind"] == "absent")
-    defaults = [(p["name"], p["parameter_kind"]["default"]) for p in params
-                if p["parameter_kind"]["default"]["kind"] == "present"]
-    if required != expected or defaults:
-        def name_of(default):
-            ty = default["value"]
-            target = ty.get("id", {}).get("def_path_hash")
-            known = by_hash.get(target)
-            label = "::".join(known["path"]) if known else ty["kind"]
-            stab = known["effective"] if known else "?"
-            return f"{label} ({stab})"
-        print(f"  {name}: rawr requires exactly {expected}; std has {required} required + "
-              f"defaulted {[(n, name_of(d)) for n, d in defaults]}")
+# std_fmt_import and the type arity table were compared here in step 0;
+# step 1 (#742) replaced them with src/std_table.
 
 # 5. builtin_inherent_method
 section("builtin_inherent_method (lower_nominal.rs) for Option, Result, Vec, String")
