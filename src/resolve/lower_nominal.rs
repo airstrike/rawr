@@ -47381,6 +47381,26 @@ impl<'a> Parser<'a> {
         if self.coerce_children(&source, &target, value)? {
             return Ok(None);
         }
+        // A native value whose opaque type is a future, whatever bound
+        // makes it one, as a program's own `impl Straw<..>` is through
+        // `Core`, goes where a future is taken, as rustc passes it to
+        // iced's `Task::future(impl Future<Output = T>)`: its `Output` is
+        // the future's.
+        #[cfg(feature = "rust-import")]
+        if let Some(expected) = self.task_output(&target)
+            && let Ty::Host { proof, arguments } = &source
+            && let Some(given) = proof
+                .definition
+                .associated(
+                    rawr_import::surface::identity::Definition::future().as_bytes(),
+                    "Output",
+                )
+                .and_then(|position| arguments.get(position))
+        {
+            let given = given.clone();
+            self.require_type(&expected, &given, value.span)?;
+            return Ok(None);
+        }
         let checkpoint = self.inference.checkpoint();
         if let Some((key, projected)) = self.selected_projection(&source, &target)
             && self.unify_type(&target, &projected)
