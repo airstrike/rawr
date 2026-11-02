@@ -20022,15 +20022,16 @@ impl<'a> Parser<'a> {
                     || matches!(self.peek(), Token::LeftParen | Token::Unit))
             {
                 let start = receiver.span.start();
-                let applied = self.parse_applied_method(
-                    receiver,
-                    &definition,
-                    member,
-                    &path,
-                    member_span,
-                    Some(error),
-                );
-                return self.recover_miss(applied, start);
+                return self.recover_miss(start, |parser| {
+                    parser.parse_applied_method(
+                        receiver,
+                        &definition,
+                        member,
+                        &path,
+                        member_span,
+                        Some(error),
+                    )
+                });
             }
             return Err(error);
         };
@@ -20443,15 +20444,19 @@ impl<'a> Parser<'a> {
     /// arguments the call did not read are passed over, and the call reads
     /// as `!`, which any place takes, so the body goes on to its next miss.
     /// The pass fails with the first miss it kept. Any other result is as
-    /// it was.
+    /// it was. A miss `attempt` returns early from inside an inference
+    /// checkpoint leaves that checkpoint open; the pass goes on, so the
+    /// checkpoints the attempt opened are closed with what they bound.
     #[cfg(feature = "rust-import")]
     fn recover_miss(
         &mut self,
-        result: Result<ParsedExpr, Error>,
         start: Position,
+        attempt: impl FnOnce(&mut Self) -> Result<ParsedExpr, Error>,
     ) -> Result<ParsedExpr, Error> {
-        let Err(error) = result else {
-            return result;
+        let depth = self.inference.depth;
+        let error = match attempt(self) {
+            Err(error) => error,
+            result => return result,
         };
         let missed = match &error {
             Error::UnknownMember { .. }
@@ -20489,6 +20494,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        self.inference.depth = depth;
         if let Error::UnknownType { name, .. } = &error {
             self.recovered_types.push((start, name.clone()));
         }
@@ -34101,7 +34107,7 @@ impl<'a> Parser<'a> {
                     member,
                     reference: member_span,
                 };
-                value = self.recover_miss(Err(absorbed), start)?;
+                value = self.recover_miss(start, |_| Err(absorbed))?;
                 if !known {
                     self.recovered.pop();
                 }
@@ -45147,7 +45153,7 @@ impl<'a> Parser<'a> {
                 // A crate's path call, as a macro's `$crate::core::Widget::
                 // _boxed(x)`: the pass goes on to the body's next miss.
                 #[cfg(feature = "rust-import")]
-                return self.recover_miss(Err(error), member_span.start());
+                return self.recover_miss(member_span.start(), |_| Err(error));
                 #[cfg(not(feature = "rust-import"))]
                 return Err(error);
             };
@@ -45496,7 +45502,7 @@ impl<'a> Parser<'a> {
             // A crate's path call, as a macro's `$crate::core::Widget::
             // _boxed(x)`: the pass goes on to the body's next miss.
             #[cfg(feature = "rust-import")]
-            return self.recover_miss(Err(error), owner_span.start());
+            return self.recover_miss(owner_span.start(), |_| Err(error));
             #[cfg(not(feature = "rust-import"))]
             return Err(error);
         };
