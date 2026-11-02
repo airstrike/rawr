@@ -25,6 +25,8 @@ const TYPES: &[(&str, &str)] = &[
     ("alloc::string::String", "String"),
     ("alloc::rc::Rc", "Rc"),
     ("alloc::sync::Arc", "Arc"),
+    ("alloc::rc::Weak", "Weak"),
+    ("alloc::sync::Weak", "SyncWeak"),
     ("std::collections::hash::map::HashMap", "HashMap"),
     ("std::collections::hash::set::HashSet", "HashSet"),
     ("alloc::collections::btree::map::BTreeMap", "BTreeMap"),

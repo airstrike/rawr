@@ -484,7 +484,7 @@ impl Parser<'_> {
                 element => Shape::Elements(Box::new(element)),
             },
             // At run time, a `Box` is the value it holds.
-            Ty::Option(inner) | Ty::Boxed(Pointer::Box, inner) => self.shape_in(inner, visiting),
+            Ty::Option(inner) | Ty::Boxed(inner) => self.shape_in(inner, visiting),
             Ty::Result(ok, err) => {
                 let (ok, err) = (self.shape_in(ok, visiting), self.shape_in(err, visiting));
                 if ok.walks() && err.walks() {
@@ -559,7 +559,9 @@ impl Parser<'_> {
             }
             Ty::Array { element, .. }
             | Ty::Option(element)
-            | Ty::Boxed(_, element)
+            | Ty::Boxed(element)
+            | Ty::Counted(_, element)
+            | Ty::Weak(_, element)
             | Ty::Cell(_, element)
             | Ty::Reverse(element) => self.drop_uses_in(element, visiting),
             Ty::Result(ok, err) => any(&mut [ok, err]
@@ -676,7 +678,7 @@ impl Parser<'_> {
                 visiting.pop();
                 needs
             }
-            Ty::Array { element, .. } | Ty::Option(element) | Ty::Boxed(Pointer::Box, element) => {
+            Ty::Array { element, .. } | Ty::Option(element) | Ty::Boxed(element) => {
                 self.needs_drop_in(element, at, visiting)?
             }
             Ty::Result(ok, err) => {
@@ -689,12 +691,13 @@ impl Parser<'_> {
                 }
                 needs
             }
-            Ty::Boxed(pointer, inner) => {
+            Ty::Counted(counter, inner) | Ty::Weak(counter, inner) => {
                 if self.needs_drop_in(inner, at, visiting)? {
-                    return Err(unsupported(&format!("an `{}`", pointer.name())));
+                    return Err(unsupported(&format!("an `{}`", counter.name())));
                 }
                 false
             }
+
             Ty::Cell(_, inner) => {
                 if self.needs_drop_in(inner, at, visiting)? {
                     return Err(unsupported("a `RefCell`"));

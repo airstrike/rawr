@@ -33,7 +33,9 @@ impl Shape {
         let of = |ty: &Ty| Self::of(ty, resolve);
         let shape = match resolve(ty) {
             Ty::Int(Int::U64 | Int::Usize) => Self::Unsigned,
-            Ty::Reference { target, .. } | Ty::Boxed(_, target) => of(&target),
+            Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => {
+                of(&target)
+            }
             Ty::Option(element) => Self::Option(Box::new(of(&element))),
             Ty::Result(ok, err) => Self::Result(Box::new(of(&ok)), Box::new(of(&err))),
             Ty::Array { element, .. } => Self::Each(Box::new(of(&element))),
@@ -155,6 +157,10 @@ impl Comparison<'_, '_> {
                         .map_err(|_| super::invariant("a native comparison lost its Ordering"))
                 })
                 .transpose();
+        }
+        // An `Rc` or `Arc` compares its value, as std's impls do.
+        if let (Some(lhs), Some(rhs)) = (super::counted::value(lhs), super::counted::value(rhs)) {
+            return self.compare(&lhs, &rhs, shape);
         }
         match shape {
             Shape::Unsigned => {
@@ -338,12 +344,16 @@ impl Comparison<'_, '_> {
                 .as_bool()
                 .map_err(|_| super::invariant("a native equality lost its bool"));
         }
+        if let (Some(lhs), Some(rhs)) = (super::counted::value(lhs), super::counted::value(rhs)) {
+            return self.equal(&lhs, &rhs);
+        }
         if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
             return match (lhs, rhs) {
                 (Some(lhs), Some(rhs)) => self.equal(&lhs, &rhs),
                 (lhs, rhs) => Ok(lhs.is_none() && rhs.is_none()),
             };
         }
+
         if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
             return match (lhs, rhs) {
                 (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => self.equal(&lhs, &rhs),

@@ -836,7 +836,9 @@ impl Parser<'_> {
         }
         let mut at = Path::ROOT;
         let mut base_ty = self.inference.resolve(base.1);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = base_ty {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) =
+            base_ty
+        {
             at = at.push(Step::Arg(0));
             base_ty = self.inference.resolve(&target);
         }
@@ -1681,7 +1683,7 @@ fn through(ty: &Ty) -> (Path, usize) {
                 at = at.push(Step::Arg(0));
                 ty = target;
             }
-            Ty::Boxed(_, target) => {
+            Ty::Boxed(target) | Ty::Counted(_, target) => {
                 at = at.push(Step::Arg(0));
                 ty = target;
             }

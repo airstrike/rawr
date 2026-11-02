@@ -10878,10 +10878,19 @@ fn language_circle_std_float_constants_and_rc_counts() {
             f32::MAX
         )
     );
-    let refused = rejected(
-        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); Rc::strong_count(&a) as i64 } run()",
+    // An `Rc` counts its pointers (D712.2); an `Rc` function std has and
+    // rawr doesn't run yet is the not-yet error (D712.1).
+    let counted = run(
+        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); let _b = a.clone(); Rc::strong_count(&a) as i64 } run()",
     );
-    assert!(refused.contains("Rc::strong_count"), "{refused}");
+    assert_eq!(counted, 2);
+    let refused = rejected(
+        "use std::rc::Rc; pub fn run() -> i64 { let a = Rc::new(1); let p = Rc::as_ptr(&a); 0 } run()",
+    );
+    assert!(
+        refused.contains("rawr doesn't run `Rc::as_ptr` yet"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -12660,4 +12669,224 @@ fn rejected_run(source: &str) -> String {
         Ok(()) => panic!("Rust rejects this program, but it ran: {source}"),
         Err(error) => error.to_string(),
     }
+}
+
+// Real `Rc` and `Arc` (D712.2, #748). Each expected text is what rustc's
+// build of the same program prints.
+
+#[test]
+fn language_rc_counts_and_ptr_eq_are_rusts() {
+    let printed = printed(
+        r#"
+        use std::rc::Rc;
+        use std::sync::Arc;
+        fn count(values: &Rc<Vec<i32>>) -> usize { Rc::strong_count(values) }
+        fn total(values: Rc<Vec<i32>>) -> i32 { values.iter().sum() }
+        fn main() {
+            let a = Rc::new(5);
+            println!("{}", Rc::strong_count(&a));
+            let b = Rc::clone(&a);
+            println!("{}", Rc::strong_count(&a));
+            {
+                let c = a.clone();
+                println!("{} {}", Rc::strong_count(&c), *c + 1);
+            }
+            println!("{}", Rc::strong_count(&a));
+            println!("{} {}", Rc::ptr_eq(&a, &b), Rc::ptr_eq(&a, &Rc::new(5)));
+            println!("{}", a == Rc::new(5));
+            drop(b);
+            println!("{}", Rc::strong_count(&a));
+            let moved = a;
+            println!("{}", Rc::strong_count(&moved));
+            let numbers = Rc::new(vec![1, 2, 3]);
+            let held = vec![Rc::clone(&numbers), Rc::clone(&numbers)];
+            println!("{} {} {}", count(&numbers), held.len(), numbers[1]);
+            println!("{} {}", total(Rc::clone(&numbers)), count(&numbers));
+            drop(held);
+            println!("{}", count(&numbers));
+            let closure = {
+                let captured = Rc::clone(&numbers);
+                move || captured.len()
+            };
+            println!("{} {}", closure(), count(&numbers));
+            drop(closure);
+            println!("{}", count(&numbers));
+            let shared = Arc::new(String::from("arc"));
+            let other = Arc::clone(&shared);
+            println!("{} {} {}", other.to_uppercase(), Arc::strong_count(&shared), Arc::ptr_eq(&shared, &other));
+            println!("{:?} {:?}", Rc::try_unwrap(moved), Rc::try_unwrap(Rc::clone(&numbers)).is_err());
+        }
+        main();
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "1\n2\n3 6\n2\ntrue false\ntrue\n1\n1\n3 2 2\n6 3\n1\n3 2\n1\nARC 2 true\nOk(5) true\n"
+    );
+}
+
+#[test]
+fn language_rc_refcell_changes_show_through_every_clone() {
+    let printed = printed(
+        r#"
+        use std::cell::RefCell;
+        use std::rc::{Rc, Weak};
+        #[derive(Debug)]
+        struct Node {
+            value: i32,
+            parent: RefCell<Weak<Node>>,
+            children: RefCell<Vec<Rc<Node>>>,
+        }
+        #[derive(Clone)]
+        struct Holder { log: Rc<RefCell<Vec<String>>> }
+        fn main() {
+            let shared = Rc::new(RefCell::new(vec![1, 2]));
+            let other = Rc::clone(&shared);
+            other.borrow_mut().push(3);
+            println!("{:?} {}", shared.borrow(), shared.borrow().len());
+            let holder = Holder { log: Rc::new(RefCell::new(Vec::new())) };
+            let copy = holder.clone();
+            copy.log.borrow_mut().push(String::from("a"));
+            holder.log.borrow_mut().push(String::from("b"));
+            println!("{:?} {}", holder.log.borrow(), Rc::strong_count(&copy.log));
+            let leaf = Rc::new(Node {
+                value: 3,
+                parent: RefCell::new(Weak::new()),
+                children: RefCell::new(vec![]),
+            });
+            println!("{:?}", leaf.parent.borrow().upgrade().map(|p| p.value));
+            let branch = Rc::new(Node {
+                value: 5,
+                parent: RefCell::new(Weak::new()),
+                children: RefCell::new(vec![Rc::clone(&leaf)]),
+            });
+            *leaf.parent.borrow_mut() = Rc::downgrade(&branch);
+            println!("{:?}", leaf.parent.borrow().upgrade().map(|p| p.value));
+            println!("{} {}", Rc::strong_count(&branch), Rc::weak_count(&branch));
+            println!("{} {}", Rc::strong_count(&leaf), Rc::weak_count(&leaf));
+            println!("{}", branch.children.borrow()[0].value);
+        }
+        main();
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "[1, 2, 3] 3\n[\"a\", \"b\"] 2\nNone\nSome(5)\n1 1\n2 0\n3\n"
+    );
+}
+
+#[test]
+fn language_weak_upgrades_until_the_last_rc_drops() {
+    let printed = printed(
+        r#"
+        use std::rc::{Rc, Weak};
+        use std::sync::Arc;
+        fn main() {
+            let weak: Weak<i32> = {
+                let strong = Rc::new(7);
+                let weak = Rc::downgrade(&strong);
+                println!("{:?} {} {}", weak.upgrade(), Rc::weak_count(&strong), weak.strong_count());
+                weak
+            };
+            println!("{:?} {} {}", weak.upgrade(), weak.strong_count(), weak.weak_count());
+            let a = Rc::new(1);
+            let w = Rc::downgrade(&a);
+            let w2 = w.clone();
+            println!("{} {}", Rc::weak_count(&a), w.ptr_eq(&w2));
+            drop(a);
+            println!("{} {:?}", w.upgrade().is_none(), w2);
+            let empty: Weak<String> = Weak::new();
+            println!("{}", empty.upgrade().is_none());
+            let arc = Arc::new(2);
+            let arc_weak = Arc::downgrade(&arc);
+            println!("{:?}", arc_weak.upgrade().map(|value| *value + 1));
+            drop(arc);
+            println!("{:?}", arc_weak.upgrade());
+        }
+        main();
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "Some(7) 1 2\nNone 0 0\n2 true\ntrue (Weak)\ntrue\nSome(3)\nNone\n"
+    );
+}
+
+#[test]
+fn language_rc_get_mut_and_make_mut_are_rusts() {
+    let printed = printed(
+        r#"
+        use std::rc::Rc;
+        use std::sync::Arc;
+        fn main() {
+            let mut x = Rc::new(10);
+            *Rc::get_mut(&mut x).unwrap() += 5;
+            println!("{}", x);
+            let y = Rc::clone(&x);
+            println!("{}", Rc::get_mut(&mut x).is_none());
+            drop(y);
+            if let Some(v) = Rc::get_mut(&mut x) {
+                *v = 40;
+            }
+            println!("{}", x);
+            let weak = Rc::downgrade(&x);
+            println!("{}", Rc::get_mut(&mut x).is_none());
+            drop(weak);
+            let mut data = Rc::new(vec![1, 2]);
+            let other = Rc::clone(&data);
+            Rc::make_mut(&mut data).push(3);
+            println!("{:?} {:?} {}", data, other, Rc::ptr_eq(&data, &other));
+            *Rc::make_mut(&mut data) = vec![9];
+            println!("{:?} {}", data, Rc::strong_count(&data));
+            let mut text = Arc::new(String::from("a"));
+            Arc::make_mut(&mut text).push('b');
+            println!("{}", text);
+        }
+        main();
+        "#,
+    );
+    assert_eq!(
+        printed,
+        "15\ntrue\n40\ntrue\n[1, 2, 3] [1, 2] false\n[9] 1\nab\n"
+    );
+}
+
+#[test]
+fn language_rc_is_not_send() {
+    let error = rejected(
+        r#"
+        use std::rc::Rc;
+        use std::sync::Arc;
+        fn require<T: Send>(value: T) -> T { value }
+        pub fn run() -> i64 {
+            let shared = require(Arc::new(1));
+            let local = require(Rc::new(2));
+            *shared + *local
+        }
+        run()
+        "#,
+    );
+    // rustc's E0277.
+    assert!(
+        error.contains("`Rc<i64>` cannot be sent between threads safely"),
+        "{error}"
+    );
+    // An `Arc` of what isn't `Sync`, as a `RefCell`, isn't `Send` either.
+    let error = rejected(
+        r#"
+        use std::cell::RefCell;
+        use std::sync::Arc;
+        fn require<T: Send>(value: T) -> T { value }
+        pub fn run() -> i64 {
+            let shared = require(Arc::new(RefCell::new(1)));
+            let value = *shared.borrow();
+            value
+        }
+        run()
+        "#,
+    );
+    assert!(
+        error.contains("cannot be sent between threads safely"),
+        "{error}"
+    );
 }

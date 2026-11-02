@@ -3,6 +3,8 @@
 mod borrows;
 mod cargo_env;
 pub(crate) mod cell;
+pub(crate) mod counted;
+
 mod drops;
 mod error_object;
 mod expand;
@@ -608,7 +610,11 @@ fn named_output(
         },
         (type_ref::Type::Path(path), _) => {
             let mut inner = match hidden {
-                Ty::Option(element) | Ty::Array { element, .. } | Ty::Boxed(_, element) => {
+                Ty::Option(element)
+                | Ty::Array { element, .. }
+                | Ty::Boxed(element)
+                | Ty::Counted(_, element)
+                | Ty::Weak(_, element) => {
                     vec![&**element]
                 }
                 Ty::Result(ok, err) => vec![&**ok, &**err],
@@ -687,7 +693,9 @@ fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
             &crate::item::type_ref::array_name(*length),
             vec![named(element)?],
         ),
-        Ty::Boxed(pointer, target) => builtin(pointer.name(), vec![named(target)?]),
+        Ty::Boxed(target) => builtin("Box", vec![named(target)?]),
+        Ty::Counted(counter, target) => builtin(counter.name(), vec![named(target)?]),
+        Ty::Weak(counter, target) => builtin(counter.weak_name(), vec![named(target)?]),
         Ty::Tuple(members) => type_ref::Type::Tuple {
             members: all(members)?.into_boxed_slice(),
             span,
@@ -2314,6 +2322,8 @@ fn erased(ty: &Ty) -> bool {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Boxed(..)
+            | Ty::Counted(..)
+            | Ty::Weak(..)
             | Ty::Reverse(_)
             | Ty::Cell(..)
             | Ty::Ordering
@@ -5155,10 +5165,10 @@ impl Models {
     /// such a field (`application::default_runs_code` reads the same).
     fn default_folds(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
         match ty {
-            Ty::Boxed(_, inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
+            Ty::Boxed(inner) | Ty::Reverse(inner) => self.default_folds(inner, visiting),
             // A cell is made where its default is used, so copies share
-            // no cell.
-            Ty::Cell(..) => false,
+            // no cell, and so is a pointer, so each is an allocation.
+            Ty::Cell(..) | Ty::Counted(..) | Ty::Weak(..) => false,
             Ty::Array {
                 element,
                 length: Some(_),
@@ -5195,7 +5205,7 @@ impl Models {
     fn holds_cell(&self, ty: &Ty, visiting: &mut Vec<type_def::Id>) -> bool {
         match ty {
             Ty::Cell(..) => true,
-            Ty::Boxed(Pointer::Box, inner)
+            Ty::Boxed(inner)
             | Ty::Reverse(inner)
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
@@ -5546,6 +5556,26 @@ enum PreludeOp {
     /// `apply(value, rhs)` of its value, through one call of the guard's
     /// method, as rustc's `*state.write() += rhs` is (D554.7(f)).
     CellUpdate,
+    /// `Rc::new`, a pointer's value (std's `Deref`), its strong and weak
+    /// counts, `ptr_eq`, `downgrade`, `get_mut`, `make_mut`, `try_unwrap`,
+    /// `into_inner` and `unwrap_or_clone`, and `Weak::new`, `upgrade`,
+    /// its counts and `ptr_eq` (`counted.rs`).
+    CountedNew,
+    CountedGet,
+    CountedStrong,
+    CountedWeakCount,
+    CountedPtrEq,
+    CountedDowngrade,
+    CountedGetMut,
+    CountedMakeMut,
+    CountedTryUnwrap,
+    CountedIntoInner,
+    CountedUnwrapOrClone,
+    WeakNew,
+    WeakUpgrade,
+    WeakStrong,
+    WeakWeakCount,
+    WeakPtrEq,
     /// A string's `lines()`, `split_whitespace()` and `split(pattern)` (a
     /// `char` or a string): the array of its pieces.
     StrLines,
@@ -5708,6 +5738,22 @@ impl PreludeOp {
             Self::CellReplace => "cell.replace",
             Self::CellClone => "cell.clone",
             Self::CellUpdate => "cell.update",
+            Self::CountedNew => "counted.new",
+            Self::CountedGet => "counted.get",
+            Self::CountedStrong => "counted.strong_count",
+            Self::CountedWeakCount => "counted.weak_count",
+            Self::CountedPtrEq => "counted.ptr_eq",
+            Self::CountedDowngrade => "counted.downgrade",
+            Self::CountedGetMut => "counted.get_mut",
+            Self::CountedMakeMut => "counted.make_mut",
+            Self::CountedTryUnwrap => "counted.try_unwrap",
+            Self::CountedIntoInner => "counted.into_inner",
+            Self::CountedUnwrapOrClone => "counted.unwrap_or_clone",
+            Self::WeakNew => "weak.new",
+            Self::WeakUpgrade => "weak.upgrade",
+            Self::WeakStrong => "weak.strong_count",
+            Self::WeakWeakCount => "weak.weak_count",
+            Self::WeakPtrEq => "weak.ptr_eq",
             Self::ReverseInner => "reverse.0",
             Self::StrLines => "str.lines",
             Self::StrSplitWhitespace => "str.split-whitespace",
@@ -5761,6 +5807,7 @@ impl PreludeOp {
             | Self::StrChange
             | Self::PathSet
             | Self::ReferentStore
+            | Self::CountedMakeMut
             | Self::Memory => Some(true),
             Self::MapGet
             | Self::MapContainsKey
@@ -5774,6 +5821,16 @@ impl PreludeOp {
             | Self::GenericDebug
             | Self::ValueClone
             | Self::SequenceContains
+            | Self::CountedGet
+            | Self::CountedStrong
+            | Self::CountedWeakCount
+            | Self::CountedPtrEq
+            | Self::CountedDowngrade
+            | Self::CountedGetMut
+            | Self::WeakUpgrade
+            | Self::WeakStrong
+            | Self::WeakWeakCount
+            | Self::WeakPtrEq
             | Self::DisplayText => Some(false),
             _ => None,
         }
@@ -5802,7 +5859,24 @@ impl PreludeOp {
             | Self::PlainCellNew
             | Self::CellGet
             | Self::CellRelease
-            | Self::CellClone => vec![TypeId::of::<Dynamic>()],
+            | Self::CellClone
+            | Self::CountedNew
+            | Self::CountedGet
+            | Self::CountedStrong
+            | Self::CountedWeakCount
+            | Self::CountedDowngrade
+            | Self::CountedGetMut
+            | Self::CountedMakeMut
+            | Self::CountedTryUnwrap
+            | Self::CountedIntoInner
+            | Self::CountedUnwrapOrClone
+            | Self::WeakUpgrade
+            | Self::WeakStrong
+            | Self::WeakWeakCount => vec![TypeId::of::<Dynamic>()],
+            Self::CountedPtrEq | Self::WeakPtrEq => {
+                vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
+            }
+            Self::WeakNew => Vec::new(),
             Self::DropParts
             | Self::CellBorrow
             | Self::CellSet
@@ -6382,6 +6456,22 @@ impl PreludeOp {
                 ));
             }
             Self::CellUpdate => return cell::update(context, args),
+            Self::CountedNew
+            | Self::CountedGet
+            | Self::CountedStrong
+            | Self::CountedWeakCount
+            | Self::CountedPtrEq
+            | Self::CountedDowngrade
+            | Self::CountedGetMut
+            | Self::CountedMakeMut
+            | Self::CountedTryUnwrap
+            | Self::CountedIntoInner
+            | Self::CountedUnwrapOrClone
+            | Self::WeakNew
+            | Self::WeakUpgrade
+            | Self::WeakStrong
+            | Self::WeakWeakCount
+            | Self::WeakPtrEq => return counted::invoke(self, args),
             Self::Join => {
                 let array = args[0]
                     .as_array_ref()
@@ -6822,8 +6912,9 @@ fn probe_rank(receiver: &Ty, mode: receiver::Mode) -> u8 {
 fn owner_id(ty: &Ty) -> Option<type_def::Id> {
     match ty {
         Ty::Script(id, _) => Some(*id),
-        Ty::Boxed(..) => None,
+        Ty::Boxed(..) | Ty::Counted(..) | Ty::Weak(..) => None,
         Ty::Host { proof, .. } => Some(type_def::Id::foreign(&proof.definition.path())),
+
         ty => builtin_code(ty).map(type_def::Id::builtin),
     }
 }
@@ -6871,7 +6962,7 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
         Ty::Array { length: None, .. } => -8,
         Ty::Unit => -9,
         Ty::Result(..) => -10,
-        Ty::Boxed(_, inner) => return builtin_code(inner),
+        Ty::Boxed(inner) => return builtin_code(inner),
         _ => return None,
     })
 }
@@ -8109,7 +8200,7 @@ impl CellKind {
     }
 }
 
-/// The pointer a `Ty::Boxed` is: `Box`, `std::rc::Rc` or `std::sync::Arc`.
+/// The pointer a path names: `Box`, `std::rc::Rc` or `std::sync::Arc`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Pointer {
     Box,
@@ -8132,6 +8223,66 @@ impl Pointer {
             Self::Box => "Box",
             Self::Rc => "Rc",
             Self::Arc => "Arc",
+        }
+    }
+
+    /// The counted pointer this is: `Rc` or `Arc`, not `Box`.
+    const fn counter(self) -> Option<Counter> {
+        match self {
+            Self::Box => None,
+            Self::Rc => Some(Counter::Rc),
+            Self::Arc => Some(Counter::Arc),
+        }
+    }
+
+    /// The type of this pointer to `target`.
+    fn ty(self, target: Ty) -> Ty {
+        match self.counter() {
+            None => Ty::Boxed(Box::new(target)),
+            Some(counter) => Ty::Counted(counter, Box::new(target)),
+        }
+    }
+}
+
+/// Which counted pointer a `Ty::Counted` or `Ty::Weak` is: `std::rc`'s or
+/// `std::sync`'s.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Counter {
+    Rc,
+    Arc,
+}
+
+impl Counter {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Rc => "Rc",
+            Self::Arc => "Arc",
+        }
+    }
+
+    /// Rawr's builtin name for the pointer's `Weak`, as
+    /// `type_ref::Type::weak_element` names it.
+    const fn weak_name(self) -> &'static str {
+        match self {
+            Self::Rc => "Weak",
+            Self::Arc => "SyncWeak",
+        }
+    }
+
+    /// The counter whose `Weak` rawr's builtin `name` is.
+    fn weak_named(name: &str) -> Self {
+        if name == Self::Arc.weak_name() {
+            Self::Arc
+        } else {
+            Self::Rc
+        }
+    }
+
+    /// The std definitions of the pointer and of its `Weak`.
+    const fn std_paths(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Rc => ("alloc::rc::Rc", "alloc::rc::Weak"),
+            Self::Arc => ("alloc::sync::Arc", "alloc::sync::Weak"),
         }
     }
 }
@@ -8258,10 +8409,17 @@ enum Ty {
     },
     /// A script struct or enum, with its type arguments when generic.
     Script(type_def::Id, Box<[Ty]>),
-    /// `Box<T>`, `Rc<T>` or `Arc<T>`: the value itself at runtime, as
-    /// Rawr values are already heap-allocated; method calls and fields
-    /// auto-deref through it.
-    Boxed(Pointer, Box<Ty>),
+    /// `Box<T>`: the value itself at runtime, as Rawr values are already
+    /// heap-allocated; method calls and fields auto-deref through it.
+    Boxed(Box<Ty>),
+    /// `Rc<T>` or `Arc<T>`: a shared, counted pointer at runtime
+    /// (`counted.rs`). A clone shares the value, and its counts and
+    /// address are observable. Method calls and fields auto-deref through
+    /// std's `Deref`, which reads the value.
+    Counted(Counter, Box<Ty>),
+    /// `std::rc::Weak<T>` or `std::sync::Weak<T>`: a pointer that doesn't
+    /// keep the value alive (`counted.rs`).
+    Weak(Counter, Box<Ty>),
     /// `HashMap<K, V>`, `BTreeMap<K, V>`, `HashSet<K>` or `BTreeSet<K>`
     /// with its type arguments: at runtime an array sorted by key, of
     /// `[key, value]` pairs for a map and of keys for a set, so every kind
@@ -8331,7 +8489,9 @@ impl Ty {
                 script.collect_dependencies(dependencies);
             }
             Self::Reference { target, .. }
-            | Self::Boxed(_, target)
+            | Self::Boxed(target)
+            | Self::Counted(_, target)
+            | Self::Weak(_, target)
             | Self::Iter(target)
             | Self::Reverse(target)
             | Self::Range(target)
@@ -8403,8 +8563,11 @@ impl Ty {
             };
         }
         if let Some((pointer, element)) = ty.pointer_element() {
-            return Self::Boxed(
-                Pointer::named(pointer),
+            return Pointer::named(pointer).ty(Self::from_resolved(element));
+        }
+        if let Some((weak, element)) = ty.weak_element() {
+            return Self::Weak(
+                Counter::weak_named(weak),
                 Box::new(Self::from_resolved(element)),
             );
         }
@@ -8602,9 +8765,11 @@ impl Ty {
                 target.name(models)
             )
             .into(),
-            Self::Boxed(pointer, target) => {
-                format!("{}<{}>", pointer.name(), target.name(models)).into()
+            Self::Boxed(target) => format!("Box<{}>", target.name(models)).into(),
+            Self::Counted(counter, target) => {
+                format!("{}<{}>", counter.name(), target.name(models)).into()
             }
+            Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
@@ -8713,10 +8878,11 @@ impl Ty {
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
             Self::ParseError(_) => Some(TypeId::of::<ImmutableString>()),
-            Self::Reference { target, .. } | Self::Boxed(_, target) => {
-                target.native_type_id(models)
-            }
+            Self::Reference { target, .. } | Self::Boxed(target) => target.native_type_id(models),
+            Self::Counted(..) => Some(TypeId::of::<counted::Counted>()),
+            Self::Weak(..) => Some(TypeId::of::<counted::Weak>()),
             Self::Host { proof, .. } => proof.definition.native_identity(),
+
             Self::Script(id, ..) => Some(match models.definition(*id) {
                 Nominal::Struct { .. } => TypeId::of::<nominal::Struct>(),
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
@@ -8846,6 +9012,8 @@ impl Ty {
             | Self::Projection(..)
             | Self::Reference { .. }
             | Self::Boxed(..)
+            | Self::Counted(..)
+            | Self::Weak(..)
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
@@ -9097,8 +9265,10 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
                 left_mutable == right_mutable
                     && compare(left_target, right_target, forward, reverse)
             }
-            (Ty::Boxed(left_pointer, left), Ty::Boxed(right_pointer, right)) => {
-                left_pointer == right_pointer && compare(left, right, forward, reverse)
+            (Ty::Boxed(left), Ty::Boxed(right)) => compare(left, right, forward, reverse),
+            (Ty::Counted(left_counter, left), Ty::Counted(right_counter, right))
+            | (Ty::Weak(left_counter, left), Ty::Weak(right_counter, right)) => {
+                left_counter == right_counter && compare(left, right, forward, reverse)
             }
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
@@ -9354,7 +9524,9 @@ impl Inference {
                 Ty::Tuple(members.iter().map(|member| self.resolve(member)).collect())
             }
             Ty::Option(element) => Ty::Option(Box::new(self.resolve(element))),
-            Ty::Boxed(pointer, target) => Ty::Boxed(*pointer, Box::new(self.resolve(target))),
+            Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
+            Ty::Counted(counter, target) => Ty::Counted(*counter, Box::new(self.resolve(target))),
+            Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
@@ -10506,8 +10678,12 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
             .cloned()
             .unwrap_or_else(|| ty.clone()),
         Ty::Option(element) => Ty::Option(Box::new(instantiate(element, substitution))),
-        Ty::Boxed(pointer, target) => {
-            Ty::Boxed(*pointer, Box::new(instantiate(target, substitution)))
+        Ty::Boxed(target) => Ty::Boxed(Box::new(instantiate(target, substitution))),
+        Ty::Counted(counter, target) => {
+            Ty::Counted(*counter, Box::new(instantiate(target, substitution)))
+        }
+        Ty::Weak(counter, target) => {
+            Ty::Weak(*counter, Box::new(instantiate(target, substitution)))
         }
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
@@ -10898,6 +11074,8 @@ fn bound_kinds(bounds: capability::Set) -> impl Iterator<Item = capability::Kind
         capability::Kind::Copy,
         capability::Kind::PartialEq,
         capability::Kind::Eq,
+        // An `Rc` is not `Send` (rustc's E0277).
+        capability::Kind::Send,
     ]
     .into_iter()
     .filter(move |kind| bounds.contains(*kind))
@@ -12224,7 +12402,11 @@ impl<'a> Parser<'a> {
             }
             (type_ref::Type::Path(path), _) => {
                 let inner = match &hidden {
-                    Ty::Option(element) | Ty::Array { element, .. } | Ty::Boxed(_, element) => {
+                    Ty::Option(element)
+                    | Ty::Array { element, .. }
+                    | Ty::Boxed(element)
+                    | Ty::Counted(_, element)
+                    | Ty::Weak(_, element) => {
                         vec![&**element]
                     }
                     Ty::Result(ok, err) => vec![&**ok, &**err],
@@ -12672,7 +12854,8 @@ impl<'a> Parser<'a> {
                         length: Some(length),
                     }
                 } else if let Some((pointer, _)) = output.pointer_element() {
-                    Ty::Boxed(Pointer::named(pointer), next()?)
+                    let target = next()?;
+                    Pointer::named(pointer).ty(*target)
                 } else if output.result_elements().is_some() {
                     Ty::Result(next()?, next()?)
                 } else {
@@ -13047,7 +13230,13 @@ impl<'a> Parser<'a> {
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
                 continue;
             }
-            if !self.type_provides(&ty, kind) {
+            // rawr proves no auto trait, but refuses what it knows isn't
+            // `Send`, as an `Rc`.
+            let provided = match kind {
+                capability::Kind::Send => !self.not_send(&ty),
+                _ => self.type_provides(&ty, kind),
+            };
+            if !provided {
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: kind.name().into(),
@@ -13948,10 +14137,22 @@ impl<'a> Parser<'a> {
     fn finish_formats(&mut self) -> Result<(), Error> {
         for pending in std::mem::take(&mut self.pending_formats) {
             let mut ty = self.inference.resolve(&pending.ty);
-            while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
-                ty = self.inference.resolve(&target);
+            let mut name = origin::Fragment::plain(pending.name.as_str());
+            loop {
+                ty = match ty {
+                    Ty::Reference { target, .. } | Ty::Boxed(target) => {
+                        self.inference.resolve(&target)
+                    }
+                    Ty::Counted(_, target) => {
+                        name = self.counted_call(PreludeOp::CountedGet, name, []);
+                        self.inference.resolve(&target)
+                    }
+                    other => {
+                        ty = other;
+                        break;
+                    }
+                };
             }
-            let name = origin::Fragment::plain(pending.name.as_str());
             let actual = ty.name(&self.models);
             let mismatch = |expected: &str| Error::TypeMismatch {
                 expected: expected.into(),
@@ -17266,11 +17467,34 @@ impl<'a> Parser<'a> {
             // `Box<T>` derives from `T`, and is never `Copy`. `Rc<T>` and
             // `Arc<T>` are `Clone` for any `T`, and an `Rc` stays on its
             // thread.
-            Ty::Boxed(pointer, target) => match (pointer, capability) {
-                (_, capability::Kind::Copy) | (Pointer::Rc, capability::Kind::Send) => false,
-                (Pointer::Rc | Pointer::Arc, capability::Kind::Clone) => true,
+            Ty::Boxed(target) => {
+                capability != capability::Kind::Copy && self.type_provides(&target, capability)
+            }
+            Ty::Counted(counter, target) => match (counter, capability) {
+                (_, capability::Kind::Copy) | (Counter::Rc, capability::Kind::Send) => false,
+                (_, capability::Kind::Clone) => true,
+                // `Arc<T>` is `Send` when `T` is `Send` and `Sync`.
+                (Counter::Arc, capability::Kind::Send) => {
+                    self.type_provides(&target, capability) && self.shared_between_threads(&target)
+                }
                 _ => self.type_provides(&target, capability),
             },
+            // A `Weak` is `Clone`, `Debug` (`(Weak)`) and `Default`
+            // (`Weak::new`) for any `T`, and compares, orders or hashes
+            // nothing.
+            Ty::Weak(counter, target) => match (counter, capability) {
+                (
+                    _,
+                    capability::Kind::Clone | capability::Kind::Debug | capability::Kind::Default,
+                ) => true,
+                (Counter::Arc, capability::Kind::Send) => {
+                    self.type_provides(&target, capability) && self.shared_between_threads(&target)
+                }
+                (Counter::Arc, capability::Kind::Static) => self.type_provides(&target, capability),
+                (Counter::Rc, capability::Kind::Static) => self.type_provides(&target, capability),
+                _ => false,
+            },
+
             // A trait object has only its trait's methods; std's `dyn Error`
             // is `Debug`, its supertrait.
             dynamic @ Ty::Dyn(..) => {
@@ -17499,7 +17723,13 @@ impl<'a> Parser<'a> {
                     operation: span,
                 });
             }
-            Ty::Never | Ty::Param(_) | Ty::Projection(..) | Ty::Boxed(..) | Ty::Dyn(..) => {
+            Ty::Never
+            | Ty::Param(_)
+            | Ty::Projection(..)
+            | Ty::Boxed(..)
+            | Ty::Counted(..)
+            | Ty::Weak(..)
+            | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })
@@ -22066,7 +22296,7 @@ impl<'a> Parser<'a> {
         let (Some(place), Some(root_ty)) = (place, root_ty) else {
             return Err(self.move_out_error(value, "of index of `{owner}`"));
         };
-        if let Ty::Boxed(Pointer::Rc | Pointer::Arc, _) = self.inference.resolve(&root_ty) {
+        if let Ty::Counted(..) = self.inference.resolve(&root_ty) {
             return Err(self.move_out_error(value, "of a value behind `{owner}`"));
         }
         let mut name = root.to_string();
@@ -22174,8 +22404,8 @@ impl<'a> Parser<'a> {
         let behind = match self.inference.resolve(&binding.ty) {
             Ty::Reference { mutable: true, .. } => Some("behind a mutable reference"),
             Ty::Reference { .. } => Some("behind a shared reference"),
-            Ty::Boxed(Pointer::Rc, _) => Some("behind an `Rc`"),
-            Ty::Boxed(Pointer::Arc, _) => Some("behind an `Arc`"),
+            Ty::Counted(Counter::Rc, _) => Some("behind an `Rc`"),
+            Ty::Counted(Counter::Arc, _) => Some("behind an `Arc`"),
             _ => None,
         };
         if let Some(behind) = behind
@@ -23233,6 +23463,7 @@ impl<'a> Parser<'a> {
         };
         let hold = self.note_drop(&name, name_span, &ty)?;
         self.bound_value(&name, name_span, &value, value_start);
+        let keyword = self.binding_keyword(mutable, &ty);
         self.bindings.insert(
             name.clone(),
             Binding {
@@ -23243,7 +23474,6 @@ impl<'a> Parser<'a> {
                 kind: BindingKind::Local,
             },
         );
-        let keyword = if mutable { "let" } else { "const" };
         // A shadowed value with drop glue is kept until its scope ends.
         if let Some(hold) = hold {
             let made = self.temporary("made");
@@ -23850,7 +24080,7 @@ impl<'a> Parser<'a> {
         rendered.push_text("\n};");
         let mut declared = String::new();
         for (index, (binding, name)) in bindings.iter().zip(&names).enumerate() {
-            let keyword = if binding.mutable { "let" } else { "const" };
+            let keyword = self.binding_keyword(binding.mutable, &binding.ty);
             let _ = write!(declared, "\n{keyword} {name} = {values}[{index}];");
             self.bindings.insert(
                 binding.name.clone(),
@@ -24083,8 +24313,9 @@ impl<'a> Parser<'a> {
                 span,
                 mutable,
             } => {
-                let keyword = if *mutable { "let" } else { "const" };
+                let keyword = self.binding_keyword(*mutable, ty);
                 let _ = write!(statements, " {keyword} {name} = {path};");
+
                 let ty = match (self.binding_mode.get(), self.inference.resolve(ty)) {
                     (Some(mutable), ty) if !matches!(ty, Ty::Reference { .. }) => Ty::Reference {
                         mutable,
@@ -28051,7 +28282,7 @@ impl<'a> Parser<'a> {
         self.loop_iterator = iterator;
         self.loop_element = Some((iterator, element, positions, Vec::new()));
         // A `Box<dyn Iterator>` is its iterator at runtime.
-        if let Ty::Boxed(Pointer::Box, inner) = self.inference.resolve(&lhs.ty)
+        if let Ty::Boxed(inner) = self.inference.resolve(&lhs.ty)
             && let iterator @ Ty::Iter(_) = self.inference.resolve(&inner)
         {
             lhs.ty = iterator;
@@ -30506,7 +30737,9 @@ impl<'a> Parser<'a> {
         }
         if matches!(
             (&source, &target),
-            (Ty::Reference { .. }, Ty::Reference { .. }) | (Ty::Boxed(..), Ty::Boxed(..))
+            (Ty::Reference { .. }, Ty::Reference { .. })
+                | (Ty::Boxed(..), Ty::Boxed(..))
+                | (Ty::Counted(..), Ty::Counted(..))
         ) {
             let lvalue = value.lvalue.clone();
             self.coerce_expr(&target, &mut value)?;
@@ -31455,7 +31688,7 @@ impl<'a> Parser<'a> {
     /// with the rest of the postfix chain. `None` for any other value.
     fn indexed_place(&mut self, value: &ParsedExpr) -> Result<Option<ParsedExpr>, Error> {
         let mut owner_ty = self.inference.resolve(&value.ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = owner_ty {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = owner_ty {
             owner_ty = self.inference.resolve(&target);
         }
         let Ty::Script(owner, _) = owner_ty else {
@@ -31545,7 +31778,7 @@ impl<'a> Parser<'a> {
         end: Position,
     ) -> Result<Option<ParsedExpr>, Error> {
         let mut owner_ty = self.inference.resolve(&value.ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = owner_ty {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = owner_ty {
             owner_ty = self.inference.resolve(&target);
         }
         let Ty::Script(owner, _) = owner_ty else {
@@ -31627,7 +31860,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(value));
         }
         let mut peeled = self.inference.resolve(&lhs.ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = peeled {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = peeled {
             peeled = self.inference.resolve(&target);
         }
         let partial_cmp = match &peeled {
@@ -31834,7 +32067,7 @@ impl<'a> Parser<'a> {
         // `&T == &T` compares the referents, as Rust's `PartialEq for &A` does,
         // and `Box<T> == Box<T>` their contents.
         let mut peeled = self.inference.resolve(&lhs.ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = peeled {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = peeled {
             peeled = self.inference.resolve(&target);
         }
         if let Ty::Option(_)
@@ -32271,9 +32504,21 @@ impl<'a> Parser<'a> {
                 self.coerce_expr(&Ty::Int(Int::Usize), argument)?;
             }
             let mut ty = self.inference.resolve(&argument.ty);
-            // A reference or box displays as its target.
-            while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
-                ty = self.inference.resolve(&target);
+            // A reference, box, `Rc` or `Arc` displays as its target.
+            loop {
+                ty = match ty {
+                    Ty::Reference { target, .. } | Ty::Boxed(target) => {
+                        self.inference.resolve(&target)
+                    }
+                    Ty::Counted(_, target) => {
+                        self.counted_value(argument);
+                        self.inference.resolve(&target)
+                    }
+                    other => {
+                        ty = other;
+                        break;
+                    }
+                };
             }
             // The macro borrows a local where it is (D568). Rust's borrow
             // keeps the later arguments from changing it. One a later
@@ -32553,8 +32798,11 @@ impl<'a> Parser<'a> {
             | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
+            | Ty::Counted(..)
+            | Ty::Weak(..)
             | Ty::Param(_)
             | Ty::Projection(..) => false,
+
             // An `i128` or a `u128` past `i64` is boxed.
             Ty::Int(kind) => !kind.wide(),
             _ => true,
@@ -32575,7 +32823,7 @@ impl<'a> Parser<'a> {
     /// `keyed_op` for the collection type `collection`, through references.
     pub(super) fn keyed_op_for(&self, op: PreludeOp, collection: &Ty) -> Op {
         let mut ty = self.inference.resolve(collection);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
             ty = self.inference.resolve(&target);
         }
         match ty {
@@ -32609,7 +32857,8 @@ impl<'a> Parser<'a> {
         fn inside(this: &Parser<'_>, ty: &Ty, seen: &mut BTreeSet<type_def::Id>) -> bool {
             match this.inference.resolve(ty) {
                 Ty::Reference { target, .. }
-                | Ty::Boxed(_, target)
+                | Ty::Boxed(target)
+                | Ty::Counted(_, target)
                 | Ty::Option(target)
                 | Ty::Reverse(target) => inside(this, &target, seen),
                 Ty::Array { element, .. } => inside(this, &element, seen),
@@ -32648,7 +32897,7 @@ impl<'a> Parser<'a> {
     /// `ty` without its references and boxes, when it is `Ord`.
     fn ord_type(&self, ty: &Ty) -> Option<Ty> {
         let mut ty = self.inference.resolve(ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
             ty = self.inference.resolve(&target);
         }
         let ord = match &ty {
@@ -34012,7 +34261,9 @@ impl<'a> Parser<'a> {
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
             let resolved = self.inference.resolve(&operand.ty);
-            let (Ty::Reference { target, .. } | Ty::Boxed(_, target)) = resolved.clone() else {
+            let (Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target)) =
+                resolved.clone()
+            else {
                 return Err(self.unsupported("`*` on a value that is not a reference or box"));
             };
             // `*v = x` through a `&mut` local or place (a map's entry, an
@@ -34052,9 +34303,7 @@ impl<'a> Parser<'a> {
                 }
                 // `*b` of a local `Box`: the box's own place, which a use
                 // by value moves, with drop glue in the crate.
-                (Ty::Boxed(Pointer::Box, _), Some(Lvalue::Binding { binding, .. }))
-                    if self.drops() =>
-                {
+                (Ty::Boxed(_), Some(Lvalue::Binding { binding, .. })) if self.drops() => {
                     Some(Lvalue::Binding {
                         binding,
                         ty: (*target).clone(),
@@ -34062,6 +34311,10 @@ impl<'a> Parser<'a> {
                 }
                 _ => None,
             };
+            // `*rc` reads the value through std's `Deref`.
+            if matches!(self.inference.resolve(&operand.ty), Ty::Counted(..)) {
+                self.counted_value(&mut operand);
+            }
             let base = (operand.span, operand.ty.clone());
             operand.ty = *target;
             operand.span = span(start, operand.span.end());
@@ -34070,10 +34323,11 @@ impl<'a> Parser<'a> {
             let behind = match self.inference.resolve(&base.1) {
                 Ty::Reference { mutable: true, .. } => Some("behind a mutable reference"),
                 Ty::Reference { .. } => Some("behind a shared reference"),
-                Ty::Boxed(Pointer::Rc, _) => Some("of an `Rc`"),
-                Ty::Boxed(Pointer::Arc, _) => Some("of an `Arc`"),
+                Ty::Counted(Counter::Rc, _) => Some("of an `Rc`"),
+                Ty::Counted(Counter::Arc, _) => Some("of an `Arc`"),
                 _ => None,
             };
+
             if let Some(behind) = behind {
                 self.unmovable.insert(
                     operand.span,
@@ -34286,12 +34540,30 @@ impl<'a> Parser<'a> {
             // `make()(x)`, `(self.f)(x)`: a call of a function value.
             if pending.is_none() && matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 let mut ty = self.inference.resolve(&value.ty);
-                while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
-                    ty = self.inference.resolve(&target);
+                let mut through = 0;
+                loop {
+                    ty = match ty {
+                        Ty::Reference { target, .. } | Ty::Boxed(target) => {
+                            self.inference.resolve(&target)
+                        }
+                        // An `Rc<dyn Fn(A) -> B>` is called through its
+                        // value.
+                        Ty::Counted(_, target) => {
+                            through += 1;
+                            self.inference.resolve(&target)
+                        }
+                        other => {
+                            ty = other;
+                            break;
+                        }
+                    };
                 }
                 if matches!(ty, Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. }) {
                     self.reject_invocation(&ty, value.span, "called as a function")?;
                     let start = value.span;
+                    for _ in 0..through {
+                        self.counted_value(&mut value);
+                    }
                     let callee = value.rendered_source().surrounded("(", ")");
                     value = self.call_function_value(callee, ty, "<function>".into(), start)?;
                     continue;
@@ -34377,6 +34649,12 @@ impl<'a> Parser<'a> {
             } else {
                 self.project_place(&value, super::borrowck::Projection::Field(member.clone()));
             }
+            // An `Rc`'s, `Arc`'s or `Weak`'s own method; any other member of
+            // an `Rc` or `Arc` is its value's, through std's `Deref`.
+            if let Some(parsed) = self.counted_member(&mut value, &member, member_span)? {
+                value = parsed;
+                continue;
+            }
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
             if let Some((unboxed, boxed)) = self.unbox(&value.ty) {
                 // `boxed.as_ref()` is a reference to the boxed value, as
@@ -34393,19 +34671,6 @@ impl<'a> Parser<'a> {
                         mutable: member.as_str() == "as_mut",
                         target: Box::new(target),
                     };
-                    value.span = span(value.span.start(), end);
-                    value.lvalue = None;
-                    continue;
-                }
-                // `rc.clone()` is another `Rc` of the same value, as Rust's
-                // `Rc::clone` shares it: the runtime's copy, which shares
-                // every cell inside, rather than the value's own `clone`.
-                if member.as_str() == "clone"
-                    && matches!(self.peek(), Token::Unit)
-                    && matches!(&boxed, Ty::Boxed(Pointer::Rc | Pointer::Arc, _))
-                {
-                    let end = self.next().1;
-                    value.ty = boxed;
                     value.span = span(value.span.start(), end);
                     value.lvalue = None;
                     continue;
@@ -34737,7 +35002,7 @@ impl<'a> Parser<'a> {
                 && matches!(self.peek(), Token::LeftParen)
             {
                 let mut receiver = builtin.clone();
-                while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = receiver {
+                while let Ty::Reference { target, .. } | Ty::Boxed(target) = receiver {
                     receiver = self.inference.resolve(&target);
                 }
                 let own = owner_id(&receiver).is_some_and(|id| {
@@ -35422,6 +35687,11 @@ impl<'a> Parser<'a> {
             };
             let owner = definition.id();
             let expression_span = span(value.span.start(), member_span.end());
+            // A field of what can't be moved out of, as an `Rc`'s value,
+            // can't be either (rustc's E0507).
+            if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
+                self.unmovable.insert(expression_span, unmovable);
+            }
             self.part_of(
                 (value.span, &value.ty),
                 expression_span,
@@ -35708,7 +35978,8 @@ impl<'a> Parser<'a> {
         // Each pointer's `Deref` target, from std's impls.
         let mut inner = boxed.clone();
         while let Ty::Boxed(..) = inner
-            && let Some((Compared::Ty(target), None)) = self.deref_target(&inner, false)
+            && let Some((Compared::Ty(target), std_impl::DerefCall::Value)) =
+                self.deref_target(&inner, false)
         {
             inner = self.inference.resolve(&target);
         }
@@ -35723,8 +35994,21 @@ impl<'a> Parser<'a> {
     }
 
     /// `value[index]` on an array, `Vec` or slice.
-    fn parse_index(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
+    fn parse_index(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
+        // `rc[i]` indexes the value, through std's `Deref`.
+        let mut pointer = self.inference.resolve(&value.ty);
+        while let Ty::Reference { target, .. } = pointer {
+            pointer = self.inference.resolve(&target);
+        }
+        if let Ty::Counted(_, element) = pointer {
+            self.counted_value(&mut value);
+            value.ty = Ty::Reference {
+                mutable: false,
+                target: element,
+            };
+        }
         self.indexed(&value);
+
         if let Some(place) = self.indexed_place(&value)? {
             return Ok(place);
         }
@@ -36283,7 +36567,9 @@ impl<'a> Parser<'a> {
                 (Ty::Array { .. }, Ty::Array { .. })
                 | (Ty::Option(_), Ty::Option(_))
                 | (Ty::Result(..), Ty::Result(..))
-                | (Ty::Boxed(..), Ty::Boxed(..)) => true,
+                | (Ty::Boxed(..), Ty::Boxed(..))
+                | (Ty::Counted(..), Ty::Counted(..))
+                | (Ty::Weak(..), Ty::Weak(..)) => true,
                 _ => false,
             };
             if same_head {
@@ -36578,22 +36864,34 @@ impl<'a> Parser<'a> {
             let source = origin::Fragment::plain("[]");
             return Ok(self.operator_expr(source, ty, at));
         }
-        // `Box::new(value)`, `Rc::new(value)` and `Arc::new(value)`: the
-        // value itself at runtime. `Rc::clone(&rc)` is a clone of it.
+        // `Rc::strong_count(&rc)`, `Arc::new(value)`, `Weak::new()`: an
+        // `Rc`'s, `Arc`'s or `Weak`'s associated function (`counted.rs`).
         if matches!(self.peek(), Token::DoubleColon)
-            && let Some(pointer) = self.pointer_named(&name)
+            && let Some((counter, weak)) = self
+                .pointer_named(&name)
+                .and_then(Pointer::counter)
+                .map(|counter| (counter, false))
+                .or_else(|| self.weak_named(&name).map(|counter| (counter, true)))
+        {
+            self.next();
+            let (member, member_span) = self.expect_member_name()?;
+            return self.parse_counted_path(counter, weak, member, name_span, member_span);
+        }
+        // `Box::new(value)`: the value itself at runtime.
+        if matches!(self.peek(), Token::DoubleColon)
+            && let Some(Pointer::Box) = self.pointer_named(&name)
         {
             self.next();
             let (member, member_span) = self.expect_member_name()?;
             let unknown = || Error::UnknownMember {
-                owner: pointer.name().into(),
+                owner: "Box".into(),
                 member: member.clone(),
                 reference: member_span,
             };
-            // `.map(Arc::new)`: the function as a value.
+            // `.map(Box::new)`: the function as a value.
             if member.as_str() == "new" && !matches!(self.peek(), Token::LeftParen | Token::Unit) {
                 let input = self.inference.fresh();
-                let output = Ty::Boxed(pointer, Box::new(input.clone()));
+                let output = Ty::Boxed(Box::new(input.clone()));
                 let parameter = self.temporary("value");
                 let source = origin::Fragment::plain(format!("|{parameter}| {parameter}"));
                 let ty = Ty::Fn {
@@ -36606,54 +36904,20 @@ impl<'a> Parser<'a> {
                     span(name_span.start(), member_span.end()),
                 ));
             }
-            // An `Rc` or `Arc` is its value at runtime (D492.3), so nothing
-            // counts its clones.
-            if pointer != Pointer::Box
-                && matches!(
-                    member.as_str(),
-                    "strong_count" | "weak_count" | "ptr_eq" | "downgrade"
-                )
-            {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "`{}::{member}`: an `{0}` is its value in Rawr, without a count or an \
-                         address",
-                        pointer.name()
-                    )
-                    .into(),
-                    source: member_span,
-                });
-            }
-            let (arguments, end) =
-                self.parse_call_arguments(&format!("`{}` arguments", pointer.name()))?;
+            let (arguments, end) = self.parse_call_arguments("`Box` arguments")?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
             let call = span(name_span.start(), end);
-            match member.as_str() {
-                "new" => {
-                    let ty = Ty::Boxed(pointer, Box::new(self.inference.resolve(&argument.ty)));
-                    // A value with drop glue moves into its `Box`; an `Rc`
-                    // or `Arc` of one is refused (`needs_drop`).
-                    let mut argument = argument;
-                    if self.needs_drop(&ty, call)? {
-                        self.move_local(&mut argument)?;
-                    }
-                    let source = argument.rendered_source();
-                    return Ok(self.operator_expr(source, ty, call));
-                }
-                "clone" if pointer != Pointer::Box => {
-                    let element = self.inference.fresh();
-                    let expected = Ty::Reference {
-                        mutable: false,
-                        target: Box::new(Ty::Boxed(pointer, Box::new(element.clone()))),
-                    };
-                    let mut argument = argument;
-                    self.coerce_expr(&expected, &mut argument)?;
-                    let source = argument.rendered_source();
-                    let ty = Ty::Boxed(pointer, Box::new(self.inference.resolve(&element)));
-                    return Ok(self.operator_expr(source, ty, call));
-                }
-                _ => return Err(unknown()),
+            if member.as_str() != "new" {
+                return Err(unknown());
             }
+            let ty = Ty::Boxed(Box::new(self.inference.resolve(&argument.ty)));
+            // A value with drop glue moves into its `Box`.
+            let mut argument = argument;
+            if self.needs_drop(&ty, call)? {
+                self.move_local(&mut argument)?;
+            }
+            let source = argument.rendered_source();
+            return Ok(self.operator_expr(source, ty, call));
         }
 
         if matches!(self.peek(), Token::Bang) {
@@ -38109,8 +38373,20 @@ impl<'a> Parser<'a> {
         }
         // `f: &dyn Fn(A) -> B` (or `Box<dyn Fn>`) is called through the
         // reference, as in Rust; references and boxes are values at runtime.
-        while let Ty::Reference { target, .. } | Ty::Boxed(_, target) = ty {
-            ty = self.inference.resolve(&target);
+        // An `Rc<dyn Fn>` is called through its value.
+        let mut through = 0;
+        loop {
+            ty = match ty {
+                Ty::Reference { target, .. } | Ty::Boxed(target) => self.inference.resolve(&target),
+                Ty::Counted(_, target) => {
+                    through += 1;
+                    self.inference.resolve(&target)
+                }
+                other => {
+                    ty = other;
+                    break;
+                }
+            };
         }
         self.reject_invocation(&ty, name_span, "called as a function")?;
         // `f: &mut impl FnMut(i32)` is the closure where the caller has it
@@ -38122,6 +38398,10 @@ impl<'a> Parser<'a> {
             Some(place) => place.rendered_source().surrounded("(", ")"),
             None => origin::Fragment::plain(name.to_string()),
         };
+        let mut callee = callee;
+        for _ in 0..through {
+            callee = self.counted_call(PreludeOp::CountedGet, callee, []);
+        }
         self.call_function_value(callee, ty, name, name_span)
     }
 
@@ -40093,9 +40373,9 @@ impl<'a> Parser<'a> {
                     target: Box::new(self.inference.resolve(&element)),
                 };
                 match self.deref_reference(&reference, false) {
-                    Some((target, None)) => Ty::Option(Box::new(target)),
+                    Some((target, std_impl::DerefCall::Value)) => Ty::Option(Box::new(target)),
                     // A program's `deref` runs on the value inside.
-                    Some((_, Some(_))) => {
+                    Some(_) => {
                         return Err(Error::NotYet {
                             path: format!("Option::{member}").into(),
                             reference: member_span,
@@ -40640,7 +40920,14 @@ impl<'a> Parser<'a> {
                     "()".into(),
                 ],
             ),
-            Ty::Boxed(_, target) => self.default_source(target, span)?,
+            Ty::Boxed(target) => self.default_source(target, span)?,
+            // `Rc::default()`: a new allocation of the value's default, and
+            // `Weak::new()`.
+            Ty::Counted(_, target) => {
+                let value = self.default_source(target, span)?;
+                self.prelude_op(PreludeOp::CountedNew, [value])
+            }
+            Ty::Weak(..) => self.prelude_op(PreludeOp::WeakNew, []),
             Ty::Reverse(inner) => {
                 let value = self.default_source(inner, span)?;
                 self.prelude_op(PreludeOp::ReverseWrap, [value])
@@ -40774,7 +41061,14 @@ impl<'a> Parser<'a> {
     ) -> Result<origin::Fragment, Error> {
         let ty = self.inference.resolve(ty);
         Ok(match &ty {
-            Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
+            Ty::Reference { target, .. } | Ty::Boxed(target) => {
+                self.equal_source(target, lhs, rhs, span)?
+            }
+            // Two `Rc`s or `Arc`s are equal when their values are, as
+            // std's `PartialEq` has it.
+            Ty::Counted(_, target) => {
+                let lhs = self.counted_call(PreludeOp::CountedGet, lhs, []);
+                let rhs = self.counted_call(PreludeOp::CountedGet, rhs, []);
                 self.equal_source(target, lhs, rhs, span)?
             }
             Ty::Option(element) => {
@@ -40959,9 +41253,17 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(match &ty {
-            Ty::Reference { target, .. } | Ty::Boxed(_, target) => {
+            Ty::Reference { target, .. } | Ty::Boxed(target) => {
                 self.debug_source(target, value, span)?
             }
+            // An `Rc` or `Arc` writes its value's `Debug`, and a `Weak`
+            // `(Weak)`, as std's do.
+            Ty::Counted(_, target) => {
+                let value = self.counted_call(PreludeOp::CountedGet, value, []);
+                self.debug_source(target, value, span)?
+            }
+            Ty::Weak(..) => origin::Fragment::plain("\"(Weak)\""),
+
             // A generic value, or an associated type's by its bounds.
             Ty::Param(_) | Ty::Projection(..) => {
                 if !self.type_provides(&ty, capability::Kind::Debug) {
@@ -46997,6 +47299,16 @@ impl<'a> Parser<'a> {
             if let Some(model) = self.models.qualified_owner(name_span) {
                 return Ok(model.ty());
             }
+            // `std::rc::Weak<T>` or `sync::Weak<T>`.
+            if self.models.get(&first).is_none()
+                && let Some(weak) = counted::std_weak(&name)
+                && matches!(self.peek(), Token::LessThan)
+            {
+                self.next();
+                let element = Box::new(self.parse_local_type()?);
+                self.expect_close_angle("'>' after `Weak<T`")?;
+                return Ok(Ty::Weak(Counter::weak_named(weak), element));
+            }
             // A path into std is std's, as rustc resolves it (D711); one
             // to a type Rawr represents reads as that type's own name.
             if self.models.get(&first).is_none() && self.models.import(&first).is_none() {
@@ -47116,8 +47428,18 @@ impl<'a> Parser<'a> {
             let element = Box::new(self.parse_local_type()?);
             self.unstable_argument(pointer.name(), 1, name_span)?;
             self.expect_close_angle(&format!("'>' after `{}<T`", pointer.name()))?;
-            return Ok(Ty::Boxed(pointer, element));
+            return Ok(pointer.ty(*element));
         }
+        if matches!(self.peek(), Token::LessThan)
+            && qualified.is_none()
+            && let Some(counter) = self.weak_named(&name)
+        {
+            self.next();
+            let element = Box::new(self.parse_local_type()?);
+            self.expect_close_angle("'>' after `Weak<T`")?;
+            return Ok(Ty::Weak(counter, element));
+        }
+
         if crate::resolve::std_collection(&name).is_some()
             && qualified.is_none()
             && self.models.get(&name).is_none()
@@ -47974,8 +48296,9 @@ impl<'a> Parser<'a> {
                     target: from,
                 },
             ) if !*to_mutable || *from_mutable => Some((to, from)),
-            (Ty::Boxed(to_pointer, to), Ty::Boxed(from_pointer, from))
-                if to_pointer == from_pointer =>
+            (Ty::Boxed(to), Ty::Boxed(from)) => Some((to, from)),
+            (Ty::Counted(to_counter, to), Ty::Counted(from_counter, from))
+                if to_counter == from_counter =>
             {
                 Some((to, from))
             }
@@ -48909,11 +49232,18 @@ impl<'a> Parser<'a> {
                     .zip(actual_arguments.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
             }
+            (Ty::Boxed(expected_element), Ty::Boxed(actual_element)) => {
+                self.unify_type(expected_element, actual_element)
+            }
             (
-                Ty::Boxed(expected_pointer, expected_element),
-                Ty::Boxed(actual_pointer, actual_element),
+                Ty::Counted(expected_counter, expected_element),
+                Ty::Counted(actual_counter, actual_element),
+            )
+            | (
+                Ty::Weak(expected_counter, expected_element),
+                Ty::Weak(actual_counter, actual_element),
             ) => {
-                expected_pointer == actual_pointer
+                expected_counter == actual_counter
                     && self.unify_type(expected_element, actual_element)
             }
             (Ty::Option(expected_element), Ty::Option(actual_element))
@@ -50193,7 +50523,7 @@ enum Selection {
 fn reaches_param(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) => true,
-        Ty::Reference { target, .. } | Ty::Boxed(_, target) | Ty::Range(target) => {
+        Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Range(target) => {
             reaches_param(target)
         }
         Ty::Array { element, .. } | Ty::Option(element) => reaches_param(element),
@@ -50210,7 +50540,7 @@ fn reaches_param(ty: &Ty) -> bool {
 fn mentions_script(ty: &Ty) -> bool {
     match ty {
         Ty::Script(..) => true,
-        Ty::Reference { target, .. } | Ty::Boxed(_, target) => mentions_script(target),
+        Ty::Reference { target, .. } | Ty::Boxed(target) => mentions_script(target),
         Ty::Host { arguments, .. } => arguments.iter().any(mentions_script),
         _ => false,
     }
@@ -50220,7 +50550,7 @@ fn contains_inference(ty: &Ty) -> bool {
     match ty {
         Ty::Infer(_) => true,
         Ty::Reference { target, .. }
-        | Ty::Boxed(_, target)
+        | Ty::Boxed(target)
         | Ty::Iter(target)
         | Ty::Reverse(target)
         | Ty::Range(target)
@@ -50778,6 +51108,13 @@ fn debug_value_spec(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) 
 }
 
 fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    // An `Rc` or `Arc` writes its value; a `Weak` `(Weak)`.
+    if let Some(inner) = counted::value(value) {
+        return debug_value_spec(&inner, models, spec);
+    }
+    if counted::is_weak(value) {
+        return "(Weak)".into();
+    }
     if let Some((name, inner)) = cell::named_value(value) {
         return format!(
             "{name} {{ value: {} }}",
@@ -50963,6 +51300,12 @@ fn debug_typed(
             format!("Some({})", debug_typed(&inner, element, models, spec))
         }
         _ if let Some(element) = ty.box_element() => debug_typed(value, element, models, spec),
+        _ if let Some(element) = ty.counted_element()
+            && let Some(inner) = counted::value(value) =>
+        {
+            debug_typed(&inner, element, models, spec)
+        }
+
         _ => debug_value_spec(value, models, spec),
     }
 }
@@ -51227,6 +51570,9 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
         return compare_value(&lhs, &rhs, models);
     }
+    if let (Some(lhs), Some(rhs)) = (counted::value(lhs), counted::value(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // `Reverse(a) < Reverse(b)` when `b < a`.
     if let (Some(lhs), Some(rhs)) = (
         lhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
@@ -51321,6 +51667,9 @@ fn typed_lexicographic<'t>(
 
 pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
     if let (Some(lhs), Some(rhs)) = (cell::value(lhs), cell::value(rhs)) {
+        return equal_value(&lhs, &rhs);
+    }
+    if let (Some(lhs), Some(rhs)) = (counted::value(lhs), counted::value(rhs)) {
         return equal_value(&lhs, &rhs);
     }
     if let (Some(lhs), Some(rhs)) = (

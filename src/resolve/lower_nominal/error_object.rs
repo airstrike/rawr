@@ -77,7 +77,7 @@ impl Parser<'_> {
     /// when `through`.
     pub(super) fn std_error(&self, ty: &Ty, through: bool) -> bool {
         let mut ty = self.inference.resolve(ty);
-        while through && let Ty::Reference { target, .. } | Ty::Boxed(Pointer::Box, target) = ty {
+        while through && let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
             ty = self.inference.resolve(&target);
         }
         matches!(&ty, Ty::Dyn(name, bindings) if name.as_str() == "Error" && bindings.is_empty())
@@ -87,7 +87,7 @@ impl Parser<'_> {
     /// Whether `ty` is `Box<dyn Error>`.
     pub(super) fn boxed_std_error(&self, ty: &Ty) -> bool {
         match self.inference.resolve(ty) {
-            Ty::Boxed(Pointer::Box, inner) => self.std_error(&inner, false),
+            Ty::Boxed(inner) => self.std_error(&inner, false),
             _ => false,
         }
     }
@@ -112,7 +112,7 @@ impl Parser<'_> {
         span: Span,
     ) -> Result<Option<origin::Fragment>, Error> {
         let mut from = self.inference.resolve(from);
-        if let Ty::Boxed(Pointer::Box, inner) = &from {
+        if let Ty::Boxed(inner) = &from {
             from = self.inference.resolve(inner);
         }
         if self.std_error(&from, false) {
@@ -163,8 +163,7 @@ impl Parser<'_> {
             return Ok(());
         }
         let source = self.inference.resolve(&value.ty);
-        let boxed =
-            matches!(&source, Ty::Boxed(Pointer::Box, inner) if !self.std_error(inner, false));
+        let boxed = matches!(&source, Ty::Boxed(inner) if !self.std_error(inner, false));
         let text = source.is_text() && self.text_into.contains(&value.span);
         if !boxed && !text {
             return Ok(());
@@ -173,10 +172,7 @@ impl Parser<'_> {
         else {
             return Ok(());
         };
-        let target = Ty::Boxed(
-            Pointer::Box,
-            Box::new(Ty::Dyn("Error".into(), Box::default())),
-        );
+        let target = Ty::Boxed(Box::new(Ty::Dyn("Error".into(), Box::default())));
         *value = self.operator_expr(object, target, value.span);
         Ok(())
     }
