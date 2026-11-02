@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"`Rc` and `Arc` are real shared pointers: `Rc::strong_count`, `weak_count`, `ptr_eq`, `downgrade`, `Weak::upgrade`, `get_mut`, `make_mut` and `try_unwrap` give rustc's answers, `Rc<RefCell<T>>` mutation is visible through every clone, and an `Rc` no longer passes a `T: Send` bound.","issues":[748]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.111",
+      "date": "2026-11-02",
+      "entries": [
+        {"text":"`Rc` and `Arc` are real shared pointers: `Rc::strong_count`, `weak_count`, `ptr_eq`, `downgrade`, `Weak::upgrade`, `get_mut`, `make_mut` and `try_unwrap` give rustc's answers, `Rc<RefCell<T>>` mutation is visible through every clone, and an `Rc` no longer passes a `T: Send` bound.","issues":[748]}
+      ]
+    },
     {
       "version": "0.3.110",
       "date": "2026-11-02",
