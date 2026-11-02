@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
+      {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
+    ]
   },
   "releases": [
     {

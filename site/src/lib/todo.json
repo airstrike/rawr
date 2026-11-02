@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
+        {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.95",
@@ -1604,8 +1610,8 @@
     {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)","release":"0.3.78"},
     {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
     {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"},
-    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"open","category":"No glue (D593)"},
-    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"open","category":"No glue (D593)"},
+    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"closed","category":"No glue (D593)"},
+    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"closed","category":"No glue (D593)"},
     {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
     {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"closed","category":"Health"},
     {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
@@ -1693,7 +1699,11 @@
     {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"open","category":"Divergences from rustc"},
     {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
     {"issue":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"}
+    {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"},
+    {"issue":727,"title":"A blanket impl's method whose input is its associated type, set through another trait's projection, has a binding","state":"open","category":"No glue (D593)"},
+    {"issue":728,"title":"A variant constructor's `.with(x)` fills a callable parameter","state":"open","category":"No glue (D593)"},
+    {"issue":729,"title":"Task::future of a script future whose output holds no crate value keeps its type for a later method","state":"open","category":"No glue (D593)"},
+    {"issue":730,"title":"A native future value passed where a script function expects a future is refused at check time","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
