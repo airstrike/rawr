@@ -164,6 +164,11 @@ fn semantic_type(
         let std = crate::std_facade::definition().export_type(path)?;
         return host::type_ref::Type::external(std, arguments).map(Some);
     }
+    // Rust's `Box<T>`: rawr's `Box` (D711 step 5).
+    if identity == Definition::boxed().as_bytes() && arguments.len() == 1 {
+        let element = arguments.into_vec().remove(0);
+        return Ok(Some(host::type_ref::Type::boxed(element)));
+    }
     if identity == Definition::duration().as_bytes() && arguments.is_empty() {
         return Ok(Some(host::type_ref::Type::builtin(
             host::type_ref::Builtin::Duration,

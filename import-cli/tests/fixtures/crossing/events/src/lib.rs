@@ -18,6 +18,7 @@ pub mod named;
 pub mod plane;
 pub mod results;
 pub mod sequences;
+pub mod signatures;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.

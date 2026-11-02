@@ -20,8 +20,11 @@ const SOURCE_PATH: &str = "src/main.rs";
 /// The crate name of a runner binary no script type names.
 const RUNNER_BINARY: &str = "rawr_generated_runner";
 /// `core::ops`' operator traits, which a crate type's operator is an impl
-/// of: an adapter calls the impl's method, as `receiver.sub(argument)`.
-const OPERATOR_TRAITS: [&str; 22] = [
+/// of: an adapter calls the impl's method, as `receiver.sub(argument)`,
+/// and `receiver.index(argument)` of `grid[i]` (#709).
+const OPERATOR_TRAITS: [&str; 24] = [
+    "Index",
+    "IndexMut",
     "Add",
     "Sub",
     "Mul",
@@ -5740,6 +5743,14 @@ fn render_source(
             .join(", ")
     )
     .map_err(request::unwritable)?;
+    // std's traits outside the prelude whose members a crate type's impl
+    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709).
+    writeln!(
+        stamps,
+        "#[allow(unused_imports)]\npub(super) use ::core::str::FromStr as _;\n\
+         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;"
+    )
+    .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a
     // method it provides resolves as it does in the program.
     let _type_paths = TypePaths::install(facade.as_ref());
@@ -8487,6 +8498,7 @@ fn render_opening(
         let native = matches!(ty, convert::Type::Nominal { .. })
             && !is_value(&ty)
             && !is_duration(&ty)
+            && boxed_element(&ty).is_none()
             && !is_facade_value(&ty)
             && !copy_scalar(&ty);
         if !native {
@@ -11943,6 +11955,7 @@ fn render_take_input(
         ty,
         convert::Type::Sequence { .. } | convert::Type::Option(_) | convert::Type::Nominal { .. }
     ) || range_inclusive_element(ty).is_some()
+        || boxed_element(ty).is_some()
     {
         deep = substituted(ty, signature, substitutions)?;
         &deep
@@ -12399,7 +12412,10 @@ fn render_callable_closure(
     substitutions: &[convert::Type],
 ) -> Result<String, request::Error> {
     let by_value = |ty: &convert::Type| {
-        !matches!(ty, convert::Type::Nominal { .. }) || is_value(ty) || is_duration(ty)
+        !matches!(ty, convert::Type::Nominal { .. })
+            || is_value(ty)
+            || is_duration(ty)
+            || boxed_element(ty).is_some()
     };
     let inputs = call
         .inputs()
@@ -12697,7 +12713,7 @@ fn render_take(
         ty if is_future(ty) => "take_script",
         // Rawr's float or integer range, as the range of the number the
         // instance gives.
-        ty if range_inclusive_element(ty).is_some() => {
+        ty if range_inclusive_element(ty).is_some() || boxed_element(ty).is_some() => {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(
@@ -12772,6 +12788,11 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+        ty if boxed_element(ty).is_some() => {
+            let mut converted = String::new();
+            render_to_dynamic(ty, value, 0, &mut converted)?;
+            writeln!(output, "    {converted}")
+        }
         ty if std_value(ty).is_some() => writeln!(
             output,
             "    Ok(__rawr_internal::crossing::Std::give({value}))"
@@ -12950,6 +12971,12 @@ fn render_from_dynamic(
             output,
             "{value}.try_cast_result::<std::ops::RangeInclusive<i64>>().map_err(|_| Error::TypeMismatch).and_then(range_from)"
         ),
+        // Rawr's `Box`, which holds its value as itself, as Rust's `Box`.
+        ty if let Some(element) = boxed_element(ty) => {
+            let mut converted = String::new();
+            render_from_dynamic(element, value, depth, &mut converted)?;
+            write!(output, "({converted}).map(Box::new)")
+        }
         // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
         // `RangeInclusive<i64>` as one of the integer the instance gives.
         ty if let Some(element) = range_inclusive_element(ty) => match element {
@@ -13170,6 +13197,10 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+        // Rust's `Box`, as rawr's, which holds its value as itself.
+        ty if let Some(element) = boxed_element(ty) => {
+            return render_to_dynamic(element, &format!("(*{value})"), depth, output);
+        }
         ty if std_value(ty).is_some() => write!(
             output,
             "Ok::<Dynamic, Error>(__rawr_internal::crossing::Std::give({value}))"
@@ -13335,6 +13366,7 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 /// value, alone or inside a tuple, as iced's boot `(State, Task<Message>)`.
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
+        ty if let Some(element) = boxed_element(ty) => holds_native(element),
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
         convert::Type::Tuple(members) => members.iter().any(holds_native),
         convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
@@ -13371,7 +13403,7 @@ fn copy_macro(target: &convert::Type) -> &'static str {
 }
 
 /// The Rust path of one of std's types Rawr's std holds as its Rust value
-/// (`identity::STD_TYPES`), when `ty` is one: native code takes, gives and
+/// (`classify::std_binding`), when `ty` is one: native code takes, gives and
 /// borrows the value itself (`crossing::Std`).
 fn std_value(ty: &convert::Type) -> Option<String> {
     match ty {
@@ -13399,6 +13431,23 @@ fn std_time(ty: &convert::Type) -> Option<&'static str> {
         }
         convert::Type::Nominal { definition, .. } if *definition == Definition::instant() => {
             Some("std::time::Instant")
+        }
+        _ => None,
+    }
+}
+
+/// `T` of Rust's `Box<T>`, which crosses as rawr's `Box`: the value it
+/// holds, boxed where native code takes it (D711 step 5).
+fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::boxed() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -15496,6 +15545,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         ty if let Some(element) = range_inclusive_element(ty) => {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
+        ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         // A script closure where a signature names its type, boxed (T417).

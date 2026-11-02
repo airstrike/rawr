@@ -96,7 +96,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // the context it applies through.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 44;
+const PROTOCOL_SCHEMA: u32 = 45;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2915,10 +2915,10 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     match obligation.kind {
                         // A demanded nominal admits a trait implementation header as
                         // applicability evidence. It does not make every trait member
-                        // a selected source surface. A Rust future's `Output` is one
-                        // exception: Rawr types the future as `Task<Output>`. An
-                        // iterator's `Item` and `next` are the other: a `for` loop
-                        // walks the type by its `next` (D558 slice 2).
+                        // a selected source surface: a member of a std trait is
+                        // demanded where the program names it, as a crate trait's
+                        // is (#709). A Rust future's `Output` is the exception:
+                        // Rawr types the future as `Task<Output>`.
                         AssociatedDemandKind::NominalSurface => {
                             if Some(trait_id) == self.tcx.lang_items().future_trait()
                                 && let Some(output) = self.tcx.lang_items().future_output()
@@ -2930,31 +2930,6 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                                     implementors,
                                     &mut selected,
                                 )?;
-                            }
-                            let iterator = Some(trait_id) == self.tcx.lang_items().iterator_trait();
-                            // `AsRef::as_ref`, as `e.name().as_ref()` calls it.
-                            let as_ref = Some(trait_id)
-                                == self.tcx.get_diagnostic_item(rustc_span::sym::AsRef);
-                            if iterator || as_ref {
-                                let members = self
-                                    .tcx
-                                    .associated_items(trait_id)
-                                    .in_definition_order()
-                                    .filter(|item| {
-                                        matches!(item.name().as_str(), "Item" | "next" | "as_ref")
-                                    })
-                                    .map(|item| item.def_id)
-                                    .collect::<Vec<_>>();
-                                self.edge(members.len())?;
-                                for member in members {
-                                    self.select_trait_item_for_impl(
-                                        impl_id,
-                                        trait_id,
-                                        member,
-                                        implementors,
-                                        &mut selected,
-                                    )?;
-                                }
                             }
                         }
                         AssociatedDemandKind::SelectedMember => {

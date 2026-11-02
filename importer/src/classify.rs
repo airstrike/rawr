@@ -12,9 +12,12 @@ use crate::contract::{self, Classified, Contract};
 
 pub(crate) mod cached;
 pub mod representability;
+pub mod std_binding;
+
+use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 94;
+const CLASSIFIER_VERSION: u32 = 95;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7436,63 +7439,102 @@ impl<P: api::Phase> Context<'_, P> {
                     .nth(index)
                     .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
                 definition_is_public(definition)?;
-                if is_string(definition) && arguments.is_empty() {
-                    Type::Builtin(Builtin::String)
-                } else if is_phantom_data(definition) {
+                match std_binding::of(definition) {
+                    Some(Std::String) => Type::Builtin(Builtin::String),
                     // `PhantomData<T>` holds nothing, and Rawr's is the unit
                     // type, as a script struct's is: palette's `Rgb` has
                     // `standard: PhantomData<S>`.
-                    Type::Unit
-                } else if let Some(time) = std_time(id, definition) {
-                    Type::Nominal {
-                        definition: time,
+                    Some(Std::PhantomData) => Type::Unit,
+                    Some(Std::Duration) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::duration(),
                         arguments: Box::default(),
+                    },
+                    Some(Std::Instant) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::instant(),
+                        arguments: Box::default(),
+                    },
+                    Some(Std::Held { path, .. } | Std::Lent { owned: path }) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::std(path),
+                        arguments: Box::default(),
+                    },
+                    Some(Std::RangeInclusive) => {
+                        let element = std_binding::type_argument(arguments, 0)
+                            .ok_or(representability::reject::Kind::UnsupportedGenericArgument)?;
+                        // A range of a concrete integer: Rawr's
+                        // `RangeInclusive<i64>`, converted to the integer
+                        // type where the call takes it.
+                        if matches!(element, model::Type::Primitive(name) if matches!(
+                            name.as_ref(),
+                            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32"
+                                | "u64" | "usize"
+                        )) {
+                            Type::Builtin(Builtin::InclusiveRange)
+                        } else {
+                            // A range of a type parameter or of a float, as
+                            // a crate's `slider(range: RangeInclusive<T>,
+                            // value: T, ..)` takes: Rawr's integer or float
+                            // range as `T` is an integer or a float.
+                            let element = self.convert(element)?;
+                            if !matches!(
+                                element,
+                                Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                            ) {
+                                return Err(
+                                    representability::reject::Kind::UnsupportedGenericArgument
+                                        .into(),
+                                );
+                            }
+                            Type::Nominal {
+                                definition: crate::surface::identity::Definition::range_inclusive(),
+                                arguments: Box::new([element]),
+                            }
+                        }
                     }
-                } else if is_i64_range(definition, arguments) {
-                    Type::Builtin(Builtin::InclusiveRange)
-                } else if let Some(element) = range_inclusive_element(definition, arguments) {
-                    // A range of a type parameter or of a float, as a
-                    // crate's `slider(range: RangeInclusive<T>, value: T,
-                    // ..)` takes: Rawr's integer or float range as `T` is
-                    // an integer or a float.
-                    let element = self.convert(element)?;
-                    if !matches!(
-                        element,
-                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
-                    ) {
-                        return Err(
-                            representability::reject::Kind::UnsupportedGenericArgument.into()
-                        );
+                    Some(Std::Range) => {
+                        // A range value, as rand's `random_range(0.5..1.0)`
+                        // or a crate's `fn take(r: Range<usize>)` takes, or
+                        // the impl parameter a relation case binds: Rawr's
+                        // `Range<f64>` of a float, its `Range<i64>` of an
+                        // integer or a char (#707).
+                        let element =
+                            self.convert(std_binding::type_argument(arguments, 0).ok_or(
+                                representability::reject::Kind::UnsupportedGenericArgument,
+                            )?)?;
+                        if !matches!(
+                            element,
+                            Type::Builtin(
+                                Builtin::F32
+                                    | Builtin::F64
+                                    | Builtin::Char
+                                    | Builtin::I8
+                                    | Builtin::I16
+                                    | Builtin::I32
+                                    | Builtin::I64
+                                    | Builtin::Isize
+                                    | Builtin::U8
+                                    | Builtin::U16
+                                    | Builtin::U32
+                                    | Builtin::U64
+                                    | Builtin::Usize
+                            ) | Type::Parameter(_)
+                        ) {
+                            return Err(
+                                representability::reject::Kind::UnsupportedGenericArgument.into()
+                            );
+                        }
+                        Type::Range(Box::new(element))
                     }
-                    Type::Nominal {
-                        definition: crate::surface::identity::Definition::range_inclusive(),
-                        arguments: Box::new([element]),
-                    }
-                } else if let Some(element) = range_element(definition, arguments) {
-                    // A float range, as rand's `random_range(0.5..1.0)` takes,
-                    // or the impl parameter a relation case binds.
-                    let element = self.convert(element)?;
-                    if !matches!(
-                        element,
-                        Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
-                    ) {
-                        return Err(
-                            representability::reject::Kind::UnsupportedGenericArgument.into()
-                        );
-                    }
-                    Type::Range(Box::new(element))
-                } else if let Some(borrowed) = cow_target(definition, arguments) {
                     // alloc's `Cow<'a, [T]>` and `Cow<'a, str>`, as
                     // quick-xml's `Attribute::value` and `decode()` give:
                     // what they hold, copied out as Rawr's array or string,
                     // which no longer borrows (D558 slice 2).
-                    match borrowed {
-                        model::Type::Slice(element) => Type::Sequence {
+                    Some(Std::Cow) => match std_binding::type_argument(arguments, 0) {
+                        Some(model::Type::Slice(element)) => Type::Sequence {
                             element: Box::new(self.convert(element)?),
                             owned: false,
                             length: None,
                         },
-                        model::Type::Primitive(name) if &**name == "str" => {
+                        Some(model::Type::Primitive(name)) if &**name == "str" => {
                             Type::Builtin(Builtin::Text)
                         }
                         _ => {
@@ -7500,59 +7542,89 @@ impl<P: api::Phase> Context<'_, P> {
                                 representability::reject::Kind::UnsupportedGenericArgument.into()
                             )
                         }
+                    },
+                    Some(Std::Option) => {
+                        Type::Option(Box::new(self.convert(
+                            std_binding::type_argument(arguments, 0).ok_or(
+                                representability::reject::Kind::UnsupportedGenericArgument,
+                            )?,
+                        )?))
                     }
-                } else if let Some(element) = option_element(definition, arguments) {
-                    Type::Option(Box::new(self.convert(element)?))
-                } else if let Some((ok, err)) = result_elements(definition, arguments) {
-                    Type::Result(Box::new(self.convert(ok)?), Box::new(self.convert(err)?))
-                } else if let Some(element) = vec_element(definition, arguments) {
+                    Some(Std::Result) => {
+                        let (Some(ok), Some(err)) = (
+                            std_binding::type_argument(arguments, 0),
+                            std_binding::type_argument(arguments, 1),
+                        ) else {
+                            return Err(
+                                representability::reject::Kind::UnsupportedGenericArgument.into()
+                            );
+                        };
+                        Type::Result(Box::new(self.convert(ok)?), Box::new(self.convert(err)?))
+                    }
                     // A `Vec<T>`, as iced's `font::list()` gives inside a
                     // `Task<Result<Vec<Family>, Error>>`: Rawr's array,
                     // which generated code names as the `Vec` it is.
-                    Type::Sequence {
-                        element: Box::new(self.convert(element)?),
+                    Some(Std::Vec) => Type::Sequence {
+                        element: Box::new(self.convert(
+                            std_binding::type_argument(arguments, 0).ok_or(
+                                representability::reject::Kind::UnsupportedGenericArgument,
+                            )?,
+                        )?),
                         owned: true,
                         length: None,
+                    },
+                    // A `Box<T>`: rawr's `Box`, which holds its value as
+                    // itself, boxed where the crate takes it.
+                    Some(Std::Box) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::boxed(),
+                        arguments: Box::new([self.convert(
+                            std_binding::type_argument(arguments, 0).ok_or(
+                                representability::reject::Kind::UnsupportedGenericArgument,
+                            )?,
+                        )?]),
+                    },
+                    Some(Std::Unrun(unrun)) => {
+                        return Err(representability::reject::Kind::StdNotRun(unrun).into())
                     }
-                } else {
-                    definition_is_publishable_nominal(definition)?;
-                    let mut converted = Vec::new();
-                    self.retain_array::<Type>(arguments.len())?;
-                    converted
-                        .try_reserve_exact(arguments.len())
-                        .map_err(|_| Error::Allocation)?;
-                    for argument in arguments {
-                        let argument = match argument {
-                            model::Argument::Type(argument) => argument,
-                            // An early-bound lifetime is instantiated at
-                            // `'static` (D558 tier 0).
-                            model::Argument::Lifetime(
-                                model::Lifetime::Static | model::Lifetime::Early { .. },
-                            ) => continue,
-                            // A scope frame's lifetime (D558 tier 1).
-                            model::Argument::Lifetime(model::Lifetime::Late { .. })
-                                if self.scope_lifetimes.get() =>
-                            {
-                                continue
-                            }
-                            _ => {
-                                return Err(
-                                    representability::reject::Kind::UnsupportedGenericArgument
-                                        .into(),
-                                )
-                            }
-                        };
-                        // `Reader<&'a [u8]>`: a shared slice of scalars or
-                        // a `&str` a type argument names, which a scope
-                        // frame's value borrows (D558 tier 1).
-                        converted.push(match borrowed_argument(argument) {
-                            Some(target) => self.convert_borrowed(target)?,
-                            None => self.convert(argument)?,
-                        });
-                    }
-                    Type::Nominal {
-                        definition: crate::surface::identity::Definition::of(id),
-                        arguments: converted.into_boxed_slice(),
+                    None => {
+                        definition_is_publishable_nominal(definition)?;
+                        let mut converted = Vec::new();
+                        self.retain_array::<Type>(arguments.len())?;
+                        converted
+                            .try_reserve_exact(arguments.len())
+                            .map_err(|_| Error::Allocation)?;
+                        for argument in arguments {
+                            let argument =
+                                match argument {
+                                    model::Argument::Type(argument) => argument,
+                                    // An early-bound lifetime is instantiated at
+                                    // `'static` (D558 tier 0).
+                                    model::Argument::Lifetime(
+                                        model::Lifetime::Static | model::Lifetime::Early { .. },
+                                    ) => continue,
+                                    // A scope frame's lifetime (D558 tier 1).
+                                    model::Argument::Lifetime(model::Lifetime::Late { .. })
+                                        if self.scope_lifetimes.get() =>
+                                    {
+                                        continue
+                                    }
+                                    _ => return Err(
+                                        representability::reject::Kind::UnsupportedGenericArgument
+                                            .into(),
+                                    ),
+                                };
+                            // `Reader<&'a [u8]>`: a shared slice of scalars or
+                            // a `&str` a type argument names, which a scope
+                            // frame's value borrows (D558 tier 1).
+                            converted.push(match borrowed_argument(argument) {
+                                Some(target) => self.convert_borrowed(target)?,
+                                None => self.convert(argument)?,
+                            });
+                        }
+                        Type::Nominal {
+                            definition: crate::surface::identity::Definition::of(id),
+                            arguments: converted.into_boxed_slice(),
+                        }
                     }
                 }
             }
@@ -8701,6 +8773,13 @@ impl<P: api::Phase> Context<'_, P> {
                 mutable: *mutability == model::Mutability::Mutable,
                 ty: Box::new(converted),
             });
+        }
+        // A tuple by value, as `fn area(size: (u32, u32))` takes: Rawr's
+        // tuple, converted as an output's is (#707).
+        if let model::Type::Tuple(members) = ty
+            && members.len() >= 2
+        {
+            return self.convert_value(ty);
         }
         let model::Type::FunctionPointer(signature) = ty else {
             return self.convert(ty);
@@ -10216,24 +10295,6 @@ fn selector(definition: &model::Definition) -> Result<crate::surface::identity::
     })
 }
 
-/// `T` of alloc's `Vec<T>`, with its allocator or without.
-pub(crate) fn vec_element<'a>(
-    definition: &model::Definition,
-    arguments: &'a [model::Argument],
-) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || !matches!(unit.crate_name(), "alloc" | "std")
-        || definition.display_path().last() != Some("Vec")
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Type(element)] | [model::Argument::Type(element), _] => Some(element),
-        _ => None,
-    }
-}
-
 /// A projection `W::Assoc` of a type parameter a signature names, or of a
 /// projection of one, and the synthetic parameter that stands for it.
 struct Projected {
@@ -10551,25 +10612,6 @@ fn projected_parameters(ty: &model::Type, projected: &[Projected]) -> model::Typ
     }
 }
 
-/// The element type of std's `Rc<[T]>`, `Arc<[T]>` or `Box<[T]>`.
-fn shared_slice_element<'a>(
-    definition: &model::Definition,
-    arguments: &'a [model::Argument],
-) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || !matches!(unit.crate_name(), "alloc" | "std")
-        || !matches!(definition.display_path().last(), Some("Rc" | "Arc" | "Box"))
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Type(model::Type::Slice(element))]
-        | [model::Argument::Type(model::Type::Slice(element)), _] => Some(element),
-        _ => None,
-    }
-}
-
 /// The length of an array type, when it is a literal, as the driver writes
 /// rustc's value (`2_usize`).
 fn array_length(length: &model::Const) -> Option<u32> {
@@ -10596,104 +10638,12 @@ fn constant(value: &model::Const) -> Result<representability::convert::Constant,
     ))
 }
 
-fn is_string(definition: &model::Definition) -> bool {
-    let unit = definition.id().unit();
-    unit.authority().sysroot().is_some()
-        && matches!(unit.crate_name(), "alloc" | "std")
-        && definition.display_path().last() == Some("String")
-}
-
-/// The identity std's `time::Duration` (in `core`), `time::Instant` (in
-/// `std`) or one of the types Rawr's std holds as their Rust values
-/// (`identity::STD_TYPES`) crosses as: each is Rawr's own type, which is
-/// std's.
-fn std_time(
-    id: &api::identity::Definition,
-    definition: &model::Definition,
-) -> Option<crate::surface::identity::Definition> {
-    id.unit().authority().sysroot()?;
-    if matches!(id.unit().crate_name(), "std" | "core" | "alloc")
-        && let Some(std) = crate::surface::identity::Definition::std_definition(
-            &definition.display_path().collect::<Vec<_>>(),
-        )
-    {
-        return Some(std);
-    }
-    let path = |expected: [&str; 3]| definition.display_path().eq(expected);
-    match id.unit().crate_name() {
-        "core" if path(["core", "time", "Duration"]) => {
-            Some(crate::surface::identity::Definition::duration())
-        }
-        "std" if path(["std", "time", "Instant"]) => {
-            Some(crate::surface::identity::Definition::instant())
-        }
-        _ => None,
-    }
-}
-
-/// core's `marker::PhantomData<T>`.
-fn is_phantom_data(definition: &model::Definition) -> bool {
-    let unit = definition.id().unit();
-    unit.authority().sysroot().is_some()
-        && matches!(unit.crate_name(), "core" | "std")
-        && definition.display_path().last() == Some("PhantomData")
-}
-
-/// `T` of core's `ops::Range<T>`, which Rawr holds as a value when `T` is
-/// a float.
-fn range_element<'a>(
-    definition: &model::Definition,
-    arguments: &'a [model::Argument],
-) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    let path = definition.display_path().collect::<Vec<_>>();
-    if unit.authority().sysroot().is_none()
-        || unit.crate_name() != "core"
-        || path.last() != Some(&"Range")
-        || !path.contains(&"ops")
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Type(element)] => Some(element),
-        _ => None,
-    }
-}
-
-/// `B` of alloc's `Cow<'a, B>`.
-fn cow_target<'a>(
-    definition: &model::Definition,
-    arguments: &'a [model::Argument],
-) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || !matches!(unit.crate_name(), "alloc" | "std")
-        || definition.display_path().last() != Some("Cow")
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Lifetime(_), model::Argument::Type(target)] => Some(target),
-        _ => None,
-    }
-}
-
 /// `T` of core's `Option<T>`, which Rawr represents as its own `Option`.
 pub(crate) fn option_element<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || !matches!(unit.crate_name(), "core" | "std")
-        || definition.display_path().last() != Some("Option")
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Type(element)] => Some(element),
-        _ => None,
-    }
+    std_binding::argument_of(definition, arguments, Std::Option, 0)
 }
 
 /// `T` and `E` of core's `Result<T, E>`, which Rawr represents as its own
@@ -10702,47 +10652,34 @@ pub(crate) fn result_elements<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<(&'a model::Type, &'a model::Type)> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || !matches!(unit.crate_name(), "core" | "std")
-        || definition.display_path().last() != Some("Result")
-    {
-        return None;
-    }
-    match arguments {
-        [model::Argument::Type(ok), model::Argument::Type(err)] => Some((ok, err)),
-        _ => None,
-    }
+    Some((
+        std_binding::argument_of(definition, arguments, Std::Result, 0)?,
+        std_binding::argument_of(definition, arguments, Std::Result, 1)?,
+    ))
 }
 
-/// Whether the type is core's `RangeInclusive` of a concrete integer:
-/// Rawr's `RangeInclusive<i64>`, converted to the integer type where the
-/// call takes it. A range of a type parameter is
-/// [`Definition::range_inclusive`](crate::surface::identity::Definition::range_inclusive)'s.
-fn is_i64_range(definition: &model::Definition, arguments: &[model::Argument]) -> bool {
-    matches!(
-        range_inclusive_element(definition, arguments),
-        Some(model::Type::Primitive(name)) if matches!(
-            name.as_ref(),
-            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize"
-        )
-    )
-}
-
-/// `T` of core's `ops::RangeInclusive<T>`.
-fn range_inclusive_element<'a>(
+/// `T` of alloc's `Vec<T>`, with its allocator or without.
+pub(crate) fn vec_element<'a>(
     definition: &model::Definition,
     arguments: &'a [model::Argument],
 ) -> Option<&'a model::Type> {
-    let unit = definition.id().unit();
-    if unit.authority().sysroot().is_none()
-        || unit.crate_name() != "core"
-        || definition.display_path().last() != Some("RangeInclusive")
-    {
+    std_binding::argument_of(definition, arguments, Std::Vec, 0)
+}
+
+/// The element type of std's `Rc<[T]>`, `Arc<[T]>` or `Box<[T]>`, whose
+/// elements an output copies out as a `&[T]`'s are.
+fn shared_slice_element<'a>(
+    definition: &model::Definition,
+    arguments: &'a [model::Argument],
+) -> Option<&'a model::Type> {
+    if !matches!(
+        std_binding::of(definition),
+        Some(Std::Box | Std::Unrun(std_binding::Unrun::Rc | std_binding::Unrun::Arc))
+    ) {
         return None;
     }
-    match arguments {
-        [model::Argument::Type(element)] => Some(element),
+    match std_binding::type_argument(arguments, 0)? {
+        model::Type::Slice(element) => Some(element),
         _ => None,
     }
 }

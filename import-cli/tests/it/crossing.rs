@@ -1387,6 +1387,25 @@ fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
     );
 }
 
+/// std's types in a crate's signature are its own in every position (D711
+/// step 5, #707): a tuple taken and given, `&String`, `&Vec<T>`,
+/// `Range<usize>` taken and given, `&Path` and a `Box<i64>` taken, given
+/// and passed back. A crate type's std trait impls are demanded like its
+/// own trait's (#709): `Index` through `grid[2]`, and `FromStr` through
+/// `.parse::<Coords>()` and a `parse()` whose target a later annotation
+/// fixes. The output is `cargo run`'s.
+#[test]
+fn std_types_cross_in_every_position_and_std_trait_impls_are_demanded() {
+    let (rawr, cargo) = both_printed("crossing-signatures", "signatures.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "area 12\nswap (\"one\", 1)\nshout HI\ncount 2 total 6\nspan 5 halves 0..5\n\
+         stem file\nboxed 8 unbox 6\nrebox 9\n\
+         parsed Coords { x: 1, y: 2 } 3 false\nrefused Err(\"no comma in 12\")\ngrid 20 30"
+    );
+}
+
 /// An edit to the body of a script impl's function, which native code calls
 /// through the proxy, takes effect at its next call, in the same process
 /// with the state kept.

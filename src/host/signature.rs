@@ -651,6 +651,7 @@ fn same_input_type(
         }
         (Shape::Option(left), Shape::Option(right))
         | (Shape::Iter(left), Shape::Iter(right))
+        | (Shape::Boxed(left), Shape::Boxed(right))
         | (Shape::Range(left), Shape::Range(right))
         | (Shape::RangeInclusive(left), Shape::RangeInclusive(right)) => {
             same_input_type(left, right, left_parameters, right_parameters, mappings)?
