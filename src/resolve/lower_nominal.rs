@@ -4260,14 +4260,18 @@ fn owned_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
 }
 
 /// A symbolic callable's input: an owned value, or a shared borrow of one as
-/// in an iced style function's `&Theme`; the runtime passes either by value.
+/// in an iced style function's `&Theme`. Its type keeps the borrow, which
+/// the runtime passes by value.
 fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
     match ty {
         type_ref::Type::Reference {
             mutable: false,
             target,
             ..
-        } => exact_symbolic_type(target),
+        } => exact_symbolic_type(target).map(|target| Ty::Reference {
+            mutable: false,
+            target: Box::new(target),
+        }),
         _ => exact_symbolic_type(ty),
     }
 }
@@ -16319,21 +16323,15 @@ impl<'a> Parser<'a> {
         let pending = std::mem::take(&mut self.pending_conversions);
         for conversion in pending {
             let target = self.inference.resolve(&conversion.target);
-            let helper = if matches!(target, Ty::Infer(_))
-                && conversion
-                    .host
-                    .as_ref()
-                    .is_some_and(|host| host.forms.is_empty())
-            {
-                // An imported value's `.into()` that no use fixes: itself,
-                // through rustc's reflexive `From<T> for T`.
-                self.unify_type(&conversion.target, &conversion.source);
-                String::new()
-            } else if matches!(target, Ty::Infer(_)) {
+            let helper = if matches!(target, Ty::Infer(_)) {
+                let source = conversion.source.name(&self.models);
                 return Err(Error::InvalidMethodCall {
-                    owner: conversion.source.name(&self.models),
+                    owner: source.clone(),
                     method: "into".into(),
-                    reason: "type annotations needed: the target of `.into()` is unknown".into(),
+                    reason: format!(
+                        "type annotations needed: the type must implement `From<{source}>` (E0283)"
+                    )
+                    .into(),
                     call: conversion.span,
                 });
             } else if self.unifies(&target, &conversion.source) {
@@ -37863,23 +37861,24 @@ impl<'a> Parser<'a> {
                 source: self.lifted[index].span,
             });
         }
-        // A shared borrow of a script value stays one, as `|event: &Event|`
-        // makes a crate's `impl Fn(T)` take `T = &Event`, which is `Clone`
-        // where `Event` isn't; its proxy shares the value either way.
-        let inputs: Box<[Ty]> = inputs
-            .iter()
-            .map(|input| match input {
-                Ty::Reference {
-                    mutable: false,
-                    target,
-                } if !matches!(self.inference.resolve(target), Ty::Script(..)) => {
-                    (**target).clone()
-                }
-                input => input.clone(),
-            })
-            .collect();
+        // The closure's type keeps its parameters' borrows, which the
+        // runtime passes by value. Its signature names a shared borrow of a
+        // script value only, as `|event: &Event|` makes a crate's `impl
+        // Fn(T)` take `T = &Event`, which is `Clone` where `Event` isn't;
+        // its proxy shares the value either way.
         let signature = Ty::Fn {
-            inputs: inputs.clone(),
+            inputs: inputs
+                .iter()
+                .map(|input| match input {
+                    Ty::Reference {
+                        mutable: false,
+                        target,
+                    } if !matches!(self.inference.resolve(target), Ty::Script(..)) => {
+                        (**target).clone()
+                    }
+                    input => input.clone(),
+                })
+                .collect(),
             output: output.clone(),
         }
         .name(&self.models);
@@ -47016,6 +47015,51 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// rustc's E0631: a closure or function passed where a callable of as
+    /// many parameters is expected, whose parameters are not the callable's,
+    /// as `|s: State|` where `Fn(&State)` is.
+    fn argument_signature(&mut self, expected: &Ty, actual: &Ty, at: Span) -> Option<Error> {
+        let (Ty::Callable { inputs: want, .. } | Ty::Fn { inputs: want, .. }) = expected else {
+            return None;
+        };
+        let (closure, have) = match actual {
+            Ty::FnItem { key, inputs, .. } => (key.name().contains("{closure#"), inputs),
+            // A closure or function the host is given, as its callable.
+            Ty::Callable {
+                inputs,
+                item: Some(item),
+                ..
+            } => (item.key().name().contains("{closure#"), inputs),
+            Ty::Fn { inputs, .. } => (true, inputs),
+            _ => return None,
+        };
+        if want.len() != have.len() {
+            return None;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let fits = want
+            .iter()
+            .zip(have.iter())
+            .all(|(want, have)| self.unify_type(want, have));
+        self.inference.rollback(checkpoint);
+        if fits {
+            return None;
+        }
+        let signature = |inputs: &[Ty], models: &_| {
+            let inputs = inputs
+                .iter()
+                .map(|input| self.inference.resolve(input).name(models).to_string())
+                .collect::<Vec<_>>();
+            format!("fn({}) -> _", inputs.join(", "))
+        };
+        Some(Error::ArgumentSignature {
+            closure,
+            expected: signature(want, &self.models).into(),
+            found: signature(have, &self.models).into(),
+            at,
+        })
+    }
+
     fn require_type(&mut self, expected: &Ty, actual: &Ty, span: Span) -> Result<(), Error> {
         if self.unify_type(expected, actual) {
             return Ok(());
@@ -47024,6 +47068,9 @@ impl<'a> Parser<'a> {
             self.inference.resolve(expected),
             self.inference.resolve(actual),
         );
+        if let Some(error) = self.argument_signature(&expected, &actual, span) {
+            return Err(error);
+        }
         let mut found = actual.name(&self.models).to_string();
         // Arrays of two lengths: rustc's label for them.
         if let (
@@ -47412,9 +47459,9 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
-    /// iced's `impl IntoIterator<Item = impl Into<Element>>`, a facade slice
-    /// of Elements: a `Vec`, array or iterator of widgets converts each one,
-    /// as `column(texts)` takes a `Vec<Text>`.
+    /// iced's `impl IntoIterator<Item = Element>`, a facade slice of
+    /// Elements: an array or an iterator of Elements is taken as the slice,
+    /// as `column([a, b])` takes `[Element; 2]`.
     fn coerce_children(
         &mut self,
         source: &Ty,
@@ -47487,38 +47534,17 @@ impl<'a> Parser<'a> {
             }
             same
         };
-        if same {
-            if !fixed && !iterator {
-                return Ok(false);
-            }
-            // An array or an iterator of Elements already: only its type
-            // widens to the slice.
-            if iterator {
-                self.collect_children(value);
-            }
-            value.ty = target.clone();
-            return Ok(true);
+        // Items of another type are `Item = Element` unmet (E0271), as
+        // rustc holds `column(texts)`: no coercion converts each one.
+        if !same || (!fixed && !iterator) {
+            return Ok(false);
         }
-        let item = self.temporary("child");
-        let mut element = self.operator_expr(
-            origin::Fragment::plain(item.clone()),
-            source_element,
-            value.span,
-        );
-        self.coerce_expr(&target_element, &mut element)?;
+        // An array or an iterator of Elements already: only its type widens
+        // to the slice.
         if iterator {
             self.collect_children(value);
         }
-        let mut rendered = origin::Fragment::plain("(");
-        rendered.push(value.rendered_source());
-        rendered.push_text(format!(").map(|{item}| "));
-        rendered.push(element.rendered_source());
-        rendered.push_text(")");
-        value.prelude = origin::Fragment::default();
-        value.source = rendered;
         value.ty = target.clone();
-        value.lvalue = None;
-        value.source.cover(value.span);
         Ok(true)
     }
 
@@ -48305,25 +48331,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        let actual = match actual {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => (**target).clone(),
-                            actual => actual.clone(),
-                        };
-                        // A `&T` the host gives a closure is the closure's
-                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
-                        let expected = match self.inference.resolve(expected) {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => *target,
-                            expected => expected,
-                        };
-                        self.unify_type(&expected, &actual)
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             // A closure a crate value holds, as `Map<W, F, A>` from iced's
@@ -48410,28 +48418,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        if self.unify_type(expected, actual) {
-                            return true;
-                        }
-                        // A `&T` the host gives a closure is the closure's
-                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
-                        match (
-                            self.inference.resolve(expected),
-                            self.inference.resolve(actual),
-                        ) {
-                            (
-                                Ty::Reference {
-                                    mutable: false,
-                                    target,
-                                },
-                                actual,
-                            ) if !matches!(actual, Ty::Reference { .. }) => {
-                                self.unify_type(&target, &actual)
-                            }
-                            _ => false,
-                        }
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             // A stream's tuple spread over a closure of as many parameters,
@@ -48467,7 +48454,7 @@ impl<'a> Parser<'a> {
             }
             // A crate's function where a host callable is expected, as
             // `.style(container::rounded_box)`: the adapter passes the Rust
-            // function itself, so a `&T` it takes is the callable's `&T`.
+            // function itself.
             #[cfg(feature = "rust-import")]
             (
                 Ty::Callable {
@@ -48490,18 +48477,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        let unborrowed = |ty: Ty| match ty {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => *target,
-                            ty => ty,
-                        };
-                        let expected = unborrowed(self.inference.resolve(expected));
-                        let actual = unborrowed(self.inference.resolve(actual));
-                        self.unify_type(&expected, &actual)
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             #[cfg(feature = "rust-import")]

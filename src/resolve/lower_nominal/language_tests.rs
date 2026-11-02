@@ -11976,3 +11976,153 @@ main();
         "{error}"
     );
 }
+
+struct UiTheme;
+
+/// `Button::style` takes `Fn(&Theme) -> i64`, as iced's style callables
+/// borrow the theme the host gives them.
+fn borrowed_style_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, item, signature, type_ref};
+    let mut builder = facade::Builder::new("ui", facade::Abi::new(1).unwrap()).unwrap();
+    builder.type_::<UiButton>("Button", &[], &[]).unwrap();
+    builder.type_::<UiTheme>("Theme", &[], &[]).unwrap();
+    let mut new = signature::Builder::new();
+    new.output(type_ref::Type::registered("Button").unwrap());
+    builder
+        .item(item::Definition::function("button", new.finish()).unwrap())
+        .unwrap();
+    let mut theme = signature::Builder::new();
+    theme.output(type_ref::Type::registered("Theme").unwrap());
+    builder
+        .item(item::Definition::function("theme", theme.finish()).unwrap())
+        .unwrap();
+    let mut style = signature::Builder::new();
+    style
+        .parameter(type_ref::Type::callable(
+            type_ref::Type::reference(false, type_ref::Type::registered("Theme").unwrap()),
+            type_ref::Type::builtin(type_ref::Builtin::I64),
+        ))
+        .output(type_ref::Type::registered("Button").unwrap());
+    builder
+        .item(
+            item::Definition::method(
+                "Button::style",
+                crate::receiver::Mode::Owned,
+                style.finish(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+fn compile_with(
+    facade: crate::host::facade::Definition,
+    source: &str,
+) -> Result<(), crate::ParseError> {
+    let mut engine = Engine::new();
+    engine.register_host_facade(facade).unwrap();
+    engine.compile_executable(source).map(|_| ())
+}
+
+/// A closure or function where `Fn(&Theme)` is expected takes `&Theme`:
+/// one that takes `Theme` is rustc's E0631, at the closure.
+#[test]
+fn language_a_callable_that_takes_a_borrow_is_not_given_its_value() {
+    for accepted in [
+        "use ui::{Button, Theme, button};\npub fn view() -> Button { button().style(|theme: &Theme| 1) }",
+        "use ui::{Button, button};\npub fn view() -> Button { button().style(|theme| 1) }",
+        "use ui::{Button, Theme, button};\nfn shade(theme: &Theme) -> i64 { 1 }\npub fn view() -> Button { button().style(shade) }",
+    ] {
+        compile_with(borrowed_style_facade(), accepted)
+            .unwrap_or_else(|error| panic!("{error}\n{accepted}"));
+    }
+    let closure = "use ui::{Button, Theme, button};\npub fn view() -> Button {\n    button().style(|theme: Theme| 1)\n}";
+    let error = compile_with(borrowed_style_facade(), closure)
+        .expect_err("rustc refuses a closure of `Theme` for `Fn(&Theme)` (E0631)");
+    let message = error.to_string();
+    assert!(
+        message.contains("type mismatch in closure arguments")
+            && message.contains("fn(&ui::Theme) -> _")
+            && message.contains("fn(ui::Theme) -> _"),
+        "{message}"
+    );
+    assert_eq!(
+        (error.position().line(), error.position().position()),
+        (Some(3), Some(20)),
+        "{message}"
+    );
+    let function = "use ui::{Button, Theme, button};\nfn shade(theme: Theme) -> i64 { 1 }\npub fn view() -> Button { button().style(shade) }";
+    let message = compile_with(borrowed_style_facade(), function)
+        .expect_err("rustc refuses a function of `Theme` for `Fn(&Theme)` (E0631)")
+        .to_string();
+    assert!(
+        message.contains("type mismatch in function arguments"),
+        "{message}"
+    );
+}
+
+/// A generic bound `F: Fn(&State)` takes a closure of `&State`, and refuses
+/// one of `State` with rustc's E0631.
+#[test]
+fn language_a_closure_of_a_value_for_a_borrowing_bound_is_e0631() {
+    let value = run(r#"
+        struct State { n: i64 }
+        fn view<F: Fn(&State) -> i64>(f: F) -> i64 { f(&State { n: 3 }) }
+        fn read(state: &State) -> i64 { state.n * 10 }
+        pub fn run() -> i64 { view(|s: &State| s.n) + view(|s| s.n) + view(read) }
+        run()
+    "#);
+    assert_eq!(value, 36);
+    let error = rejected(
+        r#"
+        struct State { n: i64 }
+        fn view<F: Fn(&State) -> i64>(f: F) -> i64 { f(&State { n: 3 }) }
+        pub fn run() -> i64 { view(|s: State| s.n) }
+        run()
+    "#,
+    );
+    assert!(
+        error.contains("type mismatch in closure arguments")
+            && error.contains("fn(&State) -> _")
+            && error.contains("fn(State) -> _"),
+        "{error}"
+    );
+}
+
+/// `.into()` whose target nothing fixes is rustc's E0283, for a crate
+/// value as for the program's own; a fixed target converts.
+#[test]
+fn language_an_into_whose_target_nothing_fixes_needs_annotations() {
+    compile_with(
+        borrowed_style_facade(),
+        "use ui::{Theme, theme};\npub fn chosen() -> Theme { let t: Theme = theme().into(); t }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let error = compile_with(
+        borrowed_style_facade(),
+        "use ui::{Theme, theme};\npub fn chosen() {\n    let t = theme().into();\n}",
+    )
+    .expect_err("rustc needs the target of `.into()` (E0283)");
+    let message = error.to_string();
+    assert!(
+        message.contains("type annotations needed") && message.contains("(E0283)"),
+        "{message}"
+    );
+    assert_eq!(error.position().line(), Some(3), "{message}");
+    let message = compile_with(
+        borrowed_style_facade(),
+        "struct Foo;\npub fn chosen() {\n    let t = Foo.into();\n}",
+    )
+    .expect_err("rustc needs the target of `.into()` (E0283)")
+    .to_string();
+    assert!(
+        message.contains("type annotations needed") && message.contains("From<Foo>"),
+        "{message}"
+    );
+    compile_with(
+        borrowed_style_facade(),
+        "struct Foo;\npub fn chosen() -> Foo { let t: Foo = Foo.into(); t }",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+}

@@ -467,6 +467,20 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::CannotCompare { lhs, rhs, .. } => {
                     crate::resolve::CannotCompare(lhs, rhs).fmt(f)
                 }
+                crate::resolve::Error::ArgumentSignature {
+                    closure,
+                    expected,
+                    found,
+                    ..
+                } => {
+                    let message = crate::resolve::ArgumentSignature(*closure);
+                    let kind = message.kind();
+                    write!(
+                        f,
+                        "{message}: expected {kind} signature '{expected}', found {kind} \
+                         signature '{found}'"
+                    )
+                }
             }
             Self::PropertyExpected => f.write_str("Expecting name of a property"),
             Self::VariableExpected => f.write_str("Expecting name of a variable"),

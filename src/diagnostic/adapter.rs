@@ -513,6 +513,7 @@ fn primary_label(
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
+        resolve::Error::ArgumentSignature { .. } => Some("found signature defined here".into()),
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
@@ -603,6 +604,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
         resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
+        resolve::Category::ArgumentSignature => code::RESOLVE_ARGUMENT_SIGNATURE,
         resolve::Category::ArgumentCount => match error {
             resolve::Error::ArgumentCount {
                 callee: resolve::Callee::Closure,
@@ -661,6 +663,17 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 )),
                 None => builder,
             }
+        }
+        resolve::Error::ArgumentSignature {
+            closure,
+            expected,
+            found,
+            ..
+        } => {
+            let kind = resolve::ArgumentSignature(*closure).kind();
+            builder.note(format!(
+                "expected {kind} signature `{expected}`\n   found {kind} signature `{found}`"
+            ))
         }
         resolve::Error::ArgumentCount {
             expected, found, ..
@@ -871,6 +884,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         .to_string(),
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             resolve::CannotCompare(lhs, rhs).to_string()
+        }
+        resolve::Error::ArgumentSignature { closure, .. } => {
+            resolve::ArgumentSignature(*closure).to_string()
         }
     }
 }
