@@ -435,12 +435,12 @@ impl fmt::Display for ParseErrorType {
                 ),
                 crate::resolve::Error::MissingCapability {
                     owner, capability, ..
-                } => write!(f, "'{owner}' does not provide '{capability}'"),
+                } => write!(f, "{}", crate::resolve::Unsatisfied(owner, capability)),
                 crate::resolve::Error::InvalidMatch { owner, reason, .. } => {
                     write!(f, "Invalid match for '{owner}': {reason}")
                 }
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-                    write!(f, "Unsupported nominal syntax '{construct}'")
+                    write!(f, "{}", crate::resolve::Unsupported(construct))
                 }
                 crate::resolve::Error::Syntax { message, .. } => f.write_str(message),
                 crate::resolve::Error::UnlabeledJumpInWhileCondition { .. } => f.write_str(
@@ -466,6 +466,20 @@ impl fmt::Display for ParseErrorType {
                 .fmt(f),
                 crate::resolve::Error::CannotCompare { lhs, rhs, .. } => {
                     crate::resolve::CannotCompare(lhs, rhs).fmt(f)
+                }
+                crate::resolve::Error::ArgumentSignature {
+                    closure,
+                    expected,
+                    found,
+                    ..
+                } => {
+                    let message = crate::resolve::ArgumentSignature(*closure);
+                    let kind = message.kind();
+                    write!(
+                        f,
+                        "{message}: expected {kind} signature '{expected}', found {kind} \
+                         signature '{found}'"
+                    )
                 }
             }
             Self::PropertyExpected => f.write_str("Expecting name of a property"),

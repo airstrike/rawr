@@ -726,15 +726,18 @@ enum Error {
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(bug) = self.bug() {
+            return write!(f, "rawr bug: {bug}");
+        }
         match self {
-            Self::MissingArgument => f.write_str("MissingArgument"),
-            Self::TypeMismatch => f.write_str("TypeMismatch"),
-            Self::StaleHandle => f.write_str("StaleHandle"),
-            Self::ArenaFull => f.write_str("ArenaFull"),
-            Self::Allocation => f.write_str("Allocation"),
-            Self::Malformed => f.write_str("Malformed"),
-            Self::Cardinality => f.write_str("Cardinality"),
-            Self::MissingAdapter => f.write_str("MissingAdapter"),
+            Self::MissingArgument
+            | Self::TypeMismatch
+            | Self::StaleHandle
+            | Self::Malformed
+            | Self::Cardinality
+            | Self::MissingAdapter => unreachable!("a rawr bug is written above"),
+            Self::ArenaFull => f.write_str("more than 1000000 values of crate types are alive at once"),
+            Self::Allocation => f.write_str("memory allocation failed"),
             Self::Stale => f.write_str("Stale"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
             Self::Leased => f.write_str(
@@ -743,7 +746,7 @@ impl std::fmt::Debug for Error {
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
             Self::NotClone(ty) => write!(
                 f,
-                "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
+                "reading a `{ty}` through a borrow guard is not supported yet: `{ty}` doesn't implement `Clone`"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
             Self::Home(reason) => f.write_str(reason),
@@ -752,6 +755,29 @@ impl std::fmt::Debug for Error {
 }
 
 impl Error {
+    /// What only a rawr bug causes: the program's types, argument counts
+    /// and moves are checked before any adapter runs (D664.1).
+    fn bug(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::MissingArgument => "an adapter ran without one of its arguments",
+            Self::TypeMismatch => "a value reached an adapter as a type its signature doesn't take",
+            Self::StaleHandle => "a crate value's handle was used after its value was released",
+            Self::Malformed => "an adapter invocation's payload is malformed",
+            Self::Cardinality => "an adapter ran with a number of arguments it doesn't take",
+            Self::MissingAdapter => "a call names an adapter the generated table doesn't have",
+            _ => return None,
+        })
+    }
+
+    /// The error as the program sees it. One that only a rawr bug causes
+    /// panics, naming the bug.
+    fn reported(self) -> Self {
+        if let Some(bug) = self.bug() {
+            panic!("rawr bug: {bug}");
+        }
+        self
+    }
+
     fn code(&self) -> u8 {
         match self {
             Self::MissingArgument => 1,
@@ -1536,7 +1562,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
 }
 
 fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
-    __rawr_internal::EvalAltResult::ErrorRuntime(format!("native place: {error:?}").into(), __rawr_internal::Position::NONE).into()
+    runtime_error(error)
 }
 
 impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
@@ -1650,7 +1676,7 @@ fn materialize(
         }
         Ok(output)
     })
-    .map_err(|error| format!("{error:?}"))
+    .map_err(|error| format!("{:?}", error.reported()))
 }
 
 /// [`materialize`] of an output that holds script values an erased generic
@@ -1661,7 +1687,7 @@ fn materialize_checked(
     convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, String> {
     let output = materialize(witness, convert)?;
-    check_values(witness, &output).map_err(|error| format!("{error:?}"))?;
+    check_values(witness, &output).map_err(|error| format!("{:?}", error.reported()))?;
     Ok(output)
 }
 
@@ -1729,11 +1755,23 @@ fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__r
 /// that runs it (D527).
 #[allow(dead_code)]
 fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Script, Error> {
-    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
-    (**value)
-        .take()
+    take_future(arguments, index).map(__rawr_internal::future::Future::into_script)
+}
+
+/// The core's future at argument `index`: a script future, or a native
+/// value whose opaque type is a future, as a program's own `impl Straw<..>`
+/// is, which its table makes one of where it was made.
+#[allow(dead_code)]
+fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Future, Error> {
+    let mut value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
+    let handle = value.read_lock::<NativeHandle>().map(|handle| handle.clone());
+    if let Some(handle) = handle {
+        let table = arguments.arena.opaque(&handle)?;
+        let mut values = [&mut value];
+        value = table.future(&mut Arguments { values: &mut values, arena: arguments.arena })?;
+    }
+    value
         .try_cast_result::<__rawr_internal::future::Future>()
-        .map(__rawr_internal::future::Future::into_script)
         .map_err(|_| Error::TypeMismatch)
 }
 
@@ -2011,6 +2049,15 @@ impl OpaqueTable {
         let entry = self.0.get(index).ok_or(Error::TypeMismatch)?;
         entry(arguments, self)
     }
+
+    /// The core's future of the value at argument 0, from the entry every
+    /// table ends with: one that makes it when the type is a future, and
+    /// refuses it otherwise.
+    #[allow(dead_code)]
+    fn future(self, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+        let entry = self.0.last().ok_or(Error::TypeMismatch)?;
+        entry(arguments, self)
+    }
 }
 
 /// The table of `entries`, each a call that takes a value of `T`'s type.
@@ -2237,9 +2284,9 @@ fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> 
     Ok(output)
 }
 
-fn runtime_error(error: impl std::fmt::Debug) -> Box<__rawr_internal::EvalAltResult> {
+fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime(
-        format!("{error:?}").into(),
+        format!("{:?}", error.reported()).into(),
         __rawr_internal::Position::NONE,
     )
     .into()
@@ -3064,6 +3111,21 @@ mod __rawr_profile_host {
                         }) as __rawr_internal::future::Finish
                     })
                 }))
+            }))
+        }
+
+        /// The core's future of a native value whose type is a future, as
+        /// a program's own `impl Straw<..>` is, where a future is taken:
+        /// its output is made a Rawr value on the thread that owns the
+        /// program, and taken back as the native type the call names.
+        pub fn native(task: Task<Materialize>) -> Dynamic {
+            Dynamic::from(__rawr_internal::future::Future::native(move || {
+                let future = (task.0)();
+                Box::pin(async move {
+                    let materialize = future.await;
+                    Box::new(move || materialize(None).map_err(__rawr_internal::future::error))
+                        as __rawr_internal::future::Finish
+                })
             }))
         }
     }
@@ -7357,6 +7419,32 @@ fn opaque_table_source(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
         ));
     }
+    // Last, the core's future of the value, when its type is a future, as
+    // a program's own `impl Straw<..>` is: where a call takes a future,
+    // as iced's `Task::future(impl Future<Output = T>)` does, the value
+    // goes as that future (`take_future`).
+    let future = match &returned {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => OPAQUE_FUTURES
+            .with_borrow(|futures| futures.get(definition.as_bytes()).copied())
+            .and_then(|position| arguments.get(usize::try_from(position).ok()?)),
+        _ => None,
+    };
+    let body = match future {
+        Some(element) => {
+            let mut body = Vec::new();
+            body.write_all(b"    let value = take_like(arguments, 0, _w)?;\n")
+                .map_err(request::unwritable)?;
+            render_give_task(element, "value", "native", &mut body)?;
+            String::from_utf8(body).map_err(request::unwritable)?
+        }
+        None => "    Err(Error::TypeMismatch)".to_owned(),
+    };
+    entries.push(format!(
+        "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}"
+    ));
     Ok(Some(format!(
         "{{
         static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
@@ -7586,6 +7674,8 @@ fn render_adapter_body(
                 ));
             }
             let crossed = Crossed { slots, crossings };
+            let pinned = opaque_pinned_strings(signature, substitutions);
+            let substitutions: &[convert::Type] = pinned.as_deref().unwrap_or(substitutions);
             let opens = instance_opens(signature, substitutions);
             // A `&str` the output borrows through a lifetime its type only
             // carries, as iced's `text(url)` gives a `Text<'a>` of an `impl
@@ -7753,7 +7843,7 @@ fn render_adapter_body(
                 }
                 .map_err(request::unwritable)?;
                 if let Some(element) = future_output(returned) {
-                    render_give_task(element, "output", output)?;
+                    render_give_task(element, "output", "imported", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
                 }
@@ -8001,7 +8091,7 @@ fn render_adapter_body(
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 let element = future_output(returned)
                     .ok_or_else(|| request::drift("borrowed async method output"))?;
-                render_give_task(element, "output", output)?;
+                render_give_task(element, "output", "imported", output)?;
             } else if let Some(guard) = signature.guard()
                 && !matches!(receiver, Receiver::Owned)
             {
@@ -8165,7 +8255,7 @@ fn render_adapter_body(
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 match future_output(returned) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
-                        render_give_task(element, "output", output)?;
+                        render_give_task(element, "output", "imported", output)?;
                     }
                     _ => render_give_with(signature, substitutions, "output", output)?,
                 }
@@ -11482,6 +11572,27 @@ fn render_take_input(
             .map_err(request::unwritable);
         }
     }
+    // A type parameter a borrow of one of std's values fills, as `&PathBuf`
+    // fills `opened<P: AsRef<Path>>(path: P)`: the value itself, lent as a
+    // `&Path` input is.
+    if let convert::Type::Parameter(_) = ty
+        && let lent @ convert::Type::Borrowed {
+            mutable: false,
+            ty: target,
+        } = substitute(ty, signature, substitutions)?
+        && std_value(target).is_some()
+    {
+        let lent = lent.clone();
+        return render_take_input(
+            local,
+            index,
+            &lent,
+            signature,
+            substitutions,
+            profile,
+            output,
+        );
+    }
     // `&mut Vec<T>` of scalars, or `&mut String`: a copy of Rawr's array or
     // string the call changes, which goes back after it (D558 slice 2).
     if let convert::Type::Borrowed {
@@ -11663,18 +11774,26 @@ fn render_take_input(
             output,
         );
     }
-    if let lending @ (convert::Type::Option(_) | convert::Type::Tuple(_)) =
+    if let lending
+    @ (convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)) =
         substituted(ty, signature, substitutions)?
         && let Some(lease) = Lease::of(&lending, future, 1)
     {
-        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
-        return writeln!(
+        writeln!(
             output,
-            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {take} }};\n    let argument_{local} = {borrow};",
+            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {take} }};",
             held = lease.held,
             take = lease.take,
         )
-        .map_err(request::unwritable);
+        .map_err(request::unwritable)?;
+        // A future borrows it again inside itself (`future_borrows`), and
+        // a member that moves moves there.
+        if future {
+            return Ok(());
+        }
+        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
+        return writeln!(output, "    let argument_{local} = {borrow};")
+            .map_err(request::unwritable);
     }
     // A type parameter only a `&'static str` fills, as a literal fills
     // iced's `title(impl Title<State>)`: a `&'static str` input.
@@ -11757,6 +11876,16 @@ struct Lease {
 enum LeaseKind {
     /// A crate value leased from its slot, as `render_lease` leases one.
     Native { mutable: bool },
+    /// One of std's values Rawr's std holds, as `&Path`, lent from it.
+    Std,
+    /// A Rust value made from Rawr's array, tuple, string or number, as
+    /// `&[u8]` or `&String`, lent as `render_take_input` lends one.
+    Made,
+    /// A value that borrows nothing, beside ones that do, as the `String`
+    /// of `Result<&Font, String>`: moved into the call once.
+    Owned,
+    /// A `Result` of leases: its variant's.
+    Result(Box<Lease>, Box<Lease>),
     /// Rawr's string: pinned for a future, or held for a call.
     Str { pinned: bool },
     /// An `Option` of a lease: `None` lends nothing.
@@ -11767,6 +11896,9 @@ enum LeaseKind {
 
 impl Lease {
     fn of(ty: &convert::Type, future: bool, depth: usize) -> Option<Self> {
+        if depth == 1 && !holds_borrow(ty) {
+            return None;
+        }
         match ty {
             convert::Type::Borrowed { mutable, ty: lent }
                 if matches!(
@@ -11782,6 +11914,35 @@ impl Lease {
                         "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.lease::<{rust}>(handle)? }}"
                     ),
                     kind: LeaseKind::Native { mutable: *mutable },
+                })
+            }
+            convert::Type::Borrowed {
+                mutable: false,
+                ty: lent,
+            } if let Some(rust) = std_value(lent) => Some(Self {
+                held: format!("<{rust} as __rawr_internal::crossing::Std>::Lent"),
+                take: format!(
+                    "<{rust} as __rawr_internal::crossing::Std>::lend(value_{depth}).ok_or(Error::TypeMismatch)?"
+                ),
+                kind: LeaseKind::Std,
+            }),
+            convert::Type::Borrowed {
+                mutable: false,
+                ty: lent,
+            } if is_made_for_call(lent) => {
+                // A slice is held as the `Vec` made for it.
+                let rust = match &**lent {
+                    convert::Type::Sequence { element, .. } => {
+                        format!("Vec<{}>", concrete_type(element)?)
+                    }
+                    lent => concrete_type(lent)?,
+                };
+                let mut converted = String::new();
+                render_from_dynamic(lent, &format!("value_{depth}"), depth, &mut converted).ok()?;
+                Some(Self {
+                    held: rust,
+                    take: format!("{{ let value_{depth} = value_{depth}.flatten(); ({converted})? }}"),
+                    kind: LeaseKind::Made,
                 })
             }
             convert::Type::Builtin(convert::Builtin::Str) if future => Some(Self {
@@ -11808,6 +11969,19 @@ impl Lease {
                         inner.take
                     ),
                     kind: LeaseKind::Option(Box::new(inner)),
+                })
+            }
+            convert::Type::Result(ok, err) => {
+                let next = depth + 1;
+                let ok = Self::of(ok, future, next)?;
+                let err = Self::of(err, future, next)?;
+                Some(Self {
+                    held: format!("Result<{}, {}>", ok.held, err.held),
+                    take: format!(
+                        "{{ let mut value_{depth} = value_{depth}; match __rawr_internal::result::take(&mut value_{depth}).ok_or(Error::TypeMismatch)? {{ Ok(value_{next}) => Ok({}), Err(value_{next}) => Err({}) }} }}",
+                        ok.take, err.take
+                    ),
+                    kind: LeaseKind::Result(Box::new(ok), Box::new(err)),
                 })
             }
             convert::Type::Tuple(members) if !members.is_empty() => {
@@ -11838,6 +12012,16 @@ impl Lease {
                     kind: LeaseKind::Tuple(members),
                 })
             }
+            ty if !holds_borrow(ty) => {
+                let rust = concrete_type(ty)?;
+                let mut converted = String::new();
+                render_from_dynamic(ty, &format!("value_{depth}"), depth, &mut converted).ok()?;
+                Some(Self {
+                    held: format!("Option<{rust}>"),
+                    take: format!("{{ let value_{depth} = value_{depth}.flatten(); Some(({converted})?) }}"),
+                    kind: LeaseKind::Owned,
+                })
+            }
             _ => None,
         }
     }
@@ -11848,6 +12032,19 @@ impl Lease {
         match &self.kind {
             LeaseKind::Native { mutable: true } => format!("{place}.get_mut()"),
             LeaseKind::Native { mutable: false } => format!("&*{place}.get_mut()"),
+            LeaseKind::Std => format!("&*{place}"),
+            LeaseKind::Made => format!("&{place}"),
+            LeaseKind::Owned => format!(
+                "{place}.take().expect(\"a value that borrows nothing moves into its call once\")"
+            ),
+            LeaseKind::Result(ok, err) => {
+                let next = depth + 1;
+                format!(
+                    "match {place}.as_mut() {{ Ok(held_{next}) => Ok({}), Err(held_{next}) => Err({}) }}",
+                    ok.borrow(&format!("(*held_{next})"), next),
+                    err.borrow(&format!("(*held_{next})"), next)
+                )
+            }
             LeaseKind::Str { pinned: true } => place.to_owned(),
             LeaseKind::Str { pinned: false } => format!("{place}.as_str()"),
             LeaseKind::Tuple(members) => {
@@ -11871,6 +12068,18 @@ impl Lease {
     }
 }
 
+/// Whether `ty` holds a borrow: a `&T`, `&mut T` or `&str`, alone or in an
+/// `Option`, a `Result` or a tuple.
+fn holds_borrow(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Borrowed { .. } | convert::Type::Builtin(convert::Builtin::Str) => true,
+        convert::Type::Option(element) => holds_borrow(element),
+        convert::Type::Result(ok, err) => holds_borrow(ok) || holds_borrow(err),
+        convert::Type::Tuple(members) => members.iter().any(holds_borrow),
+        _ => false,
+    }
+}
+
 /// The statements that move what lends each borrowed input into a future
 /// and borrow it there again, as `render_take_input` bound it: a leased
 /// value (`render_lease`), a value made for the call, or what a type that
@@ -11884,7 +12093,7 @@ fn future_borrows(
         let substituted = substituted(ty, signature, substitutions)?;
         if matches!(
             substituted,
-            convert::Type::Option(_) | convert::Type::Tuple(_)
+            convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)
         ) && let Some(lease) = Lease::of(&substituted, true, 1)
         {
             let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
@@ -11899,6 +12108,12 @@ fn future_borrows(
         if !mutable && is_made_for_call(&lent) {
             rebound.push_str(&format!(
                 "        let argument_{local}_made = argument_{local}_made;\n        let argument_{local} = &argument_{local}_made;\n"
+            ));
+        } else if !mutable && std_value(&lent).is_some() {
+            // One of std's values Rawr's std holds, as `&Path`: the value
+            // lent from its script value, held for the future's life.
+            rebound.push_str(&format!(
+                "        let argument_{local}_lent = argument_{local}_lent;\n        let argument_{local} = &*argument_{local}_lent;\n"
             ));
         } else {
             let borrow = if mutable { "" } else { "&*" };
@@ -12351,7 +12566,7 @@ fn render_take(
             render_from_dynamic(element, "value", 0, &mut converted)?;
             return writeln!(
                 output,
-                "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().try_cast_result::<__rawr_internal::future::Future>().map_err(|_| Error::TypeMismatch)?.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")));"
+                "    let argument_{local} = take_future(arguments, {index})?.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")));"
             )
             .map_err(request::unwritable);
         }
@@ -13092,10 +13307,13 @@ fn future_output(ty: &convert::Type) -> Option<&convert::Type> {
 
 /// Project an iced `Task<T>`, or a Rust future of `T`, into the facade's
 /// `Task`. Each `T` it yields becomes a Rawr value on the UI thread, never
-/// in the stream.
+/// in the stream. `wrap` is `imported` for a call's output, which takes the
+/// call's witness, or `native` for a value of a future's type taken where a
+/// future is.
 fn render_give_task(
     element: &convert::Type,
     value: &str,
+    wrap: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let mut converted = String::new();
@@ -13107,7 +13325,7 @@ fn render_give_task(
     };
     writeln!(
         output,
-        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::{wrap}(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
     )
     .map_err(request::unwritable)
 }
@@ -13203,9 +13421,15 @@ fn is_copied(ty: &convert::Type) -> bool {
 }
 
 /// Whether a `&` input of `ty` lends a Rust value the bridge makes from
-/// Rawr's array or tuple for the call: `&[T]` or `&(A, B)`.
+/// Rawr's array, tuple or string for the call: `&[T]`, `&Vec<T>`, `&(A,
+/// B)` or `&String`.
 fn is_made_for_call(ty: &convert::Type) -> bool {
-    matches!(ty, convert::Type::Sequence { .. } | convert::Type::Tuple(_))
+    matches!(
+        ty,
+        convert::Type::Sequence { .. }
+            | convert::Type::Tuple(_)
+            | convert::Type::Builtin(convert::Builtin::String)
+    )
         // A number, as `PartialOrd<f32>::lt` takes `&f32` (T412).
         || matches!(ty, convert::Type::Builtin(builtin)
             if !matches!(
@@ -13525,6 +13749,30 @@ fn instance_substituted<'a>(
         convert::Type::Option(element) => {
             convert::Type::Option(Box::new(instance_substituted(element, types)?))
         }
+        // `impl<T, E> Task<Result<T, E>>`, as iced's `and_then` has.
+        convert::Type::Result(ok, err) => convert::Type::Result(
+            Box::new(instance_substituted(ok, types)?),
+            Box::new(instance_substituted(err, types)?),
+        ),
+        convert::Type::Tuple(members) => convert::Type::Tuple(
+            members
+                .iter()
+                .map(|member| instance_substituted(member, types))
+                .collect::<Option<Box<[_]>>>()?,
+        ),
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
+            element: Box::new(instance_substituted(element, types)?),
+            owned: *owned,
+            length: *length,
+        },
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(instance_substituted(ty, types)?),
+        },
         other => other.clone(),
     })
 }
@@ -13549,6 +13797,11 @@ thread_local! {
     /// Each with the positions of the arguments that are the associated
     /// types its bounds bind.
     static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[u32]>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The opaque types that are futures, as `impl Straw<..>` is through
+    /// `Core`, by identity: the position of the argument that is their
+    /// `Future::Output`.
+    static OPAQUE_FUTURES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], u32>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The imported types that carry lifetimes (D558 tier 1), by identity:
     /// how many lifetime parameters each declares, and whether it is
@@ -13882,6 +14135,17 @@ fn shortens(ty: &convert::Type) -> bool {
 
 fn carries_lifetime(ty: &convert::Type) -> bool {
     match ty {
+        // A `&str` an opaque type captures is pinned for the runner's life
+        // where the value is made (`opaque_pinned_strings`), so it holds no
+        // borrow.
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if is_opaque(definition) => arguments.iter().any(|argument| {
+            !matches!(argument, convert::Type::Borrowed { mutable: false, ty }
+                if **ty == convert::Type::Builtin(convert::Builtin::Str))
+                && carries_lifetime(argument)
+        }),
         convert::Type::Nominal {
             definition,
             arguments,
@@ -14710,6 +14974,20 @@ impl TypePaths {
                 }));
             }
         });
+        OPAQUE_FUTURES.with_borrow_mut(|futures| {
+            futures.clear();
+            let future = *crate::surface::identity::Definition::future().as_bytes();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                futures.extend(owner.types().filter(|ty| ty.opaque()).filter_map(|ty| {
+                    ty.associated()
+                        .find(|(identity, _, _)| *identity == future)
+                        .map(|(_, _, position)| (*ty.identity(), position))
+                }));
+            }
+        });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
             for owner in facade
@@ -14820,6 +15098,7 @@ impl Drop for TypePaths {
         TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        OPAQUE_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -14856,6 +15135,59 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
 }
 
 /// Whether `definition` is an opaque `impl Trait` type a function gives.
+/// The substitutions with each `&str` an opaque output captures pinned as
+/// a `&'static str`, as a string literal is in Rust: `download(url: impl
+/// AsRef<str>) -> impl Steps` captures `&'static str` from a literal, and
+/// no region can hold a type Rust code can't name. `None` when there is
+/// none.
+fn opaque_pinned_strings(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<Box<[convert::Type]>> {
+    fn captures(ty: &convert::Type, index: u32) -> bool {
+        match ty {
+            convert::Type::Nominal {
+                definition,
+                arguments,
+            } => {
+                (is_opaque(definition)
+                    && arguments
+                        .iter()
+                        .any(|argument| output_names(argument, index)))
+                    || arguments.iter().any(|argument| captures(argument, index))
+            }
+            convert::Type::Option(inner)
+            | convert::Type::Range(inner)
+            | convert::Type::Borrowed { ty: inner, .. }
+            | convert::Type::Sequence { element: inner, .. } => captures(inner, index),
+            convert::Type::Result(ok, err) => captures(ok, index) || captures(err, index),
+            convert::Type::Tuple(members) => members.iter().any(|member| captures(member, index)),
+            _ => false,
+        }
+    }
+    let borrowed_str = convert::Type::Borrowed {
+        mutable: false,
+        ty: Box::new(convert::Type::Builtin(convert::Builtin::Str)),
+    };
+    let mut pinned = None::<Box<[convert::Type]>>;
+    for (position, parameter) in signature
+        .parameters()
+        .iter()
+        .filter(|parameter| {
+            parameter.kind() == crate::classify::representability::signature::Kind::Type
+        })
+        .enumerate()
+    {
+        if substitutions.get(position) == Some(&borrowed_str)
+            && captures(signature.output(), parameter.index())
+        {
+            pinned.get_or_insert_with(|| substitutions.into())[position] =
+                convert::Type::Builtin(convert::Builtin::StaticStr);
+        }
+    }
+    pinned
+}
+
 fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
     OPAQUE_TYPES.with_borrow(|opaque| opaque.contains_key(definition.as_bytes()))
 }
@@ -15805,7 +16137,7 @@ mod tests {
         assert_eq!(arguments[0], Type::Option(Box::new(value())));
         assert!(super::holds_value(&arguments[0]));
         let mut task = Vec::new();
-        super::render_give_task(&arguments[0], "output", &mut task).unwrap();
+        super::render_give_task(&arguments[0], "output", "imported", &mut task).unwrap();
         let task = String::from_utf8(task).unwrap();
         assert!(task.contains("materialize_checked(witness"), "{task}");
         assert!(

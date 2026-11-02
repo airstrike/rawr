@@ -145,6 +145,43 @@ fn a_module_function_names_another_crates_type() {
     assert_eq!(stdout, "Georgia of 3\nInter of 2\nInter\n");
 }
 
+/// A crate's `async fn` whose future borrows std's types and Rust's own
+/// leases each borrow to the future, whatever the type (#714): `&Path` and
+/// `&[u8]`, `&String`, `&Vec<u32>`, `&u32`, and a `Result<&Font, String>`
+/// with either variant. Each value is whole again after the await, and the
+/// output is `cargo run`'s.
+#[test]
+fn an_async_fn_leases_every_borrow_its_inputs_hold() {
+    let root = fixture("tokio-borrowed");
+    fs::copy(root.join("variants/store.rs"), root.join("src/main.rs")).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let output = |command: &mut Command| {
+        let run = command
+            .current_dir(&root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env_remove("RAWR_VERBOSE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(run.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
+        stdout
+    };
+    let rawr = output(
+        Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+            .arg("run")
+            .arg(&root)
+            .env("RAWR_HOME", directory.join("rawr-home")),
+    );
+    let cargo = output(Command::new("cargo").args(["run", "-q"]));
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "3 bytes to out/notes.txt\nQUIET\n10\n42\nInter\nmissing\nout/notes.txt quiet 4 21 Inter\n"
+    );
+}
+
 #[test]
 fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
     let root = fixture("tokio-ticks");

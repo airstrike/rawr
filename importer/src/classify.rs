@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 90;
+const CLASSIFIER_VERSION: u32 = 92;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -747,16 +747,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         &self,
         generics: &model::Generics,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
-        self.declared_parameters(generics, &[], false)
+        self.declared_parameters(generics, false)
     }
 
-    /// The generic parameters, but those in `strings`, which take a `String`.
-    /// `function` admits a function's argument `impl Trait`, which no type
-    /// has.
+    /// The generic parameters. `function` admits a function's argument
+    /// `impl Trait`, which no type has.
     fn declared_parameters(
         &self,
         generics: &model::Generics,
-        strings: &[u32],
         function: bool,
     ) -> Result<Box<[representability::signature::Parameter]>, Failure> {
         // A lifetime parameter is instantiated at `'static` (D558 tier 0):
@@ -764,7 +762,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         // inputs borrow at it.
         for parameter in generics
             .parameters()
-            .filter(|parameter| !strings.contains(&parameter.index()))
             .filter(|parameter| !is_lifetime_parameter(parameter))
         {
             // An argument's `impl Fn(..)` takes a script closure, and no
@@ -787,7 +784,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .map_err(|_| Error::Allocation)?;
         for parameter in generics
             .parameters()
-            .filter(|parameter| !strings.contains(&parameter.index()))
             .filter(|parameter| !is_lifetime_parameter(parameter))
         {
             let (kind, default) = match parameter.kind() {
@@ -843,67 +839,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         })
     }
 
-    /// The synthetic parameters of `impl AsRef<str>` or `impl Into<String>`
-    /// arguments. Rawr passes a `String`, which is both.
-    fn string_parameters(&self, generics: &model::Generics) -> Vec<u32> {
-        generics
-            .parameters()
-            .filter(|parameter| parameter.name().starts_with("impl "))
-            .filter(|parameter| {
-                let declared = match parameter.kind() {
-                    model::ParameterKind::Type { bounds, .. } => bounds.iter().collect::<Vec<_>>(),
-                    _ => return false,
-                };
-                let predicated = generics
-                    .predicates()
-                    .filter_map(|predicate| match predicate {
-                        model::Predicate::Bound {
-                            ty: model::Type::Parameter { index, .. },
-                            bound,
-                        } if *index == parameter.index() => Some(bound),
-                        _ => None,
-                    });
-                let traits = declared
-                    .into_iter()
-                    .chain(predicated)
-                    .filter_map(|bound| match bound {
-                        model::Bound::Trait {
-                            trait_id,
-                            arguments,
-                            polarity: model::Polarity::Positive,
-                            ..
-                        } => Some((trait_id, arguments)),
-                        _ => None,
-                    })
-                    .filter(|(trait_id, _)| self.definition_name(trait_id) != Some("Sized"))
-                    .collect::<Vec<_>>();
-                !traits.is_empty()
-                    && traits.iter().all(|(trait_id, arguments)| {
-                        let target = arguments.iter().rev().find_map(|argument| match argument {
-                            model::Argument::Type(ty) => Some(ty),
-                            _ => None,
-                        });
-                        match (self.definition_name(trait_id), target) {
-                            (Some("AsRef"), Some(model::Type::Primitive(name))) => &**name == "str",
-                            (Some("Into"), Some(model::Type::Definition { id, .. })) => self
-                                .graph
-                                .definition_index(id)
-                                .and_then(|index| self.graph.definitions().nth(index))
-                                .is_some_and(is_string),
-                            _ => false,
-                        }
-                    })
-            })
-            .map(model::Parameter::index)
-            .collect()
-    }
-
     fn function_parameters(
         &self,
         generics: &model::Generics,
-        strings: &[u32],
     ) -> Result<FunctionParameters, Failure> {
-        let parameters = self.declared_parameters(generics, strings, true)?;
+        let parameters = self.declared_parameters(generics, true)?;
         if generics.predicates().len() == 0 {
             return Ok(FunctionParameters {
                 parameters,
@@ -1221,8 +1161,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         {
             return Err(representability::reject::Kind::FutureClosure.into());
         }
+        // A callable with no `'static` bound is borrowed for the call, which
+        // ends before it can be called again: an `FnMut` one, as image's
+        // `ImageBuffer::from_fn(w, h, |x, y| ..)` takes, is called through
+        // the same borrow as an `Fn` one, and may change what it captures.
         let class = match (class, static_owned) {
-            ("Fn", false) => crate::surface::callable::Class::Borrowed(
+            ("Fn" | "FnMut", false) => crate::surface::callable::Class::Borrowed(
                 crate::surface::callable::borrowed::Proof::input_only(late_bound),
             ),
             ("Fn", true) => crate::surface::callable::Class::Shared(
@@ -1236,9 +1180,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             ("FnOnce", _) => crate::surface::callable::Class::Once(
                 crate::surface::callable::once::Proof::static_owned(),
             ),
-            ("FnMut", false) => {
-                return Err(representability::reject::Kind::NonStaticCallable.into());
-            }
             _ => return Err(representability::reject::Kind::CallableProtocol.into()),
         };
         // `Fn(A, B)` is written `Fn<(A, B)>`: its one argument is the tuple
@@ -6708,8 +6649,15 @@ impl<P: api::Phase> Context<'_, P> {
         if !signature.inputs().any(|input| pointer(input).is_some()) {
             return None;
         }
-        let owner = generics.parameters().next()?.owner().clone();
         let (callable, once, output) = self.callable_traits()?;
+        // A parameter is read by its index alone, so one an item with no
+        // parameters of its own declares, as image-like `Grid::fold(&self,
+        // u32, fn(u32, u8) -> u32)` or a free `combine(.., fn(i64, i64, i64)
+        // -> i64)`, is owned by `Fn` itself.
+        let owner = generics
+            .parameters()
+            .next()
+            .map_or_else(|| callable.clone(), |parameter| parameter.owner().clone());
         let mut next = generics
             .parameters()
             .map(model::Parameter::index)
@@ -6921,7 +6869,6 @@ impl<P: api::Phase> Context<'_, P> {
         let projected = self.projections(generics, signature);
         let rewritten = Self::projected_generics(generics, &projected);
         let generics = rewritten.as_ref().unwrap_or(generics);
-        let strings = self.string_parameters(generics);
         let FunctionParameters {
             mut parameters,
             callable: callable_class,
@@ -6929,7 +6876,7 @@ impl<P: api::Phase> Context<'_, P> {
             mut predicates,
             call,
             crossings,
-        } = self.function_parameters(generics, &strings)?;
+        } = self.function_parameters(generics)?;
         // A callable an `impl Into<T>` converts from crosses as a closure
         // `T`'s `From` takes (D552.3), not as a slot.
         let crossings = if converted.is_some() {
@@ -6974,11 +6921,6 @@ impl<P: api::Phase> Context<'_, P> {
             .map_err(|_| Error::Allocation)?;
         for input in signature.inputs() {
             inputs.push(match input {
-                model::Type::Parameter { index, .. } if strings.contains(index) => {
-                    representability::convert::Type::Builtin(
-                        representability::convert::Builtin::String,
-                    )
-                }
                 // An argument's `impl IntoIterator<Item = X>`, as iced's
                 // `Column::with_children` takes: a `Vec<X>`, which Rawr's
                 // array is, so the call's `X` is its elements' type.
@@ -7006,9 +6948,6 @@ impl<P: api::Phase> Context<'_, P> {
         // at the type parameters the caller fixes (`iced::widget::iced`).
         // A parameter a value fills where another form takes a callable is
         // left out as the callable is, so both forms give the one type.
-        // So is an `impl AsRef<str>` input, which Rawr fills with a
-        // `String` and no signature parameter names (iced's
-        // download_progress, #568).
         self.opaque_associated.borrow_mut().clear();
         *self.opaque_output.borrow_mut() = Some(
             call.iter()
@@ -7016,7 +6955,6 @@ impl<P: api::Phase> Context<'_, P> {
                 .chain(crossings.iter().map(|(parameter, ..)| *parameter))
                 .chain(futures.iter().map(|(parameter, _)| *parameter))
                 .chain(valued.iter().copied().filter(|_| values))
-                .chain(strings.iter().copied())
                 .collect(),
         );
         let output = match signature.receiver() {
@@ -7622,6 +7560,19 @@ impl<P: api::Phase> Context<'_, P> {
                         representability::signature::Associated::new(identity, name.into()),
                         position,
                     ));
+                    // The type is a future, whatever bound makes it one, as
+                    // `impl Straw<..>` is through `Core`: its value is taken
+                    // where a future of its `Output` is, as rustc takes it
+                    // for iced's `Task::future(impl Future<Output = T>)`.
+                    if name == "Output" && self.is_core_trait(&trait_id, "Future") {
+                        associated.push((
+                            representability::signature::Associated::new(
+                                *crate::surface::identity::Definition::future().as_bytes(),
+                                name.into(),
+                            ),
+                            position,
+                        ));
+                    }
                     arguments.push(value);
                 }
                 let definition = crate::surface::identity::Definition::of(id);
@@ -8432,23 +8383,36 @@ impl<P: api::Phase> Context<'_, P> {
         // A type that holds borrows, as fount's `load(family: &str, catalog:
         // Option<&Catalog>)` takes an `Option<&Catalog>`: each borrow in it
         // is lent as the borrow alone is, recursively, and `None` lends
-        // nothing (#677). Nothing is special to `Option`: a tuple of borrows
-        // lends each of its members.
-        if let model::Type::Definition { id, arguments } = ty
-            && let Some(element) = self
+        // nothing (#677). Nothing is special to `Option`: a `Result` lends
+        // what its variant holds, as `Result<&Font, String>` does, and a
+        // tuple each of its members. A member that borrows nothing moves.
+        let definition = match ty {
+            model::Type::Definition { id, arguments } => self
                 .graph
                 .definition_index(id)
                 .and_then(|index| self.graph.definitions().nth(index))
-                .and_then(|definition| option_element(definition, arguments))
+                .map(|definition| (definition, arguments)),
+            _ => None,
+        };
+        if let Some((definition, arguments)) = definition
+            && let Some(element) = option_element(definition, arguments)
             && names_late_lifetime(element)
         {
             return leased(representability::convert::Type::Option(Box::new(
                 self.convert_input(element)?,
             )));
         }
+        if let Some((definition, arguments)) = definition
+            && let Some((ok, err)) = result_elements(definition, arguments)
+            && (names_late_lifetime(ok) || names_late_lifetime(err))
+        {
+            return leased(representability::convert::Type::Result(
+                Box::new(self.convert_input(ok)?),
+                Box::new(self.convert_input(err)?),
+            ));
+        }
         if let model::Type::Tuple(members) = ty
-            && !members.is_empty()
-            && members.iter().all(names_late_lifetime)
+            && members.iter().any(names_late_lifetime)
         {
             return leased(representability::convert::Type::Tuple(
                 members
@@ -8514,6 +8478,35 @@ impl<P: api::Phase> Context<'_, P> {
                     return Ok(representability::convert::Type::Borrowed {
                         mutable: false,
                         ty: Box::new(self.convert_value(target)?),
+                    });
+                }
+                // `&String` or `&Vec<T>` of Rawr's own string or array, as
+                // an `async fn shout(text: &String)` takes: the Rust value
+                // made from it, lent as a `&[T]` is, since Rawr's string and
+                // array don't hold Rust's layout.
+                model::Type::Definition { .. }
+                    if let Ok(
+                        made @ (representability::convert::Type::Sequence { .. }
+                        | representability::convert::Type::Builtin(
+                            representability::convert::Builtin::String,
+                        )),
+                    ) = self.convert_value(target) =>
+                {
+                    // A `&Vec<T>` is lent as the slice it derefs to, which
+                    // the made `Vec` is.
+                    let made = match made {
+                        representability::convert::Type::Sequence { element, .. } => {
+                            representability::convert::Type::Sequence {
+                                element,
+                                owned: false,
+                                length: None,
+                            }
+                        }
+                        made => made,
+                    };
+                    return Ok(representability::convert::Type::Borrowed {
+                        mutable: false,
+                        ty: Box::new(made),
                     });
                 }
                 // `&f32` of a number, as `PartialOrd<f32>::lt(&self, &f32)`
@@ -8750,31 +8743,23 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
     }
 }
 
-/// `&str` or `&'a str`.
 /// `ty`, an input type that holds borrows, when the call can lease each of
-/// them as the generator's `Lease` does: a `&T` or `&mut T` of a value in
-/// its slot, or a `&str`, alone or in an `Option` or a tuple of them.
-/// Anything else is a reference type Rawr can't lend there.
+/// them as the generator's `Lease` does: every borrow `convert_input` gives
+/// is one the call lends, alone or in an `Option`, a `Result` or a tuple,
+/// beside members that borrow nothing and move. A `&mut` of Rawr's own
+/// string or array, copied in and back out, has no place to go back to
+/// from inside one.
 fn leased(ty: representability::convert::Type) -> Result<representability::convert::Type, Failure> {
     use representability::convert::{Builtin, Type};
     fn leasable(ty: &Type) -> bool {
         match ty {
-            Type::Borrowed { ty: lent, .. } => match lent.as_ref() {
-                Type::Nominal {
-                    definition,
-                    arguments,
-                } => {
-                    !arguments.is_empty()
-                        || crate::surface::identity::Definition::std_path(definition.as_bytes())
-                            .is_none()
-                }
-                Type::Parameter(_) => true,
-                _ => false,
-            },
-            Type::Builtin(Builtin::Str) => true,
+            Type::Borrowed { mutable: true, ty } => {
+                !matches!(**ty, Type::Sequence { .. } | Type::Builtin(Builtin::String))
+            }
             Type::Option(element) => leasable(element),
+            Type::Result(ok, err) => leasable(ok) && leasable(err),
             Type::Tuple(members) => members.iter().all(leasable),
-            _ => false,
+            _ => true,
         }
     }
     if leasable(&ty) {

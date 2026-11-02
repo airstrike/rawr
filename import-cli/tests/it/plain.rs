@@ -48,6 +48,84 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// The pinned nightly's check build directory, shared by every project
+/// that uses `home` (D700).
+fn nightly_directory(home: &Path) -> PathBuf {
+    home.join("nightly")
+        .join(rawr_import::cargo::toolchain::CHANNEL)
+}
+
+/// Whether the project at `root` ran the nightly check build: its bundle
+/// keeps a copy of the harness's metadata from each one.
+fn nightly_built(root: &Path) -> bool {
+    fn walk(path: &Path) -> bool {
+        fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path)
+                } else {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("librawr_resolution_harness")
+                }
+            })
+    }
+    walk(&root.join("target/rawr"))
+}
+
+/// The units the nightly check build compiled or ran since `since`, by
+/// Cargo's `<crate>-<hash>` names: Cargo rewrites a unit's fingerprint
+/// only when it compiles that unit or runs its build script again.
+fn compiled_since(nightly: &Path, since: std::time::SystemTime) -> Vec<String> {
+    let mut units = Vec::new();
+    let mut pending = vec![nightly.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if directory
+                .file_name()
+                .is_some_and(|name| name == ".fingerprint")
+            {
+                let written = fs::read_dir(&path)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|file| {
+                        file.metadata()
+                            .and_then(|metadata| metadata.modified())
+                            .is_ok_and(|modified| modified > since)
+                    });
+                if written {
+                    units.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            } else {
+                pending.push(path);
+            }
+        }
+    }
+    units.sort();
+    units
+}
+
+/// The units in the nightly check build named for `krate`.
+fn units_of(nightly: &Path, krate: &str) -> Vec<String> {
+    compiled_since(nightly, std::time::SystemTime::UNIX_EPOCH)
+        .into_iter()
+        .filter(|unit| {
+            unit.rsplit_once('-')
+                .is_some_and(|(name, hash)| name == krate && hash.len() == 16)
+        })
+        .collect()
+}
+
 /// `rawr_import`, killed and failed after `limit`: a run that waits on
 /// itself fails the test instead of hanging it.
 fn rawr_import_within(
@@ -478,9 +556,10 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
             }
         }
         let mut found = Vec::new();
-        for directory in ["build", "extraction", "cache/resolution", "inventories"] {
+        for directory in ["extraction", "cache/resolution", "inventories"] {
             walk(&root.join("target/rawr").join(directory), since, &mut found);
         }
+        walk(&nightly_directory(&home), since, &mut found);
         found
     };
     let started = std::time::SystemTime::now();
@@ -671,7 +750,7 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
         let probed = fs::read_dir(root.join("target/rawr/extraction"))
             .map(|entries| entries.count())
             .unwrap_or_default();
-        root.join("target/rawr/build").exists() || probed != 0
+        nightly_built(root) || probed != 0
     };
 
     run(first, expected);
@@ -755,7 +834,7 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
         let probed = fs::read_dir(root.join("target/rawr/extraction"))
             .map(|entries| entries.count())
             .unwrap_or_default();
-        root.join("target/rawr/build").exists() || probed != 0
+        nightly_built(root) || probed != 0
     };
 
     check(first);
@@ -970,18 +1049,18 @@ fn main() {
     }
     for project in &projects[1..] {
         assert!(
-            !project.join("target/rawr/build").exists(),
+            !nightly_built(project),
             "unchanged crate should replay without nightly: {}",
             project.display()
         );
         let output = run(project, "run", "small");
         assert!(output.status.success(), "{}", text(&output.stderr));
-        assert!(!project.join("target/rawr/build").exists());
+        assert!(!nightly_built(project));
         assert!(project.join("target/rawr/shared/remembered.json").is_file());
     }
     let checked = run(&projects[1], "check", "small");
     assert!(checked.status.success(), "{}", text(&checked.stderr));
-    assert!(!projects[1].join("target/rawr/build").exists());
+    assert!(!nightly_built(&projects[1]));
     fs::write(&input, "long").unwrap();
     let changed = run(&projects[1], "check", "small");
     assert!(
@@ -1041,14 +1120,14 @@ fn main() {
     shared.until(std::time::Duration::from_secs(300), |line| {
         line == "width 10"
     });
-    assert!(!live.join("target/rawr/build").exists());
+    assert!(!nightly_built(&live));
     finish(&mut shared);
     assert!(live.join("target/rawr/shared/remembered.json").is_file());
     let mut remembered = start();
     remembered.until(std::time::Duration::from_secs(120), |line| {
         line == "width 10"
     });
-    assert!(!live.join("target/rawr/build").exists());
+    assert!(!nightly_built(&live));
     fs::write(&input, "longer").unwrap();
     remembered.until(std::time::Duration::from_secs(180), |line| {
         line == "width 11"
@@ -1736,4 +1815,176 @@ fn a_workspace_member_resolves_with_the_roots_patch() {
     project(&root, &files);
     let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
     assert_runs_and_checks(&root.join("app"), &home);
+}
+
+/// A project as `FIXTURE`, with `main` and, when `events` is given, a path
+/// crate `events 0.1.0` at `events/` that returns it.
+fn nightly_project(root: &Path, main: &str, events: Option<&str>) {
+    let _ = fs::remove_dir_all(root);
+    copy(Path::new(FIXTURE), root);
+    fs::write(root.join("src/main.rs"), main).unwrap();
+    if let Some(word) = events {
+        fs::create_dir_all(root.join("events/src")).unwrap();
+        fs::write(
+            root.join("events/Cargo.toml"),
+            "[package]\nname = \"events\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("events/src/lib.rs"),
+            format!("pub fn word() -> &'static str {{\n    \"{word}\"\n}}\n"),
+        )
+        .unwrap();
+        let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            manifest.replace(
+                "semver = \"1\"\n",
+                "semver = \"1\"\nevents = { path = \"events\" }\n",
+            ),
+        )
+        .unwrap();
+    }
+}
+
+fn run_ok(root: &Path, home: &Path) -> String {
+    let run = rawr_import_with_home(root, &["run"], home);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    text(&run.stdout)
+}
+
+/// Two projects with a path crate `events 0.1.0` at the same relative path,
+/// with different contents, share the pinned nightly's check build. Cargo
+/// keys each `events` by its absolute path, so each project reads its own,
+/// the second compiles no registry unit, and neither removes the other's
+/// units (D699.2 a and c, D700).
+#[test]
+fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nightly-path-crates");
+    let _ = fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let nightly = nightly_directory(&home);
+    let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    println!(\"{} {}\", events::word(), Version::new(1, 2, 3));\n}\n";
+    let [first, second] = ["first", "second"].map(|name| base.join(name));
+    nightly_project(&first, main, Some("alpha"));
+    nightly_project(&second, main, Some("beta"));
+
+    assert_eq!(run_ok(&first, &home), "alpha 1.2.3\n");
+    assert!(nightly_built(&first));
+    assert!(
+        !units_of(&nightly, "semver").is_empty(),
+        "the first project checks semver"
+    );
+
+    let started = std::time::SystemTime::now();
+    assert_eq!(run_ok(&second, &home), "beta 1.2.3\n");
+    assert!(
+        nightly_built(&second),
+        "the second project extracts its own `events`"
+    );
+    let compiled = compiled_since(&nightly, started);
+    assert!(
+        compiled.iter().any(|unit| unit.starts_with("events-")),
+        "the second project's `events` is its own unit: {compiled:?}"
+    );
+    assert!(
+        compiled
+            .iter()
+            .all(|unit| unit.starts_with("events-") || unit.starts_with("rawr-resolution-harness-")),
+        "the second project compiled only its own crates: {compiled:?}"
+    );
+    assert_eq!(
+        units_of(&nightly, "events").len(),
+        2,
+        "each project keeps its own `events` unit"
+    );
+
+    // The first project's `events` is still its own, and still fresh.
+    fs::remove_dir_all(home.join("bindings")).unwrap();
+    fs::remove_dir_all(first.join("target/rawr")).unwrap();
+    let started = std::time::SystemTime::now();
+    assert_eq!(run_ok(&first, &home), "alpha 1.2.3\n");
+    assert!(nightly_built(&first));
+    // Only the harness, whose sources rawr has just written, is checked again.
+    let compiled = compiled_since(&nightly, started);
+    assert!(
+        compiled
+            .iter()
+            .all(|unit| unit.starts_with("rawr-resolution-harness-")),
+        "{compiled:?}"
+    );
+}
+
+/// Two projects with the same closure and no path crate share every unit
+/// of the nightly's check build, the harness's included. A binding miss in
+/// the second compiles nothing and reads what the first checked, which is
+/// what it would check itself; a feature change compiles only that variant,
+/// beside the first's (D699.2 b, D700).
+#[test]
+fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
+    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nightly-identical");
+    let _ = fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let nightly = nightly_directory(&home);
+    let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    let version = Version::parse(\"1.2.3\").unwrap();\n    println!(\"{version} {}\", version.major);\n}\n";
+    let [first, second] = ["first", "second"].map(|name| base.join(name));
+    nightly_project(&first, main, None);
+    nightly_project(&second, main, None);
+
+    assert_eq!(run_ok(&first, &home), "1.2.3 1\n");
+    assert!(nightly_built(&first));
+
+    // A miss in the second project, as after a change to the bindings'
+    // format: the nightly runs and compiles nothing.
+    fs::remove_dir_all(home.join("bindings")).unwrap();
+    let started = std::time::SystemTime::now();
+    assert_eq!(run_ok(&second, &home), "1.2.3 1\n");
+    assert!(
+        nightly_built(&second),
+        "the second project's miss ran the nightly"
+    );
+    // Only the harness, whose sources rawr has just written, is checked again.
+    let compiled = compiled_since(&nightly, started);
+    assert!(
+        compiled
+            .iter()
+            .all(|unit| unit.starts_with("rawr-resolution-harness-")),
+        "{compiled:?}"
+    );
+
+    // Another feature set is another unit: only it is compiled, and the
+    // first project's stays.
+    let before = units_of(&nightly, "semver");
+    let manifest = fs::read_to_string(second.join("Cargo.toml")).unwrap();
+    fs::write(
+        second.join("Cargo.toml"),
+        manifest.replace(
+            "semver = \"1\"\n",
+            "semver = { version = \"1\", default-features = false }\n",
+        ),
+    )
+    .unwrap();
+    let started = std::time::SystemTime::now();
+    assert_eq!(run_ok(&second, &home), "1.2.3 1\n");
+    let compiled = compiled_since(&nightly, started);
+    assert!(
+        compiled.iter().any(|unit| unit.starts_with("semver-")),
+        "semver without `std` is a unit of its own: {compiled:?}"
+    );
+    assert!(
+        compiled
+            .iter()
+            .all(|unit| unit.starts_with("semver-") || unit.starts_with("rawr-resolution-harness-")),
+        "{compiled:?}"
+    );
+    let semver = units_of(&nightly, "semver");
+    assert!(
+        before.iter().all(|unit| semver.contains(unit)) && semver.len() > before.len(),
+        "both variants stay: {before:?} then {semver:?}"
+    );
 }

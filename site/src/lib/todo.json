@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.94",
+  "version": "0.3.101",
   "examples": {
     "running": 23,
     "total": 56,
@@ -11,6 +11,61 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.101",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied.","issues":[713]},
+          {"text":"An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future.","issues":[714]},
+          {"text":"A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions.","issues":[715]}
+        ]
+      },
+      {
+        "version": "0.3.100",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"The ?play universe runner starts again: a generated runner installs each crate's bindings after those of the crates whose types they use, so iced no longer waits on iced_test's bindings.","issues":[738]}
+        ]
+      },
+      {
+        "version": "0.3.99",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, \"type mismatch in closure arguments\", naming both signatures.","issues":[722]},
+          {"text":"An `.into()` whose target nothing fixes is refused with rustc's \"type annotations needed\" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected.","issues":[723]}
+        ]
+      },
+      {
+        "version": "0.3.98",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A type missing a trait reads as rustc's E0277 (\"the trait bound `T: X` is not satisfied\", or \"`T` doesn't implement `Debug`\"), with a \"required by a bound in\" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type.","issues":[718]},
+          {"text":"A crate path that can't be used yet gives the Rust reason (\"`x` can't be used yet: it takes a closure that isn't `'static`\"), labelled where it is defined and exported, instead of an internal rejection name or \"retained\" evidence.","issues":[719,720]},
+          {"text":"A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name.","issues":[721]}
+        ]
+      },
+      {
+        "version": "0.3.97",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
+        ]
+      },
+      {
+        "version": "0.3.96",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
+          {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
+        ]
+      },
+      {
+        "version": "0.3.95",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused.","issues":[691]}
+        ]
+      },
       {
         "version": "0.3.94",
         "date": "2026-11-01",
@@ -1597,8 +1652,8 @@
     {"issue":634,"title":"Provided trait methods of an alias's instance that take impl FnOnce(&mut Self)","state":"closed","category":"No glue (D593)","release":"0.3.78"},
     {"issue":635,"title":"A demanded member that is still unbound hides its argument's error","state":"open","category":"Divergences from rustc"},
     {"issue":636,"title":"Store eviction broke every program's runtime build","state":"closed","category":"Health"},
-    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"open","category":"No glue (D593)"},
-    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"open","category":"No glue (D593)"},
+    {"issue":637,"title":"A program function's opaque future passes to Task::future","state":"closed","category":"No glue (D593)","release":"0.3.96"},
+    {"issue":638,"title":"A method whose input is a projection of its impl's self type has a binding","state":"closed","category":"No glue (D593)","release":"0.3.96"},
     {"issue":639,"title":"An opaque value that borrows can live in a view's region","state":"open","category":"No glue (D593)"},
     {"issue":640,"title":"rawr-import lib tests compile without the rustc-driver and test-fixtures features","state":"closed","category":"Health"},
     {"issue":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"open","category":"Health"},
@@ -1651,7 +1706,7 @@
     {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
-    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.95"},
     {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"open","category":"Divergences from rustc"},
     {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
@@ -1664,7 +1719,44 @@
     {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"open","category":"Divergences from rustc"},
     {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
-    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"}
+    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"},
+    {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"open","category":"Divergences from rustc"},
+    {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc","release":"0.3.97"},
+    {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"open","category":"Divergences from rustc"},
+    {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
+    {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
+    {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
+    {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"open","category":"Divergences from rustc"},
+    {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"open","category":"Divergences from rustc"},
+    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
+    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
+    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)","release":"0.3.101"},
+    {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
+    {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
+    {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
+    {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
+    {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
+    {"issue":721,"title":"Generated-runtime invariant errors (TypeMismatch, StaleHandle, NotClone) panic as rawr bugs or read in Rust terms","state":"closed","category":"Health","release":"0.3.98"},
+    {"issue":722,"title":"A closure written |x: T| where Fn(&T) is expected is E0631, not accepted by dropping the reference","state":"closed","category":"Divergences from rustc","release":"0.3.99"},
+    {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"closed","category":"Divergences from rustc","release":"0.3.99"},
+    {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
+    {"issue":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"},
+    {"issue":727,"title":"A blanket impl's method whose input is its associated type, set through another trait's projection, has a binding","state":"open","category":"No glue (D593)"},
+    {"issue":728,"title":"A variant constructor's `.with(x)` fills a callable parameter","state":"open","category":"No glue (D593)"},
+    {"issue":729,"title":"Task::future of a script future whose output holds no crate value keeps its type for a later method","state":"open","category":"No glue (D593)"},
+    {"issue":730,"title":"A native future value passed where a script function expects a future is refused at check time","state":"open","category":"No glue (D593)"},
+    {"issue":731,"title":"#[rawr::export] declares a &T parameter as &T, not an owned T","state":"open","category":"Divergences from rustc"},
+    {"issue":732,"title":"Text .into() takes its target from the use site: &str, Box<str>, Arc<str>, PathBuf","state":"open","category":"Divergences from rustc"},
+    {"issue":733,"title":"`&str + &str` reports rustc's E0369, not a type mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":734,"title":"The generated runtime's Stale error panics as a rawr bug or reads in Rust terms","state":"open","category":"Health"},
+    {"issue":735,"title":"`cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health"},
+    {"issue":736,"title":"A String's .into() with no target is E0283, not accepted as itself","state":"open","category":"Divergences from rustc"},
+    {"issue":737,"title":"An array of Elements widens to a slice only at an IntoIterator parameter","state":"open","category":"Divergences from rustc"},
+    {"issue":738,"title":"A runner installs each crate's bindings after the facades whose types they name","state":"closed","category":"Health","release":"0.3.100"},
+    {"issue":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health"},
+    {"issue":740,"title":"&mut String and &mut Vec<T> inside an Option, Result or tuple an async fn takes are leased","state":"open","category":"Divergences from rustc"},
+    {"issue":741,"title":"&String, &Vec<T>, &[u8] and &u32 a crate call or future borrows are lent without building a copy","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

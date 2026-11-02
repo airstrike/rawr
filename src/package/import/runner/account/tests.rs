@@ -234,6 +234,22 @@ fn bind_runtime(
     registry
 }
 
+/// A generated runner installs the definitions in the order `install` gives
+/// them. `native`'s `produce() -> Source` names `target`'s type, so `target`
+/// comes first, as cargo builds a dependency before its user.
+#[test]
+fn installed_definitions_come_after_the_facades_whose_types_they_name() {
+    let mut engine = Engine::new();
+    let plan = rawr_import::test_fixture::runner_foreign_facade_plan();
+    let definitions = runner::install(&mut engine, &plan).unwrap();
+    let mut registry = host::runtime::Registry::new();
+    for definition in definitions.iter() {
+        registry
+            .install(host::runtime::Builder::new(definition.clone()).finish())
+            .unwrap();
+    }
+}
+
 #[test]
 fn runtime_scope_binds_authenticated_rows_and_refuses_a_duplicate_binding() {
     let (engine, definitions, structural) = runtime_fixture();

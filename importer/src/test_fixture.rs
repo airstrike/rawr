@@ -182,6 +182,12 @@ pub fn runner_native_facade_plan() -> Box<[u8]> {
     crate::surface::facade::runner_native_fixture()
 }
 
+/// Return the runner plan with `Source` declared by `target`, so `native`'s
+/// `produce() -> Source` resolves through a facade after it in root order.
+pub fn runner_foreign_facade_plan() -> Box<[u8]> {
+    crate::surface::facade::runner_foreign_fixture()
+}
+
 fn iced_profile_graph(
     retain_text_widget: bool,
     case: IcedElementCase,

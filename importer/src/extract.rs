@@ -3850,6 +3850,7 @@ impl Candidate {
             result?;
         }
 
+        let callables = callable_lang_items(&self.definitions);
         let mut nodes = Vec::new();
         allocation.temporary_conversions(node_ids.len());
         allocation.reserve(&mut nodes, node_ids.len())?;
@@ -3884,6 +3885,24 @@ impl Candidate {
                     }
                 });
                 result?;
+                // A function pointer an item takes is read as its `Fn(..) ->
+                // R` bound, so `Fn`, `FnOnce` and its `Output` support it.
+                if takes_function_pointer(definition) {
+                    for callable in &callables {
+                        push_fixed_edge(
+                            &mut edges,
+                            source,
+                            callable,
+                            definition.span(),
+                            FixedEdgeKind::Support {
+                                provenance: id,
+                                role: ledger::SupportRole::Definition,
+                            },
+                            &nodes,
+                            allocation,
+                        )?;
+                    }
+                }
 
                 let mut owners = Vec::new();
                 if let model::Owner::Implementation(owner) = definition.owner() {
@@ -4428,6 +4447,43 @@ fn validate_fixed_implementation(
     clippy::too_many_arguments,
     reason = "one fixed edge carries its canonical endpoints, exact support/admission kind, span, and bounded ownership authorities"
 )]
+/// `core`'s `Fn`, `FnOnce` and `FnOnce::Output`, those the extraction
+/// holds: the driver adds them wherever an item names a function pointer.
+fn callable_lang_items(
+    definitions: &BTreeMap<identity::Definition, model::Definition>,
+) -> Vec<identity::Definition> {
+    let core = |definition: &model::Definition| {
+        let unit = definition.id().unit();
+        unit.authority().sysroot().is_some() && unit.crate_name() == "core"
+    };
+    let once = definitions
+        .values()
+        .find(|definition| core(definition) && definition.display_path().last() == Some("FnOnce"));
+    definitions
+        .values()
+        .filter(|definition| core(definition))
+        .filter(|definition| {
+            let path = definition.display_path().collect::<Vec<_>>();
+            matches!(path.last(), Some(&("Fn" | "FnOnce")))
+                || (path.last() == Some(&"Output")
+                    && (path.iter().rev().nth(1) == Some(&"FnOnce")
+                        || once.is_some_and(|once| {
+                            matches!(definition.owner(), model::Owner::Definition(owner)
+                                if owner == once.id())
+                        })))
+        })
+        .map(|definition| definition.id().clone())
+        .collect()
+}
+
+/// Whether a function takes a function pointer.
+fn takes_function_pointer(definition: &model::Definition) -> bool {
+    matches!(definition.kind(), model::Kind::Function { signature, .. }
+        if signature
+            .inputs()
+            .any(|input| matches!(input, model::Type::FunctionPointer(_))))
+}
+
 fn push_fixed_edge<'candidate>(
     edges: &mut Vec<FixedEdge<'candidate>>,
     source: usize,

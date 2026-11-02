@@ -82,9 +82,11 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // whose associated type a selected signature projects from a parameter.
 // Schema 38 applies a blanket implementation of a generic trait through each
 // of the type's own implementations of its bound, not only through one.
+// Schema 41 normalizes a projection a function or impl names in its own
+// environment, as `Self::Scalar` in an impl that sets it.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 40;
+const PROTOCOL_SCHEMA: u32 = 42;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -3712,6 +3714,36 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         (!normalized.has_aliases() && !has_lifetime(normalized)).then_some(normalized)
     }
 
+    /// What the projection `ty` normalizes to in the environment of
+    /// `owner`, a function or an implementation, when `ty` names no bound
+    /// variable or lifetime and the result names no associated or opaque
+    /// type and no lifetime. A projection that only a where-clause bounds,
+    /// as `<I as Iterator>::Item` of a parameter `I`, stays one.
+    fn normalized_in(&self, ty: Ty<'tcx>, owner: DefId) -> Option<Ty<'tcx>> {
+        let has_lifetime = |ty: Ty<'tcx>| {
+            ty.walk()
+                .any(|argument| matches!(argument.kind(), ty::GenericArgKind::Lifetime(_)))
+        };
+        if !ty.has_param()
+            || ty.has_bound_vars()
+            || has_lifetime(ty)
+            || !matches!(
+                self.tcx.def_kind(owner),
+                DefKind::Fn | DefKind::AssocFn | DefKind::Impl { .. }
+            )
+        {
+            return None;
+        }
+        let normalized = self
+            .tcx
+            .try_normalize_erasing_regions(
+                ty::TypingEnv::non_body_analysis(self.tcx, owner),
+                ty::Unnormalized::new(ty),
+            )
+            .ok()?;
+        (!normalized.has_aliases() && !has_lifetime(normalized)).then_some(normalized)
+    }
+
     fn type_of(&mut self, ty: Ty<'tcx>, owner: DefId, depth: usize) -> Result<Type, String> {
         check_type_depth(depth)?;
         Ok(match ty.kind() {
@@ -3787,6 +3819,17 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             ty::FnPtr(signature, header) => {
                 self.budget.items(1)?;
+                // A function pointer implements `Fn`, and the classifier
+                // reads one as its `Fn(..) -> R` bound, whatever else the
+                // crate names.
+                let lang = self.tcx.lang_items();
+                if let (Some(callable), Some(once), Some(output)) =
+                    (lang.fn_trait(), lang.fn_once_trait(), lang.fn_once_output())
+                {
+                    self.ensure(callable, Namespace::Type)?;
+                    self.ensure(once, Namespace::Type)?;
+                    self.ensure(output, Namespace::Type)?;
+                }
                 Type::FunctionPointer {
                     signature: Box::new(self.poly_signature(
                         signature.with(*header),
@@ -3866,6 +3909,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 // normalizes it to.
                 ty::AliasTyKind::Projection { .. }
                     if let Some(normalized) = self.normalized_projection(ty) =>
+                {
+                    return self.type_of(normalized, owner, depth.saturating_add(1));
+                }
+                // A projection an implementation's own items name, as
+                // palette's `fn shift_hue(self, amount: Self::Scalar)` in
+                // `impl<S, T> ShiftHue for Hsl<S, T>` names `<Hsl<S, T> as
+                // ShiftHue>::Scalar`, is the type rustc normalizes it to in
+                // the owner's environment: here the impl's `T`.
+                ty::AliasTyKind::Projection { .. }
+                    if let Some(normalized) = self.normalized_in(ty, owner) =>
                 {
                     return self.type_of(normalized, owner, depth.saturating_add(1));
                 }

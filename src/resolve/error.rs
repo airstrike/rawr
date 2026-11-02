@@ -80,6 +80,9 @@ pub enum Category {
     /// An `==` or `!=` whose left operand's type has no `PartialEq` impl
     /// for the right operand's, as rustc's E0277.
     CannotCompare,
+    /// A closure or function whose parameters differ from the ones its
+    /// callable's signature gives, as rustc's E0631.
+    ArgumentSignature,
 }
 
 impl fmt::Display for Category {
@@ -121,6 +124,7 @@ impl fmt::Display for Category {
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
+            Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
         }
     }
 }
@@ -468,14 +472,21 @@ pub enum Error {
         /// Exact signature type span.
         signature: Span,
     },
-    /// An operation requires a capability not proven by the owner type.
+    /// A type doesn't implement a trait an operation needs: rustc's E0277,
+    /// "the trait bound `Owner: Trait` is not satisfied".
     MissingCapability {
-        /// Nominal owner type.
+        /// The type, as the program names it.
         owner: ImmutableString,
-        /// Required capability.
+        /// The trait it must implement.
         capability: ImmutableString,
         /// Operation source span.
         operation: Span,
+        /// Whether the type is the program's own struct or enum, so a
+        /// `#[derive]` on it can provide a derivable trait.
+        derive: bool,
+        /// The item whose bound requires the trait, as rustc's "required by
+        /// a bound in" note names it.
+        required_by: Option<ImmutableString>,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
@@ -557,6 +568,18 @@ pub enum Error {
         /// The operator.
         at: Span,
     },
+    /// A closure or function passed where a callable of the same arity is
+    /// expected whose parameters differ, which rustc refuses (E0631).
+    ArgumentSignature {
+        /// Whether a closure is passed; else a function.
+        closure: bool,
+        /// The signature expected, as `fn(&State) -> _`.
+        expected: ImmutableString,
+        /// The signature found, as `fn(State) -> _`.
+        found: ImmutableString,
+        /// The closure or function passed.
+        at: Span,
+    },
 }
 
 impl Error {
@@ -620,6 +643,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
+            Self::ArgumentSignature { .. } => Category::ArgumentSignature,
         }
     }
 
@@ -663,6 +687,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
             Self::CannotCompare { lhs, .. } => lhs.as_str(),
+            Self::ArgumentSignature { expected, .. } => expected.as_str(),
         }
     }
 
@@ -705,7 +730,8 @@ impl Error {
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
-            | Self::CannotCompare { at, .. } => *at,
+            | Self::CannotCompare { at, .. }
+            | Self::ArgumentSignature { at, .. } => *at,
         }
     }
 
@@ -753,7 +779,8 @@ impl Error {
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
             | Self::TypeAnnotationsNeeded { .. }
-            | Self::CannotCompare { .. } => None,
+            | Self::CannotCompare { .. }
+            | Self::ArgumentSignature { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -994,9 +1021,11 @@ impl fmt::Display for Written<'_> {
                 owner,
                 capability,
                 operation,
+                ..
             } => write!(
                 formatter,
-                "`{owner}` does not provide `{capability}` at {operation}"
+                "{} at {operation} (E0277)",
+                Unsatisfied(owner, capability)
             ),
             Error::InvalidMatch {
                 owner,
@@ -1006,10 +1035,9 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "invalid match for `{owner}` at {pattern}: {reason}"
             ),
-            Error::UnsupportedNominalSyntax { construct, source } => write!(
-                formatter,
-                "nominal operation uses unsupported syntax `{construct}` at {source}"
-            ),
+            Error::UnsupportedNominalSyntax { construct, source } => {
+                write!(formatter, "{} at {source}", Unsupported(construct))
+            }
             Error::Syntax { message, .. } => formatter.write_str(message),
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
@@ -1043,6 +1071,18 @@ impl fmt::Display for Written<'_> {
                 "{} at {at} (E0277)",
                 CannotCompare(lhs, rhs)
             ),
+            Error::ArgumentSignature {
+                closure,
+                expected,
+                found,
+                at,
+            } => write!(
+                formatter,
+                "{} at {at}: expected {kind} signature `{expected}`, found {kind} signature \
+                 `{found}` (E0631)",
+                ArgumentSignature(*closure),
+                kind = ArgumentSignature(*closure).kind(),
+            ),
         }
     }
 }
@@ -1054,6 +1094,73 @@ impl fmt::Display for CannotCompare<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "can't compare `{}` with `{}`", self.0, self.1)
     }
+}
+
+/// A construct rawr doesn't handle yet, named in Rust's terms. A reason
+/// that already says it isn't supported reads as written.
+pub(crate) struct Unsupported<'a>(pub(crate) &'a str);
+
+impl fmt::Display for Unsupported<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.contains("not supported") {
+            formatter.write_str(self.0)
+        } else {
+            write!(formatter, "{} is not supported", self.0)
+        }
+    }
+}
+
+/// rustc's E0631 message for a closure or function whose parameters
+/// differ from the callable's it is passed as.
+pub(crate) struct ArgumentSignature(pub(crate) bool);
+
+impl ArgumentSignature {
+    /// `closure` or `function`, as rustc's notes name it.
+    pub(crate) const fn kind(&self) -> &'static str {
+        if self.0 {
+            "closure"
+        } else {
+            "function"
+        }
+    }
+}
+
+impl fmt::Display for ArgumentSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "type mismatch in {} arguments", self.kind())
+    }
+}
+
+/// rustc's E0277 message for a type that doesn't implement a trait: "the
+/// trait bound `Owner: Trait` is not satisfied", or the formatting traits'
+/// own wording.
+pub(crate) struct Unsatisfied<'a>(pub(crate) &'a str, pub(crate) &'a str);
+
+impl fmt::Display for Unsatisfied<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.1 {
+            "Debug" => write!(formatter, "`{}` doesn't implement `Debug`", self.0),
+            "Display" => write!(
+                formatter,
+                "`{}` doesn't implement `std::fmt::Display`",
+                self.0
+            ),
+            capability => write!(
+                formatter,
+                "the trait bound `{}: {capability}` is not satisfied",
+                self.0
+            ),
+        }
+    }
+}
+
+/// Whether `#[derive(capability)]` can provide a trait: the derives std
+/// has.
+pub(crate) fn derivable(capability: &str) -> bool {
+    matches!(
+        capability,
+        "Clone" | "Copy" | "Debug" | "Default" | "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash"
+    )
 }
 
 /// A member as the program names it: `Owner::member`, or `member` alone

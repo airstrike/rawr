@@ -53,10 +53,25 @@ pub trait Value: Sized + 'static {
 pub trait Param {
     /// The owned value the parameter borrows from.
     type Owned: Value;
+
+    /// The parameter's script type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the type's name is not a valid path.
+    fn ty() -> Result<Type, host::Error> {
+        <Self::Owned as Value>::ty()
+    }
 }
 
+/// A `&str` parameter is a `&str`, which a `String` reaches only by deref
+/// coercion, as in Rust.
 impl Param for str {
     type Owned = String;
+
+    fn ty() -> Result<Type, host::Error> {
+        Ok(Type::reference(false, <String as Value>::ty()?))
+    }
 }
 
 impl<T: Value> Param for T {

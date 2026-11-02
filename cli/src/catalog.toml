@@ -7,7 +7,7 @@
 format = 1
 name = "rawr-import"
 sections = ["rust"]
-commands = []
+commands = ["cache"]
 install = [
     "rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src",
     "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli",

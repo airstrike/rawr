@@ -291,7 +291,7 @@ impl Parser<'_> {
                 owner: kind.name().into(),
                 method: member,
                 reason: format!(
-                    "is not a `{}` constructor Rawr has; it has `new` and `default`",
+                    "this `{}` constructor is not supported yet; `new` and `default` are",
                     kind.name()
                 )
                 .into(),
@@ -384,6 +384,8 @@ impl Parser<'_> {
                         owner: inner.name(&self.models),
                         capability: "Default".into(),
                         operation: member_span,
+                        derive: matches!(inner, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 let default = self.default_source(&inner, member_span)?;
@@ -413,7 +415,7 @@ impl Parser<'_> {
         if self.models.holds_cell(&ty, &mut Vec::new()) {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
-                    "`clone()` of a `{}`, which holds a `Cell` or `RefCell`",
+                    "cloning a `{}`, which holds a `Cell` or `RefCell`, is not supported yet",
                     ty.name(&self.models)
                 )
                 .into(),
@@ -444,6 +446,8 @@ impl Parser<'_> {
                     owner: inner.name(&this.models),
                     capability: name.into(),
                     operation: member_span,
+                    derive: matches!(inner, Ty::Script(..)),
+                    required_by: None,
                 })
             }
         };

@@ -77,7 +77,13 @@ pub fn parameters(
     )],
 ) -> Box<[Box<str>]> {
     let mut names = named.into_vec();
+    let future = *crate::surface::identity::Definition::future().as_bytes();
     for (associated, position) in associated {
+        // The mark that the type is a future names the same argument as
+        // its `Future::Output` does.
+        if associated.trait_identity() == future {
+            continue;
+        }
         let Some(at) = usize::try_from(*position)
             .ok()
             .filter(|at| *at < names.len())

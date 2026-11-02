@@ -8,6 +8,61 @@
   },
   "releases": [
     {
+      "version": "0.3.101",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied.","issues":[713]},
+        {"text":"An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future.","issues":[714]},
+        {"text":"A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions.","issues":[715]}
+      ]
+    },
+    {
+      "version": "0.3.100",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"The ?play universe runner starts again: a generated runner installs each crate's bindings after those of the crates whose types they use, so iced no longer waits on iced_test's bindings.","issues":[738]}
+      ]
+    },
+    {
+      "version": "0.3.99",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, \"type mismatch in closure arguments\", naming both signatures.","issues":[722]},
+        {"text":"An `.into()` whose target nothing fixes is refused with rustc's \"type annotations needed\" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected.","issues":[723]}
+      ]
+    },
+    {
+      "version": "0.3.98",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A type missing a trait reads as rustc's E0277 (\"the trait bound `T: X` is not satisfied\", or \"`T` doesn't implement `Debug`\"), with a \"required by a bound in\" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type.","issues":[718]},
+        {"text":"A crate path that can't be used yet gives the Rust reason (\"`x` can't be used yet: it takes a closure that isn't `'static`\"), labelled where it is defined and exported, instead of an internal rejection name or \"retained\" evidence.","issues":[719,720]},
+        {"text":"A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name.","issues":[721]}
+      ]
+    },
+    {
+      "version": "0.3.97",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"`String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs.","issues":[706]}
+      ]
+    },
+    {
+      "version": "0.3.96",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output.","issues":[637]},
+        {"text":"A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called.","issues":[638]}
+      ]
+    },
+    {
+      "version": "0.3.95",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused.","issues":[691]}
+      ]
+    },
+    {
       "version": "0.3.94",
       "date": "2026-11-01",
       "entries": [

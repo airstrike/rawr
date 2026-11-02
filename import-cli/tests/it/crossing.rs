@@ -1081,6 +1081,33 @@ fn a_closure_takes_the_output_a_native_opaque_future_binds() {
     assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
 
+/// iced's gallery (#637): `Task::future(image.download(size))`, where the
+/// program's own native method gives `impl Straw<Bytes, u32, String>`, so
+/// `Task::future`'s T is the `Result<Bytes, String>` the opaque type's
+/// `Future` binds through `Straw`, `Sipper` and `Core`, as rustc reads it.
+/// `.and_then` and `.then` take it from there. The output is `cargo run`'s.
+#[test]
+fn a_native_opaque_future_fills_a_future_parameter() {
+    let (rawr, cargo) = both_printed("crossing-futured", "futured.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(Downloaded(Ok(Bytes(40))))\nSome(Downloaded(Err(\"empty\")))"
+    );
+}
+
+/// iced's color_palette (#638): palette's `ShiftHue::shift_hue(self, amount:
+/// Self::Scalar)` and `Lighten::lighten`, whose input is the trait's own
+/// associated type that each impl sets (`type Scalar = T`). The receiver's
+/// type decides the amount's, as rustc reads it. The output is `cargo
+/// run`'s.
+#[test]
+fn a_method_takes_its_traits_associated_type_of_the_receiver() {
+    let (rawr, cargo) = both_printed("crossing-hued", "hued.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.starts_with("hue 220 85"), "{rawr}");
+}
+
 /// fount's loading program: iced's `Task::future(impl Future<Output = T>)`
 /// of an async block that awaits a crate's `async fn`, then a closure that
 /// takes the block's output and matches on it. The output is a `Result`
@@ -1242,6 +1269,36 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     assert_eq!(
         rawr,
         "check Ok(()) Err(\"check\")\nvalue Ok(17) Err(\"value\")\necho Ok(23) Err(\"input\")"
+    );
+}
+
+/// String-like generics follow their bound, not their spelling (#713): `S:
+/// Into<String>` takes what `impl Into<String>` takes, and `AsRef<str>`,
+/// `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` and `ToString` take a
+/// literal, a `String`, a borrow of one, a `PathBuf` and a borrow of one,
+/// as std's impls for them say. The output is `cargo run`'s.
+#[test]
+fn string_like_generics_take_what_their_bounds_impls_take() {
+    let (rawr, cargo) = both_printed("crossing-named", "named.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("spelled Grace\nspelled Ada\n5 4 4\nopened icon.png in assets\nopened inter.ttf in assets/fonts"),
+        "{rawr}"
+    );
+}
+
+/// image's `ImageBuffer::from_fn(w, h, |x, y| ..)`: an `FnMut` with no
+/// `'static` bound is borrowed for the call, so the closure changes what
+/// it captures and the program reads the change after, and function
+/// pointers of none, two and three inputs take script functions (#715).
+/// The output is `cargo run`'s.
+#[test]
+fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
+    let (rawr, cargo) = both_printed("crossing-grid", "grid.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7"
     );
 }
 

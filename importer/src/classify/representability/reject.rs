@@ -17,7 +17,6 @@ pub enum Kind {
     ForeignAbi,
     HigherRankedBinder,
     EscapingBorrow,
-    NonStaticCallable,
     CallableProtocol,
     ExplicitReceiver,
     UnsafeImplementation,
@@ -65,57 +64,60 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// Why an item of this kind has no binding, as a diagnostic says it.
+    /// Why an item of this kind can't be used yet, naming the Rust
+    /// construct as a diagnostic says it: "`item` is not supported yet:
+    /// it ...".
     #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
             Self::Module => "it is a module",
             Self::Union => "it is a union",
-            Self::Static => "it is a static rawr can't read",
+            Self::Static => "it is a `static`",
             Self::Trait => "it is a trait",
             Self::AssociatedType => "it is an associated type",
             Self::TypeConstant => "it is a type-level constant",
             Self::SysrootDefinition => "it is a standard library definition",
-            Self::UnsafeFunction => "it is an unsafe function",
-            Self::AsyncFunction => "it is an async function",
+            Self::UnsafeFunction => "it is an `unsafe` function",
+            Self::AsyncFunction => "it is an `async` function",
             Self::VariadicFunction => "it is a variadic function",
             Self::ForeignAbi => "it uses a foreign ABI",
-            Self::HigherRankedBinder => "its signature has a higher-ranked lifetime",
-            Self::EscapingBorrow => "its output keeps a borrow rawr can't hold",
-            Self::NonStaticCallable => "it takes a callable that isn't 'static",
-            Self::CallableProtocol => "it takes a callable rawr can't make",
-            Self::ExplicitReceiver => "its receiver has an explicit type",
-            Self::UnsafeImplementation => "it is an unsafe impl",
+            Self::HigherRankedBinder => "its signature has a higher-ranked lifetime (`for<'a>`)",
+            Self::EscapingBorrow => {
+                "its return type borrows at a lifetime that none of its arguments has"
+            }
+            Self::CallableProtocol => "it takes a closure whose type isn't supported",
+            Self::ExplicitReceiver => "its receiver has an explicit type (`self: Type`)",
+            Self::UnsafeImplementation => "it is an `unsafe impl`",
             Self::NegativeImplementation => "it is a negative impl",
-            Self::ConstImplementation => "it is a const impl",
-            Self::DefaultImplementation => "it is a default impl",
+            Self::ConstImplementation => "it is a `const` impl",
+            Self::DefaultImplementation => "it is a `default` impl",
             Self::GenericImplementation => "it is a generic impl",
-            Self::ReferenceType => "its signature has a reference type rawr can't lend",
+            Self::ReferenceType => "its signature borrows a type that can't be lent yet",
             Self::RawPointer => "its signature has a raw pointer",
             Self::FunctionPointer => "its signature has a function pointer",
             Self::TraitObject => "its signature has a trait object",
             Self::OpaqueType => "its signature has an opaque `impl Trait` type",
             Self::Projection => "its signature has an associated type projection",
-            Self::TupleType => "its signature has a tuple type rawr can't hold there",
-            Self::SliceType => "its signature has a slice type rawr can't hold there",
+            Self::TupleType => "its signature has a tuple type where one isn't supported yet",
+            Self::SliceType => "its signature has a slice type where one isn't supported yet",
             Self::ArrayType => "its signature has an array type",
             Self::NeverType => "its signature has the never type",
-            Self::UnsupportedPrimitive => "its signature has an unsupported primitive",
-            Self::UnsupportedGenericArgument => "its signature has an unsupported generic argument",
-            Self::LifetimeOrConstGeneric => "its signature borrows at a lifetime rawr can't hold",
-            Self::Predicate => "it has a where clause rawr can't check",
-            Self::PrivateType => "its signature names a private type",
-            Self::UnnameableType => "its signature names a type generated code can't name",
-            Self::UnresolvedDefinition => {
-                "its signature names a definition the importer didn't see"
+            Self::UnsupportedPrimitive => "its signature has a primitive type that isn't supported",
+            Self::UnsupportedGenericArgument => {
+                "its signature has a generic argument that isn't supported"
             }
+            Self::LifetimeOrConstGeneric => "its signature borrows at an early-bound lifetime",
+            Self::Predicate => "it has a `where` clause that isn't supported",
+            Self::PrivateType => "its signature names a private type",
+            Self::UnnameableType => "its signature names a type that has no public path",
+            Self::UnresolvedDefinition => "its signature names an item that has no public path",
             Self::MissingConstantValue => "it is a constant without a value",
-            Self::UnevaluatedConstant => "it is a constant rustc didn't evaluate",
-            Self::UnsupportedConstant => "it is a constant of an unsupported type",
-            Self::Extraction => "the importer couldn't extract it",
-            Self::ScriptFutureType => "its signature names a future parameter's own type",
+            Self::UnevaluatedConstant => "it is a constant whose value isn't known at compile time",
+            Self::UnsupportedConstant => "it is a constant of a type that isn't supported",
+            Self::Extraction => "it is a kind of Rust item that isn't supported",
+            Self::ScriptFutureType => "its signature names the type of the future it takes",
             Self::FutureClosure => "it takes a closure that returns a future",
-            Self::MacroRules => "it is a `macro_rules!` macro, which rawr expands from its source",
+            Self::MacroRules => "it is a `macro_rules!` macro",
             Self::ProjectedClosureInput => {
                 "it takes a closure whose input is an associated type of a type parameter"
             }
@@ -164,6 +166,24 @@ impl Reason {
     pub const fn extraction_reason(&self) -> Option<&crate::api::ledger::Reason> {
         self.extraction.as_ref()
     }
+
+    /// Why the item can't be used yet, as [`Kind::describe`] says it, with
+    /// what the compiler reported for an item it couldn't describe.
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
+        use crate::api::ledger::Reason as Ledger;
+        match &self.extraction {
+            Some(Ledger::UnnameablePrivate(_)) => Kind::PrivateType.describe(),
+            Some(Ledger::UnresolvedDefinition(_)) => Kind::UnresolvedDefinition.describe(),
+            Some(Ledger::ExternalAuthorityUnavailable { .. }) => {
+                "it comes from a crate that `cargo metadata` doesn't list"
+            }
+            Some(Ledger::UnsupportedPublicPath { .. }) => {
+                "its public path names a kind of Rust item that isn't supported"
+            }
+            _ => self.kind.describe(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -186,7 +206,6 @@ mod tests {
             Kind::ForeignAbi,
             Kind::HigherRankedBinder,
             Kind::EscapingBorrow,
-            Kind::NonStaticCallable,
             Kind::CallableProtocol,
             Kind::ExplicitReceiver,
             Kind::UnsafeImplementation,

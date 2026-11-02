@@ -13,6 +13,8 @@ pub mod controls;
 pub mod conversions;
 pub mod custom;
 pub mod fonts;
+pub mod grid;
+pub mod named;
 pub mod plane;
 pub mod results;
 pub mod sequences;

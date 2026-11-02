@@ -14,15 +14,87 @@ pub(crate) fn directory(build: &Path) -> io::Result<PathBuf> {
     Ok(build.to_path_buf())
 }
 
-/// Held by every rawr build across its Cargo run and any read of what Cargo
-/// wrote, so no other Rawr build changes the shared files in between. It
-/// lives in `<target>/rawr`, which `cargo clean` removes with the rest.
+/// Held by every runner build in the project across its Cargo run and any
+/// read of what Cargo wrote, so no other Rawr build changes the shared files
+/// in between. It lives in `<target>/rawr`, which `cargo clean` removes with
+/// the rest. The nightly build has its own ([`nightly_lock`]).
 pub(crate) fn lock(rawr: &Path) -> io::Result<File> {
     fs::create_dir_all(rawr)?;
     let file = File::create(rawr.join("build.lock"))?;
     file.lock()?;
     Ok(file)
 }
+
+/// The pinned nightly's check build directory, which feeds extraction: one
+/// per machine per pinned toolchain, in rawr's `home` (D700). Cargo alone
+/// judges what in it is fresh. A path crate's units are keyed there by its
+/// absolute path, since the harness's workspace root never contains it, so
+/// a same-named crate of another project never stands in for it.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn nightly_directory(home: &Path) -> PathBuf {
+    home.join(NIGHTLY).join(crate::cargo::toolchain::CHANNEL)
+}
+
+const NIGHTLY: &str = "nightly";
+
+/// What Cargo prints while another build holds its build directory. A wait
+/// for the nightly directory says the same, and nothing else (D664).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+const BLOCKING: &str = "    Blocking waiting for file lock on build directory";
+
+/// Lock the nightly `directory` for one Cargo run and the copy of what it
+/// wrote, so no other project's build rewrites those files in between and
+/// cleanup skips the directory. A wait says what Cargo says of its own.
+/// Records the directory's last use, which cleanup orders by.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn nightly_lock(directory: &Path) -> io::Result<File> {
+    use std::os::unix::fs::MetadataExt as _;
+    let path = directory.join(".lock");
+    loop {
+        fs::create_dir_all(directory)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                crate::progress::say(BLOCKING);
+                file.lock()?;
+            }
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        }
+        // Cleanup renames an unlocked directory aside before removing it; a
+        // lock taken on the retired one is retaken on a new directory.
+        let held = file.metadata()?.ino();
+        if fs::metadata(&path).is_ok_and(|on_disk| on_disk.ino() == held) {
+            let _ = File::open(directory)
+                .and_then(|entry| entry.set_modified(std::time::SystemTime::now()));
+            return Ok(file);
+        }
+    }
+}
+
+/// Retire, in the background, the nightly directories of other pins unused
+/// for a day. It never waits for a lock or reads free disk (D608.7).
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn retire_nightly(home: &Path, current: &Path) {
+    let (root, current) = (home.join(NIGHTLY), current.to_path_buf());
+    let _ = std::thread::Builder::new()
+        .name("rawr-nightly-cleanup".into())
+        .spawn(move || crate::runner::runtime::prune(&root, &[current.as_path()], DAY, 0));
+}
+
+/// `rawr cache clean`: remove every nightly directory unused for an hour,
+/// the current pin's included, unless a build holds it.
+pub fn clean_nightly(home: &Path) {
+    crate::runner::runtime::prune(&home.join(NIGHTLY), &[], HOUR, 0);
+}
+
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+const HOUR: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// After a successful build in `shared`, remove Rawr's own crates left by
 /// other Rawr installs: units whose dep-info names sources outside the Rawr
@@ -551,6 +623,93 @@ mod tests {
         assert!(rawr.join("build.lock").is_file());
         drop(held);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The nightly check build's directory is one per pin in rawr's home.
+    /// Cleanup reaches it by last use: another pin's goes after a day, `rawr
+    /// cache clean` takes any idle for an hour, and a held one stays, with
+    /// no wait (D608.7, D700).
+    #[test]
+    fn nightly_directories_go_by_last_use_and_a_held_one_stays() {
+        use std::time::{Duration, SystemTime};
+        let home = std::env::temp_dir().join(format!("rawr-nightly-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        let current = super::nightly_directory(&home);
+        assert_eq!(
+            current,
+            home.join("nightly").join(crate::cargo::toolchain::CHANNEL)
+        );
+        let root = home.join("nightly");
+        let age = |name: &str, hours: u64| {
+            let directory = root.join(name);
+            drop(super::nightly_lock(&directory).unwrap());
+            let used = SystemTime::now() - Duration::from_secs(hours * 60 * 60);
+            fs::File::open(&directory)
+                .unwrap()
+                .set_modified(used)
+                .unwrap();
+        };
+        age(crate::cargo::toolchain::CHANNEL, 30);
+        age("nightly-old", 30);
+        age("nightly-held", 30);
+        age("nightly-recent", 2);
+        let held = super::nightly_lock(&root.join("nightly-held")).unwrap();
+        let left = || {
+            let mut names = fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        // Each build: other pins idle for a day, the current one kept.
+        crate::runner::runtime::prune(&root, &[current.as_path()], super::DAY, 0);
+        assert_eq!(
+            left(),
+            [
+                crate::cargo::toolchain::CHANNEL,
+                "nightly-held",
+                "nightly-recent"
+            ]
+        );
+        // `rawr cache clean`: anything idle for an hour unless held.
+        super::clean_nightly(&home);
+        assert_eq!(left(), ["nightly-held"]);
+        // Taking the lock was a use; once it is an hour old and released,
+        // the directory goes too.
+        drop(held);
+        super::clean_nightly(&home);
+        assert_eq!(left(), ["nightly-held"]);
+        age("nightly-held", 2);
+        super::clean_nightly(&home);
+        assert!(left().is_empty());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    /// A build that finds the nightly directory held waits for it, and the
+    /// directory it then holds is the live one.
+    #[test]
+    fn a_nightly_lock_waits_for_the_holder() {
+        let home = std::env::temp_dir().join(format!("rawr-nightly-wait-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        let directory = super::nightly_directory(&home);
+        let held = super::nightly_lock(&directory).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiting = directory.clone();
+        let waiter = std::thread::spawn(move || {
+            let lock = super::nightly_lock(&waiting).unwrap();
+            sender.send(()).unwrap();
+            drop(lock);
+        });
+        assert!(receiver
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err());
+        drop(held);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        waiter.join().unwrap();
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
