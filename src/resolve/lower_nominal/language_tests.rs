@@ -6094,7 +6094,7 @@ fn language_generic_from_impls_and_type_path_turbofish() {
     ] {
         let error = rejected(&format!("{source} pub fn run() -> i64 {{ 0 }} run()"));
         assert!(
-            error.contains("mismatch") || error.contains("does not provide"),
+            error.contains("mismatch") || error.contains("is not satisfied"),
             "{source}: {error}"
         );
     }

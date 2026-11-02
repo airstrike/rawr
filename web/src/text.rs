@@ -292,7 +292,7 @@ fn unprintable(report: &rawr::diagnostic::Report, source: &str) -> Option<String
     });
     let owner = report
         .message()
-        .strip_suffix(" does not provide `Debug`")?
+        .strip_suffix(" doesn't implement `Debug`")?
         .strip_prefix('`')?
         .strip_suffix('`')?;
     (report.code() == rawr::diagnostic::code::RESOLVE_CAPABILITY && after).then(|| owner.to_owned())

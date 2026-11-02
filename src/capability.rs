@@ -725,7 +725,7 @@ impl Request {
             .iter()
             .any(|ty| !type_supports(ty, capability, resolved))
         {
-            return "a field or variant payload does not provide this capability";
+            return "a field or variant payload doesn't implement it";
         }
         "capability requirements are not satisfied"
     }

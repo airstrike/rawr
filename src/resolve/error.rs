@@ -468,14 +468,21 @@ pub enum Error {
         /// Exact signature type span.
         signature: Span,
     },
-    /// An operation requires a capability not proven by the owner type.
+    /// A type doesn't implement a trait an operation needs: rustc's E0277,
+    /// "the trait bound `Owner: Trait` is not satisfied".
     MissingCapability {
-        /// Nominal owner type.
+        /// The type, as the program names it.
         owner: ImmutableString,
-        /// Required capability.
+        /// The trait it must implement.
         capability: ImmutableString,
         /// Operation source span.
         operation: Span,
+        /// Whether the type is the program's own struct or enum, so a
+        /// `#[derive]` on it can provide a derivable trait.
+        derive: bool,
+        /// The item whose bound requires the trait, as rustc's "required by
+        /// a bound in" note names it.
+        required_by: Option<ImmutableString>,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
@@ -994,9 +1001,11 @@ impl fmt::Display for Written<'_> {
                 owner,
                 capability,
                 operation,
+                ..
             } => write!(
                 formatter,
-                "`{owner}` does not provide `{capability}` at {operation}"
+                "{} at {operation} (E0277)",
+                Unsatisfied(owner, capability)
             ),
             Error::InvalidMatch {
                 owner,
@@ -1006,10 +1015,9 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "invalid match for `{owner}` at {pattern}: {reason}"
             ),
-            Error::UnsupportedNominalSyntax { construct, source } => write!(
-                formatter,
-                "nominal operation uses unsupported syntax `{construct}` at {source}"
-            ),
+            Error::UnsupportedNominalSyntax { construct, source } => {
+                write!(formatter, "{} at {source}", Unsupported(construct))
+            }
             Error::Syntax { message, .. } => formatter.write_str(message),
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
@@ -1054,6 +1062,52 @@ impl fmt::Display for CannotCompare<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "can't compare `{}` with `{}`", self.0, self.1)
     }
+}
+
+/// A construct rawr doesn't handle yet, named in Rust's terms. A reason
+/// that already says it isn't supported reads as written.
+pub(crate) struct Unsupported<'a>(pub(crate) &'a str);
+
+impl fmt::Display for Unsupported<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.contains("not supported") {
+            formatter.write_str(self.0)
+        } else {
+            write!(formatter, "{} is not supported", self.0)
+        }
+    }
+}
+
+/// rustc's E0277 message for a type that doesn't implement a trait: "the
+/// trait bound `Owner: Trait` is not satisfied", or the formatting traits'
+/// own wording.
+pub(crate) struct Unsatisfied<'a>(pub(crate) &'a str, pub(crate) &'a str);
+
+impl fmt::Display for Unsatisfied<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.1 {
+            "Debug" => write!(formatter, "`{}` doesn't implement `Debug`", self.0),
+            "Display" => write!(
+                formatter,
+                "`{}` doesn't implement `std::fmt::Display`",
+                self.0
+            ),
+            capability => write!(
+                formatter,
+                "the trait bound `{}: {capability}` is not satisfied",
+                self.0
+            ),
+        }
+    }
+}
+
+/// Whether `#[derive(capability)]` can provide a trait: the derives std
+/// has.
+pub(crate) fn derivable(capability: &str) -> bool {
+    matches!(
+        capability,
+        "Clone" | "Copy" | "Debug" | "Default" | "PartialEq" | "Eq" | "PartialOrd" | "Ord" | "Hash"
+    )
 }
 
 /// A member as the program names it: `Owner::member`, or `member` alone

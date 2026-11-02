@@ -1095,6 +1095,8 @@ impl Parser<'_> {
                         owner: Ty::Iter(Box::new(item)).name(&self.models),
                         capability: "Clone".into(),
                         operation: expression,
+                        derive: false,
+                        required_by: None,
                     });
                 }
                 return Ok(self.adapted(pipeline, item, expression));

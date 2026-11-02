@@ -435,12 +435,12 @@ impl fmt::Display for ParseErrorType {
                 ),
                 crate::resolve::Error::MissingCapability {
                     owner, capability, ..
-                } => write!(f, "'{owner}' does not provide '{capability}'"),
+                } => write!(f, "{}", crate::resolve::Unsatisfied(owner, capability)),
                 crate::resolve::Error::InvalidMatch { owner, reason, .. } => {
                     write!(f, "Invalid match for '{owner}': {reason}")
                 }
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-                    write!(f, "Unsupported nominal syntax '{construct}'")
+                    write!(f, "{}", crate::resolve::Unsupported(construct))
                 }
                 crate::resolve::Error::Syntax { message, .. } => f.write_str(message),
                 crate::resolve::Error::UnlabeledJumpInWhileCondition { .. } => f.write_str(

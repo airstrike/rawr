@@ -91,6 +91,8 @@ impl Parser<'_> {
                         owner: Ty::Reverse(Box::new(inner)).name(&self.models),
                         capability: "Clone".into(),
                         operation: member_span,
+                        derive: false,
+                        required_by: None,
                     });
                 }
                 let source = value.rendered_source();

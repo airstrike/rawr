@@ -230,6 +230,8 @@ impl Parser<'_> {
                 owner: key.name(&self.models),
                 capability: capability.into(),
                 operation: span,
+                derive: matches!(key, Ty::Script(..)),
+                required_by: None,
             })
         }
     }
@@ -491,6 +493,8 @@ impl Parser<'_> {
                         owner: owner(self),
                         capability: "Clone".into(),
                         operation: expression,
+                        derive: false,
+                        required_by: None,
                     });
                 }
                 (receiver, ty)
