@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `Rc` and `Arc` are real shared pointers: `Rc::strong_count`, `weak_count`, `ptr_eq`, `downgrade`, `Weak::upgrade`, `get_mut`, `make_mut` and `try_unwrap` give rustc's answers, `Rc<RefCell<T>>` mutation is visible through every clone, and an `Rc` no longer passes a `T: Send` bound. (#748)
 
 ## 0.3.110 (2026-11-02)
 
