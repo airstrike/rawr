@@ -714,7 +714,8 @@ enum Error {
     Leased,
     /// A script value an erased generic gave back is not of its type.
     Value(String),
-    /// A borrow guard's target read without `Clone`, by its type's name.
+    /// A borrow guard's target, or a variant's field a match binds, read
+    /// by value where its type has no `Clone`, by the type's name.
     NotClone(&'static str),
     /// A value native code lent the call (D558.3), by its type's name,
     /// that can't be reached.
@@ -746,7 +747,7 @@ impl std::fmt::Debug for Error {
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
             Self::NotClone(ty) => write!(
                 f,
-                "reading a `{ty}` through a borrow guard is not supported yet: `{ty}` doesn't implement `Clone`"
+                "cannot move out of a value behind a shared reference: `{ty}` doesn't implement `Copy` or `Clone` (E0507)"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
             Self::Home(reason) => f.write_str(reason),
@@ -4993,7 +4994,7 @@ fn run_protocol() -> std::io::Result<()> {
                     let engine = program.engine.clone();
                     let application_contract = program.application_contract.clone();
                     let receipt = receipt.ok_or_else(|| std::io::Error::other("activation receipt"))?;
-                    Ok((engine, application_contract, receipt))
+                    Ok::<_, std::io::Error>((engine, application_contract, receipt))
                 })();
                 let (engine, application_contract, receipt) = context?;
                 let mut control = stream.try_clone()?;
@@ -5248,6 +5249,7 @@ fn render<B: crate::surface::Runner>(
     profile: &crate::profile::Proof,
 ) -> Result<Product, request::Error> {
     let harness = native.runner_harness(request.allocation.limits().1)?;
+    let paths = native.path_packages();
     let mut hidden = Vec::new();
     let mut sources = Vec::new();
     let mut spans = Vec::new();
@@ -5262,7 +5264,7 @@ fn render<B: crate::surface::Runner>(
         profile,
         request.compile_snapshot(),
         request.facade_plan(),
-        (harness.lock(), &mut hidden),
+        (harness.lock(), &paths, &mut hidden),
         &mut sources,
         &mut spans,
     )?;
@@ -5361,8 +5363,10 @@ struct HiddenCrate {
 }
 
 /// The crate `segment` names, when the lock holds exactly one package of
-/// its name from a source a manifest can name.
-fn hidden_crate(lock: &[u8], segment: &str) -> Option<HiddenCrate> {
+/// its name from a source a manifest can name: a registry, a git
+/// repository, or a path, which the lock leaves out and `paths` (each path
+/// package's name and directory) gives.
+fn hidden_crate(lock: &[u8], paths: &[(String, String)], segment: &str) -> Option<HiddenCrate> {
     let name = segment
         .strip_prefix(crate::api::ledger::CRATE_SEGMENT)?
         .rsplit_once('_')?
@@ -5382,8 +5386,20 @@ fn hidden_crate(lock: &[u8], segment: &str) -> Option<HiddenCrate> {
     if found.next().is_some() {
         return None;
     }
-    let source = package.get("source").and_then(Item::as_str)?;
+    let source = match package.get("source").and_then(Item::as_str) {
+        Some(source) => source.to_owned(),
+        None => {
+            let name = package.get("name").and_then(Item::as_str)?;
+            let mut found = paths.iter().filter(|(package, _)| package == name);
+            let (_, directory) = found.next()?;
+            if found.next().is_some() {
+                return None;
+            }
+            format!("path+file://{directory}")
+        }
+    };
     (source.starts_with("git+")
+        || source.starts_with("path+file://")
         || source == "registry+https://github.com/rust-lang/crates.io-index")
         .then(|| HiddenCrate {
             segment: segment.to_owned(),
@@ -5397,7 +5413,7 @@ fn hidden_crate(lock: &[u8], segment: &str) -> Option<HiddenCrate> {
                 .and_then(Item::as_str)
                 .unwrap_or_default()
                 .to_owned(),
-            source: source.to_owned(),
+            source,
         })
 }
 
@@ -5417,6 +5433,8 @@ fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
                 table.insert(key, value.into());
             }
         }
+    } else if let Some(directory) = hidden.source.strip_prefix("path+file://") {
+        table.insert("path", directory.into());
     } else {
         table.insert("version", format!("={}", hidden.version).into());
     }
@@ -5689,7 +5707,7 @@ fn render_source(
     profile: &crate::profile::Proof,
     compile_snapshot: bool,
     facade_plan: Option<&[u8]>,
-    (lock, hidden): (&[u8], &mut Vec<HiddenCrate>),
+    (lock, paths, hidden): (&[u8], &[(String, String)], &mut Vec<HiddenCrate>),
     sources: &mut Vec<(Box<str>, Vec<u8>)>,
     spans: &mut Vec<(EntryIdentity, Box<str>, std::ops::Range<u32>)>,
 ) -> Result<Option<String>, request::Error> {
@@ -5764,7 +5782,7 @@ fn render_source(
                         continue;
                     }
                     if !hidden.iter().any(|known| known.segment == segment) {
-                        let Some(found) = hidden_crate(lock, &segment) else {
+                        let Some(found) = hidden_crate(lock, paths, &segment) else {
                             continue;
                         };
                         hidden.push(found);
@@ -6037,7 +6055,7 @@ fn render_source(
         }
         for segment in hidden_segments(source) {
             if !hidden.iter().any(|known| known.segment == segment)
-                && let Some(found) = hidden_crate(lock, &segment)
+                && let Some(found) = hidden_crate(lock, paths, &segment)
             {
                 hidden.push(found);
             }
@@ -6484,7 +6502,7 @@ fn returns_values(plan: &Plan) -> bool {
             )
         ) =>
         {
-            substituted(signature.output(), signature, substitutions).ok()
+            instantiated(signature.output(), signature, substitutions)
         }
         Operation::StructField { field, .. } => Some(field.ty().clone()),
         // A `DerefMut` guard's call gives its place, not its target.
@@ -6659,18 +6677,31 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
                 .join(", ")
         ),
     };
-    let cloned = match bound.len() {
+    // A field Rawr holds as its own value is copied, as Rust reads it in
+    // place. A native field is copied by its `Clone`; one without `Clone`
+    // can't leave the borrowed value, which rustc says as E0507.
+    let copies = fields
+        .iter()
+        .zip(&bound)
+        .map(|(field, local)| {
+            // A type with lifetimes, as quick-xml's `Event<'a>`, has fields
+            // `copied` can't take, which are `Clone` as Rust reads them.
+            if shared_field(field.ty())
+                || carries_lifetimes(&path)
+                || container_family(&path, &path).is_some()
+            {
+                format!("Clone::clone({local})")
+            } else {
+                format!("guard_copy!({local})?")
+            }
+        })
+        .collect::<Vec<_>>();
+    let tuple = match copies.len() {
         0 => "()".to_string(),
-        1 => format!("(Clone::clone({}),)", bound[0]),
-        _ => format!(
-            "({})",
-            bound
-                .iter()
-                .map(|local| format!("Clone::clone({local})"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        1 => format!("({},)", copies[0]),
+        _ => format!("({})", copies.join(", ")),
     };
+    let cloned = format!("(|| -> Result<_, Error> {{ Ok({tuple}) }})()");
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
@@ -6696,6 +6727,7 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
             #[allow(unreachable_patterns)]
             let output = match region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
             let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+            let fields = fields?;
             #[allow(unused_mut)]
             let mut values: Vec<Dynamic> = Vec::new();
             #[allow(clippy::let_unit_value)]
@@ -6718,7 +6750,8 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
             "    let handle = native_handle(arguments, 0, false)?;
     #[allow(unreachable_patterns)]
     let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let fields = fields?;"
         )
         .map_err(request::unwritable)?;
     } else {
@@ -6742,7 +6775,8 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
             arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
         }}
     }};
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let fields = fields?;"
         )
         .map_err(request::unwritable)?;
     }
@@ -7955,17 +7989,17 @@ fn render_adapter_body(
                 // that captures crosses as the closure Rawr makes.
                 let lends = |crossing: &crate::classify::representability::callable::Call| {
                     crossing.inputs().iter().all(|input| {
-                        match substituted(input, signature, substitutions) {
-                            Ok(convert::Type::Borrowed { mutable: true, ty })
+                        match instantiated(input, signature, substitutions) {
+                            Some(convert::Type::Borrowed { mutable: true, ty })
                                 if lent_mutably(&ty) =>
                             {
                                 true
                             }
-                            Ok(convert::Type::Borrowed { ty, .. }) => {
+                            Some(convert::Type::Borrowed { ty, .. }) => {
                                 matches!(*ty, convert::Type::Script { .. })
                             }
-                            Ok(_) => true,
-                            Err(_) => false,
+                            Some(_) => true,
+                            None => false,
                         }
                     })
                 };
@@ -8361,8 +8395,8 @@ fn fills_with_str(
 ) -> bool {
     matches!(input, convert::Type::Parameter(_))
         && matches!(
-            substituted(input, signature, substitutions),
-            Ok(convert::Type::Borrowed { mutable: false, ty })
+            instantiated(input, signature, substitutions),
+            Some(convert::Type::Borrowed { mutable: false, ty })
                 if matches!(*ty, convert::Type::Builtin(convert::Builtin::Str))
         )
 }
@@ -9346,7 +9380,7 @@ fn lent_slice(
         return None;
     }
     let convert::Type::Borrowed { mutable: false, ty } =
-        substituted(signature.output(), signature, substitutions).ok()?
+        instantiated(signature.output(), signature, substitutions)?
     else {
         return None;
     };
@@ -10355,22 +10389,27 @@ fn rust_path(plan: &Plan) -> String {
         })
 }
 
+/// A struct expression in braces, which Rust accepts through a type alias
+/// as well as the struct's own path: `Alias { 0: a }` builds a tuple
+/// struct and `Alias {}` a unit one, where `Alias(a)` and `Alias` are
+/// E0423, since an alias names no constructor function or constant.
 fn render_constructor(
     form: crate::api::model::FieldForm,
     fields: &[crate::surface::adapter::Field],
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match form {
-        crate::api::model::FieldForm::Unit => Ok(()),
+        crate::api::model::FieldForm::Unit => output.write_all(b" {}").map_err(request::unwritable),
         crate::api::model::FieldForm::Tuple => {
-            output.write_all(b"(").map_err(request::unwritable)?;
+            output.write_all(b" { ").map_err(request::unwritable)?;
             for (index, field) in fields.iter().enumerate() {
                 if index != 0 {
                     output.write_all(b", ").map_err(request::unwritable)?;
                 }
+                write!(output, "{index}: ").map_err(request::unwritable)?;
                 render_field_value(index, field, output)?;
             }
-            output.write_all(b")").map_err(request::unwritable)
+            output.write_all(b" }").map_err(request::unwritable)
         }
         crate::api::model::FieldForm::Record => {
             output.write_all(b" { ").map_err(request::unwritable)?;
@@ -13592,15 +13631,27 @@ fn substituted(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
 ) -> Result<convert::Type, request::Error> {
+    instantiated(ty, signature, substitutions)
+        .ok_or_else(|| request::drift("generic substitution index"))
+}
+
+/// `ty` substituted as [`substituted`] does, or `None` when the plan does
+/// not instantiate one of its parameters, as a generic item's own
+/// declaration plan does not.
+fn instantiated(
+    ty: &convert::Type,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<convert::Type> {
     let all = |types: &[convert::Type]| {
         types
             .iter()
-            .map(|ty| substituted(ty, signature, substitutions))
-            .collect::<Result<Box<[_]>, _>>()
+            .map(|ty| instantiated(ty, signature, substitutions))
+            .collect::<Option<Box<[_]>>>()
     };
-    let one = |ty: &convert::Type| substituted(ty, signature, substitutions).map(Box::new);
-    Ok(match ty {
-        convert::Type::Parameter(_) => substitute(ty, signature, substitutions)?.clone(),
+    let one = |ty: &convert::Type| instantiated(ty, signature, substitutions).map(Box::new);
+    Some(match ty {
+        convert::Type::Parameter(_) => substitution(ty, signature, substitutions)?.clone(),
         convert::Type::Nominal {
             definition,
             arguments,
@@ -13647,8 +13698,19 @@ fn substitute<'a>(
     signature: &'a crate::classify::representability::signature::Signature,
     substitutions: &'a [convert::Type],
 ) -> Result<&'a convert::Type, request::Error> {
+    substitution(ty, signature, substitutions)
+        .ok_or_else(|| request::drift("generic substitution index"))
+}
+
+/// The type a parameter `ty` stands for, `ty` itself when it is not a
+/// parameter, or `None` when the plan does not instantiate it.
+fn substitution<'a>(
+    ty: &'a convert::Type,
+    signature: &'a crate::classify::representability::signature::Signature,
+    substitutions: &'a [convert::Type],
+) -> Option<&'a convert::Type> {
     let convert::Type::Parameter(index) = ty else {
-        return Ok(ty);
+        return Some(ty);
     };
     // A script future's output is a `rawr::Value`, whatever type the script
     // gives it, which comes back checked (D527). The synthetic output of a
@@ -13661,7 +13723,7 @@ fn substitute<'a>(
         })
     {
         static VALUE: std::sync::OnceLock<convert::Type> = std::sync::OnceLock::new();
-        return Ok(VALUE.get_or_init(|| convert::Type::Nominal {
+        return Some(VALUE.get_or_init(|| convert::Type::Nominal {
             definition: crate::surface::identity::Definition::value(),
             arguments: Box::default(),
         }));
@@ -13673,7 +13735,7 @@ fn substitute<'a>(
             && parameter.kind() == crate::classify::representability::signature::Kind::Callable
     }) {
         static CLOSURE: convert::Type = convert::Type::Unit;
-        return Ok(&CLOSURE);
+        return Some(&CLOSURE);
     }
     let position = signature
         .parameters()
@@ -13681,11 +13743,8 @@ fn substitute<'a>(
         .filter(|parameter| {
             parameter.kind() == crate::classify::representability::signature::Kind::Type
         })
-        .position(|parameter| parameter.index() == *index)
-        .ok_or_else(|| request::drift("generic substitution index"))?;
-    substitutions
-        .get(position)
-        .ok_or_else(|| request::drift("generic substitution index"))
+        .position(|parameter| parameter.index() == *index)?;
+    substitutions.get(position)
 }
 
 fn render_constant(

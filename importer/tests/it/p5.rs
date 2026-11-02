@@ -274,7 +274,13 @@ fn require_outcome<B>(
     entry: &str,
     position: &mut u32,
 ) {
-    if !outcome.representability().is_demandable() {
+    if !outcome.representability().is_demandable()
+        || matches!(
+            outcome.representability(),
+            rawr_import::classify::representability::Representability::Invocation(plan)
+                if !plan.signature().parameters().is_empty()
+        )
+    {
         return;
     }
     compiler

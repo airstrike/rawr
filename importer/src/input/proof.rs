@@ -943,6 +943,31 @@ impl Proof {
         })
     }
 
+    /// Each path package's name and directory, from its Cargo package id
+    /// (`path+file:///dir#name@version`, or `#version` when the directory
+    /// is named as the package).
+    pub(crate) fn path_packages(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let Entry::Directory {
+                    package_id: Some(id),
+                    path,
+                    ..
+                } = entry
+                else {
+                    return None;
+                };
+                let (url, fragment) = id.strip_prefix("path+file://")?.split_once('#')?;
+                let name = match fragment.split_once('@') {
+                    Some((name, _)) => name,
+                    None => url.rsplit('/').next()?,
+                };
+                Some((name.to_owned(), path.as_ref().to_owned()))
+            })
+            .collect()
+    }
+
     pub(crate) fn runner_harness(&self, limit: usize) -> Result<Harness> {
         let mut manifest = None;
         let mut lock = None;

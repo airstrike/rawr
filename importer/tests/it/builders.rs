@@ -70,11 +70,13 @@ fn consuming_builder_generates_one_ordered_single_invocation_replay() {
         .expect("the builder request seals")
         .generate(&limits)
         .expect("the builder runner generates");
+    // The runner is `src/main.rs` plus one module per imported crate (D415).
     let source = manifest
         .files()
-        .find(|file| file.path() == "src/main.rs")
-        .expect("the runner source exists");
-    let source = std::str::from_utf8(source.bytes()).expect("the source is UTF-8");
+        .filter(|file| file.path().starts_with("src/"))
+        .map(|file| std::str::from_utf8(file.bytes()).expect("the source is UTF-8"))
+        .collect::<String>();
+    let source = source.as_str();
     let construct = source
         .find("generic::Builder::new(")
         .expect("constructor replay");

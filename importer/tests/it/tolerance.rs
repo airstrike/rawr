@@ -48,7 +48,9 @@ fn unrepresentable_anonymous_constants_reject_only_their_own_paths() {
     let graph = rawr_import::extract::from_resolution(resolution, &native, &limits)
         .expect("the fixture compiler evidence canonicalizes");
 
-    for name in ["lanes", "switch"] {
+    // A `char` constant is one the extractor cannot represent. A `bool` or
+    // integer one is evaluated, so `lanes` and `switch` import (D464.6).
+    for name in ["glyph"] {
         match definition(&graph, name).kind() {
             model::Kind::Rejected {
                 reason: ledger::Reason::UnknownCompilerShape { compiler_kind, .. },
@@ -60,7 +62,7 @@ fn unrepresentable_anonymous_constants_reject_only_their_own_paths() {
             other => panic!("{name} is rejected as an unknown compiler shape: {other:?}"),
         }
     }
-    for name in ["plain", "Lanes", "Switch"] {
+    for name in ["plain", "Lanes", "Switch", "Glyph", "lanes", "switch"] {
         assert!(
             !matches!(
                 definition(&graph, name).kind(),

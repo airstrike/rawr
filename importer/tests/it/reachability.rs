@@ -152,9 +152,27 @@ fn reexports_keep_alias_evidence_while_sysroot_support_stays_leaf_only() {
     assert!(sysroot_support.contains("alloc"));
     assert!(sysroot_support.contains("core"));
     assert!(graph.implementations().count() >= 2);
+    // The fixtures' own implementations keep their members. The sysroot's
+    // are support, leaves with none.
+    let sysroot_owned =
+        |implementation: &rawr_import::api::model::Implementation| match implementation.self_type()
+        {
+            model::Type::Definition { id, .. } => {
+                matches!(id.unit().authority(), Authority::Sysroot(_))
+            }
+            model::Type::Parameter { owner, .. } => {
+                matches!(owner.unit().authority(), Authority::Sysroot(_))
+            }
+            _ => false,
+        };
     assert!(graph
         .implementations()
+        .filter(|implementation| !sysroot_owned(implementation))
         .all(|implementation| implementation.associated().len() >= 2));
+    assert!(graph
+        .implementations()
+        .filter(|implementation| sysroot_owned(implementation))
+        .all(|implementation| implementation.associated().len() == 0));
 }
 
 fn imported<'a>(

@@ -39,6 +39,18 @@ fn has_unresolved_structural_parameters(
     }
 }
 
+/// Whether a use with no instance leaves one of the plan's parameters
+/// unknown: a trait's member through its `Self`, or an associated function
+/// of a generic impl, has its types only from an instance, as rustc needs
+/// them to name the call (E0282).
+fn needs_instance(representability: &crate::classify::representability::Representability) -> bool {
+    matches!(
+        representability,
+        crate::classify::representability::Representability::Invocation(plan)
+            if !plan.signature().parameters().is_empty()
+    )
+}
+
 /// Uninhabited marker proving canonical demand sealing completed.
 ///
 /// ```compile_fail
@@ -565,7 +577,9 @@ impl<B> Compiler<'_, B> {
             .contract
             .outcome(&identity)
             .ok_or(Error::ForeignIdentity)?;
-        if has_unresolved_structural_parameters(outcome.representability()) {
+        if has_unresolved_structural_parameters(outcome.representability())
+            || needs_instance(outcome.representability())
+        {
             return Err(Error::UnconstrainedGeneric);
         }
         if !outcome.representability().is_demandable() {
@@ -617,7 +631,9 @@ impl<B> Compiler<'_, B> {
             return Err(Error::ForeignIdentity);
         }
         let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
-        if has_unresolved_structural_parameters(outcome.representability()) {
+        if has_unresolved_structural_parameters(outcome.representability())
+            || needs_instance(outcome.representability())
+        {
             return Err(Error::UnconstrainedGeneric);
         }
         Origin::validate(byte_start, byte_end)?;
