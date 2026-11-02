@@ -302,6 +302,24 @@ pub trait MaybeSend: Send {}
 
 impl<T: Send> MaybeSend for T {}
 
+/// A function of two inputs with its first one given, as iced's
+/// `Function`: every `Fn(A, B) -> O` has it through the blanket impl.
+pub trait Function<A, B, O> {
+    /// The function that calls this one with `prefix` first.
+    fn with(self, prefix: A) -> impl Fn(B) -> O;
+}
+
+impl<F, A, B, O> Function<A, B, O> for F
+where
+    F: Fn(A, B) -> O,
+    Self: Sized,
+    A: Clone,
+{
+    fn with(self, prefix: A) -> impl Fn(B) -> O {
+        move |result| self(prefix.clone(), result)
+    }
+}
+
 /// A font family, as iced's `font::Family`: a crate enum that `Display`s.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Family {

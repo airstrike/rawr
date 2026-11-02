@@ -7969,8 +7969,13 @@ fn render_adapter_body(
                         }
                     })
                 };
+                // A crate's own callable value is taken as itself either
+                // way (`Slot::native`).
                 let crossed = if call.is_some() && !crossings.iter().all(lends) {
-                    Crossed::default()
+                    Crossed {
+                        slots,
+                        crossings: &[],
+                    }
                 } else {
                     Crossed { slots, crossings }
                 };
@@ -10912,7 +10917,7 @@ impl<'a> Crossed<'a> {
         position: usize,
         ty: &convert::Type,
     ) -> Option<&'a crate::classify::representability::callable::Call> {
-        self.find(position, ty, true)
+        self.find(position, ty, crate::surface::instance::Slot::is_closure)
     }
 
     /// The call of the slot at input `position`, when one fills it.
@@ -10921,24 +10926,51 @@ impl<'a> Crossed<'a> {
         position: usize,
         ty: &convert::Type,
     ) -> Option<&'a crate::classify::representability::callable::Call> {
-        self.find(position, ty, false)
+        self.find(position, ty, |slot| !slot.is_closure() && !slot.is_native())
+    }
+
+    /// The call of the callable parameter at input `position` that a
+    /// crate's own callable value fills ([`Slot::native`]), as the `impl
+    /// Fn(B) -> O` of iced's `Function::with` does.
+    ///
+    /// [`Slot::native`]: crate::surface::instance::Slot::native
+    fn native_at<'c>(
+        &self,
+        position: usize,
+        ty: &convert::Type,
+        call: Option<&'c crate::classify::representability::callable::Call>,
+    ) -> Option<&'c crate::classify::representability::callable::Call>
+    where
+        'a: 'c,
+    {
+        let convert::Type::Parameter(parameter) = ty else {
+            return None;
+        };
+        if !self
+            .slots
+            .iter()
+            .any(|slot| usize::try_from(slot.position()).ok() == Some(position) && slot.is_native())
+        {
+            return None;
+        }
+        self.crossings
+            .iter()
+            .chain(call)
+            .find(|call| call.parameter() == *parameter)
     }
 
     fn find(
         &self,
         position: usize,
         ty: &convert::Type,
-        closure: bool,
+        kind: impl Fn(&crate::surface::instance::Slot) -> bool,
     ) -> Option<&'a crate::classify::representability::callable::Call> {
         let convert::Type::Parameter(parameter) = ty else {
             return None;
         };
         self.slots
             .iter()
-            .any(|slot| {
-                usize::try_from(slot.position()).ok() == Some(position)
-                    && slot.is_closure() == closure
-            })
+            .any(|slot| usize::try_from(slot.position()).ok() == Some(position) && kind(slot))
             .then(|| {
                 self.crossings
                     .iter()
@@ -11330,6 +11362,13 @@ fn render_function_arguments(
             _ => {
                 if let Some(slot) = crossed.slot_at(position, ty) {
                     render_slot(position, runtime, slot, signature, substitutions, output)?;
+                } else if let Some(native) = crossed.native_at(position, ty, call) {
+                    let rust = boxed_call(native, signature, substitutions)?;
+                    writeln!(
+                        output,
+                        "    let argument_{position} = take_native::<{rust}>(arguments, {runtime})?;"
+                    )
+                    .map_err(request::unwritable)?;
                 } else if let Some(call) = call
                     .filter(|call| *ty == convert::Type::Parameter(call.parameter()))
                     .or_else(|| crossed.closure_at(position, ty))
@@ -12755,6 +12794,14 @@ fn render_give(
                 "    Ok(Dynamic::from(region.insert::<{family}>({value})))"
             )
         }
+        // An `impl Fn(A..) -> B` is held boxed, as a call that takes a
+        // callable takes it (`boxed_callable_type`).
+        convert::Type::Nominal { .. } if let Some(boxed) = boxed_callable_type(ty) => {
+            writeln!(
+                output,
+                "    let boxed: {boxed} = Box::new({value});\n    insert_native!(arguments.arena, boxed).map(Dynamic::from)"
+            )
+        }
         // A value whose type holds an opaque type carries the calls that
         // take it, compiled here (`opaque_table_source`), or those of the
         // value of the same type the call took.
@@ -13872,6 +13919,10 @@ fn instance_substituted<'a>(
     })
 }
 
+/// The positions of an opaque callable type's inputs among its arguments,
+/// and of its output (`OPAQUE_CALLABLES`).
+type CallShape = (Box<[u32]>, u32);
+
 thread_local! {
     /// The Rust path of each imported type of the facade plan the runner
     /// being generated declares, by identity: an imported type argument is
@@ -13897,6 +13948,12 @@ thread_local! {
     /// `Core`, by identity: the position of the argument that is their
     /// `Future::Output`.
     static OPAQUE_FUTURES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], u32>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The opaque types that are `impl Fn(A..) -> B`, as iced's
+    /// `Function::with` gives, by identity: the positions of the arguments
+    /// that are their inputs and the one that is their output. Each is held
+    /// boxed (`boxed_callable_type`), a type Rust code can write.
+    static OPAQUE_CALLABLES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], CallShape>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The imported types that carry lifetimes (D558 tier 1), by identity:
     /// how many lifetime parameters each declares, and whether it is
@@ -15075,6 +15132,27 @@ impl TypePaths {
                 }));
             }
         });
+        OPAQUE_CALLABLES.with_borrow_mut(|callables| {
+            callables.clear();
+            let callable = *crate::surface::identity::Definition::callable().as_bytes();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                callables.extend(owner.types().filter(|ty| ty.opaque()).filter_map(|ty| {
+                    let marked = |name: &str| {
+                        ty.associated()
+                            .find(|(identity, known, _)| *identity == callable && *known == name)
+                            .map(|(_, _, position)| position)
+                    };
+                    let output = marked("Output")?;
+                    let inputs = (0..)
+                        .map_while(|index| marked(&format!("Input{index}")))
+                        .collect();
+                    Some((*ty.identity(), (inputs, output)))
+                }));
+            }
+        });
         OPAQUE_FUTURES.with_borrow_mut(|futures| {
             futures.clear();
             let future = *crate::surface::identity::Definition::future().as_bytes();
@@ -15200,6 +15278,7 @@ impl Drop for TypePaths {
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         OPAQUE_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
+        OPAQUE_CALLABLES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -15291,6 +15370,53 @@ fn opaque_pinned_strings(
 
 fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
     OPAQUE_TYPES.with_borrow(|opaque| opaque.contains_key(definition.as_bytes()))
+        && !OPAQUE_CALLABLES.with_borrow(|callables| callables.contains_key(definition.as_bytes()))
+}
+
+/// The Rust type a value of the opaque `impl Fn(A..) -> B` type `ty` is
+/// held as: `Box<dyn Fn(A..) -> B + Send>`, which a call boxes it as where
+/// it gives one, and which a call that takes a callable takes as itself.
+/// `None` when `ty` is no such type, or its inputs or output have no name.
+fn boxed_callable_type(ty: &convert::Type) -> Option<String> {
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = ty
+    else {
+        return None;
+    };
+    let (inputs, output) =
+        OPAQUE_CALLABLES.with_borrow(|callables| callables.get(definition.as_bytes()).cloned())?;
+    let argument = |position: u32| concrete_type(arguments.get(usize::try_from(position).ok()?)?);
+    let inputs = inputs
+        .iter()
+        .map(|position| argument(*position))
+        .collect::<Option<Vec<_>>>()?;
+    Some(callable_box(&inputs, &argument(output)?))
+}
+
+/// `Box<dyn Fn(A..) -> B + Send>` of `inputs` and `output`, spelled.
+fn callable_box(inputs: &[String], output: &str) -> String {
+    format!("Box<dyn Fn({}) -> {output} + Send>", inputs.join(", "))
+}
+
+/// The boxed callable a call's callable parameter `call` takes where a
+/// crate's own callable value fills it ([`boxed_callable_type`]).
+fn boxed_call(
+    call: &crate::classify::representability::callable::Call,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<String, request::Error> {
+    let spelled = |ty: &convert::Type| {
+        concrete_type(&substituted(ty, signature, substitutions)?)
+            .ok_or_else(|| request::drift("a callable value's input or output"))
+    };
+    let inputs = call
+        .inputs()
+        .iter()
+        .map(spelled)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(callable_box(&inputs, &spelled(call.output())?))
 }
 
 /// Whether `this` and `other` are one opaque type: the same definition at
@@ -15347,6 +15473,9 @@ fn holds_opaque(ty: &convert::Type) -> bool {
 }
 
 fn concrete_type(ty: &convert::Type) -> Option<String> {
+    if let Some(boxed) = boxed_callable_type(ty) {
+        return Some(boxed);
+    }
     Some(match ty {
         convert::Type::Inferred => "_".to_owned(),
         convert::Type::Unit => "()".to_owned(),

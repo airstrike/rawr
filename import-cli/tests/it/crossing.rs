@@ -1139,6 +1139,23 @@ fn capturing_closures_fill_each_of_several_callable_parameters() {
     );
 }
 
+/// iced's gallery (#597): `Message::BlurhashDecoded.with(id)` through a
+/// crate trait shaped like iced's `Function`, whose blanket impl over
+/// `Fn(A, B) -> O` gives every callable `with`, on a variant's constructor,
+/// a plain function and a capturing closure. Each runs the crate's own
+/// `Function::with`, and the `impl Fn(B) -> O` it returns fills
+/// `Task::finish`'s and `Task::map`'s callable parameters as itself. No
+/// trait of a crate path of its own is special. The output is `cargo run`'s.
+#[test]
+fn a_trait_method_over_fn_runs_on_functions_and_its_callable_crosses() {
+    let (rawr, cargo) = both_printed("crossing-functioned", "functioned.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(ThumbnailDownloaded(4, Ok(Bytes(21))))\nSome(Tagged(50, 9))\nSome(Tagged(104, 2))"
+    );
+}
+
 /// fount's loading program: iced's `Task::future(impl Future<Output = T>)`
 /// of an async block that awaits a crate's `async fn`, then a closure that
 /// takes the block's output and matches on it. The output is a `Result`

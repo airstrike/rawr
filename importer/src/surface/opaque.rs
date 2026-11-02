@@ -9,12 +9,19 @@ use std::collections::BTreeSet;
 
 use crate::api::{self, model};
 
-/// The identities of the opaque types the functions in `graph` give.
+/// The identities of the opaque types the functions in `graph` give,
+/// directly or as the associated type an implementation's method returns,
+/// as `impl Fn(B) -> O` is of iced's `Function::with` for every `Fn`.
 pub fn identities<P: api::Phase>(graph: &api::Graph<P>) -> BTreeSet<[u8; 32]> {
     let mut found = BTreeSet::new();
     for definition in graph.definitions() {
-        if let model::Kind::Function { signature, .. } = definition.kind() {
-            collect(signature.output(), &mut found);
+        match definition.kind() {
+            model::Kind::Function { signature, .. } => collect(signature.output(), &mut found),
+            model::Kind::AssociatedType {
+                default: model::Default::Present(ty),
+                ..
+            } => collect(ty, &mut found),
+            _ => {}
         }
     }
     found

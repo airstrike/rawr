@@ -67,6 +67,24 @@ impl Slot {
         self.key == closure_key()
     }
 
+    /// The slot a crate's own callable value fills at the call's input
+    /// `position`, as the `impl Fn(B) -> O` iced's `Function::with` gives:
+    /// the boxed value the runner made of it, which the call takes as
+    /// itself.
+    #[must_use]
+    pub fn native(position: u32) -> Self {
+        Self {
+            position,
+            key: native_key(),
+        }
+    }
+
+    /// Whether a crate's callable value fills the slot ([`Slot::native`]).
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        self.key == native_key()
+    }
+
     /// The input the slot fills.
     #[must_use]
     pub const fn position(&self) -> u32 {
@@ -83,6 +101,11 @@ impl Slot {
 fn closure_key() -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
     Sha256::digest(b"rawr.instance.slot.closure/v1").into()
+}
+
+fn native_key() -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(b"rawr.instance.slot.native/v1").into()
 }
 
 pub(super) struct Parts {
