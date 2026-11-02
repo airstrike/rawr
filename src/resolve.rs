@@ -14,7 +14,8 @@ pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, ArgumentCount, CannotCompare, Qualified, Unsatisfied, Unsupported, ASYNC_MAIN,
+    derivable, ArgumentCount, ArgumentSignature, CannotCompare, Qualified, Unsatisfied,
+    Unsupported, ASYNC_MAIN,
 };
 pub use error::{Callee, Category, Error};
 use std::collections::BTreeMap;

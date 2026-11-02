@@ -1044,6 +1044,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::AsyncMain { .. }
         | R::TypeAnnotationsNeeded { .. }
         | R::CannotCompare { .. }
+        | R::ArgumentSignature { .. }
         | R::MemberKind { .. } => None,
     }
 }

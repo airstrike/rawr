@@ -80,6 +80,9 @@ pub enum Category {
     /// An `==` or `!=` whose left operand's type has no `PartialEq` impl
     /// for the right operand's, as rustc's E0277.
     CannotCompare,
+    /// A closure or function whose parameters differ from the ones its
+    /// callable's signature gives, as rustc's E0631.
+    ArgumentSignature,
 }
 
 impl fmt::Display for Category {
@@ -121,6 +124,7 @@ impl fmt::Display for Category {
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
+            Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
         }
     }
 }
@@ -564,6 +568,18 @@ pub enum Error {
         /// The operator.
         at: Span,
     },
+    /// A closure or function passed where a callable of the same arity is
+    /// expected whose parameters differ, which rustc refuses (E0631).
+    ArgumentSignature {
+        /// Whether a closure is passed; else a function.
+        closure: bool,
+        /// The signature expected, as `fn(&State) -> _`.
+        expected: ImmutableString,
+        /// The signature found, as `fn(State) -> _`.
+        found: ImmutableString,
+        /// The closure or function passed.
+        at: Span,
+    },
 }
 
 impl Error {
@@ -627,6 +643,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
+            Self::ArgumentSignature { .. } => Category::ArgumentSignature,
         }
     }
 
@@ -670,6 +687,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
             Self::CannotCompare { lhs, .. } => lhs.as_str(),
+            Self::ArgumentSignature { expected, .. } => expected.as_str(),
         }
     }
 
@@ -712,7 +730,8 @@ impl Error {
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
-            | Self::CannotCompare { at, .. } => *at,
+            | Self::CannotCompare { at, .. }
+            | Self::ArgumentSignature { at, .. } => *at,
         }
     }
 
@@ -760,7 +779,8 @@ impl Error {
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
             | Self::TypeAnnotationsNeeded { .. }
-            | Self::CannotCompare { .. } => None,
+            | Self::CannotCompare { .. }
+            | Self::ArgumentSignature { .. } => None,
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -1051,6 +1071,18 @@ impl fmt::Display for Written<'_> {
                 "{} at {at} (E0277)",
                 CannotCompare(lhs, rhs)
             ),
+            Error::ArgumentSignature {
+                closure,
+                expected,
+                found,
+                at,
+            } => write!(
+                formatter,
+                "{} at {at}: expected {kind} signature `{expected}`, found {kind} signature \
+                 `{found}` (E0631)",
+                ArgumentSignature(*closure),
+                kind = ArgumentSignature(*closure).kind(),
+            ),
         }
     }
 }
@@ -1075,6 +1107,27 @@ impl fmt::Display for Unsupported<'_> {
         } else {
             write!(formatter, "{} is not supported", self.0)
         }
+    }
+}
+
+/// rustc's E0631 message for a closure or function whose parameters
+/// differ from the callable's it is passed as.
+pub(crate) struct ArgumentSignature(pub(crate) bool);
+
+impl ArgumentSignature {
+    /// `closure` or `function`, as rustc's notes name it.
+    pub(crate) const fn kind(&self) -> &'static str {
+        if self.0 {
+            "closure"
+        } else {
+            "function"
+        }
+    }
+}
+
+impl fmt::Display for ArgumentSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "type mismatch in {} arguments", self.kind())
     }
 }
 
