@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.107 (2026-11-02)
+
 - std's trait impls on rawr's own types come from std's own declarations: `==`, `<`, Deref coercion and `From`/`Into` select the impl rustc would, and refuse the rest with rustc's errors. (#744)
 - A program's own `impl Deref` works: methods and fields are found through it, `&Wrapper` coerces to `&Target`, and `Option::as_deref` gives the target's reference (`Option<Vec<u8>>` gives `Option<&[u8]>`). (#710)
 - `BTreeMap`, `BTreeSet`, `Cell`, `RefCell` and `Result` compare with `<` as std orders them, and `==` follows std's `PartialEq` impls. (#704)
