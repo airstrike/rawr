@@ -89,6 +89,27 @@ impl Alias {
         }
     }
 
+    /// rawr's builtin `name` of one type parameter, as `use std::rc::Weak`
+    /// names `Weak<T>`.
+    pub(crate) fn generic_builtin(name: &str, span: Span) -> Self {
+        let parameter = Type::Path(Path {
+            name: "T".into(),
+            target: Target::Parameter,
+            arguments: Box::default(),
+            span,
+        });
+        Self {
+            params: Box::new(["T".into()]),
+            target: Some(Box::new(Type::Path(Path {
+                name: name.into(),
+                target: Target::Builtin,
+                arguments: Box::new([Argument::Type(parameter)]),
+                span,
+            }))),
+            defaults: Box::default(),
+        }
+    }
+
     /// A crate's type alias (`host::Entry::TypeAlias`), as `iced::Result`
     /// is `Result<(), iced::Error>`. `None` when a header cannot name what
     /// it names.
@@ -528,8 +549,9 @@ fn resolve_path(
     };
     let written = name.clone();
     // A std type Rawr represents reads as its own name: `alloc::vec::Vec`
-    // is `Vec`.
+    // is `Vec`, and `std::sync::Weak` is `SyncWeak`.
     let name = match std.and_then(super::std_path::spelling) {
+        _ if let Some(weak) = super::lower_nominal::counted::std_weak(&name) => weak.into(),
         Some(spelling) => ImmutableString::from(spelling),
         None => name,
     };
@@ -653,6 +675,7 @@ fn resolve_path(
         || name.as_str() == "Vec"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
+        || super::lower_nominal::counted::std_weak(&written).is_some()
         || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
     {
@@ -1355,10 +1378,33 @@ impl Type {
         })
     }
 
-    /// `T` of `Box<T>`, `Rc<T>` or `Arc<T>`, each the value itself at
-    /// runtime.
+    /// `T` of `Box<T>`, the value itself at runtime.
     pub(crate) fn box_element(&self) -> Option<&Type> {
-        self.pointer_element().map(|(_, element)| element)
+        self.pointer_element()
+            .filter(|(pointer, _)| *pointer == "Box")
+            .map(|(_, element)| element)
+    }
+
+    /// `T` of `Rc<T>` or `Arc<T>`, a counted pointer at runtime.
+    pub(crate) fn counted_element(&self) -> Option<&Type> {
+        self.pointer_element()
+            .filter(|(pointer, _)| *pointer != "Box")
+            .map(|(_, element)| element)
+    }
+
+    /// The name and `T` of `std::rc::Weak<T>` (`Weak`) or
+    /// `std::sync::Weak<T>` (`SyncWeak`).
+    pub(crate) fn weak_element(&self) -> Option<(&str, &Type)> {
+        let Type::Path(path) = self else {
+            return None;
+        };
+        if path.target != Target::Builtin || !matches!(path.name.as_str(), "Weak" | "SyncWeak") {
+            return None;
+        }
+        path.arguments.iter().find_map(|argument| match argument {
+            Argument::Type(ty) => Some((path.name.as_str(), ty)),
+            Argument::Lifetime(_) => None,
+        })
     }
 
     /// The pointer's name and `T` of `Box<T>`, `Rc<T>` or `Arc<T>`.

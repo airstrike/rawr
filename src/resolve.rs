@@ -1381,6 +1381,19 @@ fn resolve_imports(
                     type_ref::Target::Alias(type_ref::Alias::builtin(builtin, binding.name.span)),
                 );
             }
+            // `use std::rc::Weak` names rawr's `Weak<T>`, and
+            // `std::sync::Weak` its `SyncWeak<T>`.
+            if matches!(binding.target, item::Import::Module)
+                && let Some(weak) = lower_nominal::counted::std_weak(&binding.qualified)
+            {
+                types.insert(
+                    binding.name.text.clone(),
+                    type_ref::Target::Alias(type_ref::Alias::generic_builtin(
+                        weak,
+                        binding.name.span,
+                    )),
+                );
+            }
             // A std type Rawr has no representation for yet names it, so
             // its uses say so.
             if matches!(binding.target, item::Import::Module)
@@ -4426,12 +4439,20 @@ fn resolve_bounds_with_arguments(
     let mut trait_arguments = Vec::new();
     for bound in bounds_written {
         // `Send`, `Sync` and the other auto traits, bare or by their std
-        // path. rawr does not prove a type's auto traits, so the bound is
-        // accepted and asks nothing (an over-admission: an `Rc` passes
-        // `T: Send`), as rustc reads it for every type that has them.
+        // path. A `Send` bound refuses what rawr knows isn't `Send`, as an
+        // `Rc` (`Parser::not_send`); the others ask nothing, as rustc
+        // reads them for every type that has them.
         if crate::parser::item::is_auto_trait(bound) || crate::parser::item::is_sized_trait(bound) {
+            if bound
+                .segments
+                .last()
+                .is_some_and(|segment| segment.name.text.as_str() == "Send")
+            {
+                bounds.push(crate::capability::Kind::Send);
+            }
             continue;
         }
+
         // `Debug`, or `std::fmt::Debug` as Rust spells it in full.
         let kind = match &bound.segments[..] {
             [prefix @ .., segment]

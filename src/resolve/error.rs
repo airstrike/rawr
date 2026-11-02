@@ -1190,6 +1190,11 @@ impl fmt::Display for Unsatisfied<'_> {
                 "`{}` doesn't implement `std::fmt::Display`",
                 self.0
             ),
+            "Send" => write!(
+                formatter,
+                "`{}` cannot be sent between threads safely",
+                self.0
+            ),
             capability => write!(
                 formatter,
                 "the trait bound `{}: {capability}` is not satisfied",

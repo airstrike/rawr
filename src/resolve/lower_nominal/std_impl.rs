@@ -56,9 +56,9 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
             "core::result::Result",
             vec![(**ok).clone(), (**error).clone()],
         ),
-        Ty::Boxed(Pointer::Box, inner) => ("alloc::boxed::Box", one(inner)),
-        Ty::Boxed(Pointer::Rc, inner) => ("alloc::rc::Rc", one(inner)),
-        Ty::Boxed(Pointer::Arc, inner) => ("alloc::sync::Arc", one(inner)),
+        Ty::Boxed(inner) => ("alloc::boxed::Box", one(inner)),
+        Ty::Counted(counter, inner) => (counter.std_paths().0, one(inner)),
+        Ty::Weak(counter, inner) => (counter.std_paths().1, one(inner)),
         Ty::Keyed(kind, arguments) => (
             match kind {
                 Keyed::HashMap => "std::collections::hash::map::HashMap",
@@ -115,9 +115,12 @@ fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
         },
         "core::option::Option" => Ty::Option(first()?),
         "core::result::Result" => Ty::Result(first()?, Box::new(arguments.get(1)?.clone())),
-        "alloc::boxed::Box" => Ty::Boxed(Pointer::Box, first()?),
-        "alloc::rc::Rc" => Ty::Boxed(Pointer::Rc, first()?),
-        "alloc::sync::Arc" => Ty::Boxed(Pointer::Arc, first()?),
+        "alloc::boxed::Box" => Ty::Boxed(first()?),
+        "alloc::rc::Rc" => Ty::Counted(Counter::Rc, first()?),
+        "alloc::sync::Arc" => Ty::Counted(Counter::Arc, first()?),
+        "alloc::rc::Weak" => Ty::Weak(Counter::Rc, first()?),
+        "alloc::sync::Weak" => Ty::Weak(Counter::Arc, first()?),
+
         "std::collections::hash::map::HashMap" => {
             Ty::Keyed(Keyed::HashMap, arguments.get(..2)?.into())
         }
@@ -867,8 +870,10 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
                 length: Some(_), ..
             },
         ) => Some(None),
-        // A box, an `Rc` and an `Arc` are their value at runtime.
-        (Ty::Boxed(_, inner), source) if same(inner, source) => Some(None),
+        // A box is its value at runtime, and an `Rc` or `Arc` a new
+        // allocation of it.
+        (Ty::Boxed(inner), source) if same(inner, source) => Some(None),
+        (Ty::Counted(_, inner), source) if same(inner, source) => Some(Some(PreludeOp::CountedNew)),
         _ => {
             let (to, from) = (builtin_code(target)?, builtin_code(source)?);
             BUILTIN_CONVERSIONS
@@ -919,10 +924,18 @@ impl Parser<'_> {
     }
 }
 
-/// One step of a deref: the program's `deref` (or `deref_mut`) it calls,
-/// or none where the target is the value itself at runtime (std's impls on
-/// rawr's natives: a `String`'s `str`, a box's value, a reference's).
-pub(super) type DerefCall = Option<method::Definition>;
+/// One step of a deref, and how rawr runs it (D711's execution mapping
+/// for std's `Deref` impls).
+#[derive(Clone)]
+pub(super) enum DerefCall {
+    /// The target is the value itself at runtime: std's impls on rawr's
+    /// natives, as a `String`'s `str`, a box's value, a reference's.
+    Value,
+    /// The program's `deref` (or `deref_mut`), called.
+    Program(Box<method::Definition>),
+    /// An `Rc`'s or `Arc`'s value, read (`counted.rs`).
+    Counted,
+}
 
 impl Parser<'_> {
     /// `<ty as Deref>::Target` (D711 step 3, one rule for coercion, the
@@ -963,7 +976,7 @@ impl Parser<'_> {
                 "Deref".into(),
                 "Target".into(),
             ));
-            return Some((Compared::Ty(target), Some(call)));
+            return Some((Compared::Ty(target), DerefCall::Program(Box::new(call))));
         }
         let trait_ = if mutable {
             "core::ops::deref::DerefMut"
@@ -981,7 +994,12 @@ impl Parser<'_> {
                 associated(self, &selected, "Target")
             });
         self.inference.commit(checkpoint);
-        target.map(|target| (target, None))
+        let call = if matches!(ty, Ty::Counted(..)) {
+            DerefCall::Counted
+        } else {
+            DerefCall::Value
+        };
+        target.map(|target| (target, call))
     }
 
     /// One deref step of the reference `reference`: `&Target` of `&T`,
@@ -1070,10 +1088,16 @@ impl Parser<'_> {
     /// `value` through `calls`, the deref steps a coercion or a method probe
     /// takes, as type `ty`: each program `deref` called on the last.
     pub(super) fn apply_derefs(&mut self, value: &mut ParsedExpr, calls: Vec<DerefCall>, ty: Ty) {
-        for call in calls.into_iter().flatten() {
-            value.source = Self::std_call(&call, value.rendered_source(), &[]);
-            value.prelude = origin::Fragment::default();
-            value.lvalue = None;
+        for call in calls {
+            match call {
+                DerefCall::Value => {}
+                DerefCall::Program(call) => {
+                    value.source = Self::std_call(&call, value.rendered_source(), &[]);
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
+                }
+                DerefCall::Counted => self.counted_value(value),
+            }
         }
         value.ty = ty;
     }

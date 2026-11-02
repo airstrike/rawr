@@ -179,6 +179,16 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
     if let Some(element) = ty.box_element() {
         return matches_type(value, element);
     }
+    // An `Rc` or `Arc` points to a value of its type; a `Weak` may point
+    // to none.
+    if let Some(element) = ty.counted_element() {
+        return crate::resolve::lower_nominal::counted::value(value)
+            .is_some_and(|inner| matches_type(&inner, element));
+    }
+    if ty.weak_element().is_some() {
+        return crate::resolve::lower_nominal::counted::is_weak(value);
+    }
+
     // A trait object is any value of a type implementing the trait, which
     // was checked where it was made.
     if ty.dyn_trait().is_some() {
