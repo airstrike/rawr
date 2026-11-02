@@ -7548,6 +7548,8 @@ fn render_adapter_body(
                 ));
             }
             let crossed = Crossed { slots, crossings };
+            let pinned = opaque_pinned_strings(signature, substitutions);
+            let substitutions: &[convert::Type] = pinned.as_deref().unwrap_or(substitutions);
             let opens = instance_opens(signature, substitutions);
             // A `&str` the output borrows through a lifetime its type only
             // carries, as iced's `text(url)` gives a `Text<'a>` of an `impl
@@ -11368,6 +11370,27 @@ fn render_take_input(
             .map_err(request::unwritable);
         }
     }
+    // A type parameter a borrow of one of std's values fills, as `&PathBuf`
+    // fills `opened<P: AsRef<Path>>(path: P)`: the value itself, lent as a
+    // `&Path` input is.
+    if let convert::Type::Parameter(_) = ty
+        && let lent @ convert::Type::Borrowed {
+            mutable: false,
+            ty: target,
+        } = substitute(ty, signature, substitutions)?
+        && std_value(target).is_some()
+    {
+        let lent = lent.clone();
+        return render_take_input(
+            local,
+            index,
+            &lent,
+            signature,
+            substitutions,
+            profile,
+            output,
+        );
+    }
     // `&mut Vec<T>` of scalars, or `&mut String`: a copy of Rawr's array or
     // string the call changes, which goes back after it (D558 slice 2).
     if let convert::Type::Borrowed {
@@ -11539,18 +11562,26 @@ fn render_take_input(
             output,
         );
     }
-    if let lending @ (convert::Type::Option(_) | convert::Type::Tuple(_)) =
+    if let lending
+    @ (convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)) =
         substituted(ty, signature, substitutions)?
         && let Some(lease) = Lease::of(&lending, future, 1)
     {
-        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
-        return writeln!(
+        writeln!(
             output,
-            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {take} }};\n    let argument_{local} = {borrow};",
+            "    #[allow(unused_mut)]\n    let mut argument_{local}_held: {held} = {{ let value_1 = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); {take} }};",
             held = lease.held,
             take = lease.take,
         )
-        .map_err(request::unwritable);
+        .map_err(request::unwritable)?;
+        // A future borrows it again inside itself (`future_borrows`), and
+        // a member that moves moves there.
+        if future {
+            return Ok(());
+        }
+        let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
+        return writeln!(output, "    let argument_{local} = {borrow};")
+            .map_err(request::unwritable);
     }
     // A type parameter only a `&'static str` fills, as a literal fills
     // iced's `title(impl Title<State>)`: a `&'static str` input.
@@ -11633,6 +11664,16 @@ struct Lease {
 enum LeaseKind {
     /// A crate value leased from its slot, as `render_lease` leases one.
     Native { mutable: bool },
+    /// One of std's values Rawr's std holds, as `&Path`, lent from it.
+    Std,
+    /// A Rust value made from Rawr's array, tuple, string or number, as
+    /// `&[u8]` or `&String`, lent as `render_take_input` lends one.
+    Made,
+    /// A value that borrows nothing, beside ones that do, as the `String`
+    /// of `Result<&Font, String>`: moved into the call once.
+    Owned,
+    /// A `Result` of leases: its variant's.
+    Result(Box<Lease>, Box<Lease>),
     /// Rawr's string: pinned for a future, or held for a call.
     Str { pinned: bool },
     /// An `Option` of a lease: `None` lends nothing.
@@ -11643,6 +11684,9 @@ enum LeaseKind {
 
 impl Lease {
     fn of(ty: &convert::Type, future: bool, depth: usize) -> Option<Self> {
+        if depth == 1 && !holds_borrow(ty) {
+            return None;
+        }
         match ty {
             convert::Type::Borrowed { mutable, ty: lent }
                 if matches!(
@@ -11658,6 +11702,35 @@ impl Lease {
                         "{{ let handle = value_{depth}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; arguments.arena.lease::<{rust}>(handle)? }}"
                     ),
                     kind: LeaseKind::Native { mutable: *mutable },
+                })
+            }
+            convert::Type::Borrowed {
+                mutable: false,
+                ty: lent,
+            } if let Some(rust) = std_value(lent) => Some(Self {
+                held: format!("<{rust} as __rawr_internal::crossing::Std>::Lent"),
+                take: format!(
+                    "<{rust} as __rawr_internal::crossing::Std>::lend(value_{depth}).ok_or(Error::TypeMismatch)?"
+                ),
+                kind: LeaseKind::Std,
+            }),
+            convert::Type::Borrowed {
+                mutable: false,
+                ty: lent,
+            } if is_made_for_call(lent) => {
+                // A slice is held as the `Vec` made for it.
+                let rust = match &**lent {
+                    convert::Type::Sequence { element, .. } => {
+                        format!("Vec<{}>", concrete_type(element)?)
+                    }
+                    lent => concrete_type(lent)?,
+                };
+                let mut converted = String::new();
+                render_from_dynamic(lent, &format!("value_{depth}"), depth, &mut converted).ok()?;
+                Some(Self {
+                    held: rust,
+                    take: format!("{{ let value_{depth} = value_{depth}.flatten(); ({converted})? }}"),
+                    kind: LeaseKind::Made,
                 })
             }
             convert::Type::Builtin(convert::Builtin::Str) if future => Some(Self {
@@ -11684,6 +11757,19 @@ impl Lease {
                         inner.take
                     ),
                     kind: LeaseKind::Option(Box::new(inner)),
+                })
+            }
+            convert::Type::Result(ok, err) => {
+                let next = depth + 1;
+                let ok = Self::of(ok, future, next)?;
+                let err = Self::of(err, future, next)?;
+                Some(Self {
+                    held: format!("Result<{}, {}>", ok.held, err.held),
+                    take: format!(
+                        "{{ let mut value_{depth} = value_{depth}; match __rawr_internal::result::take(&mut value_{depth}).ok_or(Error::TypeMismatch)? {{ Ok(value_{next}) => Ok({}), Err(value_{next}) => Err({}) }} }}",
+                        ok.take, err.take
+                    ),
+                    kind: LeaseKind::Result(Box::new(ok), Box::new(err)),
                 })
             }
             convert::Type::Tuple(members) if !members.is_empty() => {
@@ -11714,6 +11800,16 @@ impl Lease {
                     kind: LeaseKind::Tuple(members),
                 })
             }
+            ty if !holds_borrow(ty) => {
+                let rust = concrete_type(ty)?;
+                let mut converted = String::new();
+                render_from_dynamic(ty, &format!("value_{depth}"), depth, &mut converted).ok()?;
+                Some(Self {
+                    held: format!("Option<{rust}>"),
+                    take: format!("{{ let value_{depth} = value_{depth}.flatten(); Some(({converted})?) }}"),
+                    kind: LeaseKind::Owned,
+                })
+            }
             _ => None,
         }
     }
@@ -11724,6 +11820,19 @@ impl Lease {
         match &self.kind {
             LeaseKind::Native { mutable: true } => format!("{place}.get_mut()"),
             LeaseKind::Native { mutable: false } => format!("&*{place}.get_mut()"),
+            LeaseKind::Std => format!("&*{place}"),
+            LeaseKind::Made => format!("&{place}"),
+            LeaseKind::Owned => format!(
+                "{place}.take().expect(\"a value that borrows nothing moves into its call once\")"
+            ),
+            LeaseKind::Result(ok, err) => {
+                let next = depth + 1;
+                format!(
+                    "match {place}.as_mut() {{ Ok(held_{next}) => Ok({}), Err(held_{next}) => Err({}) }}",
+                    ok.borrow(&format!("(*held_{next})"), next),
+                    err.borrow(&format!("(*held_{next})"), next)
+                )
+            }
             LeaseKind::Str { pinned: true } => place.to_owned(),
             LeaseKind::Str { pinned: false } => format!("{place}.as_str()"),
             LeaseKind::Tuple(members) => {
@@ -11747,6 +11856,18 @@ impl Lease {
     }
 }
 
+/// Whether `ty` holds a borrow: a `&T`, `&mut T` or `&str`, alone or in an
+/// `Option`, a `Result` or a tuple.
+fn holds_borrow(ty: &convert::Type) -> bool {
+    match ty {
+        convert::Type::Borrowed { .. } | convert::Type::Builtin(convert::Builtin::Str) => true,
+        convert::Type::Option(element) => holds_borrow(element),
+        convert::Type::Result(ok, err) => holds_borrow(ok) || holds_borrow(err),
+        convert::Type::Tuple(members) => members.iter().any(holds_borrow),
+        _ => false,
+    }
+}
+
 /// The statements that move what lends each borrowed input into a future
 /// and borrow it there again, as `render_take_input` bound it: a leased
 /// value (`render_lease`), a value made for the call, or what a type that
@@ -11760,7 +11881,7 @@ fn future_borrows(
         let substituted = substituted(ty, signature, substitutions)?;
         if matches!(
             substituted,
-            convert::Type::Option(_) | convert::Type::Tuple(_)
+            convert::Type::Option(_) | convert::Type::Result(..) | convert::Type::Tuple(_)
         ) && let Some(lease) = Lease::of(&substituted, true, 1)
         {
             let borrow = lease.borrow(&format!("argument_{local}_held"), 1);
@@ -11775,6 +11896,12 @@ fn future_borrows(
         if !mutable && is_made_for_call(&lent) {
             rebound.push_str(&format!(
                 "        let argument_{local}_made = argument_{local}_made;\n        let argument_{local} = &argument_{local}_made;\n"
+            ));
+        } else if !mutable && std_value(&lent).is_some() {
+            // One of std's values Rawr's std holds, as `&Path`: the value
+            // lent from its script value, held for the future's life.
+            rebound.push_str(&format!(
+                "        let argument_{local}_lent = argument_{local}_lent;\n        let argument_{local} = &*argument_{local}_lent;\n"
             ));
         } else {
             let borrow = if mutable { "" } else { "&*" };
@@ -13063,9 +13190,15 @@ fn is_copied(ty: &convert::Type) -> bool {
 }
 
 /// Whether a `&` input of `ty` lends a Rust value the bridge makes from
-/// Rawr's array or tuple for the call: `&[T]` or `&(A, B)`.
+/// Rawr's array, tuple or string for the call: `&[T]`, `&Vec<T>`, `&(A,
+/// B)` or `&String`.
 fn is_made_for_call(ty: &convert::Type) -> bool {
-    matches!(ty, convert::Type::Sequence { .. } | convert::Type::Tuple(_))
+    matches!(
+        ty,
+        convert::Type::Sequence { .. }
+            | convert::Type::Tuple(_)
+            | convert::Type::Builtin(convert::Builtin::String)
+    )
         // A number, as `PartialOrd<f32>::lt` takes `&f32` (T412).
         || matches!(ty, convert::Type::Builtin(builtin)
             if !matches!(
@@ -13742,6 +13875,17 @@ fn shortens(ty: &convert::Type) -> bool {
 
 fn carries_lifetime(ty: &convert::Type) -> bool {
     match ty {
+        // A `&str` an opaque type captures is pinned for the runner's life
+        // where the value is made (`opaque_pinned_strings`), so it holds no
+        // borrow.
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if is_opaque(definition) => arguments.iter().any(|argument| {
+            !matches!(argument, convert::Type::Borrowed { mutable: false, ty }
+                if **ty == convert::Type::Builtin(convert::Builtin::Str))
+                && carries_lifetime(argument)
+        }),
         convert::Type::Nominal {
             definition,
             arguments,
@@ -14716,6 +14860,59 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
 }
 
 /// Whether `definition` is an opaque `impl Trait` type a function gives.
+/// The substitutions with each `&str` an opaque output captures pinned as
+/// a `&'static str`, as a string literal is in Rust: `download(url: impl
+/// AsRef<str>) -> impl Steps` captures `&'static str` from a literal, and
+/// no region can hold a type Rust code can't name. `None` when there is
+/// none.
+fn opaque_pinned_strings(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Option<Box<[convert::Type]>> {
+    fn captures(ty: &convert::Type, index: u32) -> bool {
+        match ty {
+            convert::Type::Nominal {
+                definition,
+                arguments,
+            } => {
+                (is_opaque(definition)
+                    && arguments
+                        .iter()
+                        .any(|argument| output_names(argument, index)))
+                    || arguments.iter().any(|argument| captures(argument, index))
+            }
+            convert::Type::Option(inner)
+            | convert::Type::Range(inner)
+            | convert::Type::Borrowed { ty: inner, .. }
+            | convert::Type::Sequence { element: inner, .. } => captures(inner, index),
+            convert::Type::Result(ok, err) => captures(ok, index) || captures(err, index),
+            convert::Type::Tuple(members) => members.iter().any(|member| captures(member, index)),
+            _ => false,
+        }
+    }
+    let borrowed_str = convert::Type::Borrowed {
+        mutable: false,
+        ty: Box::new(convert::Type::Builtin(convert::Builtin::Str)),
+    };
+    let mut pinned = None::<Box<[convert::Type]>>;
+    for (position, parameter) in signature
+        .parameters()
+        .iter()
+        .filter(|parameter| {
+            parameter.kind() == crate::classify::representability::signature::Kind::Type
+        })
+        .enumerate()
+    {
+        if substitutions.get(position) == Some(&borrowed_str)
+            && captures(signature.output(), parameter.index())
+        {
+            pinned.get_or_insert_with(|| substitutions.into())[position] =
+                convert::Type::Builtin(convert::Builtin::StaticStr);
+        }
+    }
+    pinned
+}
+
 fn is_opaque(definition: &crate::surface::identity::Definition) -> bool {
     OPAQUE_TYPES.with_borrow(|opaque| opaque.contains_key(definition.as_bytes()))
 }

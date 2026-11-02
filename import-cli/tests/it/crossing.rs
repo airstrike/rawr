@@ -1223,6 +1223,36 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     );
 }
 
+/// String-like generics follow their bound, not their spelling (#713): `S:
+/// Into<String>` takes what `impl Into<String>` takes, and `AsRef<str>`,
+/// `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` and `ToString` take a
+/// literal, a `String`, a borrow of one, a `PathBuf` and a borrow of one,
+/// as std's impls for them say. The output is `cargo run`'s.
+#[test]
+fn string_like_generics_take_what_their_bounds_impls_take() {
+    let (rawr, cargo) = both_printed("crossing-named", "named.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("spelled Grace\nspelled Ada\n5 4 4\nopened icon.png in assets\nopened inter.ttf in assets/fonts"),
+        "{rawr}"
+    );
+}
+
+/// image's `ImageBuffer::from_fn(w, h, |x, y| ..)`: an `FnMut` with no
+/// `'static` bound is borrowed for the call, so the closure changes what
+/// it captures and the program reads the change after, and function
+/// pointers of none, two and three inputs take script functions (#715).
+/// The output is `cargo run`'s.
+#[test]
+fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
+    let (rawr, cargo) = both_printed("crossing-grid", "grid.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "4x3 after 12 calls\n0 31 22\n12 seen, 64 at (3, 2)\nsum 384\n123 7"
+    );
+}
+
 #[test]
 fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
     let (rawr, cargo) = both_printed("crossing-sequences", "sequences.rs", "");
