@@ -17,6 +17,7 @@ mod sequence;
 use places::PlacePattern;
 mod reborrow;
 mod reverse;
+mod std_impl;
 
 #[cfg(test)]
 mod argument_count_tests;
@@ -33,6 +34,8 @@ mod language_tests;
 mod placeholder_tests;
 #[cfg(test)]
 mod rust_meaning_tests;
+#[cfg(test)]
+mod std_impl_tests;
 
 use super::borrowck::{
     record,
@@ -3426,22 +3429,6 @@ fn builtin_conversions_into(target: &Ty) -> Vec<(crate::INT, PreludeOp)> {
         .filter(|(to, _, _)| *to == code)
         .map(|(_, source, op)| (*source, *op))
         .collect()
-}
-
-/// The prelude conversion from `source` to `target`, both resolved: its
-/// op, or `None` for `From<&str> for String`, the value itself.
-fn builtin_conversion(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
-    if *target == Ty::String
-        && (*source == Ty::Str
-            || matches!(source, Ty::Reference { target, .. } if target.is_text()))
-    {
-        return Some(None);
-    }
-    let target = builtin_code(target)?;
-    builtin_conversions_from(source)
-        .into_iter()
-        .find(|(to, _)| *to == target)
-        .map(|(_, op)| Some(op))
 }
 
 /// One function per trait function without `self`, running the impl of the
@@ -6877,6 +6864,7 @@ fn builtin_inherent_method(ty: &Ty, member: &str) -> bool {
                 | "as_ref"
                 | "as_mut"
                 | "as_deref"
+                | "as_deref_mut"
                 | "copied"
                 | "cloned"
                 | "clone"
@@ -6961,7 +6949,7 @@ fn builtin_inherent_receiver_rank(ty: &Ty, member: &str) -> u8 {
         },
         Ty::Option(_) => match member {
             "is_some" | "is_none" | "as_ref" | "as_deref" | "clone" => 1,
-            "as_mut" | "take" | "replace" => 2,
+            "as_mut" | "as_deref_mut" | "take" | "replace" => 2,
             _ => 0,
         },
         Ty::Result(..) => match member {
@@ -8292,7 +8280,7 @@ impl Pointer {
     }
 }
 
-/// One side of a `PartialEq` impl: a type, or `str`, which Rawr's types
+/// A type as std's impls take it: a type, or `str`, which Rawr's types
 /// hold only as the referent of a `&str` (`Ty::Str`).
 #[derive(Clone, Debug, PartialEq)]
 enum Compared {
@@ -8300,18 +8288,8 @@ enum Compared {
     Str,
 }
 
-impl Compared {
-    /// What a reference refers to: `str` for a `&str`.
-    fn referent(&self) -> Option<Self> {
-        match self {
-            Self::Ty(Ty::Reference { target, .. }) => Some(Self::Ty((**target).clone())),
-            Self::Ty(Ty::Str) => Some(Self::Str),
-            _ => None,
-        }
-    }
-}
-
 /// Which `PartialEq` impl an `==` resolves to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartialEqImpl {
     /// The left operand's type's own, `PartialEq<Self>`: the right operand
     /// takes the left's type.
@@ -12086,28 +12064,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// A member a program's type lacks, where the type implements `Deref`:
-    /// Rust finds it through the deref, which rawr doesn't run yet
-    /// (D712.1).
-    fn deref_not_yet(&self, error: Error) -> Error {
-        let Error::UnknownMember {
-            owner, reference, ..
-        } = &error
-        else {
-            return error;
-        };
-        let derefs = self.models.impls.iter().any(|(trait_name, id)| {
-            trait_name.as_str() == "Deref" && self.models.definition(*id).name() == owner.as_str()
-        });
-        if !derefs {
-            return error;
-        }
-        Error::NotYet {
-            path: "std::ops::Deref".into(),
-            reference: *reference,
-        }
-    }
-
     fn parse(&mut self) -> Result<Lowered, Error> {
         if self.peek_identifier().is_some_and(|name| {
             name.starts_with(SENTINEL)
@@ -12124,7 +12080,7 @@ impl<'a> Parser<'a> {
                 _ => self.parse_statement(),
             };
 
-            result.map_err(|error| self.deref_not_yet(error))?;
+            result?;
         }
 
         self.check_borrows()?;
@@ -12228,7 +12184,6 @@ impl<'a> Parser<'a> {
 
     fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
         self.method_body(definition)
-            .map_err(|error| self.deref_not_yet(error))
     }
 
     fn method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
@@ -12865,7 +12820,6 @@ impl<'a> Parser<'a> {
 
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.function_body(definition)
-            .map_err(|error| self.deref_not_yet(error))
     }
 
     fn function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
@@ -13245,6 +13199,25 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if !self.type_implements_with(&ty, &trait_name, &arguments) {
+                if self.prelude_trait(&trait_name)
+                    && let [argument] = &arguments[..]
+                {
+                    let (target, source) = match trait_name.as_str() {
+                        "From" => (ty.clone(), argument.clone()),
+                        _ => (argument.clone(), ty.clone()),
+                    };
+                    if let Some(error) = self.conversion_not_yet(&target, &source, span) {
+                        return Err(error);
+                    }
+                    // rustc names the `From` impl an `Into` bound needs.
+                    return Err(Error::MissingCapability {
+                        owner: target.name(&self.models),
+                        capability: format!("From<{}>", source.name(&self.models)).into(),
+                        operation: span,
+                        derive: false,
+                        required_by: None,
+                    });
+                }
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: trait_name,
@@ -13877,7 +13850,7 @@ impl<'a> Parser<'a> {
             // Rust's own `PartialOrd` and `Ord` impls.
             ty if matches!(trait_name, "PartialOrd" | "Ord")
                 && self.models.std_traits.contains(trait_name)
-                && self.ordered(ty, trait_name == "PartialOrd") =>
+                && self.std_ordered(ty, trait_name == "PartialOrd") =>
             {
                 true
             }
@@ -13994,16 +13967,14 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// The prelude's `impl<T> From<T> for T`, its builtin conversions, and
-    /// `From<&str>` and `From<&String>` for `String`.
+    /// Whether std's `impl From<source> for target` holds (D711 step 3),
+    /// one rawr runs (`std_impl::runs_from`).
     fn prelude_from(&mut self, target: &Ty, source: &Ty) -> bool {
-        let borrowed_string = *target == Ty::String
-            && (*source == Ty::Str
-                || matches!(source, Ty::Reference { mutable: false, target }
-                    if self.inference.resolve(target).is_text()));
-        borrowed_string
-            || self.unifies(target, source)
-            || builtin_conversion(target, source).is_some()
+        let (target, source) = (
+            self.inference.resolve(target),
+            self.inference.resolve(source),
+        );
+        self.std_from(&target, &source) && std_impl::runs_from(&target, &source).is_some()
     }
 
     /// Whether `trait_name` is the prelude's `From` or `Into`, not a crate
@@ -16615,6 +16586,22 @@ impl<'a> Parser<'a> {
                 let source = self.inference.resolve(&conversion.source);
                 match self.host_into_helper(host, &source, &target, conversion.span)? {
                     Some(helper) => helper,
+                    // std's own `From`: `impl<T> From<T> for Option<T>`,
+                    // `impl From<u16> for i64`.
+                    None if let Ty::Option(inner) = &target
+                        && self.unifies(inner, &source) =>
+                    {
+                        self.unify_type(inner, &source);
+                        self.push_op(Op::Prelude(PreludeOp::Some))
+                    }
+                    None if let Some(op) = self.std_conversion(&target, &source) => op
+                        .map(|op| self.push_op(Op::Prelude(op)))
+                        .unwrap_or_default(),
+                    None if let Some(error) =
+                        self.conversion_not_yet(&target, &source, conversion.span) =>
+                    {
+                        return Err(error);
+                    }
                     // An imported target whose `from` the program never
                     // named, as a field's `Background`: its member, which
                     // the importer brings once it is demanded.
@@ -16687,12 +16674,15 @@ impl<'a> Parser<'a> {
                 self.select_conversion(id, Some(&target), &conversion.source, conversion.span)
             }) {
                 method_name(definition.id())
-            } else if let Some(op) =
-                builtin_conversion(&target, &self.inference.resolve(&conversion.source))
-            {
+            } else if let Some(op) = self.std_conversion(&target, &conversion.source) {
                 op.map(|op| self.push_op(Op::Prelude(op)))
                     .unwrap_or_default()
             } else {
+                if let Some(error) =
+                    self.conversion_not_yet(&target, &conversion.source, conversion.span)
+                {
+                    return Err(error);
+                }
                 return Err(Error::MissingCapability {
                     owner: target.name(&self.models),
                     capability: format!("From<{}>", conversion.source.name(&self.models)).into(),
@@ -31593,10 +31583,23 @@ impl<'a> Parser<'a> {
             Ty::Param(_) | Ty::Projection(..) if self.type_implements(&peeled, "Ord") => {
                 Some((None, false))
             }
-            ty if self.ordered(ty, true) => Some((None, true)),
+            ty if self.std_ordered(ty, true) => Some((None, true)),
             _ => None,
         };
         let Some((definition, partial)) = partial_cmp else {
+            // A std type std doesn't order (rustc's E0369).
+            if self.std_declared(&Compared::Ty(peeled.clone()))
+                && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
+            {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "binary operation `{symbol}` cannot be applied to type `{}` (E0369)",
+                        self.inference.resolve(&lhs.ty).name(&self.models)
+                    )
+                    .into(),
+                    source: span(lhs.span.start(), rhs.span.end()),
+                });
+            }
             return Ok(None);
         };
         self.coerce_expr(&lhs.ty, rhs)?;
@@ -31716,135 +31719,6 @@ impl<'a> Parser<'a> {
         Ok(Some(value))
     }
 
-    /// The `PartialEq` impl that `lhs == rhs` selects, as rustc selects it
-    /// from std's impls: the blanket `impl PartialEq<&B> for &A where A:
-    /// PartialEq<B>` (with its `&mut` forms), the impls between `String`,
-    /// `str` and `&str`, and those between `Vec<T>`, `[T]` and `[T; N]`
-    /// where `T: PartialEq<U>`. Each other type has only its own impl,
-    /// which takes a right operand of its type (`Own`). `Err` gives the two
-    /// types no impl compares, the innermost an impl required.
-    fn partial_eq(
-        &mut self,
-        lhs: &Compared,
-        rhs: &Compared,
-    ) -> Result<PartialEqImpl, (Compared, Compared)> {
-        let resolve = |this: &Self, side: &Compared| match side {
-            Compared::Ty(ty) => Compared::Ty(this.inference.resolve(ty)),
-            Compared::Str => Compared::Str,
-        };
-        let (lhs, rhs) = (resolve(self, lhs), resolve(self, rhs));
-        // A right operand still to be inferred takes the left's type.
-        if matches!(rhs, Compared::Ty(Ty::Infer(_) | Ty::Unknown | Ty::Never)) {
-            return Ok(PartialEqImpl::Own);
-        }
-        let refused = Err((lhs.clone(), rhs.clone()));
-        match (&lhs, &rhs) {
-            (Compared::Ty(Ty::Str), Compared::Ty(Ty::Str)) => Ok(PartialEqImpl::Own),
-            // `impl PartialEq<String> for &str`.
-            (Compared::Ty(Ty::Str), Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
-            (Compared::Ty(Ty::Reference { .. } | Ty::Str), _) => {
-                let left = lhs.referent().expect("matched a reference");
-                // `impl PartialEq<Vec<U>> for &[T]` and `PartialEq<[U; N]>`.
-                if let Compared::Ty(Ty::Array { length: None, .. }) = &left
-                    && let Compared::Ty(Ty::Array { .. }) = &rhs
-                {
-                    return self
-                        .sequence_eq(&left, &rhs)
-                        .map(|_| PartialEqImpl::Between);
-                }
-                match rhs.referent() {
-                    Some(right) => self.partial_eq(&left, &right),
-                    None => refused,
-                }
-            }
-            (Compared::Ty(Ty::String), Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Own),
-            // `impl PartialEq<&str> for String`.
-            (Compared::Ty(Ty::String), Compared::Ty(Ty::Str)) => Ok(PartialEqImpl::Between),
-            // `impl PartialEq<str> for String` and `PartialEq<String> for str`.
-            (Compared::Ty(Ty::String), Compared::Str)
-            | (Compared::Str, Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
-            (Compared::Str, Compared::Str) => Ok(PartialEqImpl::Own),
-            (Compared::Str | Compared::Ty(Ty::String), _) => refused,
-            (Compared::Ty(Ty::Array { .. }), _) => self.sequence_eq(&lhs, &rhs),
-            _ => Ok(PartialEqImpl::Own),
-        }
-    }
-
-    /// `lhs == rhs` where `lhs` is a `Vec<T>`, a slice or an array: std's
-    /// impls take a `Vec<U>`, a slice or an array of the same length, or a
-    /// reference to a slice (or, for a `Vec`, to an array), where `T:
-    /// PartialEq<U>`. Rawr's type of a `Vec<T>` is also a slice's, so a
-    /// slice's impls hold for it.
-    fn sequence_eq(
-        &mut self,
-        lhs: &Compared,
-        rhs: &Compared,
-    ) -> Result<PartialEqImpl, (Compared, Compared)> {
-        let refused = Err((lhs.clone(), rhs.clone()));
-        let Compared::Ty(Ty::Array {
-            element: left,
-            length,
-        }) = lhs
-        else {
-            return refused;
-        };
-        let (right, other) = match rhs {
-            Compared::Ty(Ty::Array {
-                element,
-                length: other,
-            }) => (element, other),
-            // `&[U]`, or `&[U; N]` after a `Vec<T>`.
-            Compared::Ty(Ty::Reference { target, .. }) => match self.inference.resolve(target) {
-                Ty::Array {
-                    element,
-                    length: other,
-                } => {
-                    let fits = length.is_none() || other.is_none();
-                    self.sequence_elements(lhs, rhs, fits.then_some((&**left, &*element)))?;
-                    return Ok(PartialEqImpl::Between);
-                }
-                _ => return refused,
-            },
-            _ => return refused,
-        };
-        let fits = match (length, other) {
-            (Some(length), Some(other)) => length == other,
-            _ => true,
-        };
-        let own = length == other;
-        match self.sequence_elements(lhs, rhs, fits.then_some((&**left, &**right)))? {
-            PartialEqImpl::Own if own => Ok(PartialEqImpl::Own),
-            _ => Ok(PartialEqImpl::Between),
-        }
-    }
-
-    /// The elements' impl of a sequence impl, `None` when no sequence impl
-    /// takes the right operand.
-    fn sequence_elements(
-        &mut self,
-        lhs: &Compared,
-        rhs: &Compared,
-        elements: Option<(&Ty, &Ty)>,
-    ) -> Result<PartialEqImpl, (Compared, Compared)> {
-        let Some((left, right)) = elements else {
-            return Err((lhs.clone(), rhs.clone()));
-        };
-        let (left, right) = (Compared::Ty(left.clone()), Compared::Ty(right.clone()));
-        match self.partial_eq(&left, &right)? {
-            PartialEqImpl::Own => {
-                let (Compared::Ty(left_ty), Compared::Ty(right_ty)) = (&left, &right) else {
-                    unreachable!("elements are types")
-                };
-                if self.unify_type(left_ty, right_ty) {
-                    Ok(PartialEqImpl::Own)
-                } else {
-                    Err((left, right))
-                }
-            }
-            between => Ok(between),
-        }
-    }
-
     /// A compared type as rustc names it.
     fn compared_name(&self, side: &Compared) -> ImmutableString {
         match side {
@@ -31877,7 +31751,7 @@ impl<'a> Parser<'a> {
             Compared::Ty(self.inference.resolve(&lhs.ty)),
             Compared::Ty(self.inference.resolve(&rhs.ty)),
         );
-        match self.partial_eq(&left, &right) {
+        match self.std_partial_eq(&left, &right) {
             Ok(PartialEqImpl::Own) => {
                 self.coerce_expr(&lhs.ty, &mut rhs)?;
             }
@@ -32571,41 +32445,6 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, Ty::String, expression))
     }
 
-    /// `i64::pow`, `f64::powi` and `f64::powf`: Rust's spelling of a power,
-    /// as Rust has no power operator.
-    /// Whether a value of `ty` has Rust's `PartialOrd` (`partial`) or
-    /// `Ord` impl as Rawr compares builtins (`compare_value`).
-    fn ordered(&self, ty: &Ty, partial: bool) -> bool {
-        match self.inference.resolve(ty) {
-            Ty::Unit
-            | Ty::Bool
-            | Ty::Char
-            | Ty::Int(_)
-            | Ty::String
-            | Ty::Str
-            | Ty::Ordering
-            | Ty::Time(_) => true,
-            Ty::Float(_) => partial,
-            Ty::Reference { target, .. }
-            | Ty::Boxed(_, target)
-            | Ty::Option(target)
-            | Ty::Reverse(target) => self.ordered(&target, partial),
-            Ty::Array { element, .. } => self.ordered(&element, partial),
-            Ty::Tuple(members) => members.iter().all(|member| self.ordered(member, partial)),
-            // A derived `PartialOrd` or `Ord`, or a hand-written one, which
-            // the runtime's comparison calls (`compare::Comparison`).
-            ty @ Ty::Script(..) => {
-                let capability = if partial {
-                    capability::Kind::PartialOrd
-                } else {
-                    capability::Kind::Ord
-                };
-                self.type_provides(&ty, capability)
-            }
-            _ => false,
-        }
-    }
-
     /// `Ord::cmp` of `lhs` and `rhs`, values of type `ty`, as `Ordering`'s
     /// discriminant: a hand-written impl, a generic's bound through the std
     /// dispatcher, or `compare_value` for builtins and derives. `None` when
@@ -32751,7 +32590,7 @@ impl<'a> Parser<'a> {
         let ord = match &ty {
             Ty::Script(id, _) if self.models.std_impl(*id, "Ord", "cmp").is_some() => true,
             Ty::Param(_) | Ty::Projection(..) => self.type_implements(&ty, "Ord"),
-            ty => self.ordered(ty, false),
+            ty => self.std_ordered(ty, false),
         };
         ord.then_some(ty)
     }
@@ -34489,6 +34328,29 @@ impl<'a> Parser<'a> {
                 }
                 value.ty = unboxed;
             }
+            // A member a program's type lacks, through its `impl Deref`
+            // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
+            while let Some(id) = match self.inference.resolve(&value.ty) {
+                Ty::Script(id, _) => Some(id),
+                Ty::Reference { target, .. } => match self.inference.resolve(&target) {
+                    Ty::Script(id, _) => Some(id),
+                    _ => None,
+                },
+                _ => None,
+            } && !self.own_member(id, &member)
+            {
+                let reference = match self.inference.resolve(&value.ty) {
+                    reference @ Ty::Reference { .. } => reference,
+                    owned => Ty::Reference {
+                        mutable: false,
+                        target: Box::new(owned),
+                    },
+                };
+                let Some((ty, call)) = self.deref_reference(&reference, true) else {
+                    break;
+                };
+                self.apply_derefs(&mut value, vec![call], ty);
+            }
             #[cfg(feature = "rust-import")]
             let (has_host, imported_definition) = {
                 let resolved = self.inference.resolve(&value.ty);
@@ -35066,7 +34928,7 @@ impl<'a> Parser<'a> {
             // `a.cmp(&b)` and `a.partial_cmp(&b)` on builtin values (Rust's
             // `Ord` and `PartialOrd` impls), and `Ordering`'s methods.
             if matches!(member.as_str(), "cmp" | "partial_cmp")
-                && self.ordered(&number, member.as_str() == "partial_cmp")
+                && self.std_ordered(&number, member.as_str() == "partial_cmp")
             {
                 value = self.parse_compare_method(value, number, member)?;
                 continue;
@@ -35660,7 +35522,7 @@ impl<'a> Parser<'a> {
     /// The type a value of type `ty` auto-derefs to through each `Box`
     /// (keeping a reference to it as a reference), with the outermost box
     /// type; `None` when `ty` is not a box or a reference to one.
-    fn unbox(&self, ty: &Ty) -> Option<(Ty, Ty)> {
+    fn unbox(&mut self, ty: &Ty) -> Option<(Ty, Ty)> {
         let ty = self.inference.resolve(ty);
         let (mutable, boxed) = match &ty {
             Ty::Boxed(..) => (None, ty.clone()),
@@ -35669,8 +35531,11 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         };
+        // Each pointer's `Deref` target, from std's impls.
         let mut inner = boxed.clone();
-        while let Ty::Boxed(_, target) = inner {
+        while let Ty::Boxed(..) = inner
+            && let Some((Compared::Ty(target), None)) = self.deref_target(&inner, false)
+        {
             inner = self.inference.resolve(&target);
         }
         let unboxed = match mutable {
@@ -40034,23 +39899,40 @@ impl<'a> Parser<'a> {
                 source.push_text(" }");
                 Ty::Result(Box::new(element), Box::new(self.inference.resolve(&error)))
             }
-            "as_ref" | "as_mut" | "as_deref" => {
+            "as_ref" | "as_mut" => {
                 arity(0, &arguments)?;
                 source.push_text(o.as_str());
-                // `as_deref` borrows through `Deref`: `Option<String>` gives
-                // `Option<&str>` (`Str` is itself the borrow), and
-                // `Option<Box<T>>` gives `Option<&T>`.
-                match self.inference.resolve(&element) {
-                    Ty::String if member.as_str() == "as_deref" => Ty::Option(Box::new(Ty::Str)),
-                    resolved => {
-                        let target = match resolved {
-                            Ty::Boxed(_, inner) if member.as_str() == "as_deref" => *inner,
-                            _ => element,
-                        };
-                        Ty::Option(Box::new(Ty::Reference {
-                            mutable: member.as_str() == "as_mut",
-                            target: Box::new(target),
-                        }))
+                Ty::Option(Box::new(Ty::Reference {
+                    mutable: member.as_str() == "as_mut",
+                    target: Box::new(element),
+                }))
+            }
+            // `as_deref` borrows through `Deref` (D711 step 3):
+            // `Option<String>` gives `Option<&str>`, `Option<Vec<u8>>`
+            // `Option<&[u8]>`, `Option<Box<T>>` `Option<&T>`.
+            "as_deref" | "as_deref_mut" => {
+                arity(0, &arguments)?;
+                source.push_text(o.as_str());
+                let mutable = member.as_str() == "as_deref_mut";
+                let reference = Ty::Reference {
+                    mutable,
+                    target: Box::new(self.inference.resolve(&element)),
+                };
+                match self.deref_reference(&reference, false) {
+                    Some((target, None)) => Ty::Option(Box::new(target)),
+                    // A program's `deref` runs on the value inside.
+                    Some((_, Some(_))) => {
+                        return Err(Error::NotYet {
+                            path: format!("Option::{member}").into(),
+                            reference: member_span,
+                        });
+                    }
+                    None => {
+                        return Err(Error::UnknownMember {
+                            owner: owner.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
                     }
                 }
             }
@@ -40128,7 +40010,7 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         };
-        if member.as_str() == "as_mut" {
+        if matches!(member.as_str(), "as_mut" | "as_deref_mut") {
             self.lend_place(&value, expression);
         }
         let mut parsed = self.operator_expr(source, ty, expression);
@@ -45057,12 +44939,15 @@ impl<'a> Parser<'a> {
                 let value = self.parse_host_method(argument.clone(), "into".into(), expression)?;
                 return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
             }
-            if let Some(op) = builtin_conversion(&builtin, &source) {
+            if let Some(op) = self.std_conversion(&builtin, &source) {
                 let value = match op {
                     Some(op) => self.prelude_op(op, [argument.rendered_source()]),
                     None => argument.rendered_source(),
                 };
                 return Ok(self.operator_expr(value, builtin, expression));
+            }
+            if let Some(error) = self.conversion_not_yet(&builtin, &source, expression) {
+                return Err(error);
             }
             return Err(Error::MissingCapability {
                 owner: name,
@@ -47809,46 +47694,15 @@ impl<'a> Parser<'a> {
             };
             value.ty = source.clone();
         }
-        // Deref coercion: `&String`, or `&Arc<String>`, where `&str` is
-        // expected.
-        if target == Ty::Str
-            && let Some((unboxed, _)) = self.unbox(&source)
-        {
-            source = unboxed;
-            value.ty = source.clone();
-        }
-        // `&&String` and `&&&str` deref to `&str` through every reference.
-        let mut stripped = source.clone();
-        while target == Ty::Str
-            && let Ty::Reference { target: from, .. } = &stripped
-            && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
-        {
-            stripped = inner;
-        }
-        if target == Ty::Str
-            && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
-        {
-            source = Ty::Str;
-            value.ty = Ty::Str;
-        }
-        // Deref coercion: `&&T` (or `&&&T`) where `&T` is expected, as
-        // `b"aeiou".contains(b)` takes a filter's `&&u8`. A reference is
-        // its value at runtime, so only the type changes.
-        if let Ty::Reference {
-            mutable: false,
-            target: to,
-        } = &target
-            && !matches!(
-                self.inference.resolve(to),
-                Ty::Reference { .. } | Ty::Infer(_)
-            )
-        {
-            while let Ty::Reference { target: from, .. } = &source
-                && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
-            {
-                source = inner;
-                value.ty = source.clone();
-            }
+        // Deref coercion (D711 step 3), through std's `Deref` impls and the
+        // program's: `&String` or `&Arc<String>` where `&str` is expected,
+        // `&&T` where `&T` is (as `b"aeiou".contains(b)` takes a filter's
+        // `&&u8`), `&Box<T>` where `&T` is, a program's `&Wrapper` where
+        // `&Target` is. std's steps are the value itself at runtime; a
+        // program's calls its `deref`.
+        if let Some((ty, calls)) = self.deref_coercion(&target, &source) {
+            source = ty.clone();
+            self.apply_derefs(value, calls, ty);
         }
         // A reborrow: `&mut T` where `&T` is expected, as a `&mut Game`
         // parameter passed on to a function that only reads it. The
@@ -47978,19 +47832,6 @@ impl<'a> Parser<'a> {
             }
             value.ty = target;
             return Ok(None);
-        }
-        // Deref coercion: `&Box<T>` where `&T` is expected.
-        if let Ty::Reference {
-            target: expected, ..
-        } = &target
-            && !matches!(
-                self.inference.resolve(expected),
-                Ty::Boxed(..) | Ty::Infer(_)
-            )
-            && let Some((unboxed @ Ty::Reference { .. }, _)) = self.unbox(&source)
-        {
-            source = unboxed;
-            value.ty = source.clone();
         }
         if self.coerce_implemented_trait(&source, &target, value)? {
             return self.coerce_expr(&target, value);
@@ -51130,6 +50971,13 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
         return match (lhs, rhs) {
             (Some(lhs), Some(rhs)) => compare_value(&lhs, &rhs, models),
             (lhs, rhs) => Some(lhs.is_some().cmp(&rhs.is_some())),
+        };
+    }
+    // `Ok` before `Err`, then their values, as std's derive orders them.
+    if let (Some(lhs), Some(rhs)) = (crate::result::read(lhs), crate::result::read(rhs)) {
+        return match (lhs, rhs) {
+            (Ok(lhs), Ok(rhs)) | (Err(lhs), Err(rhs)) => compare_value(&lhs, &rhs, models),
+            (lhs, rhs) => Some(lhs.is_err().cmp(&rhs.is_err())),
         };
     }
     if let (Some(lhs), Some(rhs)) = (

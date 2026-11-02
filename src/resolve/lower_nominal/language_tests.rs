@@ -12451,9 +12451,9 @@ main();
 
 /// `Deref` and `DerefMut` declare as std declares them, `DerefMut`'s
 /// `Target` its `Deref` impl's, and `deref()` runs; a method found only
-/// through the deref is rawr's not-yet (D712.1), where rustc prints `3`.
+/// through the deref is found there (D711 step 3), as rustc prints `3`.
 #[test]
-fn language_std_trait_deref_declares_and_auto_deref_is_not_yet() {
+fn language_std_trait_deref_declares_and_auto_derefs() {
     let source = |body: &str| {
         format!(
             r#"
@@ -12484,11 +12484,7 @@ main();
         printed(&source(r#"println!("{}", w.deref().len());"#)),
         "3\n"
     );
-    let error = rejected_run(&source(r#"println!("{}", w.len());"#));
-    assert!(
-        error.contains("rawr doesn't run `std::ops::Deref` yet"),
-        "{error}"
-    );
+    assert_eq!(printed(&source(r#"println!("{}", w.len());"#)), "3\n");
 }
 
 /// `TryFrom` for a program's type, through its own path (rustc's output).
