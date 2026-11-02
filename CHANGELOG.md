@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.113 (2026-11-02)
+
 - A crate macro whose `$crate` path points into a path dependency expands under `rawr run`, a struct built through a type alias constructs correctly, and moving a field out of a borrowed variant reports E0507 as rustc does. (#778)
 
 ## 0.3.112 (2026-11-02)

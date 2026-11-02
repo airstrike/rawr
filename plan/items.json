@@ -778,6 +778,6 @@
     {"t":"T775","issue":775,"title":"T775: An Rc or Arc of a crate value crosses to a crate as the pointer itself","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T776","issue":776,"title":"T776: Rc::make_mut clones a RefCell inside the value as a new cell","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T777","issue":777,"title":"T777: HashMap, HashSet, BTreeMap and BTreeSet in a crate's signature cross as rawr's keyed collections","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T778","issue":778,"title":"T778: rawr-import's integration suite runs at importer merges and in the health sweep","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"105fafc96","release":null}
+    {"t":"T778","issue":778,"title":"T778: rawr-import's integration suite runs at importer merges and in the health sweep","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"105fafc96","release":"0.3.113"}
   ]
 }

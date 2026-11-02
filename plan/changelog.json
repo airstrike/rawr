@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A crate macro whose `$crate` path points into a path dependency expands under `rawr run`, a struct built through a type alias constructs correctly, and moving a field out of a borrowed variant reports E0507 as rustc does.","issues":[778]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.113",
+      "date": "2026-11-02",
+      "entries": [
+        {"text":"A crate macro whose `$crate` path points into a path dependency expands under `rawr run`, a struct built through a type alias constructs correctly, and moving a field out of a borrowed variant reports E0507 as rustc does.","issues":[778]}
+      ]
+    },
     {
       "version": "0.3.112",
       "date": "2026-11-02",
