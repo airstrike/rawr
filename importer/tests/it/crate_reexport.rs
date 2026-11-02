@@ -149,11 +149,11 @@ fn a_path_named_through_the_alias_selects_that_item() {
     );
 }
 
-/// A facade resolves only the types it declares. A function whose output
-/// only another selected crate exports is left out of its own facade, and
-/// the rest of both facades stays.
+/// A function whose output only another selected crate exports resolves
+/// that type through the declaring crate's facade, as rustc resolves a path
+/// into a dependency (D702), and the other facade still declares it.
 #[test]
-fn an_item_naming_another_facades_type_is_unavailable_by_itself() {
+fn an_item_naming_another_facades_type_resolves_through_that_facade() {
     let _turn = rawr_import::store::test_turn();
     let project = Project::new();
     let limits = Limits::standard();
@@ -172,7 +172,7 @@ fn an_item_naming_another_facades_type_is_unavailable_by_itself() {
     let split = facade("split");
     let items = split.items().map(|item| item.path()).collect::<Vec<_>>();
     assert!(items.contains(&"own"), "{items:?}");
-    assert!(!items.contains(&"leaf"), "{items:?}");
+    assert!(items.contains(&"leaf"), "{items:?}");
     assert!(
         facade("leaf").types().any(|ty| ty.path() == "Leaf"),
         "the other crate still declares its own type"

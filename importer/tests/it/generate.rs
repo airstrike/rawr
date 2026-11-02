@@ -35,10 +35,18 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
     assert!(source.contains("arena.shared::<facade_a::Record, _>"));
     assert!(source.contains("arena.mutable::<facade_a::Record, _>"));
     assert!(source.contains("receiver.owned("));
-    assert!(source.contains("facade_a::Forms::Tuple("));
+    assert!(source.contains("facade_a::Forms::Tuple { 0: "));
     assert!(source.contains("struct Arena"));
-    assert!(!source.contains("Arc<"));
-    assert!(!source.contains("Mutex<"));
+    // The adapters hold native values in the arena, never behind a lock or
+    // a count. The runtime counts and queues its handles' releases (D513.7).
+    let adapters = manifest
+        .files()
+        .filter(|file| file.path().starts_with("src/rawr_adapters_"))
+        .map(|file| std::str::from_utf8(file.bytes()).expect("generated Rust is UTF-8"))
+        .collect::<String>();
+    assert!(!adapters.is_empty());
+    assert!(!adapters.contains("Arc<"));
+    assert!(!adapters.contains("Mutex<"));
     assert!(!source.as_bytes().contains(&b'\r'));
 }
 

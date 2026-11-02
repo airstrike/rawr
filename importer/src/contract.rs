@@ -198,7 +198,9 @@ impl Contract<Classified> {
         self.support.definition_outcomes(definition)
     }
 
-    /// Borrow recursive support for one exact retained implementation outcome.
+    /// Borrow recursive support for one exact retained implementation
+    /// outcome. A trait's members through its `Self` are an implementation
+    /// the classifier makes, which retains no support of its own.
     pub fn implementation_support(
         &self,
         implementation: crate::surface::identity::Implementation,
@@ -206,7 +208,11 @@ impl Contract<Classified> {
         self.outcomes()
             .flat_map(|outcome| outcome.implementations())
             .find(|outcome| outcome.identity() == implementation)?;
-        self.support.implementation_outcomes(implementation)
+        Some(
+            self.support
+                .implementation_outcomes(implementation)
+                .unwrap_or_else(|| self.support.no_outcomes()),
+        )
     }
 
     /// The sealed cumulative classified usage, without opening an allocation.

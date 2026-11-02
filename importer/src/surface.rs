@@ -39,6 +39,19 @@ fn has_unresolved_structural_parameters(
     }
 }
 
+/// Whether `identity` is a trait's member through its `Self`
+/// (`surface::member`), which has its types only from an instance: with
+/// none, rustc can't name the call or its output (E0282).
+fn needs_instance(contract: &Contract<Classified>, identity: &identity::Identity) -> bool {
+    identity.implementation().is_some_and(|implementation| {
+        contract.outcomes().any(|outcome| {
+            outcome.identity().definition().is_some_and(|definition| {
+                identity::Implementation::self_members(&definition) == implementation
+            })
+        })
+    })
+}
+
 /// Uninhabited marker proving canonical demand sealing completed.
 ///
 /// ```compile_fail
@@ -565,7 +578,9 @@ impl<B> Compiler<'_, B> {
             .contract
             .outcome(&identity)
             .ok_or(Error::ForeignIdentity)?;
-        if has_unresolved_structural_parameters(outcome.representability()) {
+        if has_unresolved_structural_parameters(outcome.representability())
+            || needs_instance(self.contract, &identity)
+        {
             return Err(Error::UnconstrainedGeneric);
         }
         if !outcome.representability().is_demandable() {
@@ -617,7 +632,9 @@ impl<B> Compiler<'_, B> {
             return Err(Error::ForeignIdentity);
         }
         let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
-        if has_unresolved_structural_parameters(outcome.representability()) {
+        if has_unresolved_structural_parameters(outcome.representability())
+            || needs_instance(self.contract, base)
+        {
             return Err(Error::UnconstrainedGeneric);
         }
         Origin::validate(byte_start, byte_end)?;

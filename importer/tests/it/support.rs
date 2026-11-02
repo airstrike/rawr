@@ -675,7 +675,7 @@ fn assert_semantic_edge_cases(graph: &rawr_import::api::Graph<rawr_import::api::
             if export.key().path().eq(["private_return"])
                 && export.key().namespace().as_str() == "value"
                 && export.target().namespace().as_str() == "value"
-                && export.target().def_path_hash() == "e856ca9d98a5ea406c438a55cad53d61"
+                && stable_crate_hash(export.target())
                 && export.target().unit().package().is_some_and(|package|
                     package.name() == "facade-api"
                         && package.version() == "0.1.0"
@@ -696,7 +696,7 @@ fn assert_semantic_edge_cases(graph: &rawr_import::api::Graph<rawr_import::api::
                 && export.key().path().eq(["facade_macro"])
                 && export.key().namespace().as_str() == "macro"
                 && export.target().namespace().as_str() == "macro"
-                && export.target().def_path_hash() == "e856ca9d98a5ea40f6985cfd770c62b5"
+                && stable_crate_hash(export.target())
                 && export.target().unit().package().is_some_and(|package|
                     package.name() == "facade-api"
                         && package.version() == "0.1.0"
@@ -1622,4 +1622,23 @@ fn fixture_digests() -> BTreeSet<(PathBuf, [u8; 32])> {
         (path, Sha256::digest(bytes).into())
     })
     .collect()
+}
+
+/// Whether `target`'s def path hash is rustc's: its crate's stable id, in
+/// little-endian bytes, then the item's own half. The stable id comes from
+/// Cargo's `-C metadata`, which hashes a path package's directory, so the
+/// hash differs between checkouts and only its shape is fixed.
+fn stable_crate_hash(target: &rawr_import::api::identity::Definition) -> bool {
+    let hash = target.def_path_hash();
+    let crate_id = target.unit().stable_crate_id();
+    let little_endian = (0..crate_id.len())
+        .step_by(2)
+        .rev()
+        .map(|at| &crate_id[at..at + 2])
+        .collect::<String>();
+    hash.len() == 32
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        && hash.starts_with(&little_endian)
 }

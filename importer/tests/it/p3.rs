@@ -311,6 +311,9 @@ fn has_unresolved_structural_parameters(representability: &Representability) -> 
     match representability {
         Representability::Struct(plan) => !plan.parameters().is_empty(),
         Representability::Enum(plan) => !plan.parameters().is_empty(),
+        // A generic invocation, as a trait's member through its `Self`, takes
+        // its types from an instance or an alias, which a bare demand lacks.
+        Representability::Invocation(plan) => !plan.signature().parameters().is_empty(),
         _ => false,
     }
 }

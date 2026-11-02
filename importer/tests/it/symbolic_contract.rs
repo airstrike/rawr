@@ -23,11 +23,17 @@ fn real_symbolic_selectors_are_exact_and_never_create_authority() {
         Some(function.identity())
     );
 
-    let record = p2::outcome(&contract, "facade_a", &["OpaqueFields"]);
+    // A struct with a private field stays, readable through its public
+    // field, and nothing can build it (D464.6).
+    let opaque = p2::outcome(&contract, "facade_a", &["OpaqueFields"]);
     assert!(matches!(
-        record.representability(),
-        Representability::Rejected(_)
+        opaque.representability(),
+        Representability::Struct(plan) if plan.constructor().is_none() && !plan.constructible()
     ));
+    let record = contract
+        .outcomes()
+        .find(|outcome| matches!(outcome.representability(), Representability::Rejected(_)))
+        .expect("the facade has a rejected item");
     assert!(contract
         .select(record.identity(), record.identity().selector().clone())
         .expect("rejected selection remains a closed lookup")

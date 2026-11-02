@@ -3127,6 +3127,16 @@ impl SupportLedger {
         }
     }
 
+    /// No support, for an implementation that retained none.
+    pub(crate) fn no_outcomes(&self) -> SupportOutcomes<'_> {
+        SupportOutcomes {
+            ledger: self,
+            group: None,
+            edge: self.edges.len(),
+            remaining: 0,
+        }
+    }
+
     pub(crate) fn definition_outcomes(
         &self,
         definition: crate::surface::identity::Definition,

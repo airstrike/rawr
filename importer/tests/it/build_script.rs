@@ -195,7 +195,11 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
     let error = rawr_import::extract::from_resolution(resolution, &native, &limits)
         .err()
         .expect("changed generated output cannot publish an extracted graph");
-    assert!(format!("{error}").contains("input-changed"));
+    // Said as Cargo says a file that changed under it (D664).
+    assert!(
+        format!("{error}").contains("changed during the build; run it again"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -204,10 +208,20 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
     let project = Project::new("environment");
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    // The caller's target directory places the project's `<target>/rawr`
+    // as Cargo places its own output (D415), while every Cargo command the
+    // extraction runs gets the importer's own: two writable ones.
+    let caller_target = project.0.join("caller-target");
+    let different_target = project.0.join("different-target");
     let first_environment = environment("set")
         .setting("RUSTC", "/caller/ignored-rustc")
         .and_then(|environment| environment.setting("RUSTDOC", "/caller/ignored-rustdoc"))
-        .and_then(|environment| environment.setting("CARGO_TARGET_DIR", "/caller/ignored-target"))
+        .and_then(|environment| {
+            environment.setting(
+                "CARGO_TARGET_DIR",
+                caller_target.to_str().expect("UTF-8 path"),
+            )
+        })
         .and_then(|environment| environment.setting("CARGO_INCREMENTAL", "1"))
         .and_then(|environment| environment.removing("TARGET"))
         .and_then(|environment| environment.removing("PROFILE"))
@@ -217,7 +231,12 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
     let second_environment = environment("set")
         .setting("RUSTC", "/different/ignored-rustc")
         .and_then(|environment| environment.setting("RUSTDOC", "/different/ignored-rustdoc"))
-        .and_then(|environment| environment.setting("CARGO_TARGET_DIR", "/different/target"))
+        .and_then(|environment| {
+            environment.setting(
+                "CARGO_TARGET_DIR",
+                different_target.to_str().expect("UTF-8 path"),
+            )
+        })
         .and_then(|environment| environment.setting("CARGO_INCREMENTAL", "99"))
         .and_then(|environment| environment.removing("TARGET"))
         .and_then(|environment| environment.removing("PROFILE"))
@@ -328,7 +347,11 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
     let error = rawr_import::extract::from_resolution(resolution, &native, &limits)
         .err()
         .expect("a newly-added included fallback member rejects publication");
-    assert!(format!("{error}").contains("package-file-set-changed"));
+    // Said as Cargo says a package that changed under it (D664).
+    assert!(
+        format!("{error}").contains("fallback-api@0.1.0` changed during the build; run it again"),
+        "{error}"
+    );
 }
 
 #[test]

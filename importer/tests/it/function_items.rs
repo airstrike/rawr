@@ -88,11 +88,13 @@ fn concrete_function_item_generates_one_exact_rooted_thunk() {
         .expect("the concrete request seals")
         .generate(&limits)
         .expect("the concrete runner generates");
+    // The runner is `src/main.rs` plus one module per imported crate (D415).
     let source = manifest
         .files()
-        .find(|file| file.path() == "src/main.rs")
-        .expect("the generated runner has a source root");
-    let source = std::str::from_utf8(source.bytes()).expect("the source is UTF-8");
+        .filter(|file| file.path().starts_with("src/"))
+        .map(|file| std::str::from_utf8(file.bytes()).expect("the source is UTF-8"))
+        .collect::<String>();
+    let source = source.as_str();
     assert_eq!(source.matches("generic::identity::<i64>(").count(), 1);
     assert_eq!(source.matches("generic::add_const::<3>(").count(), 1);
 

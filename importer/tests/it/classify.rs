@@ -11,23 +11,22 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
     let graph = p2::graph();
     let export_count = graph.exports().len();
     let definition_count = graph.definitions().len();
+    // `Record::ZERO: Self` is a constant of the crate's own type, which the
+    // extractor reads as an unevaluated constant.
     let rejected_associated = graph
         .definitions()
         .find(|definition| {
             definition.display_path().last() == Some("ZERO")
                 && matches!(
                     definition.kind(),
-                    rawr_import::api::model::Kind::Rejected {
-                        class: rawr_import::api::model::RejectedClass::AssociatedConstant,
-                        ..
-                    }
+                    rawr_import::api::model::Kind::Const { .. }
                 )
                 && matches!(
                     definition.owner(),
                     rawr_import::api::model::Owner::Implementation(_)
                 )
         })
-        .expect("the rejected associated constant remains a total definition node");
+        .expect("the associated constant is a definition node of its implementation");
     let rawr_import::api::model::Owner::Implementation(associated_owner) =
         rejected_associated.owner()
     else {
@@ -119,7 +118,7 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
                 .find(|outcome| outcome.name() == "ZERO")
                 .map(|zero| (implementation, zero))
         })
-        .expect("Record retains its rejected associated constant");
+        .expect("Record retains its associated constant");
     assert_eq!(
         zero.identity().implementation(),
         Some(implementation.identity())
@@ -128,12 +127,9 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
         zero.identity().selector(),
         rawr_import::surface::identity::Selector::AssociatedConstant { .. }
     ));
-    assert!(matches!(
+    assert!(!matches!(
         zero.representability(),
-        Representability::Rejected(reason)
-            if reason.kind()
-                == rawr_import::classify::representability::reject::Kind::Extraction
-                && reason.extraction_reason().is_some()
+        Representability::Rejected(_)
     ));
 
     assert!(contract.definition_plans().any(|plan| {
@@ -234,21 +230,22 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
             if plan.form() == rawr_import::api::model::FieldForm::Tuple
                 && plan.constructor().is_some()
     ));
-    // A field whose type no import names is unavailable by itself. The
-    // enum and the struct stay, and neither can be built through it.
+    // A field whose type only another crate exports resolves through that
+    // crate's bindings (D702), so the enum and the struct hold it and can
+    // be built.
     assert!(matches!(
         p2::outcome(&contract, "facade_a", &["VariantSurface"]).representability(),
         Representability::Enum(plan)
             if plan.variants().len() == 1
                 && plan.variants()[0].name() == "Leaf"
-                && plan.variants()[0].fields().is_empty()
-                && !plan.variants()[0].constructible()
+                && plan.variants()[0].fields().len() == 1
+                && plan.variants()[0].constructible()
     ));
     assert!(matches!(
         p2::outcome(&contract, "facade_a", &["FieldSurface"]).representability(),
         Representability::Struct(plan)
-            if plan.fields().is_empty()
-                && !plan.constructible()
-                && plan.constructor().is_none()
+            if plan.fields().len() == 1
+                && plan.constructible()
+                && plan.constructor().is_some()
     ));
 }
