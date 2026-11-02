@@ -16,7 +16,7 @@ alloc::borrow::ToOwned	trait	s
 alloc::borrow::ToOwned::Owned	assoc-type	s	required
 alloc::borrow::ToOwned::clone_into	assoc-fn	s	provided
 alloc::borrow::ToOwned::to_owned	assoc-fn	s	required
-alloc::boxed::Box	struct	s	T A=std::alloc::Global?allocator_api
+alloc::boxed::Box	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::boxed::Box::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::boxed::Box::as_mut_ptr	assoc-fn	s	
 alloc::boxed::Box::as_non_null	assoc-fn	u box_as_non_null 157345 -	
@@ -82,7 +82,7 @@ alloc::collections::TryReserveError::kind	assoc-fn	u try_reserve_kind 48043 Unce
 alloc::collections::TryReserveErrorKind	enum	u try_reserve_kind 48043 Uncertain how much info should be exposed	
 alloc::collections::TryReserveErrorKind::AllocError	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	
 alloc::collections::TryReserveErrorKind::CapacityOverflow	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	
-alloc::collections::binary_heap::BinaryHeap	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::BinaryHeap	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::BinaryHeap::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::collections::binary_heap::BinaryHeap::append	assoc-fn	s	
 alloc::collections::binary_heap::BinaryHeap::as_mut_slice	assoc-fn	u binary_heap_as_mut_slice 154009 -	
@@ -114,19 +114,19 @@ alloc::collections::binary_heap::BinaryHeap::try_reserve	assoc-fn	s
 alloc::collections::binary_heap::BinaryHeap::try_reserve_exact	assoc-fn	s	
 alloc::collections::binary_heap::BinaryHeap::with_capacity	assoc-fn	s	
 alloc::collections::binary_heap::BinaryHeap::with_capacity_in	assoc-fn	u allocator_api 32838 -	
-alloc::collections::binary_heap::Drain	struct	s	'a T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::Drain	struct	s	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::Drain::allocator	assoc-fn	u allocator_api 32838 -	
-alloc::collections::binary_heap::DrainSorted	struct	u binary_heap_drain_sorted 59278 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::DrainSorted	struct	u binary_heap_drain_sorted 59278 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::DrainSorted::allocator	assoc-fn	u allocator_api 32838 -	
-alloc::collections::binary_heap::IntoIter	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::IntoIter	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::IntoIter::allocator	assoc-fn	u allocator_api 32838 -	
-alloc::collections::binary_heap::IntoIterSorted	struct	u binary_heap_into_iter_sorted 59278 -	T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::IntoIterSorted	struct	u binary_heap_into_iter_sorted 59278 -	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::IntoIterSorted::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::collections::binary_heap::Iter	struct	s	'a T
-alloc::collections::binary_heap::PeekMut	struct	s	'a T A=std::alloc::Global?allocator_api
+alloc::collections::binary_heap::PeekMut	struct	s	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::PeekMut::pop	assoc-fn	s	
 alloc::collections::binary_heap::PeekMut::refresh	assoc-fn	u binary_heap_peek_mut_refresh 138355 -	
-alloc::collections::btree::map::BTreeMap	struct	s	K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::BTreeMap	struct	s	K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::BTreeMap::append	assoc-fn	s	
 alloc::collections::btree::map::BTreeMap::clear	assoc-fn	s	
 alloc::collections::btree::map::BTreeMap::contains_key	assoc-fn	s	
@@ -170,7 +170,7 @@ alloc::collections::btree::map::Cursor::next	assoc-fn	u btree_cursors 107540 -
 alloc::collections::btree::map::Cursor::peek_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::Cursor::peek_prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::Cursor::prev	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::map::CursorMut	struct	u btree_cursors 107540 -	'a K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::CursorMut	struct	u btree_cursors 107540 -	'a K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::CursorMut::as_cursor	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMut::insert_after	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMut::insert_after_unchecked	assoc-fn	u btree_cursors 107540 -	
@@ -183,7 +183,7 @@ alloc::collections::btree::map::CursorMut::prev	assoc-fn	u btree_cursors 107540 
 alloc::collections::btree::map::CursorMut::remove_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMut::remove_prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMut::with_mutable_key	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::map::CursorMutKey	struct	u btree_cursors 107540 -	'a K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::CursorMutKey	struct	u btree_cursors 107540 -	'a K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::CursorMutKey::as_cursor	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMutKey::insert_after	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMutKey::insert_after_unchecked	assoc-fn	u btree_cursors 107540 -	
@@ -195,10 +195,10 @@ alloc::collections::btree::map::CursorMutKey::peek_prev	assoc-fn	u btree_cursors
 alloc::collections::btree::map::CursorMutKey::prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMutKey::remove_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::map::CursorMutKey::remove_prev	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::map::ExtractIf	struct	s	'a K V R F A=std::alloc::Global?allocator_api
-alloc::collections::btree::map::IntoIter	struct	s	K V A=std::alloc::Global?allocator_api
-alloc::collections::btree::map::IntoKeys	struct	s	K V A=std::alloc::Global?allocator_api
-alloc::collections::btree::map::IntoValues	struct	s	K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::ExtractIf	struct	s	'a K V R F A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::map::IntoIter	struct	s	K V A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::map::IntoKeys	struct	s	K V A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::map::IntoValues	struct	s	K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::Iter	struct	s	'a K V
 alloc::collections::btree::map::IterMut	struct	s	'a K V
 alloc::collections::btree::map::Keys	struct	s	'a K V
@@ -207,7 +207,7 @@ alloc::collections::btree::map::RangeMut	struct	s	'a K V
 alloc::collections::btree::map::UnorderedKeyError	struct	u btree_cursors 107540 -	
 alloc::collections::btree::map::Values	struct	s	'a K V
 alloc::collections::btree::map::ValuesMut	struct	s	'a K V
-alloc::collections::btree::map::entry::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::entry::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::entry::Entry::Occupied	variant	s	
 alloc::collections::btree::map::entry::Entry::Vacant	variant	s	
 alloc::collections::btree::map::entry::Entry::and_modify	assoc-fn	s	
@@ -219,7 +219,7 @@ alloc::collections::btree::map::entry::Entry::or_insert_with	assoc-fn	s
 alloc::collections::btree::map::entry::Entry::or_insert_with_key	assoc-fn	s	
 alloc::collections::btree::map::entry::Entry::or_try_insert_with	assoc-fn	u try_entry 157354 -	
 alloc::collections::btree::map::entry::Entry::or_try_insert_with_key	assoc-fn	u try_entry 157354 -	
-alloc::collections::btree::map::entry::OccupiedEntry	struct	s	'a K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::entry::OccupiedEntry	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::entry::OccupiedEntry::get	assoc-fn	s	
 alloc::collections::btree::map::entry::OccupiedEntry::get_mut	assoc-fn	s	
 alloc::collections::btree::map::entry::OccupiedEntry::insert	assoc-fn	s	
@@ -227,13 +227,13 @@ alloc::collections::btree::map::entry::OccupiedEntry::into_mut	assoc-fn	s
 alloc::collections::btree::map::entry::OccupiedEntry::key	assoc-fn	s	
 alloc::collections::btree::map::entry::OccupiedEntry::remove	assoc-fn	s	
 alloc::collections::btree::map::entry::OccupiedEntry::remove_entry	assoc-fn	s	
-alloc::collections::btree::map::entry::OccupiedError	struct	u map_try_insert 82766 -	'a K V A=std::alloc::Global?allocator_api
-alloc::collections::btree::map::entry::VacantEntry	struct	s	'a K V A=std::alloc::Global?allocator_api
+alloc::collections::btree::map::entry::OccupiedError	struct	u map_try_insert 82766 -	'a K V A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::map::entry::VacantEntry	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::map::entry::VacantEntry::insert	assoc-fn	s	
 alloc::collections::btree::map::entry::VacantEntry::insert_entry	assoc-fn	s	
 alloc::collections::btree::map::entry::VacantEntry::into_key	assoc-fn	s	
 alloc::collections::btree::map::entry::VacantEntry::key	assoc-fn	s	
-alloc::collections::btree::set::BTreeSet	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::BTreeSet	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::BTreeSet::append	assoc-fn	s	
 alloc::collections::btree::set::BTreeSet::clear	assoc-fn	s	
 alloc::collections::btree::set::BTreeSet::contains	assoc-fn	s	
@@ -274,7 +274,7 @@ alloc::collections::btree::set::Cursor::next	assoc-fn	u btree_cursors 107540 -
 alloc::collections::btree::set::Cursor::peek_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::Cursor::peek_prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::Cursor::prev	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::set::CursorMut	struct	u btree_cursors 107540 -	'a K A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::CursorMut	struct	u btree_cursors 107540 -	'a K A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::CursorMut::as_cursor	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMut::insert_after	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMut::insert_after_unchecked	assoc-fn	u btree_cursors 107540 -	
@@ -287,7 +287,7 @@ alloc::collections::btree::set::CursorMut::prev	assoc-fn	u btree_cursors 107540 
 alloc::collections::btree::set::CursorMut::remove_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMut::remove_prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMut::with_mutable_key	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::set::CursorMutKey	struct	u btree_cursors 107540 -	'a K A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::CursorMutKey	struct	u btree_cursors 107540 -	'a K A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::CursorMutKey::as_cursor	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMutKey::insert_after	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMutKey::insert_after_unchecked	assoc-fn	u btree_cursors 107540 -	
@@ -299,28 +299,28 @@ alloc::collections::btree::set::CursorMutKey::peek_prev	assoc-fn	u btree_cursors
 alloc::collections::btree::set::CursorMutKey::prev	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMutKey::remove_next	assoc-fn	u btree_cursors 107540 -	
 alloc::collections::btree::set::CursorMutKey::remove_prev	assoc-fn	u btree_cursors 107540 -	
-alloc::collections::btree::set::Difference	struct	s	'a T A=std::alloc::Global?allocator_api
-alloc::collections::btree::set::ExtractIf	struct	s	'a T R F A=std::alloc::Global?allocator_api
-alloc::collections::btree::set::Intersection	struct	s	'a T A=std::alloc::Global?allocator_api
-alloc::collections::btree::set::IntoIter	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::Difference	struct	s	'a T A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::set::ExtractIf	struct	s	'a T R F A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::set::Intersection	struct	s	'a T A=std::alloc::Global?allocator_api#32838
+alloc::collections::btree::set::IntoIter	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::Iter	struct	s	'a T
 alloc::collections::btree::set::Range	struct	s	'a T
 alloc::collections::btree::set::SymmetricDifference	struct	s	'a T
 alloc::collections::btree::set::Union	struct	s	'a T
-alloc::collections::btree::set::entry::Entry	enum	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::entry::Entry	enum	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::entry::Entry::Occupied	variant	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::Entry::Vacant	variant	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::Entry::get	assoc-fn	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::Entry::insert	assoc-fn	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::Entry::or_insert	assoc-fn	u btree_set_entry 133549 -	
-alloc::collections::btree::set::entry::OccupiedEntry	struct	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::entry::OccupiedEntry	struct	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::entry::OccupiedEntry::get	assoc-fn	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::OccupiedEntry::remove	assoc-fn	u btree_set_entry 133549 -	
-alloc::collections::btree::set::entry::VacantEntry	struct	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::btree::set::entry::VacantEntry	struct	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::btree::set::entry::VacantEntry::get	assoc-fn	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::VacantEntry::insert	assoc-fn	u btree_set_entry 133549 -	
 alloc::collections::btree::set::entry::VacantEntry::into_value	assoc-fn	u btree_set_entry 133549 -	
-alloc::collections::linked_list::Cursor	struct	u linked_list_cursors 58533 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::linked_list::Cursor	struct	u linked_list_cursors 58533 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::linked_list::Cursor::as_list	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::Cursor::back	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::Cursor::current	assoc-fn	u linked_list_cursors 58533 -	
@@ -330,7 +330,7 @@ alloc::collections::linked_list::Cursor::move_next	assoc-fn	u linked_list_cursor
 alloc::collections::linked_list::Cursor::move_prev	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::Cursor::peek_next	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::Cursor::peek_prev	assoc-fn	u linked_list_cursors 58533 -	
-alloc::collections::linked_list::CursorMut	struct	u linked_list_cursors 58533 -	'a T A=std::alloc::Global?allocator_api
+alloc::collections::linked_list::CursorMut	struct	u linked_list_cursors 58533 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::collections::linked_list::CursorMut::as_cursor	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::CursorMut::as_list	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::CursorMut::back	assoc-fn	u linked_list_cursors 58533 -	
@@ -355,11 +355,11 @@ alloc::collections::linked_list::CursorMut::splice_after	assoc-fn	u linked_list_
 alloc::collections::linked_list::CursorMut::splice_before	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::CursorMut::split_after	assoc-fn	u linked_list_cursors 58533 -	
 alloc::collections::linked_list::CursorMut::split_before	assoc-fn	u linked_list_cursors 58533 -	
-alloc::collections::linked_list::ExtractIf	struct	s	'a T F A=std::alloc::Global?allocator_api
-alloc::collections::linked_list::IntoIter	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::linked_list::ExtractIf	struct	s	'a T F A=std::alloc::Global?allocator_api#32838
+alloc::collections::linked_list::IntoIter	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::linked_list::Iter	struct	s	'a T
 alloc::collections::linked_list::IterMut	struct	s	'a T
-alloc::collections::linked_list::LinkedList	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::linked_list::LinkedList	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::linked_list::LinkedList::append	assoc-fn	s	
 alloc::collections::linked_list::LinkedList::back	assoc-fn	s	
 alloc::collections::linked_list::LinkedList::back_mut	assoc-fn	s	
@@ -387,7 +387,7 @@ alloc::collections::linked_list::LinkedList::push_front_mut	assoc-fn	s
 alloc::collections::linked_list::LinkedList::remove	assoc-fn	u linked_list_remove 69210 -	
 alloc::collections::linked_list::LinkedList::retain	assoc-fn	u linked_list_retain 114135 -	
 alloc::collections::linked_list::LinkedList::split_off	assoc-fn	s	
-alloc::collections::vec_deque::VecDeque	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::vec_deque::VecDeque	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::vec_deque::VecDeque::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::collections::vec_deque::VecDeque::append	assoc-fn	s	
 alloc::collections::vec_deque::VecDeque::as_mut_slices	assoc-fn	s	
@@ -453,17 +453,17 @@ alloc::collections::vec_deque::VecDeque::try_reserve_exact	assoc-fn	s
 alloc::collections::vec_deque::VecDeque::try_with_capacity	assoc-fn	u try_with_capacity 91913 -	
 alloc::collections::vec_deque::VecDeque::with_capacity	assoc-fn	s	
 alloc::collections::vec_deque::VecDeque::with_capacity_in	assoc-fn	u allocator_api 32838 -	
-alloc::collections::vec_deque::drain::Drain	struct	s	'a T A=std::alloc::Global?allocator_api
-alloc::collections::vec_deque::extract_if::ExtractIf	struct	u vec_deque_extract_if 147750 -	'a T F A=std::alloc::Global?allocator_api
+alloc::collections::vec_deque::drain::Drain	struct	s	'a T A=std::alloc::Global?allocator_api#32838
+alloc::collections::vec_deque::extract_if::ExtractIf	struct	u vec_deque_extract_if 147750 -	'a T F A=std::alloc::Global?allocator_api#32838
 alloc::collections::vec_deque::extract_if::ExtractIf::allocator	assoc-fn	u allocator_api 32838 -	
-alloc::collections::vec_deque::into_iter::IntoIter	struct	s	T A=std::alloc::Global?allocator_api
+alloc::collections::vec_deque::into_iter::IntoIter	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::vec_deque::iter::Iter	struct	s	'a T
 alloc::collections::vec_deque::iter::Iter::as_slices	assoc-fn	u vec_deque_iter_as_slices 123947 -	
 alloc::collections::vec_deque::iter_mut::IterMut	struct	s	'a T
 alloc::collections::vec_deque::iter_mut::IterMut::as_mut_slices	assoc-fn	u vec_deque_iter_as_slices 123947 -	
 alloc::collections::vec_deque::iter_mut::IterMut::as_slices	assoc-fn	u vec_deque_iter_as_slices 123947 -	
 alloc::collections::vec_deque::iter_mut::IterMut::into_slices	assoc-fn	u vec_deque_iter_as_slices 123947 -	
-alloc::collections::vec_deque::splice::Splice	struct	u deque_extend_front 146975 -	'a I A=std::alloc::Global?allocator_api
+alloc::collections::vec_deque::splice::Splice	struct	u deque_extend_front 146975 -	'a I A=std::alloc::Global?allocator_api#32838
 alloc::ffi::c_str::CString	struct	s	
 alloc::ffi::c_str::CString::as_bytes	assoc-fn	s	
 alloc::ffi::c_str::CString::as_bytes_with_nul	assoc-fn	s	
@@ -491,7 +491,7 @@ alloc::fmt::format	fn	s
 alloc::intrinsics::write_box_via_move	fn	u liballoc_internals - -	T
 alloc::macros::format	macro	s	
 alloc::macros::vec	macro	s	
-alloc::rc::Rc	struct	s	T A=std::alloc::Global?allocator_api
+alloc::rc::Rc	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::rc::Rc::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::rc::Rc::as_ptr	assoc-fn	s	
 alloc::rc::Rc::assume_init	assoc-fn	s	
@@ -542,14 +542,14 @@ alloc::rc::Rc::try_new_zeroed_in	assoc-fn	u allocator_api 32838 -
 alloc::rc::Rc::try_unwrap	assoc-fn	s	
 alloc::rc::Rc::unwrap_or_clone	assoc-fn	s	
 alloc::rc::Rc::weak_count	assoc-fn	s	
-alloc::rc::UniqueRc	struct	u unique_rc_arc 112566 -	T A=std::alloc::Global?allocator_api
+alloc::rc::UniqueRc	struct	u unique_rc_arc 112566 -	T A=std::alloc::Global?allocator_api#32838
 alloc::rc::UniqueRc::downgrade	assoc-fn	u unique_rc_arc 112566 -	
 alloc::rc::UniqueRc::into_rc	assoc-fn	u unique_rc_arc 112566 -	
 alloc::rc::UniqueRc::map	assoc-fn	u smart_pointer_try_map 144419 -	
 alloc::rc::UniqueRc::new	assoc-fn	u unique_rc_arc 112566 -	
 alloc::rc::UniqueRc::new_in	assoc-fn	u unique_rc_arc 112566 -	
 alloc::rc::UniqueRc::try_map	assoc-fn	u smart_pointer_try_map 144419 -	
-alloc::rc::Weak	struct	s	T A=std::alloc::Global?allocator_api
+alloc::rc::Weak	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::rc::Weak::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::rc::Weak::as_ptr	assoc-fn	s	
 alloc::rc::Weak::from_raw	assoc-fn	s	
@@ -633,7 +633,7 @@ alloc::string::String::try_with_capacity	assoc-fn	u try_with_capacity 91913 -
 alloc::string::String::with_capacity	assoc-fn	s	
 alloc::string::ToString	trait	s	
 alloc::string::ToString::to_string	assoc-fn	s	required
-alloc::sync::Arc	struct	s	T A=std::alloc::Global?allocator_api
+alloc::sync::Arc	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::sync::Arc::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::sync::Arc::as_ptr	assoc-fn	s	
 alloc::sync::Arc::assume_init	assoc-fn	s	
@@ -687,14 +687,14 @@ alloc::sync::Arc::try_pin_in	assoc-fn	u allocator_api 32838 -
 alloc::sync::Arc::try_unwrap	assoc-fn	s	
 alloc::sync::Arc::unwrap_or_clone	assoc-fn	s	
 alloc::sync::Arc::weak_count	assoc-fn	s	
-alloc::sync::UniqueArc	struct	u unique_rc_arc 112566 -	T A=std::alloc::Global?allocator_api
+alloc::sync::UniqueArc	struct	u unique_rc_arc 112566 -	T A=std::alloc::Global?allocator_api#32838
 alloc::sync::UniqueArc::downgrade	assoc-fn	u unique_rc_arc 112566 -	
 alloc::sync::UniqueArc::into_arc	assoc-fn	u unique_rc_arc 112566 -	
 alloc::sync::UniqueArc::map	assoc-fn	u smart_pointer_try_map 144419 -	
 alloc::sync::UniqueArc::new	assoc-fn	u unique_rc_arc 112566 -	
 alloc::sync::UniqueArc::new_in	assoc-fn	u unique_rc_arc 112566 -	
 alloc::sync::UniqueArc::try_map	assoc-fn	u smart_pointer_try_map 144419 -	
-alloc::sync::Weak	struct	s	T A=std::alloc::Global?allocator_api
+alloc::sync::Weak	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::sync::Weak::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::sync::Weak::as_ptr	assoc-fn	s	
 alloc::sync::Weak::from_raw	assoc-fn	s	
@@ -715,7 +715,7 @@ alloc::task::Wake::wake	assoc-fn	s	required
 alloc::task::Wake::wake_by_ref	assoc-fn	s	provided
 alloc::task::local_waker_fn	fn	u waker_fn 149580 -	F
 alloc::task::waker_fn	fn	u waker_fn 149580 -	F
-alloc::vec::Vec	struct	s	T A=std::alloc::Global?allocator_api
+alloc::vec::Vec	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::vec::Vec::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::vec::Vec::append	assoc-fn	s	
 alloc::vec::Vec::as_mut_ptr	assoc-fn	s	
@@ -785,21 +785,21 @@ alloc::vec::Vec::try_with_capacity	assoc-fn	u try_with_capacity 91913 -
 alloc::vec::Vec::try_with_capacity_in	assoc-fn	u allocator_api 32838 -	
 alloc::vec::Vec::with_capacity	assoc-fn	s	
 alloc::vec::Vec::with_capacity_in	assoc-fn	u allocator_api 32838 -	
-alloc::vec::drain::Drain	struct	s	'a T A=std::alloc::Global?allocator_api
+alloc::vec::drain::Drain	struct	s	'a T A=std::alloc::Global?allocator_api#32838
 alloc::vec::drain::Drain::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::vec::drain::Drain::as_slice	assoc-fn	s	
 alloc::vec::drain::Drain::keep_rest	assoc-fn	u drain_keep_rest 101122 -	
-alloc::vec::extract_if::ExtractIf	struct	s	'a T F A=std::alloc::Global?allocator_api
+alloc::vec::extract_if::ExtractIf	struct	s	'a T F A=std::alloc::Global?allocator_api#32838
 alloc::vec::extract_if::ExtractIf::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::vec::from_elem	fn	s	T
 alloc::vec::from_elem_in	fn	u allocator_api 32838 -	T A
-alloc::vec::into_iter::IntoIter	struct	s	T A=std::alloc::Global?allocator_api
+alloc::vec::into_iter::IntoIter	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::vec::into_iter::IntoIter::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::vec::into_iter::IntoIter::as_mut_slice	assoc-fn	s	
 alloc::vec::into_iter::IntoIter::as_slice	assoc-fn	s	
-alloc::vec::peek_mut::PeekMut	struct	u vec_peek_mut 122742 -	'a T A=std::alloc::Global?allocator_api
+alloc::vec::peek_mut::PeekMut	struct	u vec_peek_mut 122742 -	'a T A=std::alloc::Global?allocator_api#32838
 alloc::vec::peek_mut::PeekMut::pop	assoc-fn	u vec_peek_mut 122742 -	
-alloc::vec::splice::Splice	struct	s	'a I A=std::alloc::Global?allocator_api
+alloc::vec::splice::Splice	struct	s	'a I A=std::alloc::Global?allocator_api#32838
 alloc::wtf8::Wtf8Buf	struct	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
 alloc::wtf8::Wtf8Buf::as_mut_slice	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
 alloc::wtf8::Wtf8Buf::as_slice	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
@@ -5543,8 +5543,8 @@ std::backtrace::BacktraceStatus	enum	s
 std::backtrace::BacktraceStatus::Captured	variant	s	
 std::backtrace::BacktraceStatus::Disabled	variant	s	
 std::backtrace::BacktraceStatus::Unsupported	variant	s	
-std::collections::hash::map::Drain	struct	s	'a K V A=std::alloc::Global?allocator_api
-std::collections::hash::map::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api
+std::collections::hash::map::Drain	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
+std::collections::hash::map::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::Entry::Occupied	variant	s	
 std::collections::hash::map::Entry::Vacant	variant	s	
 std::collections::hash::map::Entry::and_modify	assoc-fn	s	
@@ -5556,8 +5556,8 @@ std::collections::hash::map::Entry::or_insert_with	assoc-fn	s
 std::collections::hash::map::Entry::or_insert_with_key	assoc-fn	s	
 std::collections::hash::map::Entry::or_try_insert_with	assoc-fn	u try_entry 157354 -	
 std::collections::hash::map::Entry::or_try_insert_with_key	assoc-fn	u try_entry 157354 -	
-std::collections::hash::map::ExtractIf	struct	s	'a K V F A=std::alloc::Global?allocator_api
-std::collections::hash::map::HashMap	struct	s	K V S=std::hash::RandomState A=std::alloc::Global?allocator_api
+std::collections::hash::map::ExtractIf	struct	s	'a K V F A=std::alloc::Global?allocator_api#32838
+std::collections::hash::map::HashMap	struct	s	K V S=std::hash::RandomState A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::HashMap::capacity	assoc-fn	s	
 std::collections::hash::map::HashMap::clear	assoc-fn	s	
 std::collections::hash::map::HashMap::contains_key	assoc-fn	s	
@@ -5596,13 +5596,13 @@ std::collections::hash::map::HashMap::with_capacity_and_hasher_in	assoc-fn	u all
 std::collections::hash::map::HashMap::with_capacity_in	assoc-fn	u allocator_api 32838 -	
 std::collections::hash::map::HashMap::with_hasher	assoc-fn	s	
 std::collections::hash::map::HashMap::with_hasher_in	assoc-fn	u allocator_api 32838 -	
-std::collections::hash::map::IntoIter	struct	s	K V A=std::alloc::Global?allocator_api
-std::collections::hash::map::IntoKeys	struct	s	K V A=std::alloc::Global?allocator_api
-std::collections::hash::map::IntoValues	struct	s	K V A=std::alloc::Global?allocator_api
+std::collections::hash::map::IntoIter	struct	s	K V A=std::alloc::Global?allocator_api#32838
+std::collections::hash::map::IntoKeys	struct	s	K V A=std::alloc::Global?allocator_api#32838
+std::collections::hash::map::IntoValues	struct	s	K V A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::Iter	struct	s	'a K V
 std::collections::hash::map::IterMut	struct	s	'a K V
 std::collections::hash::map::Keys	struct	s	'a K V
-std::collections::hash::map::OccupiedEntry	struct	s	'a K V A=std::alloc::Global?allocator_api
+std::collections::hash::map::OccupiedEntry	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::OccupiedEntry::get	assoc-fn	s	
 std::collections::hash::map::OccupiedEntry::get_mut	assoc-fn	s	
 std::collections::hash::map::OccupiedEntry::insert	assoc-fn	s	
@@ -5610,24 +5610,24 @@ std::collections::hash::map::OccupiedEntry::into_mut	assoc-fn	s
 std::collections::hash::map::OccupiedEntry::key	assoc-fn	s	
 std::collections::hash::map::OccupiedEntry::remove	assoc-fn	s	
 std::collections::hash::map::OccupiedEntry::remove_entry	assoc-fn	s	
-std::collections::hash::map::OccupiedError	struct	u map_try_insert 82766 -	'a K V A=std::alloc::Global?allocator_api
-std::collections::hash::map::VacantEntry	struct	s	'a K V A=std::alloc::Global?allocator_api
+std::collections::hash::map::OccupiedError	struct	u map_try_insert 82766 -	'a K V A=std::alloc::Global?allocator_api#32838
+std::collections::hash::map::VacantEntry	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::VacantEntry::insert	assoc-fn	s	
 std::collections::hash::map::VacantEntry::insert_entry	assoc-fn	s	
 std::collections::hash::map::VacantEntry::into_key	assoc-fn	s	
 std::collections::hash::map::VacantEntry::key	assoc-fn	s	
 std::collections::hash::map::Values	struct	s	'a K V
 std::collections::hash::map::ValuesMut	struct	s	'a K V
-std::collections::hash::set::Difference	struct	s	'a T S A=std::alloc::Global?allocator_api
-std::collections::hash::set::Drain	struct	s	'a K A=std::alloc::Global?allocator_api
-std::collections::hash::set::Entry	enum	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api
+std::collections::hash::set::Difference	struct	s	'a T S A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::Drain	struct	s	'a K A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::Entry	enum	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::Entry::Occupied	variant	u hash_set_entry 60896 -	
 std::collections::hash::set::Entry::Vacant	variant	u hash_set_entry 60896 -	
 std::collections::hash::set::Entry::get	assoc-fn	u hash_set_entry 60896 -	
 std::collections::hash::set::Entry::insert	assoc-fn	u hash_set_entry 60896 -	
 std::collections::hash::set::Entry::or_insert	assoc-fn	u hash_set_entry 60896 -	
-std::collections::hash::set::ExtractIf	struct	s	'a K F A=std::alloc::Global?allocator_api
-std::collections::hash::set::HashSet	struct	s	T S=std::hash::RandomState A=std::alloc::Global?allocator_api
+std::collections::hash::set::ExtractIf	struct	s	'a K F A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::HashSet	struct	s	T S=std::hash::RandomState A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::HashSet::capacity	assoc-fn	s	
 std::collections::hash::set::HashSet::clear	assoc-fn	s	
 std::collections::hash::set::HashSet::contains	assoc-fn	s	
@@ -5665,15 +5665,15 @@ std::collections::hash::set::HashSet::with_capacity_and_hasher_in	assoc-fn	u all
 std::collections::hash::set::HashSet::with_capacity_in	assoc-fn	u allocator_api 32838 -	
 std::collections::hash::set::HashSet::with_hasher	assoc-fn	s	
 std::collections::hash::set::HashSet::with_hasher_in	assoc-fn	u allocator_api 32838 -	
-std::collections::hash::set::Intersection	struct	s	'a T S A=std::alloc::Global?allocator_api
-std::collections::hash::set::IntoIter	struct	s	K A=std::alloc::Global?allocator_api
+std::collections::hash::set::Intersection	struct	s	'a T S A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::IntoIter	struct	s	K A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::Iter	struct	s	'a K
-std::collections::hash::set::OccupiedEntry	struct	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api
+std::collections::hash::set::OccupiedEntry	struct	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::OccupiedEntry::get	assoc-fn	u hash_set_entry 60896 -	
 std::collections::hash::set::OccupiedEntry::remove	assoc-fn	u hash_set_entry 60896 -	
-std::collections::hash::set::SymmetricDifference	struct	s	'a T S A=std::alloc::Global?allocator_api
-std::collections::hash::set::Union	struct	s	'a T S A=std::alloc::Global?allocator_api
-std::collections::hash::set::VacantEntry	struct	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api
+std::collections::hash::set::SymmetricDifference	struct	s	'a T S A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::Union	struct	s	'a T S A=std::alloc::Global?allocator_api#32838
+std::collections::hash::set::VacantEntry	struct	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::VacantEntry::get	assoc-fn	u hash_set_entry 60896 -	
 std::collections::hash::set::VacantEntry::insert	assoc-fn	u hash_set_entry 60896 -	
 std::collections::hash::set::VacantEntry::into_value	assoc-fn	u hash_set_entry 60896 -	

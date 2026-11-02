@@ -233,7 +233,8 @@ fn write_type(encoder: &mut Encoder, ty: &type_ref::Type) {
                 }
                 type_ref::Target::Parameter
                 | type_ref::Target::Projection(..)
-                | type_ref::Target::Alias(_) => {
+                | type_ref::Target::Alias(_)
+                | type_ref::Target::Std(_) => {
                     encoder.marker(Marker::Builtin);
                     encoder.text(ImmutableString::from(format!("<{}>", path.name)));
                 }

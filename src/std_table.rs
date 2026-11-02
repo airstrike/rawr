@@ -11,22 +11,21 @@
 //! - `items.tsv`: `definition  kind  stability  extra`, one line for each
 //!   definition and each of its members (a trait's items, a type's inherent
 //!   items, an enum's variants, a primitive's methods as `i64::pow`). For a
-//!   type, trait or function, `extra` is its generics; for a trait's member,
-//!   `provided` or `required`.
+//!   type, trait or function, `extra` is its generics, as
+//!   `K V S=std::hash::RandomState A=std::alloc::Global?allocator_api#32838`
+//!   (a default after `=`, an unstable parameter's feature and issue after
+//!   `?` and `#`); for a trait's member, `provided` or `required`.
 //!
 //! A stability is `s`, or `u feature issue reason` with `-` for no issue
 //! or reason. What differs by target (`arch`, `simd`, `os`) is left out.
+//! `TOOLCHAIN` names the pinned nightly and the target the table was taken
+//! for; the importer's tests check it is `CHANNEL`.
 //!
 //! Nothing is decoded ahead of a lookup: each lookup is a binary search of
 //! the embedded text, so a program pays only for the paths it names.
-// Shadow mode (D711): only the shadow tests read it until the switch.
-#![allow(dead_code)]
 
 const PATHS: &str = include_str!("std_table/paths.tsv");
 const ITEMS: &str = include_str!("std_table/items.tsv");
-
-/// The pinned toolchain and the target the table was taken for.
-pub(crate) const TOOLCHAIN: &str = include_str!("std_table/TOOLCHAIN");
 
 /// The namespace a path is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,9 +116,8 @@ pub(crate) struct Parameter {
     pub kind: ParameterKind,
     /// The default type, as rustc prints it: `std::hash::RandomState`.
     pub default: Option<&'static str>,
-    /// The feature that gates naming it, as `allocator_api` gates `Vec`'s
-    /// `A`.
-    pub unstable: Option<&'static str>,
+    /// Whether stable Rust may name it: `allocator_api` gates `Vec`'s `A`.
+    pub stability: Stability,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,9 +138,20 @@ impl Item {
             .split(' ')
             .filter(|text| !text.is_empty())
             .map(|text| {
-                let (text, unstable) = match text.split_once('?') {
-                    Some((text, feature)) => (text, Some(feature)),
-                    None => (text, None),
+                let (text, stability) = match text.split_once('?') {
+                    Some((text, gate)) => {
+                        let (feature, issue) = match gate.split_once('#') {
+                            Some((feature, issue)) => (feature, Some(issue)),
+                            None => (gate, None),
+                        };
+                        let stability = Stability::Unstable {
+                            feature,
+                            issue,
+                            reason: None,
+                        };
+                        (text, stability)
+                    }
+                    None => (text, Stability::Stable),
                 };
                 let (text, default) = match text.split_once('=') {
                     Some((text, default)) => (text, Some(default)),
@@ -159,7 +168,7 @@ impl Item {
                     name,
                     kind,
                     default,
-                    unstable,
+                    stability,
                 }
             })
     }
@@ -170,7 +179,7 @@ impl Item {
         let mut required = 0;
         let mut stable = 0;
         for parameter in self.generics() {
-            if parameter.kind != ParameterKind::Type || parameter.unstable.is_some() {
+            if parameter.kind != ParameterKind::Type || parameter.stability != Stability::Stable {
                 continue;
             }
             stable += 1;
@@ -179,11 +188,6 @@ impl Item {
             }
         }
         (required, stable)
-    }
-
-    /// Whether a trait's member has a default.
-    pub(crate) fn provided(&self) -> bool {
-        self.extra == "provided"
     }
 }
 
@@ -284,6 +288,17 @@ pub(crate) fn item(definition: &str) -> Option<Item> {
     })
 }
 
+/// Whether the path is under a module whose contents differ by target,
+/// which the table leaves out: `std::os::unix`, `core::arch`.
+pub(crate) fn target_specific(path: &str) -> bool {
+    path.split("::").any(|segment| {
+        matches!(
+            segment,
+            "arch" | "core_arch" | "std_detect" | "simd" | "std_float" | "os"
+        )
+    })
+}
+
 /// Whether `name` is a crate of the table: `std`, `core` or `alloc`.
 pub(crate) fn is_root(name: &str) -> bool {
     matches!(name, "std" | "core" | "alloc")
@@ -326,8 +341,10 @@ pub(crate) fn children(module: &str) -> impl Iterator<Item = Path> {
 pub(crate) enum Resolved {
     /// A path of `paths.tsv`.
     Path(Path),
-    /// A member of the type or trait `owner` names.
-    Member { owner: Path, member: Item },
+    /// A member of the type or trait `owner` names: one the table has (an
+    /// inherent item, a trait's item, a variant), or `None` for one it
+    /// doesn't list, as a trait impl's method.
+    Member { owner: Path, member: Option<Item> },
 }
 
 impl Resolved {
@@ -335,17 +352,9 @@ impl Resolved {
         match self {
             Self::Path(path) => path.stability,
             Self::Member { owner, member } => match owner.stability {
-                Stability::Stable => member.stability,
+                Stability::Stable => member.map_or(Stability::Stable, |member| member.stability),
                 unstable => unstable,
             },
-        }
-    }
-
-    /// The definition: `alloc::vec::Vec`, `alloc::vec::Vec::new`.
-    pub(crate) fn definition(&self) -> &'static str {
-        match self {
-            Self::Path(path) => path.definition,
-            Self::Member { member, .. } => member.definition,
         }
     }
 }
@@ -393,16 +402,15 @@ pub(crate) fn resolve(segments: &[&str], last: Namespace) -> Result<Resolved, Mi
             if found.kind == "mod" {
                 continue;
             }
-            // A type, trait or primitive: the rest is one of its members.
-            let owner = found;
-            if index + 2 != segments.len() {
-                return Err(missing(index + 1));
-            }
-            let member = segments[index + 1];
-            return match item(&format!("{}::{member}", owner.definition)) {
-                Some(member) => Ok(Resolved::Member { owner, member }),
-                None => Err(missing(index + 1)),
-            };
+            // A type, trait or primitive: the rest is one of its members,
+            // which the table may not list (a trait impl's).
+            let member = (index + 2 == segments.len())
+                .then(|| item(&format!("{}::{}", found.definition, segments[index + 1])))
+                .flatten();
+            return Ok(Resolved::Member {
+                owner: found,
+                member,
+            });
         }
         return Err(missing(index));
     }
@@ -455,7 +463,14 @@ mod tests {
         let s = map.generics().nth(2).expect("S");
         assert_eq!(s.default, Some("std::hash::RandomState"));
         let a = map.generics().nth(3).expect("A");
-        assert_eq!(a.unstable, Some("allocator_api"));
+        assert_eq!(
+            a.stability,
+            Stability::Unstable {
+                feature: "allocator_api",
+                issue: Some("32838"),
+                reason: None
+            }
+        );
         assert_eq!(
             item("alloc::vec::Vec").map(|v| v.type_arity()),
             Some((1, 1))
@@ -474,7 +489,10 @@ mod tests {
         };
         assert_eq!(feature, "core_intrinsics");
         match resolve(&["std", "string", "String", "from_utf8"], Namespace::Value) {
-            Ok(Resolved::Member { member, .. }) => {
+            Ok(Resolved::Member {
+                member: Some(member),
+                ..
+            }) => {
                 assert_eq!(member.definition, "alloc::string::String::from_utf8");
             }
             other => panic!("{other:?}"),
@@ -488,7 +506,7 @@ mod tests {
             })
         );
         assert!(item("i64::pow").is_some());
-        assert!(item("core::fmt::Display::fmt").is_some_and(|fmt| !fmt.provided()));
+        assert!(item("core::fmt::Display::fmt").is_some_and(|fmt| fmt.kind == "assoc-fn"));
     }
 
     #[test]

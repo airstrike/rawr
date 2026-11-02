@@ -668,7 +668,7 @@ impl Type {
             {
                 Ok(ty.clone())
             }
-            Target::Parameter | Target::Projection(..) | Target::Alias(_) => {
+            Target::Parameter | Target::Projection(..) | Target::Alias(_) | Target::Std(_) => {
                 Err(Error::Unsupported {
                     ty: path.name.clone(),
                 })

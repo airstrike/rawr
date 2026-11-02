@@ -55,6 +55,10 @@ pub(crate) enum Target {
     Projection(Box<Type>, Option<ImmutableString>),
     /// A type alias, which a header reads as its target.
     Alias(Alias),
+    /// A std type Rawr resolves but has no representation for yet: its path
+    /// as the `use` that brought it in names it. A path to it is Rawr's
+    /// not-yet error (D712.1), and never resolves to a type.
+    Std(ImmutableString),
 }
 
 /// A type alias's parameters and its target, resolved once in the module
@@ -489,6 +493,21 @@ fn resolve_path(
         .collect::<Vec<_>>()
         .join("::")
         .into();
+    // A path into std, core or alloc is std's, as rustc resolves it: one std
+    // doesn't have, or an unstable item, is refused here (D711).
+    let std = match parsed.segments.first() {
+        Some(first) if !parsed.global && !types.contains_key(first.name.text.as_str()) => {
+            super::std_path::check(&name, crate::std_table::Namespace::Type, "type", span)?
+        }
+        _ => None,
+    };
+    let written = name.clone();
+    // A std type Rawr represents reads as its own name: `alloc::vec::Vec`
+    // is `Vec`.
+    let name = match std.and_then(super::std_path::spelling) {
+        Some(spelling) => ImmutableString::from(spelling),
+        None => name,
+    };
 
     // `T::Output`, `Self::Output` or `Shape::Output`: an associated type of a
     // generic parameter or a script type.
@@ -592,7 +611,13 @@ fn resolve_path(
         }
         _ => name,
     };
-    let target = if let Some(target) = types.get(name.as_str()) {
+    let target = if let Some(Target::Std(path)) = types.get(name.as_str()) {
+        // A std type Rawr doesn't represent yet, which a `use` brought in.
+        return Err(Error::NotYet {
+            path: path.clone(),
+            reference: span,
+        });
+    } else if let Some(target) = types.get(name.as_str()) {
         target.clone()
     } else if host.is_builtin(name.as_str())
         || prelude_arity(&parsed).is_some()
@@ -613,6 +638,13 @@ fn resolve_path(
             owner: host.type_owner(name.as_str()).cloned(),
         }
     } else {
+        // A std type Rawr doesn't represent yet.
+        if std.is_some() {
+            return Err(Error::NotYet {
+                path: written,
+                reference: span,
+            });
+        }
         #[cfg(feature = "rust-import")]
         let missing =
             native.filter(|site| parsed.segments.len() > 1 && site.missing_binding(host, &name));
@@ -629,35 +661,78 @@ fn resolve_path(
 
     let mut arguments = Vec::new();
 
+    // A builtin's arity is std's (D711), its defaults included: rawr's
+    // `HashMap` takes `K` and `V`, and `S = RandomState` too.
+    let arity = match (&target, name.as_str()) {
+        (Target::Builtin, item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE) => {
+            Some((1, 1))
+        }
+        (Target::Builtin, name) if item::type_ref::array_length(name).is_some() => Some((1, 1)),
+        (Target::Builtin, name) => super::std_path::arity(name),
+        _ => None,
+    };
+    let mut position = 0;
     for segment in parsed.segments {
         for argument in segment.arguments {
-            arguments.push(match argument {
-                item::type_ref::Argument::Type(ty) => Argument::Type(resolve(
-                    ty,
-                    types,
-                    host,
-                    #[cfg(feature = "rust-import")]
-                    native,
-                )?),
-                item::type_ref::Argument::Lifetime(lifetime) => Argument::Lifetime(lifetime.span),
-            });
+            match argument {
+                item::type_ref::Argument::Type(ty) => {
+                    let resolved = resolve(
+                        ty,
+                        types,
+                        host,
+                        #[cfg(feature = "rust-import")]
+                        native,
+                    );
+                    match (resolved, arity) {
+                        (Ok(ty), _) => arguments.push(Argument::Type(ty)),
+                        // A defaulted parameter's argument Rawr has no
+                        // representation for, as a map's hasher: Rawr's own
+                        // stands in for it.
+                        (Err(Error::NotYet { .. }), Some((required, _)))
+                            if position >= required =>
+                        {
+                            arguments.push(Argument::Type(Type::Unit(span)));
+                        }
+                        (Err(error), _) => return Err(error),
+                    }
+                    position += 1;
+                }
+                item::type_ref::Argument::Lifetime(lifetime) => {
+                    arguments.push(Argument::Lifetime(lifetime.span));
+                }
+            }
         }
     }
 
-    let prelude = hand_arity(name.as_str());
-    if let (Target::Builtin, Some(expected)) = (&target, prelude) {
+    if let Some((required, stable)) = arity {
         let actual = arguments
             .iter()
             .filter(|argument| matches!(argument, Argument::Type(_)))
             .count();
-        if actual != expected {
+        // An argument for an unstable parameter, as `Vec<T, A>`'s `A`.
+        if actual > stable
+            && let Some(error) = super::std_path::unstable_argument(&name, stable, span)
+        {
+            return Err(error);
+        }
+        if actual < required || actual > stable {
             return Err(Error::InvalidTypeArguments {
                 ty: name,
-                expected,
+                expected: if actual < required { required } else { stable },
                 actual,
                 reference: span,
             });
         }
+        // Rawr's value of the type is the same whatever its defaulted
+        // parameters are: it takes the required ones.
+        let mut kept = 0;
+        arguments.retain(|argument| match argument {
+            Argument::Type(_) => {
+                kept += 1;
+                kept <= required
+            }
+            Argument::Lifetime(_) => true,
+        });
     }
 
     if target == Target::Parameter && !arguments.is_empty() {
@@ -1173,19 +1248,6 @@ fn std_fmt_type(parsed: &item::type_ref::Path) -> Option<Path> {
         arguments,
         span: parsed.span,
     })
-}
-
-/// The type arity of rawr's builtin generic `name`, by hand.
-pub(crate) fn hand_arity(name: &str) -> Option<usize> {
-    match name {
-        "Option" | "Vec" | "Box" => Some(1),
-        "Result" | "HashMap" | "BTreeMap" => Some(2),
-        "HashSet" | "BTreeSet" | "Reverse" | "RefCell" | "Cell" | "Rc" | "Arc"
-        | "RangeInclusive" => Some(1),
-        item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE => Some(1),
-        name if item::type_ref::array_length(name).is_some() => Some(1),
-        _ => None,
-    }
 }
 
 /// `Option<T>` and `Result<T, E>`: Rust's prelude enums, builtin generics;

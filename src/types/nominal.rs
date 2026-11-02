@@ -247,7 +247,8 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
             // any value.
             type_ref::Target::Parameter
             | type_ref::Target::Projection(..)
-            | type_ref::Target::Alias(_) => true,
+            | type_ref::Target::Alias(_)
+            | type_ref::Target::Std(_) => true,
             type_ref::Target::Script { identity, .. } => match &value.0 {
                 Union::Struct(value, ..) => value.identity() == identity,
                 Union::Enum(value, ..) => value.identity() == identity,

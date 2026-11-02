@@ -206,7 +206,10 @@ impl Reader<'_> {
                         None => out.push((own, Region::Unknown)),
                     },
                     Target::Parameter => out.push((at, Region::Parameter(path.name.clone()))),
-                    Target::Projection(..) | Target::Alias(_) | Target::Host { .. } => {
+                    Target::Projection(..)
+                    | Target::Alias(_)
+                    | Target::Std(_)
+                    | Target::Host { .. } => {
                         out.push((own, Region::Unknown));
                     }
                     Target::Builtin if opaque(&path.name) => out.push((own, Region::Captures)),

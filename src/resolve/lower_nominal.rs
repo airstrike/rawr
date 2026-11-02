@@ -8688,8 +8688,9 @@ impl Ty {
                     trait_name.clone().unwrap_or_default(),
                     path.name.clone(),
                 ),
-                // A resolved header names an alias's target, never the alias.
-                type_ref::Target::Alias(_) => Self::Unknown,
+                // A resolved header names an alias's target, never the alias,
+                // and never a std type Rawr doesn't represent.
+                type_ref::Target::Alias(_) | type_ref::Target::Std(_) => Self::Unknown,
             },
         }
     }
@@ -12100,9 +12101,13 @@ impl<'a> Parser<'a> {
         if native {
             return None;
         }
+        let written = crate::tokenizer::demangle_names(name);
+        let reference = Span::new(at.start(), text_end(at.start(), &written));
+        if let Some(error) = self.std_not_yet(&written, reference) {
+            return Some(error);
+        }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
         imports.sort_by_key(|path| (path.len(), path.clone()));
-        let written = crate::tokenizer::demangle_names(name);
         Some(Error::UnknownFunction {
             name: written.as_ref().into(),
             import: imports.into_iter().next().map(Into::into),
@@ -12136,6 +12141,9 @@ impl<'a> Parser<'a> {
         let written = crate::tokenizer::demangle_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
         if let Some(error) = self.module_value(name, reference) {
+            return error;
+        }
+        if let Some(error) = self.std_not_yet(&written, reference) {
             return error;
         }
         let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
@@ -35888,6 +35896,9 @@ impl<'a> Parser<'a> {
                 source: name_span,
             });
         }
+        if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
+            self.check_std_path(&name, name_span)?;
+        }
 
         // `Type::<A>::member`: the path without its arguments, its value
         // of the type `Type<A>` when it is one (a constructor).
@@ -36496,6 +36507,103 @@ impl<'a> Parser<'a> {
         let mut value = self.parse_block_expr()?;
         value.span = span(name_span.start(), end);
         Ok(value)
+    }
+
+    /// A path into std written in an expression, from its first segment
+    /// `name`, as rustc resolves it (D711): `core::thread::sleep` is
+    /// rustc's E0433, since core has no `thread`, and an unstable item is
+    /// E0658. A local or an import of that name is the program's.
+    #[inline(never)]
+    fn check_std_path(&self, name: &str, name_span: Span) -> Result<(), Error> {
+        if self.models.get(name).is_some()
+            || self.models.import(name).is_some()
+            || self.bindings.contains_key(name)
+        {
+            return Ok(());
+        }
+        let (path, reference, next) = self.peek_path(name, name_span);
+        let kind = match next {
+            Some(Token::LeftParen) => "function",
+            _ => "value",
+        };
+        super::std_path::check(&path, crate::std_table::Namespace::Value, kind, reference)
+            .map(|_| ())
+    }
+
+    /// The path ahead from its first segment `name`, which is read: its
+    /// segments up to a turbofish or anything else, their span, and the
+    /// token after them.
+    fn peek_path(&self, name: &str, name_span: Span) -> (String, Span, Option<Token>) {
+        let mut ahead = self.input.clone();
+        let mut path = name.to_owned();
+        let mut end = name_span.end();
+        let mut next = ahead.next();
+        loop {
+            let Some((Token::DoubleColon, _)) = next else {
+                break;
+            };
+            let Some((Token::Identifier(segment), position)) = ahead.next() else {
+                next = None;
+                break;
+            };
+            path.push_str("::");
+            path.push_str(segment.as_str());
+            end = text_end(position, segment.as_str());
+            next = ahead.next();
+        }
+        (
+            path,
+            span(name_span.start(), end),
+            next.map(|(token, _)| token),
+        )
+    }
+
+    /// rawr's error for a use of `name`, which no local, item or import of
+    /// the program's names, when it is a std item Rawr can't run yet: a
+    /// path into std, a name a `use` brought in from std, or one of std's
+    /// prelude (D712.1).
+    fn std_not_yet(&self, name: &str, reference: Span) -> Option<Error> {
+        let first = name.split("::").next().unwrap_or(name);
+        let binding = self.models.import(first);
+        let qualified =
+            super::std_path::qualified(name, binding.map(|binding| binding.qualified.as_str()))?;
+        // A prelude name reads as written; another as its std path.
+        let shown = if binding.is_none() && !crate::std_table::is_root(first) {
+            name
+        } else {
+            qualified.as_str()
+        };
+        super::std_path::not_yet(
+            &qualified,
+            shown,
+            crate::std_table::Namespace::Value,
+            reference,
+        )
+    }
+
+    /// rustc's E0658 when a further type argument follows the `read` ones
+    /// of the builtin `name` and fills an unstable parameter, as `Vec<T,
+    /// A>`'s `A` does.
+    fn unstable_argument(&mut self, name: &str, read: usize, at: Span) -> Result<(), Error> {
+        if !matches!(self.peek(), Token::Comma) {
+            return Ok(());
+        }
+        match crate::resolve::std_path::unstable_argument(name, read, at) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// rawr's error for a type `name` a `use` brought in from std, which
+    /// Rawr has no representation for yet (D712.1).
+    fn std_type_not_yet(&self, name: &str, reference: Span) -> Option<Error> {
+        let binding = self.models.import(name)?;
+        crate::resolve::std_path::not_yet(
+            &binding.qualified,
+            &binding.qualified,
+            crate::std_table::Namespace::Type,
+            reference,
+        )
     }
 
     /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
@@ -44652,7 +44760,27 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// A path expression from its first segment. One that names a std
+    /// item Rawr can't run yet says so (D712.1).
     fn parse_qualified(
+        &mut self,
+        first: ImmutableString,
+        first_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let (path, reference, _) = self.peek_path(&first, first_span);
+        match self.parse_qualified_path(first, first_span) {
+            Err(
+                error @ (Error::UnknownType { .. }
+                | Error::UnknownVariable { .. }
+                | Error::UnknownFunction { .. }
+                | Error::UnknownMember { .. }
+                | Error::NotInModule { .. }),
+            ) => Err(self.std_not_yet(&path, reference).unwrap_or(error)),
+            parsed => parsed,
+        }
+    }
+
+    fn parse_qualified_path(
         &mut self,
         first: ImmutableString,
         first_span: Span,
@@ -44812,6 +44940,9 @@ impl<'a> Parser<'a> {
         // `Nope::<i32>`: a turbofish on a name that is no value.
         if segments.is_empty() {
             if let Some(error) = self.module_value(&member, member_span) {
+                return Err(error);
+            }
+            if let Some(error) = self.std_not_yet(&member, member_span) {
                 return Err(error);
             }
             return Err(Error::UnknownVariable {
@@ -46464,6 +46595,19 @@ impl<'a> Parser<'a> {
             if let Some(model) = self.models.qualified_owner(name_span) {
                 return Ok(model.ty());
             }
+            // A path into std is std's, as rustc resolves it (D711); one
+            // to a type Rawr represents reads as that type's own name.
+            if self.models.get(&first).is_none() && self.models.import(&first).is_none() {
+                let std = crate::resolve::std_path::check(
+                    &name,
+                    crate::std_table::Namespace::Type,
+                    "type",
+                    name_span,
+                )?;
+                if let Some(spelling) = std.and_then(crate::resolve::std_path::spelling) {
+                    name = spelling.into();
+                }
+            }
             if let Some(collection) = crate::resolve::std_collection(&name) {
                 return self.parse_keyed_type(collection, name_span);
             }
@@ -46522,6 +46666,15 @@ impl<'a> Parser<'a> {
                 return self.parse_alias_type(name, name_span, &alias);
             }
             let Some(definition) = self.models.host.source_type(&path).cloned() else {
+                // A std type Rawr doesn't represent yet.
+                if let Some(error) = crate::resolve::std_path::not_yet(
+                    &path,
+                    &path,
+                    crate::std_table::Namespace::Type,
+                    name_span,
+                ) {
+                    return Err(error);
+                }
                 return Err(Error::UnknownType {
                     name,
                     reference: name_span,
@@ -46559,6 +46712,7 @@ impl<'a> Parser<'a> {
         {
             self.next();
             let element = Box::new(self.parse_local_type()?);
+            self.unstable_argument(pointer.name(), 1, name_span)?;
             self.expect_close_angle(&format!("'>' after `{}<T`", pointer.name()))?;
             return Ok(Ty::Boxed(pointer, element));
         }
@@ -46595,6 +46749,7 @@ impl<'a> Parser<'a> {
         if name.as_str() == "Vec" && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
             self.next();
             let element = Box::new(self.parse_local_type()?);
+            self.unstable_argument("Vec", 1, name_span)?;
             self.expect_close_angle("'>' after `Vec<T`")?;
             return Ok(Ty::Array {
                 element,
@@ -47065,13 +47220,17 @@ impl<'a> Parser<'a> {
                         ParseError::named(error).expect("a std parse error"),
                     ));
                 }
-                self.models
-                    .get(name)
-                    .map(Nominal::ty)
-                    .ok_or_else(|| Error::UnknownType {
-                        name: name.into(),
-                        reference: span,
-                    })?
+                match self.models.get(name).map(Nominal::ty) {
+                    Some(ty) => ty,
+                    None => {
+                        return Err(self.std_type_not_yet(name, span).unwrap_or_else(|| {
+                            Error::UnknownType {
+                                name: name.into(),
+                                reference: span,
+                            }
+                        }));
+                    }
+                }
             }
         })
     }

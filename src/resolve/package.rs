@@ -403,7 +403,8 @@ impl<'a> Resolver<'a> {
                                 | type_ref::Target::Host { .. }
                                 | type_ref::Target::Parameter
                                 | type_ref::Target::Projection(..)
-                                | type_ref::Target::Alias(_),
+                                | type_ref::Target::Alias(_)
+                                | type_ref::Target::Std(_),
                             ) => continue,
                         }
                     }
@@ -461,7 +462,8 @@ impl<'a> Resolver<'a> {
                             | type_ref::Target::Host { .. }
                             | type_ref::Target::Parameter
                             | type_ref::Target::Projection(..)
-                            | type_ref::Target::Alias(_),
+                            | type_ref::Target::Alias(_)
+                            | type_ref::Target::Std(_),
                         ) => {}
                     }
                 }
@@ -806,10 +808,8 @@ impl<'a> Resolver<'a> {
                 },
             });
         }
-        // `use std::collections::*;`: the names of that std module Rawr
-        // knows.
-        let std_names = super::std_glob(&module);
-        let names = if !std_names.is_empty() {
+        // `use std::collections::*;`: every name of that std module.
+        let names = if let Some(std_names) = super::std_path::glob(&module) {
             std_names
         } else if matches!(
             self.host.entry(&module),
@@ -1086,6 +1086,12 @@ impl<'a> Resolver<'a> {
                         );
                         item::Import::Type { definition, owner }
                     }
+                    // A std type Rawr doesn't represent, through a module of
+                    // this crate that re-exports it.
+                    Target::Type(type_ref::Target::Std(path)) => {
+                        types.insert(name.text.clone(), type_ref::Target::Std(path));
+                        item::Import::Module
+                    }
                     Target::Type(type_ref::Target::Alias(alias)) => {
                         types.insert(name.text.clone(), type_ref::Target::Alias(alias));
                         item::Import::Alias
@@ -1146,6 +1152,13 @@ impl<'a> Resolver<'a> {
                         name.text.clone(),
                         type_ref::Target::Alias(type_ref::Alias::builtin(builtin, name.span)),
                     );
+                }
+                // A std type Rawr has no representation for yet names it,
+                // so its uses say so.
+                if matches!(import, item::Import::Module)
+                    && let Some(path) = super::std_path::unrepresented_type(&qualified)
+                {
+                    types.insert(name.text.clone(), type_ref::Target::Std(path));
                 }
                 bindings.push(item::Binding {
                     name,
@@ -1820,13 +1833,15 @@ fn host_target(
             definitions: definitions.into(),
             owner: host.item_owner(&qualified).cloned(),
         }),
-        // `use std::fmt;`, for hand-written `Debug` and `Display` impls.
-        None if super::std_fmt_import(&qualified)
-            || super::tokio_macro(&qualified, host).is_some()
+        // `use tokio::join;`, a macro Rawr expands.
+        None if super::tokio_macro(&qualified, host).is_some()
             || qualified.contains("::") && super::hasher_alias(&qualified).is_some() =>
         {
             Ok(Target::Module)
         }
+        // A path into std, which its uses name: `use std::fmt;` for
+        // hand-written `Debug` and `Display` impls.
+        None if super::std_path::import(&qualified, reference)?.is_some() => Ok(Target::Module),
         None => {
             #[cfg(feature = "rust-import")]
             let missing = native.filter(|site| site.missing_binding(host, &qualified));

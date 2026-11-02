@@ -2,6 +2,9 @@
 <article>
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
+<h2 id="paths">Paths</h2>
+<p>rawr knows every path of <code>std</code>, <code>core</code> and <code>alloc</code>, read from the standard library of its pinned toolchain. A path resolves through every re-export, so <code>std::collections::hash_map::HashMap</code> and <code>alloc::collections::BTreeMap</code> name the types this page lists, and <code>use std::collections::*;</code> brings in every name of the module. A path std doesn&rsquo;t have gets rustc&rsquo;s error, as <code>core::thread::sleep</code> does. An unstable item gets rustc&rsquo;s E0658, as on stable Rust.</p>
+<p>An item std has and rawr doesn&rsquo;t run yet can be imported. A use of it says <code>rawr doesn't run `std::sync::Mutex` yet</code>, where the program uses it.</p>
 <h2 id="string"><code>String</code> and <code>&amp;str</code></h2>
 <p><code>push</code>, <code>push_str</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>truncate</code>, <code>retain</code>, <code>clear</code>, <code>trim</code>, <code>find</code>, <code>replace</code>, <code>split</code>, <code>splitn</code>, <code>rsplitn</code>, <code>split_whitespace</code>, <code>lines</code>, <code>chars</code>, <code>char_indices</code>, <code>bytes</code>, <code>as_bytes</code>, <code>starts_with</code>, <code>contains</code>, <code>to_uppercase</code>, <code>parse</code>, <code>String::from_utf8</code> and more. <code>len</code> counts bytes.</p>
 <div class="block">
@@ -79,7 +82,7 @@ async fn main() {
   <div class="run"><small>on your machine</small><b>rawr run futures.rs</b><span>(2, 4)</span></div>
 </div>
 <h2 id="collections">Collections</h2>
-<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code>, <code>BTreeSet</code> and <code>VecDeque</code>. A map&rsquo;s <code>get_mut</code> lends a value to change. A map&rsquo;s or a set&rsquo;s <code>drain</code> gives its entries and leaves it empty, and <code>clear</code> empties it. rawr treats a <code>VecDeque</code> as a <code>Vec</code>. It adds <code>push_front</code>, <code>pop_front</code>, <code>push_back</code>, <code>pop_back</code>, <code>front</code> and <code>back</code>. <code>BinaryHeap</code> isn&rsquo;t supported yet. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
+<p><code>HashMap</code> with the entry API, <code>HashSet</code>, <code>BTreeMap</code>, <code>BTreeSet</code> and <code>VecDeque</code>. A map&rsquo;s <code>get_mut</code> lends a value to change. A map&rsquo;s or a set&rsquo;s <code>drain</code> gives its entries and leaves it empty, and <code>clear</code> empties it. rawr treats a <code>VecDeque</code> as a <code>Vec</code>. It adds <code>push_front</code>, <code>pop_front</code>, <code>push_back</code>, <code>pop_back</code>, <code>front</code> and <code>back</code>. <code>BinaryHeap</code> isn&rsquo;t supported yet. <code>HashMap&lt;K, V, S&gt;</code> and <code>HashSet&lt;T, S&gt;</code> may name their hasher, as std&rsquo;s do, and rawr&rsquo;s map stays the same. <code>rustc_hash</code>&rsquo;s <code>FxHashMap</code> and <code>FxHashSet</code> are rawr&rsquo;s <code>HashMap</code> and <code>HashSet</code>. Cargo still builds them with the crate&rsquo;s hasher.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="hashmap.rs" id="src-hashmap">use std::collections::HashMap;
 

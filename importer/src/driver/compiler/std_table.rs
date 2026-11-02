@@ -122,7 +122,7 @@ fn render_ty<'tcx>(ty: ty::Ty<'tcx>) -> String {
 }
 
 /// The generic parameters a path to the item may write, in order:
-/// `'a`, `T`, `S=std::hash::RandomState`, `A=alloc::alloc::Global?allocator_api`,
+/// `'a`, `T`, `S=std::hash::RandomState`, `A=std::alloc::Global?allocator_api#32838`,
 /// `const N`. Joined with ` ` (a default's own spaces become nothing).
 fn generics(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     let generics = tcx.generics_of(def_id);
@@ -158,10 +158,15 @@ fn generics(tcx: TyCtxt<'_>, def_id: DefId) -> String {
                 text
             }
         };
+        // An unstable parameter: `?feature`, then `#issue` when it has one.
         if let Some(stability) = stability(tcx, parameter.def_id) {
-            let feature = stability.split(' ').nth(1).unwrap_or("-");
+            let mut parts = stability.split(' ').skip(1);
             text.push('?');
-            text.push_str(feature);
+            text.push_str(parts.next().unwrap_or("-"));
+            if let Some(issue) = parts.next().filter(|issue| *issue != "-") {
+                text.push('#');
+                text.push_str(issue);
+            }
         }
         out.push(text);
     }
