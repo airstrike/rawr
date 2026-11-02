@@ -1,7 +1,7 @@
 //! std's own paths, kinds, stability and generics, read from the sysroot of
 //! the pinned toolchain (D711 step 1, D714.2).
 //!
-//! The table is two sorted, tab-separated files that rawr embeds, which
+//! The table is three sorted, tab-separated files that rawr embeds, which
 //! `scripts/std-table.sh` writes with the importer's driver:
 //!
 //! - `paths.tsv`: `path  namespace  kind  stability  definition`, one line
@@ -21,6 +21,16 @@
 //!   `type IntoIter: Iterator<Item = Self::Item>`), naming types by their
 //!   public paths, bare for the prelude's.
 //!
+//! - `impls.tsv` (D711 step 3): `trait  key  self  arguments  generics
+//!   where  associated`, one line per impl of a stable trait that stable
+//!   Rust can name: the trait's definition, the self type's simplified key
+//!   (a primitive's name, an ADT's definition, `&`, `&mut`, `[]`, `[;]`,
+//!   `()`, or `_` for a blanket impl), the self type and the trait's
+//!   arguments as a program writes them, the impl's type and const
+//!   parameters (`T U const:N`), its where-clauses (`T: PartialEq<U>`) and
+//!   its associated types (`Target = str`). Lists are split by `, ` outside
+//!   brackets.
+//!
 //! A stability is `s`, or `u feature issue reason` with `-` for no issue
 //! or reason. What differs by target (`arch`, `simd`, `os`) is left out.
 //! `TOOLCHAIN` names the pinned nightly and the target the table was taken
@@ -31,6 +41,7 @@
 
 const PATHS: &str = include_str!("std_table/paths.tsv");
 const ITEMS: &str = include_str!("std_table/items.tsv");
+const IMPLS: &str = include_str!("std_table/impls.tsv");
 
 /// The namespace a path is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -581,6 +592,248 @@ pub(crate) fn prelude(edition: &str) -> impl Iterator<Item = Path> {
     })
 }
 
+/// An impl's line in `impls.tsv`: std's impl header, as a program would
+/// write it (D711 step 3).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Impl {
+    /// The trait's definition: `core::cmp::PartialEq`.
+    pub trait_: &'static str,
+    /// The self type: `Vec<T, A>`, `&A`, `str`.
+    pub self_ty: &'static str,
+    arguments: &'static str,
+    generics: &'static str,
+    wheres: &'static str,
+    associated: &'static str,
+}
+
+impl Impl {
+    /// The trait's arguments after `Self`: `Vec<U, A>` of
+    /// `PartialEq<Vec<U, A>>`.
+    pub(crate) fn arguments(&self) -> Vec<&'static str> {
+        split_list(self.arguments)
+    }
+
+    /// The impl's type and const parameters: `T`, `U`, `const:N`.
+    pub(crate) fn generics(&self) -> impl Iterator<Item = &'static str> {
+        self.generics.split(' ').filter(|name| !name.is_empty())
+    }
+
+    /// Its where-clauses, each as its subject and its bounds: (`T`,
+    /// `PartialEq<U> + Clone`).
+    pub(crate) fn wheres(&self) -> Vec<(&'static str, &'static str)> {
+        split_list(self.wheres)
+            .into_iter()
+            .filter_map(|clause| {
+                let colon = top_level(clause, ": ")?;
+                Some((&clause[..colon], &clause[colon + 2..]))
+            })
+            .collect()
+    }
+
+    /// The associated type `name` it declares: `str` for `Target` of
+    /// `impl Deref for String`.
+    pub(crate) fn associated(&self, name: &str) -> Option<&'static str> {
+        split_list(self.associated).into_iter().find_map(|binding| {
+            let (bound, ty) = binding.split_once(" = ")?;
+            (bound == name).then_some(ty)
+        })
+    }
+}
+
+/// The first `pattern` in `text` outside brackets.
+fn top_level(text: &str, pattern: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, c) in text.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            // `->` closes nothing.
+            '>' if index > 0 && text.as_bytes()[index - 1] == b'-' => {}
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && text[index..].starts_with(pattern) => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `text` split at each top-level `separator`.
+fn split_top(text: &'static str, separator: &str) -> Vec<&'static str> {
+    let mut parts = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        match top_level(rest, separator) {
+            Some(at) => {
+                parts.push(&rest[..at]);
+                rest = &rest[at + separator.len()..];
+            }
+            None => {
+                parts.push(rest);
+                break;
+            }
+        }
+    }
+    parts
+}
+
+/// `text` split at each top-level `, `.
+pub(crate) fn split_list(text: &'static str) -> Vec<&'static str> {
+    split_top(text, ", ")
+}
+
+/// `text` split at each top-level ` + `: a bound's traits.
+pub(crate) fn split_bounds(text: &'static str) -> Vec<&'static str> {
+    split_top(text, " + ")
+}
+
+/// The impls of the trait `trait_` (its definition) whose self type has the
+/// simplified key `key`: `alloc::string::String`, `&`, `[]`, `_`.
+pub(crate) fn impls(trait_: &str, key: &str) -> impl Iterator<Item = Impl> {
+    let prefix = format!("{trait_}\t{key}\t");
+    lines_from(IMPLS, &prefix)
+        .lines()
+        .take_while(move |line| line.starts_with(&prefix))
+        .map(|line| {
+            let mut fields = line.split('\t');
+            let mut next = || fields.next().unwrap_or_default();
+            let trait_ = next();
+            let _key = next();
+            Impl {
+                trait_,
+                self_ty: next(),
+                arguments: next(),
+                generics: next(),
+                wheres: next(),
+                associated: next(),
+            }
+        })
+}
+
+/// A type as std's declarations write it, parsed: what an impl header's
+/// types are matched by.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Written {
+    /// A path with its type arguments and its associated type bindings
+    /// (`Iterator<Item = T>`): a type, a trait, or an impl's parameter.
+    Path {
+        path: &'static str,
+        arguments: Vec<Written>,
+        bindings: Vec<(&'static str, Written)>,
+    },
+    Reference {
+        mutable: bool,
+        target: Box<Written>,
+    },
+    Slice(Box<Written>),
+    /// `[T; N]`, with its length as written.
+    Array(Box<Written>, &'static str),
+    Tuple(Vec<Written>),
+    Never,
+    /// What rawr matches no value by: a pointer, a `fn` or `dyn` type, a
+    /// projection, a closure bound.
+    Other(&'static str),
+}
+
+/// The type `text` writes.
+pub(crate) fn written(text: &'static str) -> Written {
+    let text = text.trim();
+    if text == "!" {
+        return Written::Never;
+    }
+    if let Some(rest) = text.strip_prefix("&mut ") {
+        return Written::Reference {
+            mutable: true,
+            target: Box::new(written(rest)),
+        };
+    }
+    if let Some(rest) = text.strip_prefix('&') {
+        return Written::Reference {
+            mutable: false,
+            target: Box::new(written(rest)),
+        };
+    }
+    if let Some(inner) = text
+        .strip_prefix('[')
+        .and_then(|text| text.strip_suffix(']'))
+    {
+        return match top_level(inner, "; ") {
+            Some(semicolon) => Written::Array(
+                Box::new(written(&inner[..semicolon])),
+                inner[semicolon + 2..].trim(),
+            ),
+            None => Written::Slice(Box::new(written(inner))),
+        };
+    }
+    if let Some(inner) = text
+        .strip_prefix('(')
+        .and_then(|text| text.strip_suffix(')'))
+    {
+        // `(A) -> B` is no tuple: its first `(` closes before its end.
+        let mut depth = 0usize;
+        for (index, c) in text.char_indices() {
+            match c {
+                '<' | '(' | '[' => depth += 1,
+                '>' if index > 0 && text.as_bytes()[index - 1] == b'-' => {}
+                '>' | ')' | ']' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && index + 1 < text.len() {
+                        return Written::Other(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let inner = inner.strip_suffix(',').unwrap_or(inner);
+        return Written::Tuple(split_list(inner).into_iter().map(written).collect());
+    }
+    if text.starts_with(['*', '<'])
+        || text.starts_with("dyn ")
+        || text.starts_with("fn(")
+        || text.starts_with("impl ")
+        || top_level(text, " ").is_some()
+    {
+        return Written::Other(text);
+    }
+    let (path, rest) = match text.find('<') {
+        Some(open) if text.ends_with('>') => (&text[..open], &text[open + 1..text.len() - 1]),
+        Some(_) => return Written::Other(text),
+        None => (text, ""),
+    };
+    if path.contains(['(', ')']) {
+        return Written::Other(text);
+    }
+    let mut arguments = Vec::new();
+    let mut bindings = Vec::new();
+    for argument in split_list(rest) {
+        match top_level(argument, " = ") {
+            Some(equals) => bindings.push((&argument[..equals], written(&argument[equals + 3..]))),
+            None => arguments.push(written(argument)),
+        }
+    }
+    Written::Path {
+        path,
+        arguments,
+        bindings,
+    }
+}
+
+/// The definition a path std's declarations write names: a primitive's
+/// name, or the definition of a prelude name or a path
+/// (`std::rc::Rc` is `alloc::rc::Rc`, `String` is `alloc::string::String`).
+pub(crate) fn definition_of(path: &str) -> Option<&'static str> {
+    const PRIMITIVES: &[&str] = &[
+        "bool", "char", "str", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32",
+        "u64", "u128", "usize", "f16", "f32", "f64", "f128",
+    ];
+    if let Some(primitive) = PRIMITIVES.iter().find(|primitive| **primitive == path) {
+        return Some(primitive);
+    }
+    if path.contains("::") {
+        return self::path(path, Namespace::Type).map(|found| found.definition);
+    }
+    self::path(&format!("std::prelude::rust_2024::{path}"), Namespace::Type)
+        .map(|found| found.definition)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +927,50 @@ mod tests {
         assert!(names.contains(&"std::prelude::rust_2021::TryFrom"));
         assert!(!prelude("2018").any(|p| p.path.ends_with("::TryFrom")));
         assert!(prelude("2024").any(|p| p.path.ends_with("::Future")));
+    }
+
+    #[test]
+    fn std_table_impls_carry_their_headers() {
+        let deref = impls("core::ops::deref::Deref", "alloc::string::String")
+            .next()
+            .expect("impl Deref for String");
+        assert_eq!(deref.self_ty, "String");
+        assert_eq!(deref.associated("Target"), Some("str"));
+        let between = impls("core::cmp::PartialEq", "alloc::vec::Vec")
+            .find(|line| line.arguments() == ["[U; N]"])
+            .expect("impl PartialEq<[U; N]> for Vec<T, A>");
+        assert_eq!(
+            between.generics().collect::<Vec<_>>(),
+            ["T", "U", "A", "const:N"]
+        );
+        assert_eq!(between.wheres(), [("T", "PartialEq<U>")]);
+        let parameter = |path| Written::Path {
+            path,
+            arguments: vec![],
+            bindings: vec![],
+        };
+        assert_eq!(
+            written("Vec<T, A>"),
+            Written::Path {
+                path: "Vec",
+                arguments: vec![parameter("T"), parameter("A")],
+                bindings: vec![],
+            }
+        );
+        assert!(matches!(written("[U; N]"), Written::Array(_, "N")));
+        assert!(matches!(
+            written("&mut [T]"),
+            Written::Reference { mutable: true, .. }
+        ));
+        assert!(matches!(written("(A, B)"), Written::Tuple(members) if members.len() == 2));
+        assert!(matches!(written("(T,)"), Written::Tuple(members) if members.len() == 1));
+        assert!(matches!(written("FnOnce() -> T"), Written::Other(_)));
+        assert_eq!(definition_of("std::rc::Rc"), Some("alloc::rc::Rc"));
+        assert_eq!(definition_of("String"), Some("alloc::string::String"));
+        assert_eq!(
+            split_bounds("PartialEq<U> + Clone"),
+            ["PartialEq<U>", "Clone"]
+        );
+        assert_eq!(definition_of("PartialEq"), Some("core::cmp::PartialEq"));
     }
 }
