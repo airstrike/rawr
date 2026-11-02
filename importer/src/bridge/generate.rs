@@ -1559,6 +1559,10 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
         let value = PLACE_VALUES.with_borrow_mut(|values| values.1.remove(&stored.0)).ok_or_else(place_slot_missing)?;
         value.downcast::<T>().map(|value| *value).map_err(|_| place_slot_missing())
     }
+    fn restore(stored: &PlaceSlot, value: T) -> Result<(), Box<__rawr_internal::EvalAltResult>> {
+        PLACE_VALUES.with_borrow_mut(|values| values.1.insert(stored.0, Box::new(value)));
+        Ok(())
+    }
 }
 
 fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
@@ -1584,6 +1588,9 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
     }
     fn take(stored: &NativeHandle) -> Result<T, Box<__rawr_internal::EvalAltResult>> {
         with_arena(|arena| arena.take(stored.clone())).map_err(place_error)
+    }
+    fn restore(stored: &NativeHandle, value: T) -> Result<(), Box<__rawr_internal::EvalAltResult>> {
+        with_arena(|arena| { arena.restore(stored.clone(), Box::new(value)); Ok(()) }).map_err(place_error)
     }
 }
 
@@ -2415,6 +2422,23 @@ fn native_place<P: __rawr_internal::place::Policy>(
     witness: &__rawr_internal::host::runtime::Witness,
 ) -> Result<Dynamic, Error> {
     __rawr_internal::place::owned::<P>(value, witness).map_err(|error| Error::Value(error.to_string()))
+}
+
+/// A native value a call took from the owned place `owner` and changed,
+/// given back to that place, which every handle of it reaches (#716), or,
+/// for a program's value, a native place of its own.
+#[allow(dead_code)]
+fn restored_place<P: __rawr_internal::place::Policy>(
+    owner: Option<__rawr_internal::place::Place>,
+    value: P::Value,
+    witness: &__rawr_internal::host::runtime::Witness,
+) -> Result<Dynamic, Error> {
+    match owner {
+        Some(place) => __rawr_internal::place::restore::<P>(&place, witness, value)
+            .map(|()| Dynamic::from(place))
+            .map_err(|error| Error::Value(error.to_string())),
+        None => native_place::<P>(value, witness),
+    }
 }
 
 /// The witnesses of the `count` parameters of the closure that is operand
@@ -6685,10 +6709,22 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
     }
     // A value native code lent the script function that matches it, as a
     // canvas program's `update` takes `&Event` (D558.3), is reached through
-    // its accessor; any other is in the arena.
-    writeln!(
-        output,
-        "    #[allow(unreachable_patterns)]
+    // its accessor; any other is in the arena. A lent value of a type with
+    // lifetimes, as quick-xml's `Event<'a>`, lends its fields only for the
+    // accessor's call, so they can't be given out of it.
+    if carries_lifetimes(&path) {
+        writeln!(
+            output,
+            "    let handle = native_handle(arguments, 0, false)?;
+    #[allow(unreachable_patterns)]
+    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
+    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
+        )
+        .map_err(request::unwritable)?;
+    } else {
+        writeln!(
+            output,
+            "    #[allow(unreachable_patterns)]
     let output = match lent_value(arguments, 0) {{
         Some(lent) => {{
             let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
@@ -6707,8 +6743,9 @@ fn render_matcher(plan: &Plan, output: &mut Vec<u8>) -> Result<(), request::Erro
         }}
     }};
     let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};"
-    )
-    .map_err(request::unwritable)?;
+        )
+        .map_err(request::unwritable)?;
+    }
     if fields.is_empty() {
         output
             .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
@@ -7615,8 +7652,11 @@ fn render_adapter_body(
             } else if plain_value(field.ty()) {
                 // A field Rawr holds as its own value, as a `String`: read
                 // through the value where it is, which stays whole, as Rust
-                // reads `font.family` without moving `font`.
-                writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
+                // reads `font.family` without moving `font`. A lent value of
+                // a type with lifetimes, as quick-xml's `Attribute<'a>`,
+                // lends its fields only for the accessor's call.
+                if !carries_lifetimes(&path) {
+                    writeln!(output, "    if let Some(lent) = lent_value(arguments, 0) {{
         let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
             .accessor(false).map_err(|error| Error::Lent(lent.name(), error))?;
         let mut output = None;
@@ -7624,8 +7664,9 @@ fn render_adapter_body(
             .map_err(|code| Error::Lent(lent.name(), __rawr_internal::scope::Error::from_code(code)))?;
         let output = output.ok_or(Error::Lent(lent.name(), __rawr_internal::scope::Error::Busy))?;
         return {{", name = field.name()).map_err(request::unwritable)?;
-                render_give(field.ty(), "output", output)?;
-                writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+                    render_give(field.ty(), "output", output)?;
+                    writeln!(output, "    }};\n    }}").map_err(request::unwritable)?;
+                }
                 output
                     .write_all(b"    let handle = native_handle(arguments, 0, false)?;\n")
                     .map_err(request::unwritable)?;
@@ -8855,7 +8896,10 @@ fn frame_copies(
     }
     let mut given = Vec::new();
     for (position, element) in &copies {
-        given.push(format!("({})?", given_back(*position, element)?));
+        given.push(format!(
+            "({})?",
+            given_back(*position, element, !LENT_ARGUMENTS.get())?
+        ));
     }
     Ok(FrameCopies {
         rebound,
@@ -9698,12 +9742,15 @@ fn render_guard(
             call_again("arena.held", "receiver.clone()", "arena, receiver", output)?;
             output
                 .write_all(
-                    b"
+                    format!(
+                        "
                         let output = {copy}!(&*guard)?;
-                        let value = {
+                        let value = {{
                             #[allow(unused_variables)]
-                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
-",
+                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
+"
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)?;
             indented(&give, "                        ", output)?;
@@ -9797,12 +9844,15 @@ fn render_guard(
             call("arena.held", "receiver.clone()", "arena, receiver", output)?;
             output
                 .write_all(
-                    b"
+                    format!(
+                        "
                         let output = {copy}!(&*guard)?;
-                        let value = {
+                        let value = {{
                             #[allow(unused_variables)]
-                            let arguments = &mut Arguments { values: &mut [], arena: &mut *arena };
-",
+                            let arguments = &mut Arguments {{ values: &mut [], arena: &mut *arena }};
+"
+                    )
+                    .as_bytes(),
                 )
                 .map_err(encoding)?;
             indented(&give, "                        ", output)?;
@@ -11627,7 +11677,9 @@ fn render_take_input(
             .map_err(request::unwritable);
         }
         let witness = if place::available(element) {
-            format!("    let argument_{local}_witness = operand_witness({index});\n")
+            format!(
+                "    let argument_{local}_witness = operand_witness({index});\n    let argument_{local}_owner = arguments.values.get({index}).and_then(|value| __rawr_internal::place::get(&**value));\n"
+            )
         } else {
             String::new()
         };
@@ -13354,7 +13406,7 @@ fn render_give_with(
     let given = String::from_utf8(given).map_err(request::unwritable)?;
     let mut copied = String::new();
     for (position, element) in &copies {
-        let converted = given_back(*position, element)?;
+        let converted = given_back(*position, element, !LENT_ARGUMENTS.get())?;
         if LENT_ARGUMENTS.get() && place::available(element) {
             copied.push_str(&format!(", match argument_{position}_copy {{ Some(argument_{position}_copy) => ({converted})?, None => argument_{position}_place }}"));
         } else {
@@ -13373,12 +13425,23 @@ fn render_give_with(
 /// of the operand's exact type, which the next call lends where it is
 /// (#716). An element type with no native place goes back as Rawr's value
 /// (D558 slice 2).
-fn given_back(position: usize, element: &convert::Type) -> Result<String, request::Error> {
+fn given_back(
+    position: usize,
+    element: &convert::Type,
+    owned: bool,
+) -> Result<String, request::Error> {
     if place::available(element) {
-        return Ok(format!(
-            "native_place::<{}>(argument_{position}_copy, &argument_{position}_witness)",
-            place::policy(element)?
-        ));
+        return Ok(if owned {
+            format!(
+                "restored_place::<{}>(argument_{position}_owner, argument_{position}_copy, &argument_{position}_witness)",
+                place::policy(element)?
+            )
+        } else {
+            format!(
+                "native_place::<{}>(argument_{position}_copy, &argument_{position}_witness)",
+                place::policy(element)?
+            )
+        });
     }
     let mut converted = String::new();
     render_to_dynamic(
@@ -14200,6 +14263,12 @@ fn family_of(ty: &convert::Type) -> Option<String> {
     }
     let lifetimes = TYPE_TRAITS.with_borrow(|types| types.get(definition.as_bytes()).copied())?;
     family(scoped_type(ty)?, lifetimes)
+}
+
+/// Whether the type at `path` has lifetime parameters, which a lent value
+/// of it borrows for its accessor's call only.
+fn carries_lifetimes(path: &str) -> bool {
+    SCOPED_PATHS.with_borrow(|paths| paths.get(path).is_some_and(|lifetimes| lifetimes.count > 0))
 }
 
 /// The family of a method's container, spelled `container` as

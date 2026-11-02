@@ -21,7 +21,7 @@ use crate::{Dynamic, RawrResult, RawrResultOf, Shared};
 use std::any::Any;
 use std::fmt;
 
-pub use native::{borrow, borrow_ref, lend, lend_ref, owned, reach, take};
+pub use native::{borrow, borrow_ref, lend, lend_ref, owned, reach, restore, take};
 
 /// The ownership action selected by a checked extension expression.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
