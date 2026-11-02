@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-02",
-  "version": "0.3.109",
+  "version": "0.3.110",
   "examples": {
     "running": 25,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"Inherent methods of `Option`, `Result`, `char`, floats, ints, `String`/`str`, `Vec`/`[T]` and maps come from std's declarations: their receiver modes (`into_bytes` moves, `sort` takes `&mut self`, a program trait comes before a method a Deref step away) and what each call keeps of its inputs. A std `&mut self` method on a local not declared `mut` is rustc's E0596, and a std method rawr doesn't run yet is the not-yet error.","issues":[745]},
-        {"text":"`x.try_into()` into a program type uses its `TryFrom` impl, and `x.clone_from(&y)` works on any `Clone` type through method lookup.","issues":[757]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.110",
+        "date": "2026-11-02",
+        "entries": [
+          {"text":"Inherent methods of `Option`, `Result`, `char`, floats, ints, `String`/`str`, `Vec`/`[T]` and maps come from std's declarations: their receiver modes (`into_bytes` moves, `sort` takes `&mut self`, a program trait comes before a method a Deref step away) and what each call keeps of its inputs. A std `&mut self` method on a local not declared `mut` is rustc's E0596, and a std method rawr doesn't run yet is the not-yet error.","issues":[745]},
+          {"text":"`x.try_into()` into a program type uses its `TryFrom` impl, and `x.clone_from(&y)` works on any `Clone` type through method lookup.","issues":[757]}
+        ]
+      },
       {
         "version": "0.3.109",
         "date": "2026-11-02",
@@ -1831,7 +1833,7 @@
     {"issue":742,"title":"std paths and type arities come from the shipped std table (D711 step 1)","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
-    {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"closed","category":"Divergences from rustc"},
+    {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"closed","category":"Divergences from rustc","release":"0.3.110"},
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc"},
     {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
     {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"open","category":"Divergences from rustc"},
@@ -1843,7 +1845,7 @@
     {"issue":754,"title":"Recovered misses close the inference checkpoints they leave open","state":"closed","category":"Health","release":"0.3.105"},
     {"issue":755,"title":"Generated mutable guard places format their copy macro","state":"closed","category":"Health","release":"0.3.105"},
     {"issue":756,"title":"quick-xml scope frames: receiver moves, closure parameters, lent lifetimes, frame buffers","state":"closed","category":"Divergences from rustc","release":"0.3.105"},
-    {"issue":757,"title":"x.try_into() into a program type uses its TryFrom impl","state":"closed","category":"Divergences from rustc"},
+    {"issue":757,"title":"x.try_into() into a program type uses its TryFrom impl","state":"closed","category":"Divergences from rustc","release":"0.3.110"},
     {"issue":758,"title":"std traits are keyed by their definition, not their short name","state":"open","category":"Divergences from rustc"},
     {"issue":759,"title":"Provided std trait members run without a hand mapping: clone_from as a method, TryFrom::try_from by path","state":"open","category":"Divergences from rustc"},
     {"issue":760,"title":"std::vec::IntoIter as an IntoIterator impl's IntoIter","state":"open","category":"No glue (D593)"},
