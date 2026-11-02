@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A type missing a trait reads as rustc's E0277 (\"the trait bound `T: X` is not satisfied\", or \"`T` doesn't implement `Debug`\"), with a \"required by a bound in\" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type.","issues":[718]},
+        {"text":"A crate path that can't be used yet gives the Rust reason (\"`x` can't be used yet: it takes a closure that isn't `'static`\"), labelled where it is defined and exported, instead of an internal rejection name or \"retained\" evidence.","issues":[719,720]},
+        {"text":"A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name.","issues":[721]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.97",
@@ -1700,10 +1707,10 @@
     {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"open","category":"No glue (D593)"},
     {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
     {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
-    {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"open","category":"Divergences from rustc"},
-    {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"open","category":"Divergences from rustc"},
-    {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"open","category":"Divergences from rustc"},
-    {"issue":721,"title":"Generated-runtime invariant errors (TypeMismatch, StaleHandle, NotClone) panic as rawr bugs or read in Rust terms","state":"open","category":"Health"},
+    {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"closed","category":"Divergences from rustc"},
+    {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"closed","category":"Divergences from rustc"},
+    {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"closed","category":"Divergences from rustc"},
+    {"issue":721,"title":"Generated-runtime invariant errors (TypeMismatch, StaleHandle, NotClone) panic as rawr bugs or read in Rust terms","state":"closed","category":"Health"},
     {"issue":722,"title":"A closure written |x: T| where Fn(&T) is expected is E0631, not accepted by dropping the reference","state":"open","category":"Divergences from rustc"},
     {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"open","category":"Divergences from rustc"},
     {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
@@ -1715,7 +1722,9 @@
     {"issue":730,"title":"A native future value passed where a script function expects a future is refused at check time","state":"open","category":"No glue (D593)"},
     {"issue":731,"title":"#[rawr::export] declares a &T parameter as &T, not an owned T","state":"open","category":"Divergences from rustc"},
     {"issue":732,"title":"Text .into() takes its target from the use site: &str, Box<str>, Arc<str>, PathBuf","state":"open","category":"Divergences from rustc"},
-    {"issue":733,"title":"`&str + &str` reports rustc's E0369, not a type mismatch","state":"open","category":"Divergences from rustc"}
+    {"issue":733,"title":"`&str + &str` reports rustc's E0369, not a type mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":734,"title":"The generated runtime's Stale error panics as a rawr bug or reads in Rust terms","state":"open","category":"Health"},
+    {"issue":735,"title":"`cargo check --tests` without rust-import fails in language_tests.rs","state":"open","category":"Health"}
   ],
   "groups": [
     {
