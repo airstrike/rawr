@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A type parameter bounded by `Into<String>`, `AsRef<str>`, `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` or `ToString` takes what std implements the bound for, however the parameter is written, and a string literal is lent rather than copied.","issues":[713]},
+        {"text":"An async fn whose future borrows `&Path`, `&[u8]`, `&String`, `&Vec<T>`, a number or a `Result` holding a borrow runs, with each borrow held by the future.","issues":[714]},
+        {"text":"A crate function taking an `FnMut` with no `'static` bound, such as image's `ImageBuffer::from_fn`, takes a closure that changes the locals it captures, and function pointers of any number of inputs take your functions.","issues":[715]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.100",
@@ -1719,9 +1726,9 @@
     {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
     {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"open","category":"Divergences from rustc"},
     {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"open","category":"Divergences from rustc"},
-    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"open","category":"Divergences from rustc"},
-    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"open","category":"Divergences from rustc"},
-    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"open","category":"No glue (D593)"},
+    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc"},
+    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"closed","category":"Divergences from rustc"},
+    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"closed","category":"No glue (D593)"},
     {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
     {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
     {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"closed","category":"Divergences from rustc","release":"0.3.98"},
@@ -1745,7 +1752,9 @@
     {"issue":736,"title":"A String's .into() with no target is E0283, not accepted as itself","state":"open","category":"Divergences from rustc"},
     {"issue":737,"title":"An array of Elements widens to a slice only at an IntoIterator parameter","state":"open","category":"Divergences from rustc"},
     {"issue":738,"title":"A runner installs each crate's bindings after the facades whose types they name","state":"closed","category":"Health","release":"0.3.100"},
-    {"issue":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health"}
+    {"issue":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"open","category":"Health"},
+    {"issue":740,"title":"&mut String and &mut Vec<T> inside an Option, Result or tuple an async fn takes are leased","state":"open","category":"Divergences from rustc"},
+    {"issue":741,"title":"&String, &Vec<T>, &[u8] and &u32 a crate call or future borrows are lent without building a copy","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
