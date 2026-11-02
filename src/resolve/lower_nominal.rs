@@ -83,22 +83,6 @@ const ASYNC_RESUME: &str = "__rawr_resume";
 /// The core's function an async body's step function is passed to, where
 /// no host's `Task` runs futures.
 const CORE_ASYNC: &str = "rawr::future::script";
-/// The std and prelude traits whose functions a path call names
-/// (`Default::default()`, `From::from(x)`), with those functions, and
-/// `std::cmp`'s free `min` and `max`.
-const STD_TRAIT_FUNCTIONS: &[(&str, &[&str])] = &[
-    ("Default", &["default"]),
-    ("From", &["from"]),
-    ("Into", &["into"]),
-    ("Clone", &["clone"]),
-    ("ToString", &["to_string"]),
-    ("PartialEq", &["eq", "ne"]),
-    ("PartialOrd", &["lt", "le", "gt", "ge", "partial_cmp"]),
-    ("Ord", &["cmp", "min", "max", "clamp"]),
-    ("Display", &["fmt"]),
-    ("Debug", &["fmt"]),
-    ("cmp", &["min", "max"]),
-];
 const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 /// Why a crate call can't take the program's function that builds its
 /// message, as `Message::Changed` given to iced's `on_input`, here.
@@ -4526,35 +4510,52 @@ impl Models {
             }))
             .map(|name| name.text.clone())
             .collect::<BTreeSet<_>>();
+        // The std traits the crate implements or bounds by, with their
+        // supertraits (an `Ord` bound reaches `PartialOrd`'s `partial_cmp`).
         let mut used = impls
             .iter()
             .map(|(trait_name, _)| trait_name.clone())
-            .chain(bounds.into_iter().filter(|name| {
-                matches!(
-                    name.as_str(),
-                    "Display" | "From" | "Into" | "PartialOrd" | "Ord"
-                ) || crate::resolve::OPERATOR_TRAITS
-                    .iter()
-                    .any(|(_, operator, _)| operator == name)
-            }))
+            .chain(
+                bounds
+                    .into_iter()
+                    .filter(|name| program.std_traits().contains_key(name)),
+            )
             .collect::<BTreeSet<_>>();
-        // `Ord: PartialOrd`, whose `partial_cmp` an `Ord` bound reaches.
-        if used.contains("Ord") {
-            used.insert("PartialOrd".into());
+        let mut pending = used.iter().cloned().collect::<Vec<_>>();
+        while let Some(name) = pending.pop() {
+            let Some(declared) = program.std_traits().get(&name) else {
+                continue;
+            };
+            for parent in declared.supertraits.1.iter() {
+                if used.insert(parent.text.clone()) {
+                    pending.push(parent.text.clone());
+                }
+            }
         }
+        let mut declarations = program.std_traits().clone();
         // std's `Error`, which `Box<dyn Error>` names without an impl.
+        if !declarations.contains_key("Error")
+            && let Some(error) = crate::resolve::std_trait::anywhere("Error")
+                .and_then(|error| crate::resolve::std_trait::declaration(error, &[], &host))
+        {
+            declarations.insert("Error".into(), error);
+        }
         used.insert("Error".into());
         for trait_name in &used {
             if !traits.contains_key(trait_name)
-                && let Some(declared) = crate::resolve::builtin_trait(trait_name)
+                && let Some(declared) = declarations.get(trait_name)
             {
                 traits.insert(
                     trait_name.clone(),
-                    (crate::program::source::Id::ROOT, declared),
+                    (crate::program::source::Id::ROOT, declared.clone()),
                 );
-                // The prelude's `From` and `Into` dispatch as crate traits
-                // do; the others fall back to Rawr's builtins.
-                if !matches!(trait_name.as_str(), "From" | "Into") {
+                // A std trait whose methods rawr's runtime runs for its own
+                // values falls back to them; another dispatches as a crate
+                // trait does.
+                if declared
+                    .std
+                    .is_some_and(crate::resolve::std_trait::runs_builtin)
+                {
                     std_traits.insert(trait_name.clone());
                 }
             }
@@ -10813,6 +10814,45 @@ fn split_first_argument(tokens: Tokens) -> (Tokens, Tokens) {
 
 /// An argument's tokens without a leading `&`: `Clone::clone(&x)` is
 /// `x.clone()`, as Rust's auto-reference makes it.
+/// The tokens of the Rust `text`, each at `at`, with each named hole the
+/// parenthesised tokens it stands for: a call rewritten as source.
+fn template_tokens(
+    text: &str,
+    holes: &[(&str, Vec<(Token, Position)>)],
+    at: Position,
+) -> Vec<(Token, Position)> {
+    let engine = Engine::new_raw();
+    let mut tokens = Vec::new();
+    for (token, _) in lex_rust(&engine, text) {
+        if token == Token::EOF {
+            break;
+        }
+        if let Token::Identifier(name) = &token
+            && let Some((_, hole)) = holes.iter().find(|(hole, _)| name.as_str() == *hole)
+        {
+            tokens.push((Token::LeftParen, at));
+            tokens.extend(hole.iter().cloned());
+            tokens.push((Token::RightParen, at));
+            continue;
+        }
+        tokens.push((token, at));
+    }
+    tokens
+}
+
+/// The tokens of a receiver taken by `&self` or `&mut self` as a method
+/// call's receiver: its `&` or `&mut` dropped (`Iterator::next(&mut it)`
+/// is `it.next()`).
+fn without_borrow(mut tokens: Vec<(Token, Position)>) -> Vec<(Token, Position)> {
+    if matches!(tokens.first(), Some((Token::Ampersand, _))) && tokens.len() > 1 {
+        tokens.remove(0);
+        if matches!(tokens.first(), Some((Token::Mut, _))) && tokens.len() > 1 {
+            tokens.remove(0);
+        }
+    }
+    tokens
+}
+
 fn without_reference(mut tokens: Vec<(Token, Position)>) -> Vec<(Token, Position)> {
     if matches!(tokens.first(), Some((Token::Ampersand, _))) && tokens.len() > 1 {
         tokens.remove(0);
@@ -11403,7 +11443,9 @@ struct Parser<'a> {
     pending_formats: Vec<PendingFormat>,
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
-    pending_parses: Vec<(Ty, Ty, Span)>,
+    pending_parses: Vec<(Ty, Ty, Span, String)>,
+    /// The `parse` calls read so far, which number their placeholders.
+    parse_count: usize,
     /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
     /// Error` (`error_object.rs`).
     text_into: Vec<Span>,
@@ -11705,6 +11747,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
             pending_turbofish: None,
@@ -12043,6 +12086,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A member a program's type lacks, where the type implements `Deref`:
+    /// Rust finds it through the deref, which rawr doesn't run yet
+    /// (D712.1).
+    fn deref_not_yet(&self, error: Error) -> Error {
+        let Error::UnknownMember {
+            owner, reference, ..
+        } = &error
+        else {
+            return error;
+        };
+        let derefs = self.models.impls.iter().any(|(trait_name, id)| {
+            trait_name.as_str() == "Deref" && self.models.definition(*id).name() == owner.as_str()
+        });
+        if !derefs {
+            return error;
+        }
+        Error::NotYet {
+            path: "std::ops::Deref".into(),
+            reference: *reference,
+        }
+    }
+
     fn parse(&mut self) -> Result<Lowered, Error> {
         if self.peek_identifier().is_some_and(|name| {
             name.starts_with(SENTINEL)
@@ -12059,7 +12124,7 @@ impl<'a> Parser<'a> {
                 _ => self.parse_statement(),
             };
 
-            result?;
+            result.map_err(|error| self.deref_not_yet(error))?;
         }
 
         self.check_borrows()?;
@@ -12162,6 +12227,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
+        self.method_body(definition)
+            .map_err(|error| self.deref_not_yet(error))
+    }
+
+    fn method_body(&mut self, definition: &method::Definition) -> Result<Lowered, Error> {
         self.check_method_signature(definition)?;
         // The value of an associated `const NAME: T = value;` is a tail.
         if definition.constant() {
@@ -12794,6 +12864,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
+        self.function_body(definition)
+            .map_err(|error| self.deref_not_yet(error))
+    }
+
+    fn function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.check_function_signature(definition)?;
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
@@ -13628,7 +13703,11 @@ impl<'a> Parser<'a> {
         };
         if self.models.import(trait_name).is_some()
             || self.models.std_traits.contains(trait_name.as_str())
-            || crate::resolve::builtin_trait(trait_name).is_some()
+            || self
+                .models
+                .traits
+                .get(trait_name.as_str())
+                .is_some_and(|(_, declared)| declared.std.is_some())
         {
             return true;
         }
@@ -13813,6 +13892,15 @@ impl<'a> Parser<'a> {
     fn type_implements_with(&mut self, ty: &Ty, trait_name: &str, arguments: &[Ty]) -> bool {
         if arguments.is_empty() {
             return self.type_implements(ty, trait_name);
+        }
+        // `PartialEq<Self>` and `PartialOrd<Self>`, their `Rhs = Self`
+        // filled in: a derive or a builtin's comparison is with its own type.
+        if let [argument] = arguments
+            && let Some(kind) = capability::Kind::from_derive(trait_name)
+            && self.unifies(argument, ty)
+            && self.type_provides(ty, kind)
+        {
+            return true;
         }
         // The prelude's blanket impls: `impl<T> From<T> for T`, its builtin
         // conversions, and `impl<T, U: From<T>> Into<U> for T`.
@@ -14315,6 +14403,11 @@ impl<'a> Parser<'a> {
         for (bound, item, expected) in equalities.iter() {
             let expected = instantiate(&Ty::from_resolved(expected), &substitution);
             let actual = if is_iterator_trait(bound) && item == "Item" {
+                // A program's own iterator type: its impl names its `Item`,
+                // which its uses read.
+                if matches!(self.inference.resolve(ty), Ty::Script(..)) {
+                    continue;
+                }
                 // Rawr's iterator type stands for the projection
                 // (`Inference::project`), so the impl's type must be one.
                 let Ty::Iter(item) = self.inference.resolve(ty) else {
@@ -14613,10 +14706,12 @@ impl<'a> Parser<'a> {
         Some((*member).as_str().into())
     }
 
-    /// `Default::default`, `From::from`, `std::convert::Into::into`: a std
-    /// or prelude trait's function by path, after its first segment
-    /// `first`, with the number of tokens up to its arguments. A
-    /// trait the crate declares itself is its own (`parse_trait_path_call`).
+    /// `Default::default`, `Iterator::next`, `std::cmp::max`: a std trait's
+    /// function, or a free function of `std::cmp`, by path, after its first
+    /// segment `first`, with the number of tokens up to its arguments, as
+    /// std's table resolves it through the module's `use`s and the prelude
+    /// (D711 step 2). A trait the crate declares itself is its own
+    /// (`parse_trait_path_call`).
     fn std_trait_path(&self, first: &str) -> Option<(&'static str, &'static str, usize)> {
         let mut ahead = self.input.clone();
         let mut segments = vec![ImmutableString::from(first)];
@@ -14638,38 +14733,75 @@ impl<'a> Parser<'a> {
         {
             return None;
         }
-        let [modules @ .., trait_name, member] = &segments[..] else {
-            return None;
-        };
-        if !modules.iter().all(|module| {
-            matches!(
-                module.as_str(),
-                "std"
-                    | "core"
-                    | "alloc"
-                    | "fmt"
-                    | "clone"
-                    | "cmp"
-                    | "convert"
-                    | "default"
-                    | "string"
-            )
-        }) {
+        if segments.len() < 2 {
             return None;
         }
-        let found = STD_TRAIT_FUNCTIONS
+        let written = segments
             .iter()
-            .find(|(name, members)| name == trait_name && members.contains(&member.as_str()))?;
+            .map(ImmutableString::as_str)
+            .collect::<Vec<_>>()
+            .join("::");
+        let binding = self
+            .models
+            .import(first)
+            .map(|binding| binding.qualified.as_str());
+        // The first segment through its `use`, else a root of std's or a
+        // name of the prelude: `Iterator::next` is
+        // `std::prelude::rust_2024::Iterator::next`.
+        let base = match binding {
+            Some(binding) => binding.to_owned(),
+            None if crate::std_table::is_root(first) => first.to_owned(),
+            None => crate::std_table::prelude("2024")
+                .find(|path| path.path.rsplit("::").next() == Some(first))?
+                .path
+                .to_owned(),
+        };
+        let qualified = format!("{base}{}", &written[first.len()..]);
+        let parts = qualified.split("::").collect::<Vec<_>>();
+        let (trait_name, member) =
+            match crate::std_table::resolve(&parts, crate::std_table::Namespace::Value).ok()? {
+                // `std::cmp::max(a, b)`: a free function of `std::cmp`.
+                crate::std_table::Resolved::Path(path)
+                    if path.kind == "fn" && path.definition.starts_with("core::cmp::") =>
+                {
+                    ("cmp", path.definition.rsplit("::").next()?)
+                }
+                crate::std_table::Resolved::Member {
+                    owner,
+                    member: Some(member),
+                } if owner.kind == "trait"
+                    && owner.stability == crate::std_table::Stability::Stable
+                    && member.kind == "assoc-fn"
+                    && member.stability == crate::std_table::Stability::Stable =>
+                {
+                    (owner.definition.rsplit("::").next()?, member.name())
+                }
+                _ => return None,
+            };
         if self
             .models
             .traits
-            .get(found.0)
+            .get(trait_name)
             .is_some_and(|(_, declared)| declared.name.span != Span::NONE)
         {
             return None;
         }
-        let member = found.1.iter().find(|name| **name == member.as_str())?;
-        Some((found.0, member, 2 * (segments.len() - 1)))
+        Some((trait_name, member, 2 * (segments.len() - 1)))
+    }
+
+    /// How the std trait `trait_name`'s function `member` takes `self`, as
+    /// std's table declares it: `Some(Some("&mut self"))` for
+    /// `Iterator::next`, `Some(None)` for `FromStr::from_str`, `None` when
+    /// the trait has no such function.
+    fn std_receiver(&self, trait_name: &str, member: &str) -> Option<Option<&'static str>> {
+        let uses = self
+            .models
+            .import(trait_name)
+            .map(|binding| (trait_name, binding.qualified.as_str()));
+        let definition = crate::resolve::std_trait::named(trait_name, uses)
+            .or_else(|| crate::resolve::std_trait::anywhere(trait_name))?;
+        let member = crate::std_table::item(&format!("{definition}::{member}"))?;
+        (member.kind == "assoc-fn").then(|| member.receiver())
     }
 
     /// The tokens of a call's parenthesised arguments, from its `(` to the
@@ -14989,8 +15121,8 @@ impl<'a> Parser<'a> {
         }
         // `Into::<T>::into(x)` and kin are a trait's turbofish.
         if self.models.traits.contains_key(last.as_str())
-            || STD_TRAIT_FUNCTIONS.iter().any(|(name, _)| *name == last)
-            || matches!(last.as_str(), "From" | "Into" | "TryFrom" | "TryInto")
+            || self.models.get(&last).is_none()
+                && crate::resolve::std_trait::anywhere(&last).is_some()
         {
             return Ok(None);
         }
@@ -15363,7 +15495,10 @@ impl<'a> Parser<'a> {
         match (trait_name, member) {
             // `x.into()`, `x.clone()`, `x.to_string()`: the receiver as
             // written, its `&` dropped (`Clone::clone(&x)` is `x.clone()`).
-            ("From" | "Into" | "Clone" | "ToString", _) => {
+            ("From", "from")
+            | ("Into", "into")
+            | ("Clone", "clone")
+            | ("ToString", "to_string") => {
                 let (receiver, rest) = split_first_argument(arguments);
                 if !rest.is_empty() {
                     return Err(expects(1));
@@ -15385,6 +15520,31 @@ impl<'a> Parser<'a> {
                     (identifier(method), close),
                     (Token::Unit, close),
                 ]);
+            }
+            // `std::cmp::max_by_key(a, b, f)` and kin: the iterator's own
+            // over `[a, b]`, which keeps the same one on a tie (the second
+            // for a max, the first for a min).
+            ("cmp", "max_by" | "min_by" | "max_by_key" | "min_by_key") => {
+                let (left, rest) = split_first_argument(arguments);
+                let (right, rest) = split_first_argument(rest);
+                let (function, extra) = split_first_argument(rest);
+                if function.is_empty() || !extra.is_empty() {
+                    return Err(expects(3));
+                }
+                let text = format!(
+                    "vec![__rawr_left, __rawr_right].into_iter().{member}(__rawr_function).unwrap()"
+                );
+                let tokens = template_tokens(
+                    &text,
+                    &[
+                        ("__rawr_left", left),
+                        ("__rawr_right", right),
+                        ("__rawr_function", function),
+                    ],
+                    start,
+                );
+                self.splice_tokens(tokens);
+                return self.parse_primary();
             }
             // `Ord::max(a, b)` and `std::cmp::max(a, b)` are `a.max(b)`.
             ("Ord", "min" | "max" | "clamp") | ("cmp", _) => {
@@ -15444,9 +15604,45 @@ impl<'a> Parser<'a> {
                 tokens.extend(without_reference(right));
                 tokens.extend([(Token::RightParen, close), (Token::RightParen, close)]);
             }
+            // `Clone::clone_from(&mut a, &b)`: std's provided body,
+            // `*self = source.clone()`, which is `a = b.clone()`.
+            ("Clone", "clone_from") => {
+                let (place, rest) = split_first_argument(arguments);
+                let (source, extra) = split_first_argument(rest);
+                if source.is_empty() || !extra.is_empty() {
+                    return Err(expects(2));
+                }
+                tokens = vec![(Token::LeftBrace, start)];
+                tokens.extend(without_borrow(place));
+                tokens.extend([(Token::Equals, close), (Token::LeftParen, close)]);
+                tokens.extend(without_reference(source));
+                tokens.extend([
+                    (Token::RightParen, close),
+                    (Token::Period, close),
+                    (identifier("clone"), close),
+                    (Token::Unit, close),
+                    (Token::SemiColon, close),
+                    (Token::RightBrace, close),
+                ]);
+            }
+            // `FromStr::from_str(s)` is `s.parse()`, which is std's own
+            // `FromStr` lookup by the expected type.
+            ("FromStr", "from_str") => {
+                let (text, extra) = split_first_argument(arguments);
+                if !extra.is_empty() {
+                    return Err(expects(1));
+                }
+                tokens.extend(text);
+                tokens.extend([
+                    (Token::RightParen, close),
+                    (Token::Period, close),
+                    (identifier("parse"), close),
+                    (Token::Unit, close),
+                ]);
+            }
             // `fmt::Display::fmt(&self.0, f)` in a `fmt` body writes the
             // value into its formatter: `write!(f, "{}", self.0)`.
-            _ => {
+            ("Display" | "Debug", "fmt") => {
                 let (value, formatter) = split_first_argument(arguments);
                 let (formatter, extra) = split_first_argument(formatter);
                 if formatter.is_empty() || !extra.is_empty() {
@@ -15476,6 +15672,49 @@ impl<'a> Parser<'a> {
                 tokens.extend(without_reference(value));
                 tokens.push((Token::RightParen, close));
             }
+            // Any other trait function that takes `self` is the method call
+            // on its first argument, which method lookup resolves as Rust's
+            // does: `Iterator::next(&mut it)` is `it.next()`,
+            // `Clone::clone_from(&mut a, &b)` is `a.clone_from(&b)`.
+            _ => match self.std_receiver(trait_name, member) {
+                Some(Some(receiver)) => {
+                    let (first, rest) = split_first_argument(arguments);
+                    let first = if receiver == "self" {
+                        first
+                    } else {
+                        without_borrow(first)
+                    };
+                    tokens.extend(first);
+                    tokens.extend([
+                        (Token::RightParen, close),
+                        (Token::Period, close),
+                        (identifier(member), close),
+                    ]);
+                    if rest.is_empty() {
+                        tokens.push((Token::Unit, close));
+                    } else {
+                        tokens.push((Token::LeftParen, close));
+                        tokens.extend(rest);
+                        tokens.push((Token::RightParen, close));
+                    }
+                }
+                // An associated function rawr has no lookup for yet.
+                Some(None) => {
+                    return Err(Error::NotYet {
+                        path: crate::resolve::Qualified(trait_name, member)
+                            .to_string()
+                            .into(),
+                        reference: call,
+                    });
+                }
+                None => {
+                    return Err(Error::UnknownMember {
+                        owner: trait_name.into(),
+                        member: member.into(),
+                        reference: call,
+                    });
+                }
+            },
         }
         self.splice_tokens(tokens);
         self.parse_primary()
@@ -15559,10 +15798,10 @@ impl<'a> Parser<'a> {
         start: Position,
     ) -> Result<ParsedExpr, Error> {
         let (member, member_span) = self.expect_member_name()?;
-        let Some(member) = STD_TRAIT_FUNCTIONS
-            .iter()
-            .find(|(name, _)| *name == trait_name)
-            .and_then(|(_, members)| members.iter().find(|name| **name == member.as_str()))
+        let Some(member) = crate::resolve::std_trait::anywhere(trait_name)
+            .and_then(|definition| crate::std_table::item(&format!("{definition}::{member}")))
+            .filter(|found| found.kind == "assoc-fn")
+            .map(|found| found.name())
         else {
             return Err(Error::UnknownMember {
                 owner: trait_name.into(),
@@ -16350,8 +16589,10 @@ impl<'a> Parser<'a> {
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
         self.finish_formats()?;
-        for (target, error, span) in std::mem::take(&mut self.pending_parses) {
-            self.settle_parse(&target, &error, span, true)?;
+        for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
+            if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
+                self.write_over(&placeholder, &format!("{helper}("));
+            }
         }
         let pending = std::mem::take(&mut self.pending_conversions);
         for conversion in pending {
@@ -24232,8 +24473,12 @@ impl<'a> Parser<'a> {
     /// Each pending `parse` whose target a statement made known gets its
     /// error type, so later statements can use it.
     fn settle_parses(&mut self) -> Result<(), Error> {
-        for (target, error, span) in self.pending_parses.clone() {
-            self.settle_parse(&target, &error, span, false)?;
+        for pending in std::mem::take(&mut self.pending_parses) {
+            let (target, error, span, placeholder) = &pending;
+            match self.settle_parse(target, error, *span, false)? {
+                Some(helper) => self.write_over(placeholder, &format!("{helper}(")),
+                None => self.pending_parses.push(pending),
+            }
         }
         Ok(())
     }
@@ -27710,6 +27955,21 @@ impl<'a> Parser<'a> {
             return Ok(looped);
         }
         let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // `for x in bag` of a program's type that implements `IntoIterator`
+        // loops over `bag.into_iter()`, as Rust's `for` desugars it.
+        let iterated = self.inference.resolve(&lhs.ty);
+        if iterated.script().is_some()
+            && !self.type_implements(&iterated, "Iterator")
+            && self.type_implements(&iterated, "IntoIterator")
+        {
+            let at = lhs.span.end();
+            self.splice_tokens(vec![
+                (Token::Period, at),
+                (Token::Identifier(Box::new("into_iter".into())), at),
+                (Token::Unit, at),
+            ]);
+            lhs = self.parse_postfix_of(lhs)?;
+        }
         // `for x in &v` borrows `v` for the whole loop, and each `x` holds
         // that borrow.
         let iterator = self.flow().hold("<iterator>", lhs.span);
@@ -33308,35 +33568,56 @@ impl<'a> Parser<'a> {
             ));
         }
         let error = self.inference.fresh();
-        self.pending_parses
-            .push((target.clone(), error.clone(), expression));
-        // A target known now gives the error type now.
-        self.settle_parse(&target, &error, expression, false)?;
-        let helper = self.push_op(Op::Kinded {
-            op: PreludeOp::Parse,
-            kinds: [target.clone(), target.clone()],
-        });
-        let source = origin::Fragment::call(&helper, [value.rendered_source()]);
+        // A target known now gives the call and the error type now; else
+        // `placeholder(value))`, whose placeholder becomes `helper(` once
+        // the target is known (`settle_parses`).
+        let source = match self.settle_parse(&target, &error, expression, false)? {
+            Some(helper) => origin::Fragment::call(&helper, [value.rendered_source()]),
+            None => {
+                let placeholder = format!("__rawr_nominal_parse_{:010}", self.parse_count);
+                self.parse_count += 1;
+                let width = placeholder.len() + 1;
+                let placeholder = format!("{placeholder:_<width$}");
+                let mut source = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+                source.push_text(")");
+                self.pending_parses
+                    .push((target.clone(), error.clone(), expression, placeholder));
+                source
+            }
+        };
         let ty = Ty::Result(Box::new(target), Box::new(error));
         Ok(self.operator_expr(source, ty, expression))
     }
 
-    /// The error type of a `parse` into `target`, once `target` is known;
-    /// at the end of the body (`last`), Rust's errors for an unknown or
-    /// unparseable target.
+    /// The error type of a `parse` into `target` once `target` is known,
+    /// and the helper its call is: std's `FromStr` for a number, `bool` or
+    /// `char`, or the program's `impl FromStr` for its type, whose `Err` is
+    /// the error. At the end of the body (`last`), Rust's errors for an
+    /// unknown target or one with no `FromStr`.
     fn settle_parse(
         &mut self,
         target: &Ty,
         error: &Ty,
         span: Span,
         last: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<String>, Error> {
         let resolved = self.inference.resolve(target);
         if let Some(kind) = ParseError::of(&resolved) {
-            return self.require_type(&Ty::ParseError(kind), error, span);
+            self.require_type(&Ty::ParseError(kind), error, span)?;
+            let helper = self.push_op(Op::Kinded {
+                op: PreludeOp::Parse,
+                kinds: [resolved.clone(), resolved],
+            });
+            return Ok(Some(helper));
+        }
+        if let Ty::Script(id, _) = &resolved
+            && let Some((definition, from_str_error)) = self.program_from_str(*id)
+        {
+            self.require_type(&from_str_error, error, span)?;
+            return Ok(Some(method_name(definition.id())));
         }
         match resolved {
-            Ty::Infer(_) if !last => Ok(()),
+            Ty::Infer(_) if !last => Ok(None),
             Ty::Infer(_) => Err(Error::InvalidMethodCall {
                 owner: "str".into(),
                 method: "parse".into(),
@@ -33347,9 +33628,41 @@ impl<'a> Parser<'a> {
                 owner: other.name(&self.models),
                 capability: "FromStr".into(),
                 operation: span,
-                derive: matches!(other, Ty::Script(..)),
+                derive: false,
                 required_by: None,
             }),
+        }
+    }
+
+    /// The program's `impl FromStr for` the type `id`: its `from_str`, and
+    /// the impl's `Err`.
+    fn program_from_str(&self, id: type_def::Id) -> Option<(method::Definition, Ty)> {
+        let definition = self
+            .models
+            .trait_methods
+            .get(&(id, "from_str".into()))?
+            .iter()
+            .find(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| name.as_str() == "FromStr")
+                    && definition.receiver().is_none()
+            })?
+            .clone();
+        let Ty::Result(_, error) = Ty::from_resolved(definition.output()) else {
+            return None;
+        };
+        Some((definition, *error))
+    }
+
+    /// Write `text` over `placeholder`, padded to its length so source
+    /// locations stay exact, in the body and its lifted closures.
+    fn write_over(&mut self, placeholder: &str, text: &str) {
+        let replacement = format!("{text:<width$}", width = placeholder.len());
+        debug_assert_eq!(replacement.len(), placeholder.len());
+        self.output.replace_same_length(placeholder, &replacement);
+        for closure in &mut self.lifted {
+            closure.body.replace_same_length(placeholder, &replacement);
         }
     }
 
@@ -35718,9 +36031,8 @@ impl<'a> Parser<'a> {
                 self.expect_close_angle("'>' after a qualified path's trait")?;
                 self.expect(Token::DoubleColon, "'::' after a qualified path")?;
                 if !self.ufcs_trait(&trait_name)
-                    && let Some(&(std_name, _)) = STD_TRAIT_FUNCTIONS
-                        .iter()
-                        .find(|(name, _)| *name == trait_name.as_str())
+                    && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)
+                        .and_then(|definition| definition.rsplit("::").next())
                 {
                     return self.parse_typed_std_trait_call(
                         std_name,
@@ -39191,7 +39503,7 @@ impl<'a> Parser<'a> {
             && let Some(target) = self
                 .pending_parses
                 .iter()
-                .find(|(_, pending, _)| self.inference.resolve(pending) == *error)
+                .find(|(_, pending, ..)| self.inference.resolve(pending) == *error)
                 .map(|(target, ..)| target.clone())
         {
             let ok = self.inference.fresh();
@@ -39918,7 +40230,7 @@ impl<'a> Parser<'a> {
             // A `parse` whose target is still open: each error it can have
             // is `Debug`.
             let parse_error = matches!(this.inference.resolve(ty), Ty::Infer(_))
-                && this.pending_parses.iter().any(|(_, error, _)| {
+                && this.pending_parses.iter().any(|(_, error, ..)| {
                     this.inference.resolve(error) == this.inference.resolve(ty)
                 });
             if parse_error || this.type_provides(ty, capability::Kind::Debug) {
@@ -44573,6 +44885,21 @@ impl<'a> Parser<'a> {
             );
             return Ok(self.operator_expr(value, ty, expression));
         }
+        // `i32::from_str(s)`: std's `FromStr` for the type, which is
+        // `s.parse::<i32>()`.
+        if member.as_str() == "from_str"
+            && let Some(kind) = ParseError::of(&builtin)
+            && let [text] = arguments.as_mut_slice()
+        {
+            self.coerce_expr(&Ty::Str, text)?;
+            let helper = self.push_op(Op::Kinded {
+                op: PreludeOp::Parse,
+                kinds: [builtin.clone(), builtin.clone()],
+            });
+            let source = origin::Fragment::call(&helper, [text.rendered_source()]);
+            let ty = Ty::Result(Box::new(builtin), Box::new(Ty::ParseError(kind)));
+            return Ok(self.operator_expr(source, ty, expression));
+        }
         if builtin == Ty::String && member.as_str() == "new" && arguments.is_empty() {
             return Ok(self.literal("\"\"", Ty::String, expression));
         }
@@ -44581,7 +44908,7 @@ impl<'a> Parser<'a> {
         if matches!(builtin, Ty::Int(_) | Ty::Float(_))
             && !matches!(
                 member.as_str(),
-                "from" | "try_from" | "default" | "from_str_radix"
+                "from" | "try_from" | "default" | "from_str_radix" | "from_str"
             )
             && !arguments.is_empty()
         {

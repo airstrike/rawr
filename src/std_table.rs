@@ -14,7 +14,12 @@
 //!   type, trait or function, `extra` is its generics, as
 //!   `K V S=std::hash::RandomState A=std::alloc::Global?allocator_api#32838`
 //!   (a default after `=`, an unstable parameter's feature and issue after
-//!   `?` and `#`); for a trait's member, `provided` or `required`.
+//!   `?` and `#`); for a trait's member, `provided` or `required`. A trait
+//!   and its members have one more field (D711 step 2): the trait's
+//!   supertraits (`Eq + PartialOrd`), and each member's declaration as a
+//!   program writes it (`fn from_str(s: &str) -> Result<Self, Self::Err>`,
+//!   `type IntoIter: Iterator<Item = Self::Item>`), naming types by their
+//!   public paths, bare for the prelude's.
 //!
 //! A stability is `s`, or `u feature issue reason` with `-` for no issue
 //! or reason. What differs by target (`arch`, `simd`, `os`) is left out.
@@ -107,6 +112,7 @@ pub(crate) struct Item {
     pub kind: &'static str,
     pub stability: Stability,
     extra: &'static str,
+    detail: &'static str,
 }
 
 /// A generic parameter of a type, trait or function.
@@ -171,6 +177,69 @@ impl Item {
                     stability,
                 }
             })
+    }
+
+    /// Whether a trait's member has a default.
+    pub(crate) fn provided(&self) -> bool {
+        self.extra == "provided"
+    }
+
+    /// A trait's supertraits as its declaration writes them: `Eq +
+    /// PartialOrd`, empty for none.
+    pub(crate) fn supertraits(&self) -> &'static str {
+        if self.kind == "trait" {
+            self.detail
+        } else {
+            ""
+        }
+    }
+
+    /// A trait member's declaration, as a program writes it: `fn
+    /// from_str(s: &str) -> Result<Self, Self::Err>` or `type Err`.
+    pub(crate) fn declaration(&self) -> &'static str {
+        if self.kind == "trait" {
+            ""
+        } else {
+            self.detail
+        }
+    }
+
+    /// The last segment of the item's path: `from_str` of
+    /// `core::str::traits::FromStr::from_str`.
+    pub(crate) fn name(&self) -> &'static str {
+        self.definition
+            .rsplit("::")
+            .next()
+            .unwrap_or(self.definition)
+    }
+
+    /// How a trait's function takes `self`: `Some("&self")`, `Some("&mut
+    /// self")`, `Some("self")` (also `self: Box<Self>`), or `None` for an
+    /// associated function.
+    pub(crate) fn receiver(&self) -> Option<&'static str> {
+        let declaration = self.declaration();
+        // The inputs start at the first `(` outside the generics, whose
+        // closure bounds have parentheses of their own.
+        let mut depth = 0usize;
+        let mut open = None;
+        for (index, c) in declaration.char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' => depth = depth.saturating_sub(1),
+                '(' if depth == 0 => {
+                    open = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let inputs = &declaration[open? + 1..];
+        let first = inputs.split([',', ')']).next()?.trim();
+        match first {
+            "&self" | "&mut self" | "self" => Some(first),
+            _ if first.starts_with("self:") => Some("self"),
+            _ => None,
+        }
     }
 
     /// The type arity a path to the item may write: the parameters with no
@@ -274,18 +343,121 @@ pub(crate) fn is_module(path: &str) -> bool {
 /// The definition `definition`, or a member of one: `alloc::vec::Vec`,
 /// `alloc::vec::Vec::push`, `i64::pow`.
 pub(crate) fn item(definition: &str) -> Option<Item> {
-    let line = find(ITEMS, definition, 1)?;
+    find(ITEMS, definition, 1).map(item_line)
+}
+
+fn item_line(line: &'static str) -> Item {
     let mut fields = line.split('\t');
     let definition = fields.next().unwrap_or_default();
     let kind = fields.next().unwrap_or_default();
     let stability = Stability::parse(fields.next().unwrap_or("s"));
     let extra = fields.next().unwrap_or_default();
-    Some(Item {
+    let detail = fields.next().unwrap_or_default();
+    Item {
         definition,
         kind,
         stability,
         extra,
-    })
+        detail,
+    }
+}
+
+/// `text`, a sorted table, from its first line at or after `prefix`.
+fn lines_from(text: &'static str, prefix: &str) -> &'static str {
+    let bytes = text.as_bytes();
+    let (mut low, mut high) = (0, bytes.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = bytes[..middle]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |newline| newline + 1);
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |newline| start + newline);
+        if text[start..end] < *prefix {
+            low = end + 1;
+        } else {
+            high = start;
+        }
+    }
+    &text[low.min(text.len())..]
+}
+
+/// The members the table lists under `definition`: a trait's items, a
+/// type's inherent items, an enum's variants.
+pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
+    let prefix = format!("{definition}::");
+    let length = prefix.len();
+    lines_from(ITEMS, &prefix)
+        .lines()
+        .take_while(move |line| line.starts_with(&prefix))
+        .filter(move |line| {
+            let rest = &line[length..];
+            !rest.split('\t').next().unwrap_or_default().contains("::")
+        })
+        .map(item_line)
+}
+
+/// The stable std trait a program names by `path` (`std::str::FromStr`),
+/// as its definition: `core::str::traits::FromStr`.
+pub(crate) fn stable_trait(path: &str) -> Option<&'static str> {
+    let found = self::path(path, Namespace::Type)?;
+    (found.kind == "trait" && found.stability == Stability::Stable).then_some(found.definition)
+}
+
+/// A stable std trait's declaration as a program would write it, from its
+/// line and its members': its stable items, each provided function with an
+/// empty body when `provided` names it, else none. `pub trait FromStr:
+/// Sized { type Err; fn from_str(s: &str) -> Result<Self, Self::Err>; }`.
+///
+/// Every type a rawr value has is sized, so `?Sized` is left out.
+pub(crate) fn trait_source(definition: &str, provided: &[&str]) -> Option<String> {
+    let declared = item(definition)?;
+    if declared.kind != "trait" || declared.stability != Stability::Stable {
+        return None;
+    }
+    let mut text = format!("pub trait {}", declared.name());
+    let generics = declared
+        .generics()
+        .filter(|parameter| {
+            parameter.kind == ParameterKind::Type && parameter.stability == Stability::Stable
+        })
+        .map(|parameter| match parameter.default {
+            Some(default) => format!("{} = {default}", parameter.name),
+            None => parameter.name.to_owned(),
+        })
+        .collect::<Vec<_>>();
+    if !generics.is_empty() {
+        text.push('<');
+        text.push_str(&generics.join(", "));
+        text.push('>');
+    }
+    if !declared.supertraits().is_empty() {
+        text.push_str(": ");
+        text.push_str(declared.supertraits());
+    }
+    text.push_str(" {\n");
+    for member in members(definition) {
+        if member.stability != Stability::Stable
+            || member.declaration().is_empty()
+            || member.provided() && member.kind == "assoc-fn" && !provided.contains(&member.name())
+        {
+            continue;
+        }
+        text.push_str("    ");
+        let declaration = member.declaration();
+        let declaration = declaration.replace(": ?Sized", "").replace(" + ?Sized", "");
+        text.push_str(&declaration);
+        text.push_str(if member.provided() && member.kind == "assoc-fn" {
+            " {}\n"
+        } else {
+            ";\n"
+        });
+    }
+    text.push('}');
+    Some(text)
 }
 
 /// Whether the path is under a module whose contents differ by target,
@@ -308,26 +480,7 @@ pub(crate) fn is_root(name: &str) -> bool {
 /// `use module::*;` binds.
 pub(crate) fn children(module: &str) -> impl Iterator<Item = Path> {
     let prefix = format!("{module}::");
-    // The first line at or after the prefix.
-    let bytes = PATHS.as_bytes();
-    let (mut low, mut high) = (0, bytes.len());
-    while low < high {
-        let middle = low + (high - low) / 2;
-        let start = bytes[..middle]
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |newline| newline + 1);
-        let end = bytes[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(bytes.len(), |newline| start + newline);
-        if PATHS[start..end] < *prefix.as_str() {
-            low = end + 1;
-        } else {
-            high = start;
-        }
-    }
-    PATHS[low.min(PATHS.len())..]
+    lines_from(PATHS, &prefix)
         .lines()
         .take_while(move |line| line.starts_with(&prefix))
         .map(path_line)

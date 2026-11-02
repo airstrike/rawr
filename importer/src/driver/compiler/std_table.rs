@@ -8,13 +8,16 @@
 //!   definition it names (`=` when it is that path);
 //! - `items.tsv`: each definition, with its own stability and generics,
 //!   and its members (a trait's items, a type's inherent items, an enum's
-//!   variants) under its path.
+//!   variants) under its path. A trait's line ends with its supertraits,
+//!   and each of its members' with its declaration as a program writes it
+//!   (D711 step 2), naming types by their public paths, bare for the
+//!   prelude's.
 //!
 //! What differs by target (`arch`, `simd`, `os`) is left out, so the table
 //! is the same on every host. `scripts/std-table.sh` regenerates it for
 //! the pinned toolchain.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,6 +181,13 @@ struct Table<'tcx> {
     paths: BTreeMap<String, String>,
     items: BTreeMap<String, String>,
     seen: HashSet<DefId>,
+    /// Each type's and trait's best public path, as a signature names it.
+    public: HashMap<DefId, (bool, String)>,
+    /// The definitions the 2024 prelude names, which a signature names bare.
+    prelude: HashSet<DefId>,
+    /// The stable traits, with their paths, whose members' signatures are
+    /// written once every public path is known.
+    traits: Vec<(DefId, String)>,
 }
 
 fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
@@ -198,6 +208,9 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         paths: BTreeMap::new(),
         items: BTreeMap::new(),
         seen: HashSet::new(),
+        public: HashMap::new(),
+        prelude: HashSet::new(),
+        traits: Vec::new(),
     };
     for (krate, name) in &roots {
         let root = krate.as_def_id();
@@ -252,6 +265,9 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
                             &stability_text,
                             &canonical,
                         );
+                        if namespace == 't' && kind != DefKind::Mod {
+                            table.public_path(def_id, &path, stability.is_none());
+                        }
                         if kind == DefKind::Mod {
                             if !def_id.is_crate_root() && !stack.contains(&def_id) {
                                 let mut stack = stack.clone();
@@ -266,6 +282,11 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
                 }
             }
         }
+    }
+    // Each trait's supertraits and its members' signatures, in the public
+    // paths a program writes.
+    for (def_id, canonical) in std::mem::take(&mut table.traits) {
+        table.trait_signatures(def_id, &canonical);
     }
     // Every primitive's inherent items, under its name: `i64::pow`.
     for (name, simplified) in primitives() {
@@ -367,12 +388,18 @@ impl<'tcx> Table<'tcx> {
             | DefKind::Fn => generics(tcx, def_id),
             _ => String::new(),
         };
+        // A derive macro shares its trait's path (`core::cmp::Ord`): the
+        // trait's line answers.
+        if kind_text(kind) == "macro" && self.items.contains_key(canonical) {
+            return;
+        }
         self.items.insert(
             canonical.to_owned(),
             format!("{}\t{own}\t{generics}", kind_text(kind)),
         );
         match kind {
             DefKind::Trait => {
+                self.traits.push((def_id, canonical.to_owned()));
                 for member in tcx.associated_item_def_ids(def_id) {
                     let item = tcx.associated_item(*member);
                     let Some(name) = item.opt_name() else {
@@ -445,5 +472,421 @@ impl<'tcx> Table<'tcx> {
                 }
             }
         }
+    }
+}
+
+/// Signatures in the paths a program writes (D711 step 2): a trait's
+/// supertraits, its associated types' bounds and its functions'
+/// declarations, which rawr reads as a program's own trait.
+impl<'tcx> Table<'tcx> {
+    /// Keep `path` as `def_id`'s public path when it is the best yet: a
+    /// stable one, then one under `std`, then the shortest.
+    fn public_path(&mut self, def_id: DefId, path: &str, stable: bool) {
+        if let Some(name) = path.strip_prefix("std::prelude::rust_2024::")
+            && !name.contains("::")
+            && stable
+        {
+            self.prelude.insert(def_id);
+        }
+        if path.starts_with("std::prelude::")
+            || path.starts_with("core::prelude::")
+            || path.contains("::__")
+        {
+            return;
+        }
+        let rank = |stable: bool, path: &str| {
+            (
+                !stable,
+                !path.starts_with("std::"),
+                path.matches("::").count(),
+                path.to_owned(),
+            )
+        };
+        let better = match self.public.get(&def_id) {
+            Some((kept_stable, kept)) => rank(stable, path) < rank(*kept_stable, kept),
+            None => true,
+        };
+        if better {
+            self.public.insert(def_id, (stable, path.to_owned()));
+        }
+    }
+
+    /// The path a signature names `def_id` by: bare for a prelude name.
+    fn name_of(&self, def_id: DefId) -> String {
+        if self.prelude.contains(&def_id) {
+            return self.tcx.item_name(def_id).to_string();
+        }
+        match self.public.get(&def_id) {
+            Some((_, path)) => path.clone(),
+            None => definition_path(self.tcx, def_id),
+        }
+    }
+
+    /// A path's written type arguments: lifetimes left out, and the
+    /// trailing ones that are their parameters' defaults.
+    fn arguments(
+        &self,
+        def_id: DefId,
+        args: ty::GenericArgsRef<'tcx>,
+        skip_self: bool,
+    ) -> Vec<String> {
+        let generics = self.tcx.generics_of(def_id);
+        // `own_args_no_defaults` leaves a trait's `Self` out already.
+        let (own, skip) = if args.len() == generics.count() {
+            (generics.own_args_no_defaults(self.tcx, args), 0)
+        } else {
+            let start = generics
+                .own_params
+                .first()
+                .map_or(0, |first| first.index as usize);
+            let end = args.len().min(start + generics.own_params.len());
+            (&args[start.min(end)..end], usize::from(skip_self))
+        };
+        own.iter()
+            .skip(skip)
+            .filter_map(|arg| match arg.kind() {
+                ty::GenericArgKind::Type(ty) => Some(self.ty(ty)),
+                ty::GenericArgKind::Const(constant) => Some(constant.to_string()),
+                ty::GenericArgKind::Lifetime(_) => None,
+            })
+            .collect()
+    }
+
+    fn ty(&self, ty: ty::Ty<'tcx>) -> String {
+        let tcx = self.tcx;
+        let list = |items: Vec<String>| {
+            if items.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", items.join(", "))
+            }
+        };
+        match ty.kind() {
+            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => {
+                ty.to_string()
+            }
+            ty::Never => "!".to_owned(),
+            ty::Adt(definition, args) => format!(
+                "{}{}",
+                self.name_of(definition.did()),
+                list(self.arguments(definition.did(), args, false))
+            ),
+            ty::Foreign(def_id) => self.name_of(*def_id),
+            ty::Array(element, length) => format!("[{}; {length}]", self.ty(*element)),
+            ty::Slice(element) => format!("[{}]", self.ty(*element)),
+            ty::RawPtr(target, mutability) => format!(
+                "*{} {}",
+                if mutability.is_mut() { "mut" } else { "const" },
+                self.ty(*target)
+            ),
+            ty::Ref(_, target, mutability) => format!(
+                "&{}{}",
+                if mutability.is_mut() { "mut " } else { "" },
+                self.ty(*target)
+            ),
+            ty::Tuple(types) => match types.len() {
+                1 => format!("({},)", self.ty(types[0])),
+                _ => format!(
+                    "({})",
+                    types
+                        .iter()
+                        .map(|ty| self.ty(ty))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+            ty::Param(parameter) => parameter.name.to_string(),
+            ty::Alias(_, alias) if let ty::AliasTyKind::Projection { def_id } = alias.kind => {
+                let associated: DefId = def_id;
+                // A return-position `impl Trait` in a trait has no name.
+                let Some(name) = tcx.opt_item_name(associated) else {
+                    return "_".to_owned();
+                };
+                let self_ty = alias.args.type_at(0);
+                if matches!(self_ty.kind(), ty::Param(parameter) if parameter.name == kw::SelfUpper)
+                {
+                    format!("Self::{name}")
+                } else {
+                    let trait_id = tcx.parent(associated);
+                    format!(
+                        "<{} as {}{}>::{name}",
+                        self.ty(self_ty),
+                        self.name_of(trait_id),
+                        list(self.arguments(trait_id, alias.args, true))
+                    )
+                }
+            }
+            ty::Dynamic(predicates, _) => {
+                let mut bounds = Vec::new();
+                if let Some(principal) = predicates.principal() {
+                    let principal = principal
+                        .skip_binder()
+                        .with_self_ty(tcx, tcx.types.trait_object_dummy_self);
+                    let mut arguments = self.arguments(principal.def_id, principal.args, true);
+                    for projection in predicates.projection_bounds() {
+                        let projection = projection.skip_binder();
+                        if let Some(term) = projection.term.as_type() {
+                            arguments.push(format!(
+                                "{} = {}",
+                                tcx.opt_item_name(projection.def_id)
+                                    .map_or_else(|| "_".to_owned(), |name| name.to_string()),
+                                self.ty(term)
+                            ));
+                        }
+                    }
+                    bounds.push(format!(
+                        "{}{}",
+                        self.name_of(principal.def_id),
+                        list(arguments)
+                    ));
+                }
+                for auto in predicates.auto_traits() {
+                    bounds.push(self.name_of(auto));
+                }
+                format!("dyn {}", bounds.join(" + "))
+            }
+            _ => clean(&rustc_middle::ty::print::with_no_trimmed_paths!(
+                ty.to_string()
+            )),
+        }
+    }
+
+    /// The bounds `clauses` put on `subject`, as a program writes them:
+    /// `Iterator<Item = A> + Clone`, and `?Sized` when none says `Sized`.
+    fn bounds(&self, subject: ty::Ty<'tcx>, clauses: &[ty::Clause<'tcx>]) -> Vec<String> {
+        let tcx = self.tcx;
+        let sized = tcx.lang_items().sized_trait();
+        let mut is_sized = false;
+        let mut bounds: Vec<(DefId, Vec<String>, Vec<String>)> = Vec::new();
+        for clause in clauses {
+            match clause.kind().skip_binder() {
+                ty::ClauseKind::Trait(predicate)
+                    if predicate.self_ty() == subject
+                        && predicate.polarity == ty::PredicatePolarity::Positive =>
+                {
+                    let def_id = predicate.def_id();
+                    if Some(def_id) == sized {
+                        is_sized = true;
+                        continue;
+                    }
+                    // The sizedness hierarchy below `Sized` is implied, and
+                    // an unstable trait (`Destruct`) no program names.
+                    if Some(def_id) == tcx.lang_items().meta_sized_trait()
+                        || Some(def_id) == tcx.lang_items().pointee_sized_trait()
+                        || stability(tcx, def_id).is_some()
+                    {
+                        continue;
+                    }
+                    let arguments = self.arguments(def_id, predicate.trait_ref.args, true);
+                    bounds.push((def_id, arguments, Vec::new()));
+                }
+                ty::ClauseKind::Projection(predicate)
+                    if predicate.projection_term.args.type_at(0) == subject =>
+                {
+                    let associated: DefId = predicate.def_id();
+                    let trait_id = tcx.parent(associated);
+                    let Some(term) = predicate.term.as_type() else {
+                        continue;
+                    };
+                    let Some(name) = tcx.opt_item_name(associated) else {
+                        continue;
+                    };
+                    let text = format!("{name} = {}", self.ty(term));
+                    match bounds.iter_mut().find(|(def_id, ..)| *def_id == trait_id) {
+                        Some((.., projections)) => projections.push(text),
+                        None => bounds.push((trait_id, Vec::new(), vec![text])),
+                    }
+                }
+                _ => {}
+            }
+        }
+        // `F: FnMut(A) -> B` is `F: FnMut<(A,)>` and `<F as
+        // FnOnce<(A,)>>::Output == B`: one bound in its sugar.
+        let closure = |def_id: DefId| tcx.fn_trait_kind_from_def_id(def_id).is_some();
+        if bounds
+            .iter()
+            .any(|(def_id, arguments, _)| closure(*def_id) && !arguments.is_empty())
+        {
+            let output = bounds
+                .iter()
+                .filter(|(def_id, ..)| closure(*def_id))
+                .flat_map(|(.., projections)| projections.clone())
+                .collect::<Vec<_>>();
+            bounds.retain(|(def_id, arguments, _)| !closure(*def_id) || !arguments.is_empty());
+            for (def_id, _, projections) in &mut bounds {
+                if closure(*def_id) {
+                    *projections = output.clone();
+                }
+            }
+        }
+        let mut out = bounds
+            .into_iter()
+            .map(|(def_id, arguments, projections)| {
+                // `FnMut(A) -> B`: a closure trait in its sugar.
+                if tcx.fn_trait_kind_from_def_id(def_id).is_some() {
+                    let inputs = arguments
+                        .first()
+                        .map(|tuple| {
+                            let inner = tuple.strip_prefix('(').unwrap_or(tuple);
+                            let inner = inner.strip_suffix(')').unwrap_or(inner);
+                            inner.strip_suffix(',').unwrap_or(inner).to_owned()
+                        })
+                        .unwrap_or_default();
+                    let output = projections
+                        .iter()
+                        .find_map(|projection| projection.strip_prefix("Output = "))
+                        .filter(|output| *output != "()")
+                        .map(|output| format!(" -> {output}"))
+                        .unwrap_or_default();
+                    return format!("{}({inputs}){output}", self.name_of(def_id));
+                }
+                let all = arguments.into_iter().chain(projections).collect::<Vec<_>>();
+                if all.is_empty() {
+                    self.name_of(def_id)
+                } else {
+                    format!("{}<{}>", self.name_of(def_id), all.join(", "))
+                }
+            })
+            .collect::<Vec<_>>();
+        if !is_sized {
+            out.push("?Sized".to_owned());
+        }
+        out
+    }
+
+    /// A trait's supertraits on its line, and each member's declaration
+    /// on the member's: `fn from_str(s: &str) -> Result<Self, Self::Err>`,
+    /// or `type IntoIter: Iterator<Item = Self::Item>`.
+    fn trait_signatures(&mut self, def_id: DefId, canonical: &str) {
+        let tcx = self.tcx;
+        let self_ty = tcx.types.self_param;
+        let supers = tcx
+            .explicit_super_predicates_of(def_id)
+            .skip_binder()
+            .iter()
+            .map(|(clause, _)| *clause)
+            .collect::<Vec<_>>();
+        let mut supertraits = self.bounds(self_ty, &supers);
+        // A trait's `Self` is `?Sized` unless it says `Sized`, which its
+        // super predicates name.
+        supertraits.retain(|bound| bound != "?Sized");
+        let sized = tcx.lang_items().sized_trait();
+        if supers.iter().any(|clause| {
+            matches!(clause.kind().skip_binder(),
+                ty::ClauseKind::Trait(predicate) if Some(predicate.def_id()) == sized)
+        }) {
+            supertraits.insert(0, "Sized".to_owned());
+        }
+        let supertraits = supertraits.join(" + ");
+        if let Some(line) = self.items.get_mut(canonical) {
+            line.push('\t');
+            line.push_str(&supertraits);
+        }
+        for member in tcx.associated_item_def_ids(def_id) {
+            let item = tcx.associated_item(*member);
+            let Some(name) = item.opt_name() else {
+                continue;
+            };
+            let declaration = match tcx.def_kind(*member) {
+                DefKind::AssocFn => self.function(*member, name.as_str()),
+                DefKind::AssocTy => {
+                    let alias = ty::Ty::new_projection_from_args(
+                        tcx,
+                        ty::IsRigid::No,
+                        *member,
+                        ty::GenericArgs::identity_for_item(tcx, *member),
+                    );
+                    let clauses = tcx
+                        .explicit_item_bounds(*member)
+                        .skip_binder()
+                        .iter()
+                        .map(|(clause, _)| *clause)
+                        .collect::<Vec<_>>();
+                    let bounds = self.bounds(alias, &clauses);
+                    if bounds.is_empty() {
+                        format!("type {name}")
+                    } else {
+                        format!("type {name}: {}", bounds.join(" + "))
+                    }
+                }
+                DefKind::AssocConst { .. } => format!(
+                    "const {name}: {}",
+                    self.ty(tcx.type_of(*member).instantiate_identity().skip_norm_wip())
+                ),
+                _ => continue,
+            };
+            if let Some(line) = self.items.get_mut(&format!("{canonical}::{name}")) {
+                line.push('\t');
+                line.push_str(&declaration);
+            }
+        }
+    }
+
+    /// `fn name<T: Bound>(&self, a: A) -> R`, a trait function's
+    /// declaration.
+    fn function(&self, def_id: DefId, name: &str) -> String {
+        let tcx = self.tcx;
+        let signature = tcx
+            .fn_sig(def_id)
+            .instantiate_identity()
+            .skip_norm_wip()
+            .skip_binder();
+        let clauses = tcx
+            .predicates_of(def_id)
+            .predicates
+            .iter()
+            .map(|(clause, _)| *clause)
+            .collect::<Vec<_>>();
+        let generics = tcx.generics_of(def_id);
+        let mut parameters = Vec::new();
+        for parameter in &generics.own_params {
+            if !matches!(parameter.kind, GenericParamDefKind::Type { .. }) {
+                continue;
+            }
+            let ty = ty::Ty::new_param(tcx, parameter.index, parameter.name);
+            let bounds = self.bounds(ty, &clauses);
+            let name = self.ty(ty);
+            if bounds.is_empty() {
+                parameters.push(name);
+            } else {
+                parameters.push(format!("{name}: {}", bounds.join(" + ")));
+            }
+        }
+        let names = tcx.fn_arg_idents(def_id);
+        let method = tcx.associated_item(def_id).is_method();
+        let is_self = |ty: ty::Ty<'tcx>| matches!(ty.kind(), ty::Param(parameter) if parameter.name == kw::SelfUpper);
+        let mut inputs = Vec::new();
+        for (index, input) in signature.inputs().iter().enumerate() {
+            if method && index == 0 {
+                inputs.push(match input.kind() {
+                    _ if is_self(*input) => "self".to_owned(),
+                    ty::Ref(_, target, mutability) if is_self(*target) => if mutability.is_mut() {
+                        "&mut self"
+                    } else {
+                        "&self"
+                    }
+                    .to_owned(),
+                    _ => format!("self: {}", self.ty(*input)),
+                });
+                continue;
+            }
+            let name = names
+                .get(index)
+                .copied()
+                .flatten()
+                .map(|ident| ident.name.to_string())
+                .filter(|name| name != "_" && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                .unwrap_or_else(|| format!("a{index}"));
+            inputs.push(format!("{name}: {}", self.ty(*input)));
+        }
+        let mut text = format!("fn {name}");
+        if !parameters.is_empty() {
+            let _ = write!(text, "<{}>", parameters.join(", "));
+        }
+        let _ = write!(text, "({})", inputs.join(", "));
+        if !signature.output().is_unit() {
+            let _ = write!(text, " -> {}", self.ty(signature.output()));
+        }
+        text
     }
 }

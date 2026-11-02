@@ -163,6 +163,9 @@ pub(crate) struct Trait {
     /// The declaration of a facade trait (iced's `canvas::Program`), whose
     /// text its default bodies span.
     pub declaration: Option<crate::ImmutableString>,
+    /// A std trait's definition, `core::str::traits::FromStr`, whose
+    /// declaration is std's (D711 step 2).
+    pub std: Option<&'static str>,
 }
 
 /// `impl<T: Trait + ..> Trait for &T` (or `&mut T`) whose every item
