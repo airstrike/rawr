@@ -1085,7 +1085,7 @@ impl Parser<'_> {
             Ty::Keyed(kind, arguments) if kind.is_map() => (false, arguments),
             Ty::Array {
                 element,
-                length: None,
+                kind: sequence::Kind::Vec | sequence::Kind::Deque,
             } => (true, Box::from([Ty::Int(Int::Usize), *element])),
             _ => return Ok(None),
         };

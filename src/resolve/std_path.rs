@@ -47,8 +47,7 @@ const TYPES: &[(&str, &str)] = &[
     ("core::convert::Infallible", "Infallible"),
     ("alloc::string::FromUtf8Error", "FromUtf8Error"),
     ("core::num::error::TryFromIntError", "TryFromIntError"),
-    // Rawr's `Vec` (`vec_deque_as_vec`).
-    ("alloc::collections::vec_deque::VecDeque", "Vec"),
+    ("alloc::collections::vec_deque::VecDeque", "VecDeque"),
     // A `Formatter` is Rawr's `String`, and `fmt::Result` its `Result`.
     ("core::fmt::Formatter", "String"),
     ("core::fmt::Result", "Result"),

@@ -2,14 +2,14 @@
 //! step 4). Which methods a native type has, the probe step each is found
 //! at, how it takes its receiver and what a call keeps of its inputs are
 //! read from std's declarations: `Vec<T>`'s own, then `[T]`'s through
-//! `Deref`, `String`'s, then `str`'s.
+//! `Deref`, `String`'s, then `str`'s, and `VecDeque<T>`'s own.
 //!
 //! [`steps`] is the binding: which std type each native type's probe
 //! steps stand for. It states no method, signature or receiver. How rawr
 //! runs each method stays rawr's; a method std has and rawr doesn't run
 //! yet resolves, and fails at its use with the not-yet error (D712.1).
 
-use super::{std_impl, Float, Int, Ty};
+use super::{sequence, std_impl, Float, Int, Ty};
 use crate::receiver;
 use crate::resolve::borrowck::{
     region::{Path as RegionPath, Step as RegionStep},
@@ -33,7 +33,8 @@ pub(super) struct Step {
 
 /// The autoderef steps of a native receiver (with no reference left
 /// around it), each one's std type: `Vec<T>` then `[T]`, `String` then
-/// `str`, `[T; N]` then `[T]`. A `&str` is one step before `str`'s.
+/// `str`, `[T; N]` then `[T]`, `[T]` and `VecDeque<T>` alone. A `&str` is
+/// one step before `str`'s.
 /// Empty for a type std's inherent impls don't cover.
 pub(super) fn steps(ty: &Ty) -> Vec<Step> {
     let one = |owner, ty: &Ty| {
@@ -72,25 +73,23 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
             ty: Ty::Str,
             behind_reference: true,
         }],
-        Ty::Array { element, length } => {
+        Ty::Array { element, kind } => {
             let slice = Step {
                 owner: "slice",
-                ty: Ty::Array {
-                    element: element.clone(),
-                    length: None,
-                },
+                ty: Ty::sequence(sequence::Kind::Slice, (**element).clone()),
                 behind_reference: false,
             };
-            let own = Step {
-                owner: if length.is_some() {
-                    "array"
-                } else {
-                    "alloc::vec::Vec"
-                },
+            let own = |owner| Step {
+                owner,
                 ty: ty.clone(),
                 behind_reference: false,
             };
-            vec![own, slice]
+            match kind {
+                sequence::Kind::Array(_) => vec![own("array"), slice],
+                sequence::Kind::Vec => vec![own("alloc::vec::Vec"), slice],
+                sequence::Kind::Slice => vec![slice],
+                sequence::Kind::Deque => vec![own("alloc::collections::vec_deque::VecDeque")],
+            }
         }
         Ty::Keyed(..) => match std_impl::std_definition(ty) {
             Some((definition, _)) => one(definition, ty),
@@ -167,7 +166,19 @@ pub(super) fn receiver_mode(ty: &Ty, member: &str) -> Option<receiver::Mode> {
     if let Some(found) = inherent(ty, member) {
         return Some(found.mode);
     }
-    let (key, _) = std_impl::std_definition(ty)?;
+    let key = match ty {
+        Ty::Reference { mutable: false, .. } => "&",
+        Ty::Reference { mutable: true, .. } => "&mut",
+        Ty::Array {
+            kind: sequence::Kind::Slice,
+            ..
+        } => "[]",
+        Ty::Array {
+            kind: sequence::Kind::Array(_),
+            ..
+        } => "[;]",
+        ty => std_impl::std_definition(ty)?.0,
+    };
     thread_local! {
         static TRAIT_MODES: std::cell::RefCell<
             std::collections::HashMap<(&'static str, String), Option<receiver::Mode>>,
@@ -187,6 +198,34 @@ pub(super) fn receiver_mode(ty: &Ty, member: &str) -> Option<receiver::Mode> {
         });
     TRAIT_MODES.with_borrow_mut(|modes| modes.insert(cache_key, mode));
     mode
+}
+
+/// Whether `member` is a method of another of std's sequence types and
+/// not of `receiver`'s (`[T]` or a reference to one, `Vec<T>`, `[T; N]`,
+/// `VecDeque<T>`): `push` of a `&[T]`, `push_back` of a `Vec<T>`, `sort` of
+/// a `VecDeque<T>`, which rustc refuses (E0599).
+pub(super) fn foreign_sequence_method(receiver: &Ty, member: &str) -> bool {
+    let native = match receiver {
+        Ty::Reference { target, .. } => &**target,
+        native => native,
+    };
+    let Ty::Array { element, kind } = native else {
+        return false;
+    };
+    if receiver_mode(native, member).is_some()
+        || (native != receiver && receiver_mode(receiver, member).is_some())
+    {
+        return false;
+    }
+    [
+        sequence::Kind::Vec,
+        sequence::Kind::Slice,
+        sequence::Kind::Deque,
+        sequence::Kind::Array(0),
+    ]
+    .into_iter()
+    .filter(|other| std::mem::discriminant(other) != std::mem::discriminant(kind))
+    .any(|other| receiver_mode(&Ty::sequence(other, (**element).clone()), member).is_some())
 }
 
 /// The not-yet path of an inherent method: `Vec::dedup_by_key`,
@@ -216,8 +255,18 @@ fn fits(written: &Written, ty: &Ty) -> bool {
             Ty::Str => !mutable && fits(target, &Ty::Str),
             _ => false,
         },
-        Written::Slice(element) | Written::Array(element, _) => match ty {
-            Ty::Array { element: found, .. } => fits(element, found),
+        Written::Slice(element) => match ty {
+            Ty::Array {
+                element: found,
+                kind: sequence::Kind::Slice,
+            } => fits(element, found),
+            _ => false,
+        },
+        Written::Array(element, _) => match ty {
+            Ty::Array {
+                element: found,
+                kind: sequence::Kind::Array(_),
+            } => fits(element, found),
             _ => false,
         },
         Written::Tuple(members) => match ty {
@@ -536,6 +585,7 @@ impl Reader {
             "core::option::Option" => "Option<T>",
             "core::result::Result" => "Result<T, E>",
             "alloc::vec::Vec" => "Vec<T>",
+            "alloc::collections::vec_deque::VecDeque" => "std::collections::VecDeque<T>",
             "alloc::string::String" => "String",
             "std::collections::hash::map::HashMap" => "std::collections::HashMap<K, V>",
             "alloc::collections::btree::map::BTreeMap" => "std::collections::BTreeMap<K, V>",
@@ -654,6 +704,7 @@ impl Reader {
             "core::option::Option" => Some(("Option", 1)),
             "core::result::Result" => Some(("Result", 2)),
             "alloc::vec::Vec" => Some(("Vec", 1)),
+            "alloc::collections::vec_deque::VecDeque" => Some(("VecDeque", 1)),
             "alloc::boxed::Box" => Some(("Box", 1)),
             "alloc::rc::Rc" => Some(("Rc", 1)),
             "alloc::sync::Arc" => Some(("Arc", 1)),
@@ -754,10 +805,7 @@ mod tests {
     }
 
     fn vec_of(element: Ty) -> Ty {
-        Ty::Array {
-            element: Box::new(element),
-            length: None,
-        }
+        Ty::sequence(sequence::Kind::Vec, element)
     }
 
     /// Step 0 of D711 found these in the hand list std's declarations

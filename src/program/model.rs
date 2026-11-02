@@ -646,7 +646,7 @@ impl Model {
             type_ref::Type::Path(path) => match &path.target {
                 type_ref::Target::Builtin => match crate::host::runtime_builtin(&path.name) {
                     "Option" => Ok(crate::option::none()),
-                    "Vec" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet" => {
+                    "Vec" | "VecDeque" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet" => {
                         Ok(Dynamic::from_array(crate::Array::new()))
                     }
                     "bool" => Ok(false.into()),
@@ -782,7 +782,7 @@ impl Model {
                 }),
             };
         }
-        if let Some(element) = expected.vec_element() {
+        if let Some(element) = expected.sequence_element() {
             // A native vector a script made (D651): its elements are native
             // values its exact witness proved where the vector was made.
             if crate::place::get(value)

@@ -34,8 +34,8 @@ pub(super) type Unmet = (Compared, Option<Compared>);
 const DEPTH: usize = 16;
 
 /// The std definition the native type `ty` stands for, with its type
-/// arguments: `alloc::string::String`, `alloc::vec::Vec` of a `Vec<T>` (or
-/// a slice, which rawr's type also is), `i64`. `None` for a type std
+/// arguments: `alloc::string::String`, `alloc::vec::Vec` of a `Vec<T>`,
+/// `i64`. `None` for a type std
 /// doesn't declare, and for a literal whose kind is still to be inferred.
 pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
     let one = |ty: &Ty| vec![ty.clone()];
@@ -49,8 +49,12 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
         Ty::String => ("alloc::string::String", Vec::new()),
         Ty::Array {
             element,
-            length: None,
+            kind: sequence::Kind::Vec,
         } => ("alloc::vec::Vec", one(element)),
+        Ty::Array {
+            element,
+            kind: sequence::Kind::Deque,
+        } => ("alloc::collections::vec_deque::VecDeque", one(element)),
         Ty::Option(inner) => ("core::option::Option", one(inner)),
         Ty::Result(ok, error) => (
             "core::result::Result",
@@ -111,7 +115,11 @@ fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
         "alloc::string::String" => Ty::String,
         "alloc::vec::Vec" => Ty::Array {
             element: first()?,
-            length: None,
+            kind: sequence::Kind::Vec,
+        },
+        "alloc::collections::vec_deque::VecDeque" => Ty::Array {
+            element: first()?,
+            kind: sequence::Kind::Deque,
         },
         "core::option::Option" => Ty::Option(first()?),
         "core::result::Result" => Ty::Result(first()?, Box::new(arguments.get(1)?.clone())),
@@ -263,9 +271,12 @@ fn keys(solver: &impl Solve, side: &Compared) -> Option<Vec<&'static str>> {
     Some(match ty {
         Ty::Str | Ty::Reference { mutable: false, .. } => vec!["&"],
         Ty::Reference { mutable: true, .. } => vec!["&mut"],
-        // A `Vec<T>` is also a slice's type.
-        Ty::Array { length: None, .. } => vec!["alloc::vec::Vec", "[]"],
-        Ty::Array { .. } => vec!["[;]"],
+        Ty::Array { kind, .. } => vec![match kind {
+            sequence::Kind::Array(_) => "[;]",
+            sequence::Kind::Vec => "alloc::vec::Vec",
+            sequence::Kind::Slice => "[]",
+            sequence::Kind::Deque => "alloc::collections::vec_deque::VecDeque",
+        }],
         Ty::Unit | Ty::Tuple(_) => vec!["()"],
         Ty::Never => vec!["!"],
         ty => vec![std_definition(&ty)?.0],
@@ -567,7 +578,7 @@ fn bind(
         Written::Slice(element) => match ty {
             Some(Ty::Array {
                 element: given,
-                length: None,
+                kind: sequence::Kind::Slice,
             }) => bind(
                 solver,
                 element,
@@ -580,7 +591,7 @@ fn bind(
         Written::Array(element, length) => match ty {
             Some(Ty::Array {
                 element: given,
-                length: Some(given_length),
+                kind: sequence::Kind::Array(given_length),
             }) => {
                 let fits = match substitution.lengths.get(length) {
                     Some(bound) => *bound == given_length,
@@ -692,7 +703,7 @@ fn instantiate<S: Solve>(
         }
         Written::Slice(element) => Compared::Ty(Ty::Array {
             element: Box::new(ty(solver, element)?),
-            length: None,
+            kind: sequence::Kind::Slice,
         }),
         Written::Array(element, length) => {
             let length = match substitution.lengths.get(length) {
@@ -701,7 +712,7 @@ fn instantiate<S: Solve>(
             };
             Compared::Ty(Ty::Array {
                 element: Box::new(ty(solver, element)?),
-                length: Some(length),
+                kind: sequence::Kind::Array(length),
             })
         }
         Written::Tuple(members) if members.is_empty() => Compared::Ty(Ty::Unit),
@@ -864,12 +875,8 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
         (Ty::Int(_), Ty::Int(_)) => Some(None),
         // An `f32` is an `f64` rounded at runtime.
         (Ty::Float(Float::F64), Ty::Float(_)) => Some(None),
-        (
-            Ty::Array { length: None, .. },
-            Ty::Array {
-                length: Some(_), ..
-            },
-        ) => Some(None),
+        // Every sequence is an array at runtime.
+        (Ty::Array { .. }, Ty::Array { .. }) => Some(None),
         // A box is its value at runtime, and an `Rc` or `Arc` a new
         // allocation of it.
         (Ty::Boxed(inner), source) if same(inner, source) => Some(None),

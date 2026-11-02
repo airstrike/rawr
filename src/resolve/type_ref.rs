@@ -632,11 +632,10 @@ fn resolve_path(
         Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
         None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
         None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
-        // `std::collections::VecDeque` is Rawr's `Vec` (`vec_deque_as_vec`).
         None if !types.contains_key("VecDeque")
             && (super::std_vec_deque(&name) || name.as_str() == "VecDeque") =>
         {
-            "Vec".into()
+            "VecDeque".into()
         }
         // `std::cell::Cell`, or a bare `Cell` that names no crate or host
         // type.
@@ -673,6 +672,7 @@ fn resolve_path(
         || name.as_str() == "RefCell"
         || name.as_str() == "Cell" && host.source_type("Cell").is_none()
         || name.as_str() == "Vec"
+        || name.as_str() == "VecDeque"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
         || super::lower_nominal::counted::std_weak(&written).is_some()
@@ -715,7 +715,12 @@ fn resolve_path(
         (Target::Builtin, item::type_ref::ITER_TYPE | item::type_ref::INTO_ITER_TYPE) => {
             Some((1, 1))
         }
-        (Target::Builtin, name) if item::type_ref::array_length(name).is_some() => Some((1, 1)),
+        (Target::Builtin, name)
+            if name == item::type_ref::SLICE_TYPE
+                || item::type_ref::array_length(name).is_some() =>
+        {
+            Some((1, 1))
+        }
         (Target::Builtin, name) => super::std_path::arity(name),
         _ => None,
     };
@@ -1304,6 +1309,7 @@ fn prelude_arity(parsed: &item::type_ref::Path) -> Option<usize> {
     match &parsed.segments[..] {
         [segment] if segment.name.text.as_str() == "Option" => Some(1),
         [segment] if segment.name.text.as_str() == "Vec" => Some(1),
+        [segment] if segment.name.text.as_str() == item::type_ref::SLICE_TYPE => Some(1),
         [segment] if segment.name.text.as_str() == "Box" => Some(1),
         // `[T; N]`.
         [segment] if item::type_ref::array_length(&segment.name.text).is_some() => Some(1),
@@ -1351,10 +1357,33 @@ impl Type {
 
     /// `T` of `Vec<T>`.
     pub(crate) fn vec_element(&self) -> Option<&Type> {
+        self.builtin_element("Vec")
+    }
+
+    /// `T` of a slice `[T]`.
+    pub(crate) fn slice_element(&self) -> Option<&Type> {
+        self.builtin_element(item::type_ref::SLICE_TYPE)
+    }
+
+    /// `T` of `VecDeque<T>`.
+    pub(crate) fn deque_element(&self) -> Option<&Type> {
+        self.builtin_element("VecDeque")
+    }
+
+    /// `T` of `Vec<T>`, `[T]` or `VecDeque<T>`: each an array of `T` at
+    /// runtime.
+    pub(crate) fn sequence_element(&self) -> Option<&Type> {
+        self.vec_element()
+            .or_else(|| self.slice_element())
+            .or_else(|| self.deque_element())
+    }
+
+    /// The one type argument of the builtin type `name`.
+    fn builtin_element(&self, name: &str) -> Option<&Type> {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || path.name.as_str() != "Vec" {
+        if path.target != Target::Builtin || path.name.as_str() != name {
             return None;
         }
         path.arguments.iter().find_map(|argument| match argument {

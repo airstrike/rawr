@@ -330,7 +330,9 @@ impl<'a> Generator<'a> {
                         | "u32" | "u64" | "usize" | "f32" | "f64" | "String",
                         [],
                     ) => Ok(()),
-                    ("Vec" | "Option", [inner]) => self.crosses(inner, owner),
+                    ("Vec" | "Option" | crate::item::type_ref::SLICE_TYPE, [inner]) => {
+                        self.crosses(inner, owner)
+                    }
                     ("Self", []) => match owner {
                         Some(owner) if self.crossing.contains(owner) => Ok(()),
                         _ => Err("`Self` can't cross here".into()),
@@ -391,7 +393,11 @@ impl<'a> Generator<'a> {
         };
         path.segments.last().is_some_and(|last| {
             let name = last.name.text.as_str();
-            !self.types.contains_key(name) && !matches!(name, "Self" | "Vec" | "Option")
+            !self.types.contains_key(name)
+                && !matches!(
+                    name,
+                    "Self" | "Vec" | "Option" | crate::item::type_ref::SLICE_TYPE
+                )
         })
     }
 

@@ -762,8 +762,9 @@ pub(crate) fn type_supports(
         type_ref::Type::Path(_) if let Some(element) = ty.option_element() => {
             capability == Kind::Default || type_supports(element, capability, resolved)
         }
-        // `Vec<T>` is `Default`, and otherwise derives from `T`.
-        type_ref::Type::Path(_) if let Some(element) = ty.vec_element() => {
+        // `Vec<T>` and `VecDeque<T>` are `Default`, and otherwise derive
+        // from `T`.
+        type_ref::Type::Path(_) if let Some(element) = ty.sequence_element() => {
             capability == Kind::Default || type_supports(element, capability, resolved)
         }
         // `[T; N]` derives from `T`; Rust's `Default` stops at 32 elements
