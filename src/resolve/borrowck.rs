@@ -228,7 +228,8 @@ pub(crate) struct Body {
     /// against.
     pub(crate) own: Option<OwnSignature>,
     /// Each closure body's first block, with a hidden local its body reads
-    /// a capture by, which has its value again each time the body starts.
+    /// a capture by, or one of its parameters, which has its value again
+    /// each time the body starts.
     pub(crate) closure_entries: Vec<(Block, Local)>,
 }
 

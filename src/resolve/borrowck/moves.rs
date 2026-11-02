@@ -120,7 +120,8 @@ fn run(
             .map(|((_, at), _)| *at)
     };
     // A closure's body reads its captures through hidden locals of its own,
-    // given their values each time it is entered.
+    // which, with its parameters, are given their values each time it is
+    // entered.
     for (entry, local) in &body.closure_entries {
         if *entry == block {
             clear(moved, state, |place| place.local == *local);

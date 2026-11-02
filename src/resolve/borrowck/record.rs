@@ -1310,10 +1310,20 @@ impl Recorder {
                 upvars.insert(local, (upvar, *capture));
             }
         }
-        for (upvar, _) in upvars.values() {
+        // The body's captures and its parameters have their values again
+        // each time it starts, as a closure called in a loop is.
+        let parameter_locals = parameters
+            .iter()
+            .filter_map(|declaration| self.locals.get(declaration).copied())
+            .collect::<Vec<_>>();
+        for local in upvars
+            .values()
+            .map(|(upvar, _)| *upvar)
+            .chain(parameter_locals)
+        {
             self.body
                 .closure_entries
-                .push((Block(body.blocks.start), *upvar));
+                .push((Block(body.blocks.start), local));
         }
         let inside = |point: Point| body.blocks.contains(&point.block.0);
         let mut places = Vec::<CapturePlace>::new();
