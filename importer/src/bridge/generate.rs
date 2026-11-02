@@ -1128,9 +1128,16 @@ impl Arena {
                 .map_err(|_| Error::TypeMismatch);
         }
         let index = self.index::<T>(&handle)?;
-        // A script copies a handle where it copies the value, so a `Clone`
-        // value is cloned out and its slot stays valid for every copy.
-        if let Some(clone) = self.slots[index].clone {
+        // A script copies a handle where it copies the value, so while
+        // another copy of the handle lives, a `Clone` value is cloned out
+        // and its slot stays valid for that copy. The last copy moves the
+        // value out, as Rust moves it (#698): a `vec![Family::new(..)]`
+        // given to a crate call clones nothing.
+        let shared = handle
+            .release
+            .as_ref()
+            .is_none_or(|release| std::sync::Arc::strong_count(release) > 1);
+        if shared && let Some(clone) = self.slots[index].clone {
             let value = self.slots[index].value.as_deref().ok_or(Error::StaleHandle)?;
             let value = clone(value).ok_or(Error::TypeMismatch)?;
             return value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch);
@@ -2339,6 +2346,28 @@ fn attest_nested(
             .map(Dynamic::from_array);
     }
     Ok(value)
+}
+
+/// The witness of operand `index` of the running call: the exact type of
+/// the program's value a `&mut String` or `&mut Vec<T>` lends, which the
+/// value keeps as a native place once the call has it (#716).
+#[allow(dead_code)]
+fn operand_witness(index: usize) -> __rawr_internal::host::runtime::Witness {
+    OPERANDS
+        .with_borrow(|operands| operands.get(index).cloned().flatten())
+        .expect("rawr: an imported call's operand has its type's witness")
+}
+
+/// The program's own `String` or `Vec<T>` a call took `&mut` and changed,
+/// given back as the native value itself, in place of Rawr's: the next
+/// call lends it where it is, as rustc's borrow does, and the program
+/// reads and changes it there (#716).
+#[allow(dead_code)]
+fn native_place<P: __rawr_internal::place::Policy>(
+    value: P::Value,
+    witness: &__rawr_internal::host::runtime::Witness,
+) -> Result<Dynamic, Error> {
+    __rawr_internal::place::owned::<P>(value, witness).map_err(|error| Error::Value(error.to_string()))
 }
 
 /// The witnesses of the `count` parameters of the closure that is operand
@@ -6397,6 +6426,17 @@ fn holds_value(ty: &convert::Type) -> bool {
 }
 
 /// A script value an erased generic takes or gives (D513.2).
+/// Whether `signature` is a trait's method of its impl for `&str`, which
+/// Rawr calls on its string (`surface::text`).
+fn str_member(signature: &crate::classify::representability::signature::Signature) -> bool {
+    matches!(
+        signature.instance(),
+        Some(convert::Type::Builtin(
+            convert::Builtin::Str | convert::Builtin::StaticStr
+        ))
+    )
+}
+
 fn is_value(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
         if *definition == crate::surface::identity::Definition::value())
@@ -6414,9 +6454,7 @@ fn witness_mode(plan: &Plan) -> u8 {
             receiver: Receiver::Owned,
             signature,
             ..
-        } if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) => {
-            1
-        }
+        } if str_member(signature) => 1,
         Operation::StructField { field, .. } if !shared_field(field.ty()) => 2,
         Operation::Method {
             receiver: Receiver::Owned,
@@ -7981,17 +8019,17 @@ fn render_adapter_body(
             } else {
                 match receiver {
                     // A trait's method of its impl for `&str`, called on
-                    // Rawr's string (`surface::text`): the string, pinned
-                    // for the runner's life as a `&'static str` input is.
-                    Receiver::Owned
-                        if signature.instance()
-                            == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) =>
-                    {
-                        output
-                            .write_all(
-                                b"    let receiver: &'static str = static_pins().pin(take_primitive::<ImmutableString>(arguments, 0)?);\n",
-                            )
-                            .map_err(request::unwritable)?;
+                    // Rawr's string (`surface::text`), lent at the lifetime
+                    // the impl names (#717).
+                    Receiver::Owned if str_member(signature) => {
+                        render_str_receiver(
+                            plan,
+                            signature,
+                            substitutions,
+                            constants,
+                            *container_parameters,
+                            output,
+                        )?;
                         let annotation = concrete_type(&substituted(
                             signature.output(),
                             signature,
@@ -8354,6 +8392,89 @@ fn render_opening(
     .map_err(encoding)
 }
 
+/// The receiver of a trait's method of its impl for `&str`, Rawr's string,
+/// at the lifetime rustc borrows it at (#717). An impl for `&'static str`
+/// alone takes it pinned per site, as a `&'static str` input is (D694). An
+/// output that doesn't borrow it takes it for the call. One that does, as
+/// `Widget::_boxed("label")` gives an `Element<'a>`, takes it pinned in the
+/// region of the slot the call is made in, and goes there itself; out of
+/// any region the string is pinned for the runner's life, as a function's
+/// `&str` its output borrows is. Pinning holds the string's shared handle,
+/// so no text is copied.
+fn render_str_receiver(
+    plan: &Plan,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let encoding = request::unwritable;
+    output
+        .write_all(b"    let receiver_text = take_primitive::<ImmutableString>(arguments, 0)?;\n")
+        .map_err(encoding)?;
+    if signature.instance() == Some(&convert::Type::Builtin(convert::Builtin::StaticStr)) {
+        return output
+            .write_all(b"    let receiver: &'static str = { static PINS: __rawr_internal::scope::Pins = __rawr_internal::scope::Pins::constant(); PINS.pin(receiver_text) };\n")
+            .map_err(encoding);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    if !carries_lifetime(&returned) {
+        return output
+            .write_all(b"    let receiver: &str = receiver_text.as_str();\n")
+            .map_err(encoding);
+    }
+    if copied_inputs(signature).is_empty() && !lifetime_inputs(signature, substitutions)? {
+        let mut call = Vec::new();
+        render_method_head(
+            plan.name(),
+            Receiver::Owned,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            &mut call,
+        )?;
+        argument_list(signature.inputs().len(), 1, &mut call)?;
+        call.write_all(b")").map_err(encoding)?;
+        let call = String::from_utf8(call).map_err(request::unwritable)?;
+        let converted = {
+            let _region = InRegion::enter();
+            let mut converted = String::new();
+            render_to_dynamic(&returned, "made", 0, &mut converted)?;
+            converted
+        };
+        if REGION_ARGUMENTS.get() {
+            writeln!(
+                output,
+                "    if let Some(pins) = region.pins() {{
+        let receiver = pins.pin(receiver_text);
+        let made = {call};
+        return {converted};
+    }}"
+            )
+            .map_err(encoding)?;
+        } else {
+            writeln!(
+                output,
+                "    if let Some(anchor) = __rawr_internal::scope::anchor() {{
+        return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| -> Result<Dynamic, Error> {{
+            let pins = region.pins().ok_or(Error::Lent(\"a slot's region\", __rawr_internal::scope::Error::Mismatch))?;
+            let receiver = pins.pin(receiver_text);
+            let made = {call};
+            {converted}
+        }})
+        .map_err(|error| Error::Lent(\"a slot's region\", error))?;
+    }}"
+            )
+            .map_err(encoding)?;
+        }
+    }
+    output
+        .write_all(b"    let receiver: &'static str = static_pins().pin(receiver_text);\n")
+        .map_err(encoding)
+}
+
 /// A call whose output borrows its `&str` inputs, made while a slot's
 /// region is open (D594): `view(&state)`'s `text(&state.label)`. The output
 /// goes in that region, whose lifetime is the lent value's, and each string
@@ -8644,14 +8765,7 @@ fn frame_copies(
     }
     let mut given = Vec::new();
     for (position, element) in &copies {
-        let mut converted = String::new();
-        render_to_dynamic(
-            element,
-            &format!("argument_{position}_copy"),
-            0,
-            &mut converted,
-        )?;
-        given.push(format!("({converted})?"));
+        given.push(format!("({})?", given_back(*position, element)?));
     }
     Ok(FrameCopies {
         rebound,
@@ -11381,9 +11495,14 @@ fn render_take_input(
         if LENT_ARGUMENTS.get() && place::available(element) {
             let rust = concrete_type(element)
                 .ok_or_else(|| request::drift("a copied or native borrowed input's type"))?;
+            // A native place is lent where it is and given back as it is.
+            // A program's value the call takes the first time is moved
+            // into a native value, which goes back to the program in its
+            // place (#716).
             return writeln!(
                 output,
-                "    let argument_{local}_place = (**arguments.values.get({index}).ok_or(Error::MissingArgument)?).clone();
+                "    let argument_{local}_witness = operand_witness({index});
+    let argument_{local}_place = {{ let value = &**arguments.values.get({index}).ok_or(Error::MissingArgument)?; if __rawr_internal::place::get(value).is_some() {{ value.clone() }} else {{ Dynamic::UNIT }} }};
     let mut argument_{local}_copy: Option<{rust}> = None;
     let argument_{local}: &mut {rust} = match lent_argument(lent, {index}) {{
         Some(value) => value.mutable::<{rust}>().ok_or(Error::TypeMismatch)?,
@@ -11396,9 +11515,14 @@ fn render_take_input(
             )
             .map_err(request::unwritable);
         }
+        let witness = if place::available(element) {
+            format!("    let argument_{local}_witness = operand_witness({index});\n")
+        } else {
+            String::new()
+        };
         return writeln!(
             output,
-            "    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
+            "{witness}    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
         )
         .map_err(request::unwritable);
     }
@@ -13012,13 +13136,7 @@ fn render_give_with(
     let given = String::from_utf8(given).map_err(request::unwritable)?;
     let mut copied = String::new();
     for (position, element) in &copies {
-        let mut converted = String::new();
-        render_to_dynamic(
-            element,
-            &format!("argument_{position}_copy"),
-            0,
-            &mut converted,
-        )?;
+        let converted = given_back(*position, element)?;
         if LENT_ARGUMENTS.get() && place::available(element) {
             copied.push_str(&format!(", match argument_{position}_copy {{ Some(argument_{position}_copy) => ({converted})?, None => argument_{position}_place }}"));
         } else {
@@ -13030,6 +13148,28 @@ fn render_give_with(
         "    let given = (|| -> Result<Dynamic, Error> {{\n{given}    }})()?;\n    Ok(Dynamic::from_array(vec![given{copied}]))"
     )
     .map_err(request::unwritable)
+}
+
+/// What goes back to the program of the `&mut String` or `&mut Vec<T>` at
+/// `position` a call took and changed: the native value itself, as a place
+/// of the operand's exact type, which the next call lends where it is
+/// (#716). An element type with no native place goes back as Rawr's value
+/// (D558 slice 2).
+fn given_back(position: usize, element: &convert::Type) -> Result<String, request::Error> {
+    if place::available(element) {
+        return Ok(format!(
+            "native_place::<{}>(argument_{position}_copy, &argument_{position}_witness)",
+            place::policy(element)?
+        ));
+    }
+    let mut converted = String::new();
+    render_to_dynamic(
+        element,
+        &format!("argument_{position}_copy"),
+        0,
+        &mut converted,
+    )?;
+    Ok(converted)
 }
 
 /// Each input `&mut Vec<T>` or `&mut String` a call takes as a copy of

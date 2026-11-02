@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 89;
+const CLASSIFIER_VERSION: u32 = 90;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5349,8 +5349,12 @@ impl<P: api::Phase> Context<'_, P> {
             // one instance that no other implementation of the type
             // declares, as quick-xml's `Reader::from_str` in `impl<'a>
             // Reader<&'a [u8]>`: no overload can repeat it (D558 slice 2).
+            // A trait's impl for `&str`, whose only parameter is the
+            // string's lifetime, as `impl Label for &str`, is the trait's
+            // member on Rawr's string, below.
             _ if implementation.generics().parameters().next().is_some()
                 && lifetime_only(implementation.generics())
+                && !is_str_reference(implementation.self_type())
                 && !self.own_form(implementation.self_type(), target)
                 && !self.sole_instance_member(implementation, definition, target) =>
             {
@@ -5388,7 +5392,7 @@ impl<P: api::Phase> Context<'_, P> {
                 )))
             }
             // A trait's impl for `&str`, as iced's `impl Widget<..> for
-            // &str`: its methods take Rawr's string as `&'static str`.
+            // &str`: its methods take Rawr's string as the impl's `&str`.
             None if is_str_reference(implementation.self_type())
                 && matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == target) =>
             {
@@ -5533,9 +5537,9 @@ impl<P: api::Phase> Context<'_, P> {
 
     /// A method of a trait's impl for `&str`, as iced's `impl<Message,
     /// Theme, Renderer> Widget<Message, Theme, Renderer> for &str` gives
-    /// `_boxed`: an invocation whose instance is `&'static str`, Rawr's
-    /// string pinned for the runner's life, with every parameter of the
-    /// impl the call's to infer, as rustc infers them.
+    /// `_boxed`: an invocation whose instance is the `&str`, or the
+    /// `&'static str` of an impl for that alone, with every parameter of
+    /// the impl the call's to infer, as rustc infers them.
     fn classify_str_member(
         &self,
         implementation: &model::Implementation,
@@ -5553,8 +5557,18 @@ impl<P: api::Phase> Context<'_, P> {
                 return Err(reject::Kind::GenericImplementation.into());
             };
             // Only a method that takes the string by value: `&self` would
-            // borrow a `&&str`.
-            if !matches!(signature.receiver(), model::Receiver::Value { .. })
+            // borrow a `&&str`. A method the impl defines reads its `self`,
+            // the impl's own `&str`, as a borrow of `str`.
+            let by_value = match signature.receiver() {
+                model::Receiver::Value { .. } => true,
+                model::Receiver::Reference {
+                    mutability: model::Mutability::Shared,
+                    ty: model::Type::Primitive(name),
+                    ..
+                } => &**name == "str",
+                _ => false,
+            };
+            if !by_value
                 || generics
                     .parameters()
                     .any(|parameter| parameter.owner() != definition.id())
@@ -5583,8 +5597,45 @@ impl<P: api::Phase> Context<'_, P> {
             };
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
-            let Representability::FunctionItem(item) = self.function(signature, &inherited)? else {
-                return Err(reject::Kind::GenericImplementation.into());
+            // A `self` the impl defines is its own `&str` taken by value,
+            // as a provided method's `self` is.
+            let owned;
+            let signature = if matches!(signature.receiver(), model::Receiver::Reference { .. }) {
+                owned = model::Signature::new(
+                    signature.safety(),
+                    signature.const_function(),
+                    signature.async_function(),
+                    signature.abi().into(),
+                    signature.variadic(),
+                    signature.binders().cloned().collect(),
+                    model::Receiver::Value {
+                        ty: implementation.self_type().clone(),
+                    },
+                    signature.inputs().cloned().collect(),
+                    signature.output().clone(),
+                )
+                .with_guard(signature.guard().cloned());
+                &owned
+            } else {
+                signature
+            };
+            // A method of an impl and trait with no type parameters, as
+            // `impl Label for &str`, classifies as a plain method of the
+            // string, which takes it by value all the same.
+            let item = match self.function(signature, &inherited)? {
+                Representability::FunctionItem(item) => item,
+                Representability::Method(plan)
+                    if plan.receiver() == representability::ownership::Receiver::Owned =>
+                {
+                    callable::Item::new(
+                        plan.signature().clone(),
+                        Some(plan.receiver()),
+                        None,
+                        Box::default(),
+                        Box::default(),
+                    )
+                }
+                _ => return Err(reject::Kind::GenericImplementation.into()),
             };
             let item = item
                 .with_inferred(&inferred, parameters.len())
@@ -5592,9 +5643,22 @@ impl<P: api::Phase> Context<'_, P> {
             if item.call().is_some() || !item.crossings().is_empty() {
                 return Err(reject::Kind::CallableProtocol.into());
             }
-            let item = item.with_instance(representability::convert::Type::Builtin(
-                representability::convert::Builtin::StaticStr,
-            ));
+            // The string at the lifetime the impl names: `&'static str`
+            // when the impl is for that alone, as `impl Title<State> for
+            // &'static str` is, and otherwise a `&str` the call borrows at
+            // any lifetime, as rustc does (#717).
+            let instance = if matches!(
+                implementation.self_type(),
+                model::Type::Reference {
+                    lifetime: model::Lifetime::Static,
+                    ..
+                }
+            ) {
+                representability::convert::Builtin::StaticStr
+            } else {
+                representability::convert::Builtin::Str
+            };
+            let item = item.with_instance(representability::convert::Type::Builtin(instance));
             Ok(Representability::Invocation(callable::Invocation::new(
                 item, 0,
             )))

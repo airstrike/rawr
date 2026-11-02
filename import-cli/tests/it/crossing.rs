@@ -480,6 +480,28 @@ fn a_slice_a_method_lends_from_its_receiver_is_read_in_place() {
     let (rawr, cargo) = both_printed("crossing-options", "options.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.ends_with("heavy at Some(1), 0 clones"), "{rawr}");
+    // The vectors move their families into `Choices::new`, as Rust moves
+    // them (#698).
+    assert!(rawr.contains("0 clones making the choices"), "{rawr}");
+    assert!(
+        rawr.contains("1 options, 0 clones moving a local"),
+        "{rawr}"
+    );
+}
+
+/// A crate call's `&mut String` and `&mut Vec<u8>` are the program's own,
+/// lent in place (#716): the room `reserve` makes is still there at the
+/// next call, as rustc's borrow keeps the one allocation, and the program
+/// reads and changes what the calls wrote between them. A trait the crate
+/// implements for `&str` of any lifetime takes the program's strings at the
+/// call's lifetime (#717). The output is `cargo run`'s.
+#[test]
+fn mutable_buffers_are_lent_in_place() {
+    let (rawr, cargo) = both_printed("crossing-buffers", "buffers.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("room still kept true"), "{rawr}");
+    assert!(rawr.contains("[1] 1, room kept true"), "{rawr}");
+    assert!(rawr.contains("[Basalt] is 6 wide"), "{rawr}");
 }
 
 #[test]

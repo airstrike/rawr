@@ -696,6 +696,17 @@ impl Engine {
         let pos = op_info.position();
 
         if let Some(place) = crate::place::get(target.as_ref()) {
+            // `s += "text"` and `s.push_str("text")` of a native `String`
+            // append to it where it is, as Rust's `AddAssign<&str>` does,
+            // keeping its allocation (#716).
+            if op_info
+                .get_op_assignment_info()
+                .is_some_and(|(.., op_assign, _, _)| op_assign == "+=")
+                && place.witness().is_builtin("String")
+            {
+                let _ = place.invoke(crate::place::Operation::PushStr, &mut [new_val])?;
+                return Ok(());
+            }
             if op_info.is_op_assignment() {
                 let copied = place.invoke(crate::place::Operation::Copy, &mut [])?;
                 let mut copied = Target::TempValue(copied);

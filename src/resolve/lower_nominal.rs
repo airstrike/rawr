@@ -48171,6 +48171,16 @@ impl<'a> Parser<'a> {
         statement.push(operand.source);
         statement.push_text(";\n");
         prelude.push(statement);
+        // The operand's local is the call's alone: a value that moves goes
+        // into the call, as Rust moves it, and the local keeps no copy of
+        // it (#698). A `vec![Family::new(..)]` given to a crate function
+        // then gives the function the families themselves.
+        if self.moves_by_value(&operand.ty) {
+            return origin::Fragment::call(
+                crate::engine::KEYWORD_MOVE,
+                [origin::Fragment::plain(temporary)],
+            );
+        }
         origin::Fragment::plain(temporary)
     }
 
