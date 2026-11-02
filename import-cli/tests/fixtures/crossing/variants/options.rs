@@ -25,6 +25,15 @@ fn main() {
     println!("serif at {serif:?}");
 
     let families = Choices::new(vec![Family::new("Quartz", 400), Family::new("Basalt", 700)]);
+    // The vector moves its families into the call, as Rust moves them.
+    println!("{} clones making the choices", clones());
+    let granite = Family::new("Granite", 500);
+    let more = Choices::new(vec![granite]);
+    println!(
+        "{} options, {} clones moving a local",
+        more.options().len(),
+        clones()
+    );
     // What the borrows below clone: nothing.
     let made = clones();
     let options = families.options();

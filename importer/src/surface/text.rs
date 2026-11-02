@@ -3,8 +3,10 @@
 //! `Widget::_boxed("label")` that `column!` writes. Rawr's string has no
 //! facade type to hold them, so a facade declares each as a function
 //! beside the trait, whose first input is the string, and Rawr calls it for
-//! `Trait::method(string, ..)`. The runner takes the string as `&'static
-//! str`, pinned for its life.
+//! `Trait::method(string, ..)`. The runner lends the string at the
+//! lifetime the impl names: a `&str` for the call, or the region its output
+//! borrows it in, and a `&'static str` pinned per site for an impl for
+//! `&'static str` alone (#717).
 
 use crate::classify::representability::{convert, Representability};
 
@@ -23,7 +25,9 @@ pub fn is_member(representability: &Representability) -> bool {
     matches!(
         representability,
         Representability::Invocation(plan)
-            if plan.signature().instance()
-                == Some(&convert::Type::Builtin(convert::Builtin::StaticStr))
+            if matches!(
+                plan.signature().instance(),
+                Some(convert::Type::Builtin(convert::Builtin::Str | convert::Builtin::StaticStr))
+            )
     )
 }

@@ -2356,17 +2356,27 @@ fn build(
                 .checked_add(selector)
         });
         allocation.retain_checked(Some(1), bytes)?;
-        let receiver = types.convert(
-            &representability::convert::Type::Builtin(
-                representability::convert::Builtin::StaticStr,
-            ),
-            &[],
-            allocation,
-        )?;
+        // The string at the impl's lifetime: an impl for `&'static str`
+        // alone borrows its receiver for `'static`, as D694 lends a
+        // `&'static str` input, and its inputs come after the receiver.
+        let instance = plan.signature().instance().cloned().unwrap_or(
+            representability::convert::Type::Builtin(representability::convert::Builtin::Str),
+        );
+        // A `&str` receiver, as rustc's `<&str as Trait>::method(text)`
+        // takes it, not a `String` (#706).
+        let receiver = types.convert_input(&instance, &[], allocation)?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
+        let lent = (lent_static(plan.signature()) << 1)
+            | u64::from(
+                instance
+                    == representability::convert::Type::Builtin(
+                        representability::convert::Builtin::StaticStr,
+                    ),
+            );
         builder.item(
             host::item::Definition::function(path, signature)?
-                .imported(associated.identity().selector().try_clone()?),
+                .imported(associated.identity().selector().try_clone()?)
+                .lending_static(lent),
         )?;
     }
     // A trait's method over its `Self`, which a program's own type that
