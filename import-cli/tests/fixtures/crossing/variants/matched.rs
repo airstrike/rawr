@@ -18,12 +18,23 @@ fn by_reference(outcome: &Outcome) -> String {
             matched::describe(door),
             matched::state(outcome)
         ),
-        Outcome::Failed { error, attempts } => format!("{attempts} {}", matched::reason(error)),
+        Outcome::Failed { .. } => matched::state(outcome).to_string(),
         Outcome::Idle => "idle".to_string(),
     }
 }
 
+fn checked(result: Result<u32, Outcome>) -> String {
+    match result {
+        Ok(count) => format!("ok {count}"),
+        Err(Outcome::Opened(door)) => door.close(),
+        Err(other) => matched::state(&other).to_string(),
+    }
+}
+
 fn main() {
+    println!("{}", checked(Ok(4)));
+    println!("{}", checked(Err(matched::open("vent"))));
+    println!("{}", checked(Err(matched::fail(2))));
     let opened = matched::open("door");
     println!("{}", by_reference(&opened));
     println!("{}", by_value(opened));
@@ -33,9 +44,6 @@ fn main() {
     println!("{}", by_value(matched::open("gate")));
     if let Outcome::Opened(door) = matched::open("hatch") {
         println!("{}", door.close());
-    }
-    if let Outcome::Failed { error, .. } = &matched::fail(1) {
-        println!("{}", matched::reason(error));
     }
     println!("{}", by_value(Outcome::Idle));
 }

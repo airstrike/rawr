@@ -29496,15 +29496,15 @@ impl<'a> Parser<'a> {
             Ty::Tuple(fields.clone().into_boxed_slice())
         };
         let selector = variant.imported_identity();
+        // A matcher reads the value by its handle and gives new values, its
+        // fields, which take its output's witness; the value stays
+        // observable after it, but for the one that moves the fields out.
         let operation = |kind: crate::host::structural::Kind, output: Ty| ImportedOperation {
             kind,
-            operands: vec![(ty.clone(), at, true)].into_boxed_slice(),
+            operands: vec![(ty.clone(), at, kind != crate::host::structural::Kind::Take)]
+                .into_boxed_slice(),
             output,
-            // A matcher reads the value by its handle and gives new values,
-            // its fields, which take its output's witness; the one that
-            // moves them out takes the value.
-            receiver: (kind == crate::host::structural::Kind::Take)
-                .then_some(crate::receiver::Mode::Owned),
+            receiver: None,
         };
         // The test reads no field, so a field without `Clone` is no
         // obstacle to it.

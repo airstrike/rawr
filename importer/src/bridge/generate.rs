@@ -1888,6 +1888,16 @@ fn reach_lent<T: 'static>(
     mutable: bool,
     visit: &mut dyn FnMut(Reached<'_>),
 ) -> Result<(), Error> {
+    // A value its slot has leased to lend shared, as a pattern through
+    // `&T` lends its fields, is shared where the lend holds it; borrowing
+    // it mutably meanwhile is the conflict rustc reports.
+    if let Some(nonce) = lender_nonce(&value) {
+        if mutable {
+            return Err(Error::Leased);
+        }
+        return __rawr_internal::scope::with_ref::<LenderF<T>, _>(nonce, |value| visit(Reached::Shared(value)))
+            .map_err(|error| Error::Lent(std::any::type_name::<T>(), error));
+    }
     let lent = value.try_cast_result::<__rawr_internal::scope::Lent>().map_err(|_| Error::TypeMismatch)?;
     let failed = |error| Error::Lent(lent.name(), error);
     let reached = if mutable {
@@ -1948,6 +1958,14 @@ impl Drop for Lending {
     fn drop(&mut self) {
         LENDERS.with_borrow_mut(|lenders| lenders.remove(&self.0));
     }
+}
+
+/// The lend that holds the value of the crate value handle `value`, while
+/// its slot has leased it to lend shared.
+#[allow(dead_code)]
+fn lender_nonce(value: &Dynamic) -> Option<__rawr_internal::scope::Nonce> {
+    let handle = value.read_lock::<NativeHandle>()?;
+    LENDERS.with_borrow(|lenders| lenders.get(&(handle.slot, handle.generation)).copied())
 }
 
 /// Reach the receiver `lender` names, shared, for one operation on the
@@ -2015,7 +2033,9 @@ fn with_lent_arguments(
         .iter()
         .filter_map(|&(index, mutable, reach)| {
             let value = arguments.values.get(index)?;
-            (value.is::<__rawr_internal::scope::Lent>() || __rawr_internal::place::get(value).is_some())
+            (value.is::<__rawr_internal::scope::Lent>()
+                || __rawr_internal::place::get(value).is_some()
+                || lender_nonce(value).is_some())
                 .then(|| (index, mutable, (**value).clone(), reach))
         })
         .collect();
