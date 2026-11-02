@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-01",
-  "version": "0.3.104",
+  "version": "0.3.105",
   "examples": {
     "running": 23,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A provided trait method that lends `Self` to a closure, as `renderer.with_translation(v, |renderer| ..)`, no longer panics a debug build during a cold check's miss-gathering pass (first bad #661–#663, 775663c7c; fixed in 6e794f02c).","issues":[754]},
-        {"text":"A guard-returning method's mutable place reads compile again in the generated runner: two byte-string templates had kept `{copy}` as written (first bad #653, 8810b6fb5; fixed in 651ef5b8f, generator 127).","issues":[755]},
-        {"text":"quick-xml's `read_event_into` loop with attributes runs under `rawr run` as `cargo run` does: a borrowing call's receiver isn't moved by its frame binding, a closure's parameters are given their value at each body entry, lifetime-carrying types are read from the arena instead of cloned out of an accessor, and a frame's `&mut Vec` goes back into the place it came from. It had failed since 30b8a530c (2026-10-26).","issues":[756]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.105",
+        "date": "2026-11-01",
+        "entries": [
+          {"text":"A provided trait method that lends `Self` to a closure, as `renderer.with_translation(v, |renderer| ..)`, no longer panics a debug build during a cold check's miss-gathering pass (first bad #661–#663, 775663c7c; fixed in 6e794f02c).","issues":[754]},
+          {"text":"A guard-returning method's mutable place reads compile again in the generated runner: two byte-string templates had kept `{copy}` as written (first bad #653, 8810b6fb5; fixed in 651ef5b8f, generator 127).","issues":[755]},
+          {"text":"quick-xml's `read_event_into` loop with attributes runs under `rawr run` as `cargo run` does: a borrowing call's receiver isn't moved by its frame binding, a closure's parameters are given their value at each body entry, lifetime-carrying types are read from the arena instead of cloned out of an accessor, and a frame's `&mut Vec` goes back into the place it came from. It had failed since 30b8a530c (2026-10-26).","issues":[756]}
+        ]
+      },
       {
         "version": "0.3.104",
         "date": "2026-11-01",
@@ -1799,9 +1801,9 @@
     {"issue":751,"title":"A std type named bare with no `use` is refused as rustc refuses it (E0412)","state":"open","category":"Divergences from rustc"},
     {"issue":752,"title":"A wrong builtin type arity is rustc's E0107","state":"open","category":"Divergences from rustc"},
     {"issue":753,"title":"A std module glob's names shadow the prelude, as `use std::fmt::*` makes Result fmt::Result","state":"open","category":"Divergences from rustc"},
-    {"issue":754,"title":"Recovered misses close the inference checkpoints they leave open","state":"open","category":"Health"},
-    {"issue":755,"title":"Generated mutable guard places format their copy macro","state":"open","category":"Health"},
-    {"issue":756,"title":"quick-xml scope frames: receiver moves, closure parameters, lent lifetimes, frame buffers","state":"open","category":"Divergences from rustc"}
+    {"issue":754,"title":"Recovered misses close the inference checkpoints they leave open","state":"closed","category":"Health","release":"0.3.105"},
+    {"issue":755,"title":"Generated mutable guard places format their copy macro","state":"closed","category":"Health","release":"0.3.105"},
+    {"issue":756,"title":"quick-xml scope frames: receiver moves, closure parameters, lent lifetimes, frame buffers","state":"closed","category":"Divergences from rustc","release":"0.3.105"}
   ],
   "groups": [
     {

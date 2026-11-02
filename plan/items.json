@@ -754,8 +754,8 @@
     {"t":"T751","issue":751,"title":"T751: A std type named bare with no `use` is refused as rustc refuses it (E0412)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T752","issue":752,"title":"T752: A wrong builtin type arity is rustc's E0107","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T753","issue":753,"title":"T753: A std module glob's names shadow the prelude, as `use std::fmt::*` makes Result fmt::Result","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T754","issue":754,"title":"T754: Recovered misses close the inference checkpoints they leave open","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T755","issue":755,"title":"T755: Generated mutable guard places format their copy macro","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T756","issue":756,"title":"T756: quick-xml scope frames: receiver moves, closure parameters, lent lifetimes, frame buffers","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T754","issue":754,"title":"T754: Recovered misses close the inference checkpoints they leave open","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.105"},
+    {"t":"T755","issue":755,"title":"T755: Generated mutable guard places format their copy macro","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.105"},
+    {"t":"T756","issue":756,"title":"T756: quick-xml scope frames: receiver moves, closure parameters, lent lifetimes, frame buffers","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":"0.3.105"}
   ]
 }
