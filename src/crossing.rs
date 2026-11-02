@@ -239,7 +239,7 @@ impl std::fmt::Debug for Proxy {
 }
 
 /// One of std's types that Rawr's own std holds as its Rust value
-/// (`rawr_import::surface::identity::STD_TYPES`): a crate's `PathBuf` or
+/// (`rawr_import::classify::std_binding`): a crate's `PathBuf` or
 /// `io::Error` is the program's, so native code takes, gives and borrows
 /// the value itself.
 pub trait Std: Sized + 'static {

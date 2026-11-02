@@ -3272,6 +3272,13 @@ impl Types {
                 {
                     return Ok(host::type_ref::Type::range_inclusive_of(element));
                 }
+                // alloc's `Box<T>`: rawr's `Box` (D711 step 5).
+                if *definition == rawr_import::surface::identity::Definition::boxed()
+                    && converted.len() == 1
+                    && let Some(element) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::boxed(element));
+                }
                 host::type_ref::Type::imported_boxed(
                     imported_identity(*definition),
                     converted.into_boxed_slice(),

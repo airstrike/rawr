@@ -2053,6 +2053,14 @@ fn imported_surface_type(
                 arguments: converted.into_boxed_slice(),
             }
         }
+        // A `Box<T>`: alloc's, which a crate's signature names (D711
+        // step 5).
+        Ty::Boxed(inner) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::boxed(),
+            arguments: Box::new([imported_surface_type(
+                inference, models, inner, operation, imported,
+            )?]),
+        },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
@@ -2405,6 +2413,10 @@ fn instance_surface_type(
                 .iter()
                 .map(|argument| instance_surface_type(inference, models, argument))
                 .collect::<Option<_>>()?,
+        },
+        Ty::Boxed(inner) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::boxed(),
+            arguments: Box::new([instance_surface_type(inference, models, inner)?]),
         },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
@@ -17576,6 +17588,9 @@ impl<'a> Parser<'a> {
             Ty::Keyed(..) | Ty::Reverse(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
+            // A `Box` is its value at runtime (D492.3), which a crate's
+            // `Box<T>` boxes where it takes it.
+            Ty::Boxed(inner) => self.proven_type(&inner, operation, span)?,
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
@@ -17726,7 +17741,6 @@ impl<'a> Parser<'a> {
             Ty::Never
             | Ty::Param(_)
             | Ty::Projection(..)
-            | Ty::Boxed(..)
             | Ty::Counted(..)
             | Ty::Weak(..)
             | Ty::Dyn(..) => {
@@ -17878,12 +17892,15 @@ impl<'a> Parser<'a> {
     fn takes_range(&self, items: &[crate::host::item::Definition], index: usize) -> bool {
         items.iter().any(|item| {
             let signature = item.signature();
-            let Some(crate::host::type_ref::Shape::Parameter(name)) = signature
+            let name = match signature
                 .parameters()
                 .get(index)
                 .map(crate::host::type_ref::Type::shape)
-            else {
-                return false;
+            {
+                // A `Range<usize>` the item takes itself (#707).
+                Some(crate::host::type_ref::Shape::Range(_)) => return true,
+                Some(crate::host::type_ref::Shape::Parameter(name)) => name,
+                _ => return false,
             };
             signature.relations().iter().any(|relation| {
                 relation.parameter() == name.to_string()
@@ -19289,6 +19306,14 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             },
+            Shape::Boxed(element) => Ty::Boxed(Box::new(self.instantiate_host_type(
+                element,
+                parameters,
+                operation,
+                span,
+                owner,
+                originating,
+            )?)),
             Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -28343,7 +28368,10 @@ impl<'a> Parser<'a> {
                             return Err(self.unsupported("`for` over a value that is not iterable"))
                         }
                     },
-                    _ => return Err(self.unsupported("`for` over a value that is not iterable")),
+                    _ => {
+                        let fallback = self.unsupported("`for` over a value that is not iterable");
+                        return Err(self.pipeline_error(&lhs, fallback));
+                    }
                 };
                 // `for x in v` takes `v`: a later use is rustc's E0382.
                 let mut lhs = lhs;
@@ -33784,6 +33812,16 @@ impl<'a> Parser<'a> {
             self.require_type(&from_str_error, error, span)?;
             return Ok(Some(method_name(definition.id())));
         }
+        // A crate type's `impl FromStr`: its `from_str`, which the importer
+        // brings as it brings any member of the type (#709).
+        #[cfg(feature = "rust-import")]
+        if let Ty::Host { proof, .. } = &resolved
+            && proof.definition.identity().imported().is_some()
+        {
+            return self
+                .host_from_str(&proof.definition.path(), target, error, span)
+                .map(Some);
+        }
         match resolved {
             Ty::Infer(_) if !last => Ok(None),
             Ty::Infer(_) => Err(Error::InvalidMethodCall {
@@ -33800,6 +33838,48 @@ impl<'a> Parser<'a> {
                 required_by: None,
             }),
         }
+    }
+
+    /// The helper that parses into the crate type at `path` through its
+    /// `impl FromStr`: the facade's `from_str`, whose `Result` gives
+    /// `target` and the parse's `error`.
+    #[cfg(feature = "rust-import")]
+    fn host_from_str(
+        &mut self,
+        path: &str,
+        target: &Ty,
+        error: &Ty,
+        span: Span,
+    ) -> Result<String, Error> {
+        let member = format!("{path}::from_str");
+        let Some(items) = self.models.host_items(&member).map(<[_]>::to_vec) else {
+            let miss = Error::UnknownMember {
+                owner: path.into(),
+                member: "from_str".into(),
+                reference: span,
+            };
+            return Err(self.native_miss(true, miss));
+        };
+        let owner = self.models.item_owner(&member).cloned();
+        let text = self.operator_expr(origin::Fragment::plain("()".to_owned()), Ty::Str, span);
+        let mut arguments = vec![text];
+        let (item, signature) =
+            self.select_host_signature(&items, None, &mut arguments, false, span)?;
+        let output = self.inference.resolve(&signature.output);
+        let Ty::Result(parsed, failed) = &output else {
+            return Err(self.unsupported("a `from_str` that gives no `Result`"));
+        };
+        self.require_type(parsed, target, span)?;
+        self.require_type(failed, error, span)?;
+        self.push_intrinsic(
+            item,
+            owner,
+            None,
+            &mut arguments,
+            output,
+            signature.requirements,
+            span,
+        )
     }
 
     /// The program's `impl FromStr for` the type `id`: its `from_str`, and
@@ -36068,6 +36148,27 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         if let Some(indexed) = self.index_impl(&value, &mut index, end)? {
             return Ok(indexed);
+        }
+        // `value[index]` of a crate type: its `impl Index<Idx>`'s `index`,
+        // which the importer brings as any member of the type (#709).
+        #[cfg(feature = "rust-import")]
+        {
+            let mut owner = self.inference.resolve(&value.ty);
+            while let Ty::Reference { target, .. } = owner {
+                owner = self.inference.resolve(&target);
+            }
+            if let Ty::Host { proof, .. } = &owner
+                && proof.definition.identity().imported().is_some()
+            {
+                let expression = span(value.span.start(), end);
+                self.pending_arguments = Some((vec![index], end));
+                let mut indexed = self.parse_host_method(value, "index".into(), expression)?;
+                if let Ty::Reference { target, .. } = self.inference.resolve(&indexed.ty) {
+                    indexed.ty = *target;
+                }
+                indexed.span = expression;
+                return Ok(indexed);
+            }
         }
         if let Some(keyed) = self.keyed_type(&value.ty) {
             return self.keyed_index(value, keyed, index, end);
@@ -41448,6 +41549,11 @@ impl<'a> Parser<'a> {
                 source.push(rendered);
                 source.push_text(format!("; }} {text} + \"}}\" }}"));
                 source
+            }
+            // `Range<usize>` a crate gives (#707): its `Range<i64>` value,
+            // which shows as Rust's `0..5` does.
+            Ty::Range(element) if matches!(**element, Ty::Int(_)) => {
+                self.prelude_op(PreludeOp::GenericDebug, [value])
             }
             // A facade type providing `Debug`: Rust's text, as its facade
             // registered it (`host::debug`).

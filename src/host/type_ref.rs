@@ -121,6 +121,8 @@ pub(crate) enum Shape {
     Iter(Box<Type>),
     /// Rust's `std::ops::Range<T>` of a float: a `Range<f64>` at runtime.
     Range(Box<Type>),
+    /// Rust's `Box<T>`: rawr's `Box`, its value at runtime (D711 step 5).
+    Boxed(Box<Type>),
     /// Rust's `std::ops::RangeInclusive<T>` of a type parameter `T`:
     /// Rawr's `RangeInclusive<f64>` or `RangeInclusive<i64>` at runtime as
     /// `T` is a float or an integer.
@@ -187,6 +189,7 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
+            | Shape::Boxed(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
@@ -240,6 +243,7 @@ impl Type {
                 target: Box::new(target.try_clone()?),
             },
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
+            Shape::Boxed(element) => Shape::Boxed(Box::new(element.try_clone()?)),
             Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
             Shape::RangeInclusive(element) => Shape::RangeInclusive(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
@@ -328,6 +332,13 @@ impl Type {
     #[must_use]
     pub fn iterator(element: Self) -> Self {
         Self(Shape::Iter(Box::new(element)))
+    }
+
+    /// Construct Rust's `Box<element>`, rawr's `Box`, which holds its
+    /// value as itself at runtime.
+    #[must_use]
+    pub fn boxed(element: Self) -> Self {
+        Self(Shape::Boxed(Box::new(element)))
     }
 
     /// Construct Rust's `std::ops::Range<element>` of a float, a
@@ -491,6 +502,9 @@ impl Type {
             Shape::Iter(element) => Ok(Self::iterator(
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
+            Shape::Boxed(element) => Ok(Self::boxed(
+                element.resolve(root, types, parameters, _imported, item)?,
+            )),
             Shape::Range(element) => Ok(Self::range(
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
@@ -620,6 +634,7 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
+            | Shape::Boxed(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.resolve_imported(root, types, parameters, imported, item, allocation)?;
@@ -776,6 +791,7 @@ impl Type {
                 target: element, ..
             }
             | Shape::Iter(element)
+            | Shape::Boxed(element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.collect_exports(exports);
@@ -869,6 +885,10 @@ impl crate::digest::Write for Type {
             }
             Shape::Iter(element) => {
                 writer.tag(0x230e);
+                element.write(writer)?;
+            }
+            Shape::Boxed(element) => {
+                writer.tag(0x2317);
                 element.write(writer)?;
             }
             Shape::Range(element) => {
