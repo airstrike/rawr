@@ -179,12 +179,23 @@ impl Parser<'_> {
         let kind = crate::resolve::std_collection(name)
             .and_then(Keyed::from_name)
             .expect("a std collection's name");
-        let arity = if kind.is_map() { 2 } else { 1 };
+        // std's arity (D711): `HashMap<K, V, S = RandomState>`.
+        let fallback = if kind.is_map() { 2 } else { 1 };
+        let (required, stable) =
+            crate::resolve::std_path::arity(kind.name()).unwrap_or((fallback, fallback));
         let mut arguments = Vec::new();
         if matches!(self.peek(), Token::LessThan) {
             self.next();
             while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                arguments.push(self.parse_local_type()?);
+                match self.parse_local_type() {
+                    Ok(ty) => arguments.push(ty),
+                    // A hasher Rawr has no representation for: its own map
+                    // stands in for it.
+                    Err(Error::NotYet { .. }) if arguments.len() >= required => {
+                        arguments.push(Ty::Unit);
+                    }
+                    Err(error) => return Err(error),
+                }
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
                 } else {
@@ -193,14 +204,26 @@ impl Parser<'_> {
             }
             self.expect_close_angle("'>' after a map or set's type arguments")?;
         }
-        if arguments.len() != arity {
+        if arguments.len() > stable
+            && let Some(error) =
+                crate::resolve::std_path::unstable_argument(kind.name(), stable, name_span)
+        {
+            return Err(error);
+        }
+        if arguments.len() < required || arguments.len() > stable {
             return Err(Error::InvalidTypeArguments {
                 ty: kind.name().into(),
-                expected: arity,
+                expected: if arguments.len() < required {
+                    required
+                } else {
+                    stable
+                },
                 actual: arguments.len(),
                 reference: name_span,
             });
         }
+        // Rawr's map is the same whatever its hasher is.
+        arguments.truncate(required);
         Ok(Ty::Keyed(kind, arguments.into_boxed_slice()))
     }
 

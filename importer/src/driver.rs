@@ -134,6 +134,15 @@ fn execute() -> Result<ExitCode, String> {
         println!("rawr-import-driver {PLAN_SCHEMA} {PROTOCOL_SCHEMA} {COMPILER_COMMIT}");
         return Ok(ExitCode::SUCCESS);
     }
+    if arguments
+        .get(1)
+        .is_some_and(|mode| mode.starts_with("--std-catalog"))
+    {
+        return std_catalog(&arguments);
+    }
+    if arguments.get(1).is_some_and(|mode| mode == "--std-table") {
+        return std_table(&arguments);
+    }
     if !(6..=7).contains(&arguments.len()) {
         return Err(
             "usage: rawr-import-driver (--probe|--diagnostic-probe) RUSTC PLAN PROTOCOL_DIRECTORY PROBE_SOURCE [REUSE_DIRECTORY]".to_owned(),
@@ -266,6 +275,149 @@ fn execute() -> Result<ExitCode, String> {
         diagnose_recursion,
         reuse,
     )
+}
+
+/// D711 step 0, a prototype outside the probe protocol:
+/// `--std-catalog RUSTC OUT TARGET` walks the sysroot's core, alloc and std
+/// whole into `OUT/catalog.json`; `--std-catalog-pack OUT` writes the
+/// shipped form; `--std-catalog-decode OUT (all|stable) DEMAND` times a
+/// warm run's lazy decode of the records `DEMAND` names.
+fn std_catalog(arguments: &[String]) -> Result<ExitCode, String> {
+    let usage = || {
+        "usage: rawr-import-driver --std-catalog RUSTC OUT TARGET | --std-catalog-pack OUT | --std-catalog-decode OUT BLOB DEMAND".to_owned()
+    };
+    match (arguments[1].as_str(), arguments.len()) {
+        ("--std-catalog-pack", 3) => {
+            compiler::std_catalog::pack(Path::new(&arguments[2]))?;
+            Ok(ExitCode::SUCCESS)
+        }
+        ("--std-catalog-decode", 5) => {
+            compiler::std_catalog::decode(
+                Path::new(&arguments[2]),
+                &arguments[3],
+                Path::new(&arguments[4]),
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
+        ("--std-catalog", 5) => {
+            let rustc = PathBuf::from(&arguments[2]);
+            let out = PathBuf::from(&arguments[3]);
+            let target = arguments[4].clone();
+            let sysroot = rustc
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| "pinned rustc has no sysroot parent".to_owned())?;
+            fs::create_dir_all(&out).map_err(|error| error.to_string())?;
+            let source = out.join("probe.rs");
+            fs::write(&source, "pub fn probe() {}\n").map_err(|error| error.to_string())?;
+            let compiler_arguments = vec![
+                rustc.display().to_string(),
+                "--crate-name=rawr_std_catalog".to_owned(),
+                "--edition=2024".to_owned(),
+                "--crate-type=rlib".to_owned(),
+                format!("--target={target}"),
+                format!("--sysroot={}", sysroot.display()),
+                "--emit=metadata".to_owned(),
+                format!("--out-dir={}", out.display()),
+                "-Zunstable-options".to_owned(),
+                "--cap-lints=allow".to_owned(),
+                source.display().to_string(),
+            ];
+            let invocation = compiler::Invocation {
+                inventory: true,
+                package: compiler::Package {
+                    cargo_id: String::new(),
+                    name: "std".to_owned(),
+                    version: String::new(),
+                    source: String::new(),
+                },
+                root: compiler::Root::Selected {
+                    aliases: vec!["std".to_owned()],
+                },
+                demand: Vec::new(),
+                unit_key: String::new(),
+                dependencies: Vec::new(),
+                closure: Vec::new(),
+                target: String::new(),
+                target_kind: String::new(),
+                target_kinds: Vec::new(),
+                crate_types: Vec::new(),
+                crate_name: "std".to_owned(),
+                edition: "2024".to_owned(),
+                profile: String::new(),
+                host: target.clone(),
+                selected_target: target,
+                features: Vec::new(),
+                invocation_nonce: String::new(),
+                unit_correlation: String::new(),
+                compiler_commit: COMPILER_COMMIT.to_owned(),
+                protocol_directory: out.clone(),
+                artifact: compiler::Artifact {
+                    path: String::new(),
+                    length: 0,
+                    digest: String::new(),
+                    profile: String::new(),
+                    fresh: false,
+                    probe_alias: String::new(),
+                },
+            };
+            let mut callbacks = compiler::std_catalog::StdCatalog {
+                invocation: Some(invocation),
+                out,
+                result: None,
+            };
+            let exit = rustc_driver::catch_with_exit_code(|| {
+                rustc_driver::run_compiler(&compiler_arguments, &mut callbacks);
+            });
+            match callbacks.result {
+                Some(Err(error)) => Err(error),
+                Some(Ok(())) => Ok(ExitCode::SUCCESS),
+                None => Ok(exit),
+            }
+        }
+        _ => Err(usage()),
+    }
+}
+
+/// D711 step 1: `--std-table RUSTC OUT TARGET` writes the std table rawr
+/// embeds, `OUT/paths.tsv` and `OUT/items.tsv` (`scripts/std-table.sh`).
+fn std_table(arguments: &[String]) -> Result<ExitCode, String> {
+    let [_, _, rustc, out, target] = arguments else {
+        return Err("usage: rawr-import-driver --std-table RUSTC OUT TARGET".to_owned());
+    };
+    let rustc = PathBuf::from(rustc);
+    let out = PathBuf::from(out);
+    let sysroot = rustc
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "pinned rustc has no sysroot parent".to_owned())?;
+    let scratch = std::env::temp_dir().join(format!("rawr-std-table-{}", std::process::id()));
+    fs::create_dir_all(&scratch).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&out).map_err(|error| error.to_string())?;
+    let source = scratch.join("probe.rs");
+    fs::write(&source, "pub fn probe() {}\n").map_err(|error| error.to_string())?;
+    let compiler_arguments = vec![
+        rustc.display().to_string(),
+        "--crate-name=rawr_std_table".to_owned(),
+        "--edition=2024".to_owned(),
+        "--crate-type=rlib".to_owned(),
+        format!("--target={target}"),
+        format!("--sysroot={}", sysroot.display()),
+        "--emit=metadata".to_owned(),
+        format!("--out-dir={}", scratch.display()),
+        "--cap-lints=allow".to_owned(),
+        source.display().to_string(),
+    ];
+    let mut callbacks = compiler::std_table::StdTable { out, result: None };
+    let exit = rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::run_compiler(&compiler_arguments, &mut callbacks);
+    });
+    let _ = fs::remove_dir_all(&scratch);
+    match callbacks.result {
+        Some(Err(error)) => Err(error),
+        Some(Ok(())) => Ok(ExitCode::SUCCESS),
+        None => Ok(exit),
+    }
 }
 
 fn validate_rustc_stack_authority(value: Option<&OsStr>) -> Result<(), String> {

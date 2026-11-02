@@ -12191,3 +12191,186 @@ fn language_an_into_whose_target_nothing_fixes_needs_annotations() {
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
+
+// D711 step 1: std's paths, globs and arities come from std's table.
+
+#[test]
+fn language_std_paths_resolve_through_every_reexport() {
+    let value = run(r#"
+        use std::collections::hash_map::HashMap;
+        use alloc::collections::BTreeMap;
+        use core::cmp::Ordering;
+        use std::fmt::{self, Display};
+        struct Point(i64);
+        impl Display for Point {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        pub fn run() -> i64 {
+            let mut map: HashMap<i64, i64> = HashMap::new();
+            map.insert(1, 2);
+            let mut tree: alloc::collections::BTreeMap<i64, i64> = BTreeMap::new();
+            tree.insert(3, 4);
+            let order = if 1.cmp(&2) == Ordering::Less { 10 } else { 0 };
+            let shown = format!("{}", Point(5)).len() as i64;
+            map[&1] + tree[&3] + order + shown + core::cmp::max(1, 2)
+        }
+        run()
+    "#);
+    assert_eq!(value, 2 + 4 + 10 + 1 + 2);
+}
+
+#[test]
+fn language_std_globs_bind_every_name_of_the_module() {
+    let value = run(r#"
+        use std::collections::*;
+        use std::cmp::*;
+        use std::cmp::Ordering;
+        pub fn run() -> i64 {
+            let mut deque: VecDeque<i64> = VecDeque::new();
+            deque.push_back(7);
+            let mut set: BTreeSet<i64> = BTreeSet::new();
+            set.insert(1);
+            let order = if max(1, 2) == 2 { Ordering::Less } else { Ordering::Greater };
+            deque[0] + set.len() as i64 + if order == Ordering::Less { 100 } else { 0 }
+        }
+        run()
+    "#);
+    assert_eq!(value, 108);
+}
+
+#[test]
+fn language_std_arities_take_their_defaults() {
+    // std's `HashMap<K, V, S = RandomState>` and `HashSet<T, S>`.
+    let value = run(r#"
+        use std::collections::{HashMap, HashSet};
+        use std::hash::RandomState;
+        pub fn run() -> i64 {
+            let mut map: HashMap<i64, i64, RandomState> = HashMap::new();
+            map.insert(1, 41);
+            let mut set: HashSet<i64, std::collections::hash_map::RandomState> = HashSet::new();
+            set.insert(1);
+            map[&1] + set.len() as i64
+        }
+        run()
+    "#);
+    assert_eq!(value, 42);
+    // Too many, too few, and an unstable parameter's argument (rustc's
+    // E0658 for `Vec<T, A>`'s `A`).
+    let error = rejected("pub fn run() -> i64 { let v: Vec<i64, i64, i64> = Vec::new(); 0 } run()");
+    assert!(
+        error.contains("use of unstable library feature `allocator_api`"),
+        "{error}"
+    );
+    let error = rejected("fn take(v: Vec<i64, i64, i64>) {}\npub fn run() -> i64 { 0 } run()");
+    assert!(
+        error.contains("use of unstable library feature `allocator_api`"),
+        "{error}"
+    );
+    let error = rejected("fn take(o: Option) {}\npub fn run() -> i64 { 0 } run()");
+    assert!(error.contains("Option': expected 1, found 0"), "{error}");
+    let error = rejected(
+        "use std::collections::HashMap;\n\
+         pub fn run() -> i64 { let m: HashMap<i64, i64, std::hash::RandomState, std::alloc::Global> = HashMap::new(); 0 } run()",
+    );
+    assert!(
+        error.contains("use of unstable library feature `allocator_api`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn language_core_paths_rustc_refuses_are_refused() {
+    // rustc 1.96: core has no `collections`, `thread`, `rc` or `string`,
+    // and `Instant` and `Arc` are std's alone.
+    for (source, expected) in [
+        (
+            "use core::collections::HashMap;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::collections`",
+        ),
+        (
+            "use core::rc::Rc;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::rc`",
+        ),
+        (
+            "use core::sync::Arc;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::sync::Arc`",
+        ),
+        (
+            "use core::time::Instant;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::time::Instant`",
+        ),
+        (
+            "use core::string::FromUtf8Error;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::string`",
+        ),
+        (
+            "use core::thread;\npub fn run() -> i64 { 0 } run()",
+            "unresolved import `core::thread`",
+        ),
+        (
+            "pub fn run() -> i64 { core::thread::sleep(std::time::Duration::from_millis(1)); 0 } run()",
+            "cannot find `thread` in `core`",
+        ),
+        (
+            "pub fn run() -> i64 { let x: Option<core::time::Instant> = None; 0 } run()",
+            "cannot find type `Instant` in module `core::time`",
+        ),
+        (
+            "fn take(x: core::string::FromUtf8Error) {}\npub fn run() -> i64 { 0 } run()",
+            "cannot find `string` in `core`",
+        ),
+    ] {
+        let error = rejected(source);
+        assert!(error.contains(expected), "{source}\n{error}");
+    }
+}
+
+#[test]
+fn language_unstable_std_items_are_rustcs_e0658() {
+    let error = rejected("use std::intrinsics::transmute;\npub fn run() -> i64 { 0 } run()");
+    assert!(
+        error.contains(
+            "use of unstable library feature `core_intrinsics`: intrinsics are unlikely to ever \
+             be stabilized, instead they should be used through stabilized interfaces in the \
+             rest of the standard library"
+        ),
+        "{error}"
+    );
+    let error = rejected("pub fn run() -> i64 { let t = std::f16::consts::PI; 0 } run()");
+    assert!(
+        error.contains("use of unstable library feature `f16`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn language_std_items_rawr_cannot_run_fail_at_their_use() {
+    // The `use` resolves: std has the item, and nothing names it.
+    run("use std::sync::mpsc::channel;\nuse std::sync::Mutex;\npub fn run() -> i64 { 1 } run()");
+    for (source, path) in [
+        (
+            "use std::sync::mpsc::channel;\npub fn run() -> i64 { let (a, b) = channel::<i64>(); 0 } run()",
+            "std::sync::mpsc::channel",
+        ),
+        (
+            "use std::sync::Mutex;\nfn take(m: Mutex<i64>) {}\npub fn run() -> i64 { 0 } run()",
+            "std::sync::Mutex",
+        ),
+        (
+            "pub fn run() -> i64 { let x: Option<std::num::NonZeroU8> = None; 0 } run()",
+            "std::num::NonZeroU8",
+        ),
+        (
+            "pub fn run() -> i64 { std::process::abort(); 0 } run()",
+            "std::process::abort",
+        ),
+    ] {
+        let error = rejected(source);
+        assert!(
+            error.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{source}\n{error}"
+        );
+    }
+}

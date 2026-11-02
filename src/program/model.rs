@@ -662,7 +662,8 @@ impl Model {
                 }
                 type_ref::Target::Parameter
                 | type_ref::Target::Projection(..)
-                | type_ref::Target::Alias(_) => Err(construction::Error::ValueType {
+                | type_ref::Target::Alias(_)
+                | type_ref::Target::Std(_) => Err(construction::Error::ValueType {
                     expected: path.name.clone(),
                     actual: "no executable Default implementation of a generic parameter".into(),
                 }),

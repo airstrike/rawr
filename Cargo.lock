@@ -3007,6 +3007,7 @@ dependencies = [
  "rawr-location",
  "rawr-toml",
  "rawr-toml-edit",
+ "rmp-serde",
  "rustix 1.1.4",
  "semver",
  "serde",

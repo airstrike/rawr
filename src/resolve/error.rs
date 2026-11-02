@@ -72,6 +72,11 @@ pub enum Category {
     /// A root `main` that is `async` with no runtime's entry, as rustc's
     /// E0752.
     AsyncMain,
+    /// A path into std, core or alloc that rustc refuses: one std doesn't
+    /// have (E0432, E0433, E0425), or an unstable item (E0658).
+    StdPath,
+    /// A std item rawr resolves but can't run yet (D712.1).
+    NotYet,
     /// A generic parameter whose type nothing gives, as rustc's E0282.
     TypeAnnotationsNeeded,
     /// A call with more or fewer arguments than its callee takes, as
@@ -121,6 +126,8 @@ impl fmt::Display for Category {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
             Self::AsyncMain => formatter.write_str("async main"),
+            Self::StdPath => formatter.write_str("std path"),
+            Self::NotYet => formatter.write_str("not yet run"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
@@ -530,6 +537,28 @@ pub enum Error {
         /// The function's signature, from `async` to its output.
         at: Span,
     },
+    /// A path into std, core or alloc that rustc refuses, in rustc's words:
+    /// one std doesn't have (E0432, E0433, E0425), or an unstable item
+    /// (E0658). From the std table (D711).
+    StdPath {
+        /// rustc's code.
+        code: &'static str,
+        /// rustc's message.
+        message: ImmutableString,
+        /// rustc's label on the path, when it has one.
+        label: Option<ImmutableString>,
+        /// rustc's note, as E0658's issue link.
+        note: Option<ImmutableString>,
+        /// The path.
+        reference: Span,
+    },
+    /// A std item rawr resolves but can't run yet, at its use (D712.1).
+    NotYet {
+        /// The item's path as the program names it: `std::sync::Mutex`.
+        path: ImmutableString,
+        /// The use.
+        reference: Span,
+    },
     /// A call of a generic function that gives one of its type parameters
     /// no type, which rustc refuses (E0282).
     TypeAnnotationsNeeded {
@@ -640,6 +669,8 @@ impl Error {
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
+            Self::StdPath { .. } => Category::StdPath,
+            Self::NotYet { .. } => Category::NotYet,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
@@ -684,6 +715,8 @@ impl Error {
             Self::Syntax { message, .. } => message.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
+            Self::StdPath { message, .. } => message.as_str(),
+            Self::NotYet { path, .. } => path.as_str(),
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
             Self::CannotCompare { lhs, .. } => lhs.as_str(),
@@ -726,6 +759,7 @@ impl Error {
             Self::InvalidMatch { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } => *at,
+            Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
@@ -778,6 +812,8 @@ impl Error {
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
+            | Self::StdPath { .. }
+            | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
             | Self::ArgumentSignature { .. } => None,
@@ -1042,6 +1078,15 @@ impl fmt::Display for Written<'_> {
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
+            Error::StdPath {
+                code,
+                message,
+                reference,
+                ..
+            } => write!(formatter, "{message} at {reference} ({code})"),
+            Error::NotYet { path, reference } => {
+                write!(formatter, "rawr doesn't run `{path}` yet at {reference}")
+            }
             Error::TypeAnnotationsNeeded {
                 parameter,
                 reference,

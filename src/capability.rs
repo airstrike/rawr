@@ -833,7 +833,8 @@ pub(crate) fn type_supports(
             // instantiated, as a derive's bounds are.
             type_ref::Target::Parameter
             | type_ref::Target::Projection(..)
-            | type_ref::Target::Alias(_) => true,
+            | type_ref::Target::Alias(_)
+            | type_ref::Target::Std(_) => true,
             type_ref::Target::Host { definition, .. } => {
                 definition.capabilities().contains(capability)
             }

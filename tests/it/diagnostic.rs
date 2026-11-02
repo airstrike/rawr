@@ -104,3 +104,26 @@ fn serde_exports_only_the_stable_read_only_view() {
     assert!(json.contains("\"category\":\"environment\""));
     assert!(json.contains("\"labels\":[]"));
 }
+
+/// rustc's codes for std paths (D711): E0432, E0433, E0425, E0658, and
+/// rawr's own for an item it can't run yet.
+#[test]
+fn std_path_errors_carry_rustcs_codes() {
+    for (text, code, message) in [
+        ("use core::collections::HashMap;\n", "E0432", "unresolved import `core::collections`"),
+        ("fn f() { core::thread::sleep(); }\n", "E0433", "cannot find `thread` in `core`"),
+        ("struct S { at: core::time::Instant }\n", "E0425", "cannot find type `Instant` in module `core::time`"),
+        ("use std::intrinsics::abort;\n", "E0658", "use of unstable library feature `core_intrinsics`"),
+        ("struct S { lock: std::sync::Mutex<i64> }\n", "RAWR-NOT-YET", "rawr doesn't run `std::sync::Mutex` yet"),
+    ] {
+        let error = Engine::new().compile(text).unwrap_err();
+        let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
+        assert_eq!(report.code().as_str(), code, "{text}");
+        assert!(report.message().starts_with(message), "{text}: {}", report.message());
+    }
+    let text = "struct S { values: Vec<i64, std::alloc::Global> }\n";
+    let error = Engine::new().compile(text).unwrap_err();
+    let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
+    assert_eq!(report.code().as_str(), "E0658");
+    assert_eq!(report.notes().collect::<Vec<_>>(), ["see issue #32838 <https://github.com/rust-lang/rust/issues/32838> for more information"]);
+}

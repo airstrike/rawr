@@ -83,6 +83,11 @@ jobs:
             --features rustc-driver --bin rawr-import-driver
           echo "$PWD/target/release" >> "$GITHUB_PATH"
 
+      # rawr embeds std's table for the pinned nightly (D711): it must be
+      # the one this nightly gives.
+      - name: Check the std table is current
+        run: RAWR_IMPORT_DRIVER="$PWD/target/release/rawr-import-driver" scripts/std-table.sh --check
+
       # semver has a build script, so the run enumerates the build directory
       # the original Linux report failed on. stdin is not a terminal, so the
       # run ends with the program instead of waiting for a save. rawr runs

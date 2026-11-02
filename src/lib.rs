@@ -175,6 +175,8 @@ pub mod signature;
 /// Source text retained by parsed compilation units.
 pub mod source;
 mod std_facade;
+// D711: std's paths, kinds, stability and generics, from the sysroot.
+pub(crate) mod std_table;
 mod tests;
 /// Host-requested timing observations.
 pub mod timing;

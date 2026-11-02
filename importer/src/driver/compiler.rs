@@ -42,6 +42,14 @@ mod table;
 #[path = "compiler/units.rs"]
 mod units;
 
+/// D711 step 0's whole walk of the sysroot (`--std-catalog`).
+#[path = "compiler/std_catalog.rs"]
+pub(super) mod std_catalog;
+
+/// D711 step 1's std table rawr embeds (`--std-table`).
+#[path = "compiler/std_table.rs"]
+pub(super) mod std_table;
+
 use engine::model::{
     Authority, Binding, Id, Namespace, Reexport, ReexportEvidence, ReexportId, ReexportKind,
     Scalar, ScalarPredicateOutcome, ScalarPredicateProof, Span,
@@ -1569,6 +1577,16 @@ impl Budget {
             items: 0,
             edges: 0,
             byte_limit: MAX_BYTES,
+        }
+    }
+
+    /// No byte limit, for the sysroot's whole walk (`std_catalog`).
+    pub(super) fn unlimited() -> Self {
+        Self {
+            bytes: 0,
+            items: 0,
+            edges: 0,
+            byte_limit: usize::MAX,
         }
     }
 

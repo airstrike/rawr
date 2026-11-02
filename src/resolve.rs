@@ -10,6 +10,7 @@ pub(crate) mod macro_rules;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
 pub(crate) mod package;
+pub(crate) mod std_path;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
@@ -667,7 +668,8 @@ fn invocation_path(ty: &type_ref::Type) -> Option<String> {
                 | type_ref::Target::Script { .. }
                 | type_ref::Target::Parameter
                 | type_ref::Target::Projection(..)
-                | type_ref::Target::Alias(_) => {}
+                | type_ref::Target::Alias(_)
+                | type_ref::Target::Std(_) => {}
             }
             path.arguments.iter().find_map(|argument| match argument {
                 type_ref::Argument::Type(ty) => invocation_path(ty),
@@ -1118,6 +1120,20 @@ fn resolve_imports(
 ) -> Result<Vec<Option<item::Use>>, Error> {
     let mut occupied = local_declarations.clone();
     let mut uses = vec![None; parsed_items.len()];
+    // A glob binds no name an explicit `use` binds, wherever that `use` is.
+    let explicit = parsed_items
+        .iter()
+        .filter_map(|parsed| match parsed {
+            crate::item::Parsed::Use(parsed)
+                if !matches!(parsed.tree, crate::item::UseTree::Glob { .. }) =>
+            {
+                Some(parsed.bindings())
+            }
+            _ => None,
+        })
+        .flatten()
+        .map(|(name, _)| name.text)
+        .collect::<std::collections::BTreeSet<_>>();
     // A `use` may start at a module another `use` imported, as Rust allows:
     // after `use iced::keyboard;`, `use keyboard::key;` names
     // `iced::keyboard::key`.
@@ -1224,9 +1240,11 @@ fn resolve_imports(
                 .iter()
                 .map(|segment| segment.name.text.clone())
                 .collect::<Vec<_>>();
-            let names = enum_variants(&segments).unwrap_or_else(|| std_glob(&module));
+            let names = enum_variants(&segments)
+                .or_else(|| std_path::glob(&module))
+                .unwrap_or_default();
             for name in names {
-                if !occupied.contains_key(&name) {
+                if !occupied.contains_key(&name) && !explicit.contains(&name) {
                     globbed.push((
                         crate::item::Name {
                             span: *span,
@@ -1270,7 +1288,7 @@ fn resolve_imports(
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
             let prefix = through_module(parsed_path(prefix));
             match host.entry(&std_reexport(&prefix, host)) {
-                None if std_fmt_import(&prefix) => {}
+                None if std_path::import(&prefix, prefix_span(&parsed.tree))?.is_some() => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
                 Some(
                     host::Entry::Item(_) | host::Entry::Builtin(_) | host::Entry::TypeAlias(_),
@@ -1351,6 +1369,13 @@ fn resolve_imports(
                     binding.name.text.clone(),
                     type_ref::Target::Alias(type_ref::Alias::builtin(builtin, binding.name.span)),
                 );
+            }
+            // A std type Rawr has no representation for yet names it, so
+            // its uses say so.
+            if matches!(binding.target, item::Import::Module)
+                && let Some(path) = std_path::unrepresented_type(&binding.qualified)
+            {
+                types.insert(binding.name.text.clone(), type_ref::Target::Std(path));
             }
             if matches!(binding.target, item::Import::Alias) {
                 match host.entry(&binding.qualified) {
@@ -1477,14 +1502,15 @@ fn resolve_import_binding(
         }
         // A crate's derive macro, as `use serde::Deserialize;`.
         None if host.derive_macro(&qualified) => item::Import::Derive,
-        // `use std::fmt;`, for hand-written `Debug` and `Display` impls,
-        // and `use tokio::join;`, a macro Rawr expands.
-        None if std_fmt_import(&qualified)
-            || tokio_macro(&qualified, host).is_some()
+        // `use tokio::join;`, a macro Rawr expands.
+        None if tokio_macro(&qualified, host).is_some()
             || qualified.contains("::") && hasher_alias(&qualified).is_some() =>
         {
             item::Import::Module
         }
+        // A path into std, which its uses name: `use std::fmt;` for
+        // hand-written `Debug` and `Display` impls.
+        None if std_path::import(&qualified, name.span)?.is_some() => item::Import::Module,
         None => {
             return Err(Error::UnknownImport {
                 path: qualified,
@@ -1579,123 +1605,6 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
 /// `rawr::future::Future`: its facade is installed.
 pub(crate) fn core_futures(host: &host::Registry) -> bool {
     host.type_(crate::future::facade::FUTURE).is_some()
-}
-
-/// `std::fmt` (or `core::fmt`) and its `Debug`, `Display` and `Formatter`,
-/// and `std::cmp` and its `Ordering`, `PartialOrd`, `Ord`, `min` and `max`: imports a
-/// hand-written `Debug`, `Display` or `Ord` impl names, which Rawr resolves
-/// by spelling, so the import binds nothing else.
-pub(crate) fn std_fmt_import(path: &str) -> bool {
-    let rest = path
-        .strip_prefix("std::")
-        .or_else(|| path.strip_prefix("core::"));
-    matches!(
-        rest,
-        Some(
-            "fmt"
-                | "fmt::Debug"
-                | "fmt::Display"
-                | "fmt::Formatter"
-                | "fmt::Write"
-                | "cmp"
-                | "cmp::Ordering"
-                | "cmp::PartialOrd"
-                | "cmp::Ord"
-                | "cmp::min"
-                | "cmp::max"
-                | "cmp::Reverse"
-                | "collections"
-                | "collections::HashMap"
-                | "collections::HashSet"
-                | "collections::BTreeMap"
-                | "collections::BTreeSet"
-                | "collections::VecDeque"
-                | "hash"
-                | "hash::Hash"
-                | "convert"
-                | "convert::TryFrom"
-                | "convert::TryInto"
-                | "num"
-                | "str::FromStr"
-                | "mem"
-                | "mem::swap"
-                | "mem::replace"
-                | "mem::take"
-                | "mem::size_of"
-                | "mem::size_of_val"
-                | "thread"
-                | "thread::sleep"
-                | "iter"
-                | "iter::once"
-                | "iter::empty"
-                | "iter::FromIterator"
-                | "time"
-                | "time::Duration"
-                | "time::Instant"
-                | "marker"
-                | "marker::PhantomData"
-                | "cell"
-                | "cell::RefCell"
-                | "cell::Cell"
-                | "error"
-                | "error::Error"
-                | "rc"
-                | "rc::Rc"
-                | "sync::Arc"
-        )
-    ) || rest.is_some_and(|rest| std_parse_error(rest).is_some() && rest.contains("::"))
-        || rest.is_some_and(|rest| {
-            matches!(rest, "f32::consts" | "f64::consts") || float_constant(path).is_some()
-        })
-        || rest
-            .and_then(|rest| rest.strip_prefix("ops"))
-            .is_some_and(|rest| {
-                rest.is_empty()
-                    || rest.strip_prefix("::").is_some_and(|name| {
-                        OPERATOR_TRAITS
-                            .iter()
-                            .any(|(_, trait_name, _)| *trait_name == name)
-                            || matches!(name, "Index" | "IndexMut" | "Range" | "RangeInclusive")
-                    })
-            })
-}
-
-/// The names `use std::collections::*;` and its kin bind: each name of
-/// that std module that `std_fmt_import` knows. None for another module.
-pub(crate) fn std_glob(module: &str) -> Vec<ImmutableString> {
-    const NAMES: &[&str] = &[
-        "HashMap",
-        "HashSet",
-        "BTreeMap",
-        "BTreeSet",
-        "VecDeque",
-        "Debug",
-        "Display",
-        "Formatter",
-        "Write",
-        "Ordering",
-        "PartialOrd",
-        "Ord",
-        "min",
-        "max",
-        "Reverse",
-        "Hash",
-        "TryFrom",
-        "TryInto",
-        "FromStr",
-        "swap",
-        "replace",
-        "take",
-        "size_of",
-        "size_of_val",
-        "Duration",
-        "Instant",
-    ];
-    NAMES
-        .iter()
-        .filter(|name| std_fmt_import(&format!("{module}::{name}")))
-        .map(|name| ImmutableString::from(*name))
-        .collect()
 }
 
 /// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is
@@ -3742,34 +3651,6 @@ pub(crate) const OPERATOR_TRAITS: [(&str, &str, &str); 22] = [
     (">>=", "ShrAssign", "shr_assign"),
 ];
 
-/// A std trait named by its path, as `std::fmt::Display` or `fmt::Debug`.
-fn std_trait(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item::Name> {
-    let [prefix @ .., last] = segments else {
-        return None;
-    };
-    (!prefix.is_empty()
-        && last.arguments.is_empty()
-        && BUILTIN_TRAITS.contains(&last.name.text.as_str())
-        && prefix.iter().all(|module| {
-            module.arguments.is_empty()
-                && matches!(
-                    module.name.text.as_str(),
-                    "std"
-                        | "core"
-                        | "fmt"
-                        | "clone"
-                        | "cmp"
-                        | "default"
-                        | "marker"
-                        | "iter"
-                        | "ops"
-                        | "hash"
-                        | "error"
-                )
-        }))
-    .then(|| last.name.clone())
-}
-
 /// The declaration of a std trait Rawr implements by hand. `Debug` and
 /// `Display` write into a `fmt::Formatter`, which is Rawr's `String`, and
 /// return `fmt::Result`, `Result<(), ()>`.
@@ -4945,7 +4826,7 @@ fn resolve_bounds_with_arguments(
                 ));
                 continue;
             }
-            if let Some(name) = std_trait(&bound.segments) {
+            if let Some(name) = std_path::trait_path(&bound.segments) {
                 traits.push(name);
                 continue;
             }
@@ -5031,7 +4912,7 @@ fn resolve_trait(
             arguments,
         });
     }
-    if let Some(name) = std_trait(&path.segments) {
+    if let Some(name) = std_path::trait_path(&path.segments) {
         return Ok(item::TraitImpl::User {
             name,
             arguments: Box::default(),
@@ -5683,6 +5564,7 @@ fn declared_type(
         | type_ref::Target::Parameter
         | type_ref::Target::Projection(..)
         | type_ref::Target::Alias(_)
+        | type_ref::Target::Std(_)
         | type_ref::Target::Script {
             identity: type_def::Identity::Host(_),
             ..
@@ -6258,7 +6140,7 @@ mod tests {
                     nominal_value(program, key.name())
                 }
                 Target::Host { .. } => panic!("test schemas contain no host values"),
-                Target::Alias(_) => panic!("test schemas contain no aliases"),
+                Target::Alias(_) | Target::Std(_) => panic!("test schemas contain no aliases"),
             },
         }
     }
