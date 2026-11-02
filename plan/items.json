@@ -749,6 +749,7 @@
     {"t":"T746","issue":746,"title":"T746: The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T747","issue":747,"title":"T747: The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T748","issue":748,"title":"T748: Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D711"],"commit":null,"release":null},
-    {"t":"T749","issue":749,"title":"T749: The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D711","D712"],"commit":null,"release":null}
+    {"t":"T749","issue":749,"title":"T749: The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":["D711","D712"],"commit":null,"release":null},
+    {"t":"T750","issue":750,"title":"T750: A &str inside a tuple or Option input is a &str in the runner as in the checker","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

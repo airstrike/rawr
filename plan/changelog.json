@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A `&str` inside a tuple or `Option` input, such as an async fn's `(&str, &Catalog)`, and a string literal beside a widget in `column!` are typed `&str`, as rustc reads them, after #706 made `String` and `&str` distinct.","issues":[750]}
+    ]
   },
   "releases": [
     {

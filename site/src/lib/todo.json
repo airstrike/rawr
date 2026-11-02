@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A `&str` inside a tuple or `Option` input, such as an async fn's `(&str, &Catalog)`, and a string literal beside a widget in `column!` are typed `&str`, as rustc reads them, after #706 made `String` and `&str` distinct.","issues":[750]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.102",
@@ -1773,7 +1778,8 @@
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc"},
     {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
     {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"open","category":"Divergences from rustc"},
-    {"issue":749,"title":"The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc"}
+    {"issue":749,"title":"The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc"},
+    {"issue":750,"title":"A &str inside a tuple or Option input is a &str in the runner as in the checker","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
