@@ -61,6 +61,9 @@ pub enum Kind {
     /// parameter, as iced's `Task::sip` takes `impl FnMut(S::Item) -> T`:
     /// the type the call fixes `S` to decides it (#568).
     ProjectedClosureInput,
+    /// A signature names a std type rawr doesn't take from or give to a
+    /// crate yet (D711 step 5, D712.1).
+    StdNotRun(crate::classify::std_binding::Unrun),
 }
 
 impl Kind {
@@ -121,6 +124,7 @@ impl Kind {
             Self::ProjectedClosureInput => {
                 "it takes a closure whose input is an associated type of a type parameter"
             }
+            Self::StdNotRun(unrun) => unrun.describe(),
         }
     }
 }
@@ -238,8 +242,10 @@ mod tests {
             Kind::FutureClosure,
             Kind::MacroRules,
             Kind::ProjectedClosureInput,
+            Kind::StdNotRun(crate::classify::std_binding::Unrun::Rc),
+            Kind::StdNotRun(crate::classify::std_binding::Unrun::Other),
         ];
-        assert_eq!(kinds.len(), 46);
+        assert_eq!(kinds.len(), 47);
         let encoded = kinds
             .iter()
             .map(|kind| serde_json::to_string(kind).expect("rejection kind encodes"))
