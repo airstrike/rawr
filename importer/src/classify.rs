@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 92;
+const CLASSIFIER_VERSION: u32 = 93;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7457,19 +7457,7 @@ impl<P: api::Phase> Context<'_, P> {
                 converted.ok_or(representability::reject::Kind::OpaqueType)??
             }
             model::Type::SelfType(id) => {
-                let index = self.graph.implementation_index(id).or_else(|| {
-                    // A trait's `Self` in a default method classified as a
-                    // member of one implementation is that type.
-                    self.trait_self.get().filter(|_| {
-                        self.graph
-                            .definition_index(id)
-                            .and_then(|index| self.graph.definitions().nth(index))
-                            .is_some_and(|definition| {
-                                matches!(definition.kind(), model::Kind::Trait { .. })
-                            })
-                    })
-                });
-                if let Some(index) = index {
+                if let Some(index) = self.self_implementation(id) {
                     let implementation = self
                         .graph
                         .implementations()
@@ -7593,10 +7581,10 @@ impl<P: api::Phase> Context<'_, P> {
                     arguments: arguments.into_boxed_slice(),
                 }
             }
-            // `<T as Iterator>::Item` of an `impl Iterator for T` the crate
-            // declares, as `next`'s `Option<Self::Item>` names it (D558
-            // slice 2).
-            model::Type::Projection { .. } => match self.iterator_item(ty) {
+            // `<T as Trait>::Name` of an impl of the trait for `T` that sets
+            // `Name`, as `next`'s `Option<Self::Item>` names an iterator's
+            // `Item` (D558 slice 2).
+            model::Type::Projection { .. } => match self.projected(ty) {
                 Some(item) => return self.convert(item),
                 None => return Err(representability::reject::Kind::Projection.into()),
             },
@@ -7944,10 +7932,30 @@ impl<P: api::Phase> Context<'_, P> {
         names.into_boxed_slice()
     }
 
-    /// The `Item` of the crate's `impl Iterator for T`, for the projection
-    /// `<T as Iterator>::Item` with that exact `T` (D558 slice 2). The
-    /// driver keeps an iterator impl's `Item` for this.
-    fn iterator_item<'g>(&'g self, ty: &model::Type) -> Option<&'g model::Type> {
+    /// The implementation whose type `Self` of `id` is: the implementation
+    /// itself, or, for a trait's `Self` in a default method classified as a
+    /// member of one implementation, that implementation.
+    fn self_implementation(&self, id: &api::identity::Definition) -> Option<usize> {
+        self.graph.implementation_index(id).or_else(|| {
+            self.trait_self.get().filter(|_| {
+                self.graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                    .is_some_and(|definition| {
+                        matches!(definition.kind(), model::Kind::Trait { .. })
+                    })
+            })
+        })
+    }
+
+    /// The type an implementation of the projection's trait at exactly its
+    /// arguments gives the projected associated type, as rustc normalizes
+    /// `<T as Trait>::Name`: the crate's `impl Iterator for T` gives `Item`
+    /// (D558 slice 2), and palette's blanket `Darken` applied to `Hsl`
+    /// gives `Scalar` as `Hsl`'s `Lighten` impl sets it (#727). The driver
+    /// keeps an iterator impl's `Item`, and an application's associated
+    /// types, for this.
+    fn projected<'g>(&'g self, ty: &model::Type) -> Option<&'g model::Type> {
         let model::Type::Projection {
             trait_id,
             associated,
@@ -7956,29 +7964,41 @@ impl<P: api::Phase> Context<'_, P> {
         else {
             return None;
         };
-        if !self.is_core_trait(trait_id, "Iterator")
-            || self
+        let name = self
+            .graph
+            .definition_index(associated)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|definition| definition.display_path().last())?;
+        let model::Argument::Type(self_type) = arguments.first()? else {
+            return None;
+        };
+        // A trait's `Self`, as a default method's `Self::Scalar` names it,
+        // is the type of the implementation it is a member of.
+        let self_type = match self_type {
+            model::Type::SelfType(id) => self
                 .graph
-                .definition_index(associated)
-                .and_then(|index| self.graph.definitions().nth(index))
-                .and_then(|definition| definition.display_path().last())
-                != Some("Item")
-        {
-            return None;
-        }
-        let [model::Argument::Type(self_type)] = &arguments[..] else {
-            return None;
+                .implementations()
+                .nth(self.self_implementation(id)?)?
+                .self_type(),
+            self_type => self_type,
         };
         self.graph
             .implementations_of(trait_id)
             .find_map(|implementation| {
-                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                let model::Trait::Trait {
+                    id,
+                    arguments: implemented,
+                } = implementation.trait_ref()
+                else {
                     return None;
                 };
-                if id != trait_id || implementation.self_type() != self_type {
+                if id != trait_id
+                    || implementation.self_type() != self_type
+                    || implemented.get(1..) != arguments.get(1..)
+                {
                     return None;
                 }
-                self.associated_type(implementation, "Item")
+                self.associated_type(implementation, name)
             })
     }
 

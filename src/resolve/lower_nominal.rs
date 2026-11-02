@@ -49628,7 +49628,10 @@ impl<'a> Parser<'a> {
     /// The script functions that fill `item`'s callable parameters as
     /// slots (D594): each named function or closure that captures nothing,
     /// by its position among the call's arguments. A closure that captures
-    /// crosses as a Rust closure that holds what it captured.
+    /// crosses as a Rust closure that holds what it captured, in a slot of
+    /// its own kind ([`Slot::closure`]).
+    ///
+    /// [`Slot::closure`]: rawr_import::surface::instance::Slot::closure
     #[cfg(feature = "rust-import")]
     fn crossing_slots(
         &self,
@@ -49638,6 +49641,22 @@ impl<'a> Parser<'a> {
         if !item.signature().crossing() {
             return Box::default();
         }
+        // An item of one callable parameter takes a closure that captures
+        // in its one closure class; one of several, as iced's `Task::sip`,
+        // in a slot of its own kind at each parameter, as the classifier
+        // has no one class for it.
+        let several = item
+            .signature()
+            .parameters()
+            .iter()
+            .filter(|parameter| {
+                matches!(
+                    parameter.shape(),
+                    crate::host::type_ref::Shape::Callable { .. }
+                )
+            })
+            .count()
+            > 1;
         arguments
             .enumerate()
             .filter_map(|(position, ty)| {
@@ -49653,9 +49672,15 @@ impl<'a> Parser<'a> {
                     .iter()
                     .find(|closure| closure.key == *function.key())
                     .is_some_and(|closure| !closure.captures.is_empty());
-                (!captures).then(|| {
+                if captures && !several {
+                    return None;
+                }
+                let position = u32::try_from(position).unwrap_or(u32::MAX);
+                Some(if captures {
+                    rawr_import::surface::instance::Slot::closure(position)
+                } else {
                     rawr_import::surface::instance::Slot::new(
-                        u32::try_from(position).unwrap_or(u32::MAX),
+                        position,
                         &format!("{:?}", function.key()),
                     )
                 })

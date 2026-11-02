@@ -934,7 +934,13 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     value,
                     alias,
                 } => {
-                    if self.definitions.contains_key(key) {
+                    // A blanket application's associated type is emitted
+                    // with the application each time a member demands it,
+                    // and is the same value each time.
+                    if let Some(existing) = self.definitions.get(key) {
+                        if existing.value.get() == value.get() && existing.id == *id {
+                            continue;
+                        }
                         return Err(Fault::Error(
                             "duplicate external definition identity".to_owned(),
                         ));

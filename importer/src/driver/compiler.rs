@@ -91,10 +91,12 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // Schema 38 applies a blanket implementation of a generic trait through each
 // of the type's own implementations of its bound, not only through one.
 // Schema 41 normalizes a projection a function or impl names in its own
-// environment, as `Self::Scalar` in an impl that sets it.
+// environment, as `Self::Scalar` in an impl that sets it. Schema 43 gives a
+// blanket implementation's application its associated types, normalized in
+// the context it applies through.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 42;
+const PROTOCOL_SCHEMA: u32 = 43;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
