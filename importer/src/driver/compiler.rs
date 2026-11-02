@@ -96,7 +96,7 @@ const DIAGNOSTIC_IDENTITY_BYTES: usize = 224;
 // the context it applies through.
 // `driver.rs`, `cargo/toolchain.rs` and `extract/protocol.rs` hold the same
 // number and move with it.
-const PROTOCOL_SCHEMA: u32 = 43;
+const PROTOCOL_SCHEMA: u32 = 44;
 
 pub(super) struct Invocation {
     pub(super) inventory: bool,
@@ -2227,8 +2227,48 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
                 || self.is_sysroot_crate(obligation.trait_id.krate)?
                 || self.tcx.def_kind(trait_item) != DefKind::AssocTy
-                || self.tcx.opt_rpitit_info(trait_item).is_some()
             {
+                return Ok(());
+            }
+            // The opaque type a trait's method returns, as iced's
+            // `Function::with` returns `impl Fn(B) -> O`: what each blanket
+            // implementation over a parameter of its own gives it, so the
+            // classifier can read it where a callable fills that parameter.
+            if self.tcx.opt_rpitit_info(trait_item).is_some() {
+                let mut implementations = Vec::new();
+                for impl_id in self.tcx.all_impls(obligation.trait_id) {
+                    self.budget.edge(1)?;
+                    if !self.reaches(impl_id.krate)?
+                        || self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive
+                    {
+                        continue;
+                    }
+                    let Some(reference) = self.tcx.impl_opt_trait_ref(impl_id) else {
+                        continue;
+                    };
+                    if matches!(
+                        reference
+                            .instantiate_identity()
+                            .skip_norm_wip()
+                            .self_ty()
+                            .kind(),
+                        ty::Param(_)
+                    ) {
+                        implementations.push(impl_id);
+                    }
+                }
+                implementations.sort_unstable_by_key(|impl_id| {
+                    self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+                });
+                let associated = Some(AssociatedObligation {
+                    kind: AssociatedDemandKind::SelectedMember,
+                    trait_item: Some(trait_item),
+                    arguments: Some(obligation.arguments),
+                    param_env: obligation.param_env,
+                });
+                for impl_id in implementations {
+                    self.request_implementation(impl_id, obligation.relevance, associated)?;
+                }
                 return Ok(());
             }
             self.find_aliases();

@@ -14862,66 +14862,57 @@ impl<'a> Parser<'a> {
         self.parse_match(name_span)
     }
 
-    /// `f.with(x)`, at its `(`: the closure `move |b, ..| f(x, b, ..)` over
-    /// the rest of `f`'s inputs, with `f` and `x` evaluated once, first.
-    fn parse_function_with(
+    /// The `fn` pointer `function` as the closure `|a, ..| f(a, ..)` that
+    /// holds it, with `f` evaluated once, first: what native code calls
+    /// where it takes a callable, as Rust's `fn` pointers implement `Fn`.
+    #[cfg(feature = "rust-import")]
+    fn fn_pointer_closure(
         &mut self,
         function: ParsedExpr,
         inputs: &[Ty],
     ) -> Result<ParsedExpr, Error> {
-        let open = self.next().1;
-        let argument = self.parse_expr()?;
-        let close = self.expect(Token::RightParen, "')' after the argument of `with`")?;
-        let whole = span(function.span.start(), close);
-        self.coerce_expr(&inputs[0], &mut { argument.clone() })?;
+        let at = function.span.start();
         let callee = self.temporary("function");
-        let bound = self.temporary("argument");
         let mut prelude = origin::Fragment::plain(format!("let {callee} = "));
         prelude.push(function.rendered_source());
-        prelude.push_text(format!(";\nlet {bound} = "));
-        prelude.push(argument.rendered_source());
         prelude.push_text(";\n");
         let outer = self.bindings.clone();
-        for (name, ty, declaration) in [
-            (&callee, function.ty.clone(), function.span),
-            (&bound, argument.ty.clone(), argument.span),
-        ] {
-            self.bindings.insert(
-                name.as_str().into(),
-                Binding {
-                    ty,
-                    mutable: false,
-                    available: true,
-                    declaration,
-                    kind: BindingKind::Local,
-                },
-            );
-        }
-        let identifier = |name: &str| (Token::Identifier(Box::new(name.into())), open);
-        let rest = (1..inputs.len())
-            .map(|index| format!("__rawr_with{index}"))
+        self.bindings.insert(
+            callee.as_str().into(),
+            Binding {
+                ty: function.ty.clone(),
+                mutable: false,
+                available: true,
+                declaration: function.span,
+                kind: BindingKind::Local,
+            },
+        );
+        let identifier = |name: &str| (Token::Identifier(Box::new(name.into())), at);
+        let names = (0..inputs.len())
+            .map(|index| format!("__rawr_input{index}"))
             .collect::<Vec<_>>();
         let mut tokens = Vec::new();
-        for (index, name) in rest.iter().enumerate() {
+        for (index, name) in names.iter().enumerate() {
             if index > 0 {
-                tokens.push((Token::Comma, open));
+                tokens.push((Token::Comma, at));
             }
             tokens.push(identifier(name));
         }
         tokens.extend([
-            (Token::Pipe, open),
+            (Token::Pipe, at),
             identifier(&callee),
-            (Token::LeftParen, open),
-            identifier(&bound),
+            (Token::LeftParen, at),
         ]);
-        for name in &rest {
-            tokens.push((Token::Comma, open));
+        for (index, name) in names.iter().enumerate() {
+            if index > 0 {
+                tokens.push((Token::Comma, at));
+            }
             tokens.push(identifier(name));
         }
-        tokens.push((Token::RightParen, open));
+        tokens.push((Token::RightParen, at));
         self.splice_tokens(tokens);
-        self.closure_hint = Some(inputs[1..].to_vec().into_boxed_slice());
-        let closure = self.parse_closure(Token::Pipe, whole, true);
+        self.closure_hint = Some(inputs.to_vec().into_boxed_slice());
+        let closure = self.parse_closure(Token::Pipe, function.span, true);
         self.bindings = outer;
         let closure = closure?;
         prelude.push(closure.prelude.clone());
@@ -14929,7 +14920,7 @@ impl<'a> Parser<'a> {
             prelude,
             source: closure.source,
             ty: closure.ty,
-            span: whole,
+            span: function.span,
             lvalue: None,
             outcome: closure.outcome,
             evaluation: closure.evaluation,
@@ -21543,6 +21534,44 @@ impl<'a> Parser<'a> {
         let trait_path = self.spliced_traits.get(&member_span.start())?;
         let path = rawr_import::surface::member::path(trait_path, member);
         self.models.host_items(&path).is_some().then_some(path)
+    }
+
+    /// The inputs and output of a crate value whose type is an opaque
+    /// `impl Fn(A..) -> B`, as iced's `Function::with` gives: its type's
+    /// arguments the classifier marked as the bound's (`Definition::callable`).
+    #[cfg(feature = "rust-import")]
+    fn native_callable(&self, ty: &Ty) -> Option<(Vec<Ty>, Ty)> {
+        let Ty::Host { proof, arguments } = self.inference.resolve(ty) else {
+            return None;
+        };
+        let callable = *rawr_import::surface::identity::Definition::callable().as_bytes();
+        let argument = |name: &str| {
+            proof
+                .definition
+                .associated(&callable, name)
+                .and_then(|position| arguments.get(position).cloned())
+        };
+        let output = argument("Output")?;
+        let inputs = (0..)
+            .map_while(|index| argument(&format!("Input{index}")))
+            .collect();
+        Some((inputs, output))
+    }
+
+    /// The path of the method `member` over its `Self` (`surface::member`)
+    /// of a crate's trait this source imports by name, as Rust finds a
+    /// method of a trait in scope.
+    #[cfg(feature = "rust-import")]
+    fn scoped_trait_member(&self, member: &str) -> Option<String> {
+        let context = self.models.context;
+        self.models
+            .imports
+            .iter()
+            .filter(|((source, _), binding)| {
+                *source == context && matches!(binding.target, item::Import::Module)
+            })
+            .map(|(_, binding)| rawr_import::surface::member::path(&binding.qualified, member))
+            .find(|path| self.models.host_items(path).is_some())
     }
 
     /// Whether the crate gives the host type `ty` (or the type it refers
@@ -34458,19 +34487,39 @@ impl<'a> Parser<'a> {
                 };
                 continue;
             }
-            // `Message::Changed.with(id)`: iced's `Function::with`, the
-            // closure that calls the function with `id` first.
-            if member == "with"
-                && matches!(self.peek(), Token::LeftParen)
-                && self
-                    .models
-                    .import("Function")
-                    .is_some_and(|binding| binding.qualified.as_str() == "iced::Function")
-                && let Ty::Fn { inputs, .. } | Ty::FnItem { inputs, .. } =
-                    self.inference.resolve(&value.ty)
-                && inputs.len() > 1
+            // `Message::Changed.with(id)`: a method of a crate's trait in
+            // scope on a function or closure, which the trait's blanket
+            // impl over `Fn(..)` gives it, called as the trait's method
+            // over its `Self` (`surface::member`), as rustc selects it.
+            #[cfg(feature = "rust-import")]
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Fn { .. } | Ty::FnItem { .. } | Ty::FnChoice { .. } | Ty::Callable { .. }
+                )
+                && let Some(path) = self.scoped_trait_member(&member)
             {
-                value = self.parse_function_with(value, &inputs)?;
+                let items = self
+                    .models
+                    .host_items(&path)
+                    .expect("a scoped trait member has items")
+                    .to_vec();
+                let owner = self.models.item_owner(&path).cloned();
+                let start = value.span.start();
+                let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
+                // A `fn` pointer, as a tuple variant's constructor is as a
+                // value, is `Fn` through the closure that calls it.
+                if let Ty::Fn { inputs, .. } = self.inference.resolve(&value.ty) {
+                    value = self.fn_pointer_closure(value, &inputs)?;
+                }
+                let mut inputs = Vec::with_capacity(arguments.len() + 1);
+                self.move_local(&mut value)?;
+                inputs.push(value);
+                for mut argument in arguments {
+                    self.move_local(&mut argument)?;
+                    inputs.push(argument);
+                }
+                value = self.call_host_function(&items, owner, inputs, span(start, end))?;
                 continue;
             }
             // `value.fmt(f)` in a `Display` or `Debug` `fmt` body writes the
@@ -47558,6 +47607,20 @@ impl<'a> Parser<'a> {
         );
         #[cfg(not(feature = "rust-import"))]
         let imported_callable = false;
+        // A crate's own `impl Fn(A..) -> B` value where a crate's callable
+        // is taken, as `Task::map(Message::Loaded.with(id))`: the value
+        // itself, whose inputs and output are the callable's.
+        #[cfg(feature = "rust-import")]
+        if let Ty::Callable { inputs, output, .. } = &target
+            && let Some((given, gives)) = self.native_callable(&source)
+            && given.len() == inputs.len()
+        {
+            for (input, given) in inputs.iter().zip(&given) {
+                self.require_type(input, given, value.span)?;
+            }
+            self.require_type(output, &gives, value.span)?;
+            return Ok(None);
+        }
         if imported_callable || matches!(target, Ty::Callable { .. }) {
             self.host_callable(value)?;
             source = self.inference.resolve(&value.ty);
@@ -49638,9 +49701,7 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
         arguments: impl Iterator<Item = Ty>,
     ) -> Box<[rawr_import::surface::instance::Slot]> {
-        if !item.signature().crossing() {
-            return Box::default();
-        }
+        let crossing = item.signature().crossing();
         // An item of one callable parameter takes a closure that captures
         // in its one closure class; one of several, as iced's `Task::sip`,
         // in a slot of its own kind at each parameter, as the classifier
@@ -49660,6 +49721,27 @@ impl<'a> Parser<'a> {
         arguments
             .enumerate()
             .filter_map(|(position, ty)| {
+                // A crate's own callable value fills the parameter as
+                // itself, boxed (`Slot::native`).
+                if self.native_callable(&ty).is_some()
+                    && item
+                        .signature()
+                        .parameters()
+                        .get(position)
+                        .is_some_and(|parameter| {
+                            matches!(
+                                parameter.shape(),
+                                crate::host::type_ref::Shape::Callable { .. }
+                            )
+                        })
+                {
+                    return Some(rawr_import::surface::instance::Slot::native(
+                        u32::try_from(position).unwrap_or(u32::MAX),
+                    ));
+                }
+                if !crossing {
+                    return None;
+                }
                 let Ty::Callable {
                     item: Some(function),
                     ..

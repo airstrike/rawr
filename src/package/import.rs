@@ -2388,7 +2388,9 @@ fn build(
         let Representability::Invocation(plan) = associated.representability() else {
             continue;
         };
-        if !writes_declared(plan.signature(), None, &[]) || !names_declared(*associated, resolved) {
+        if !writes_declared(plan.signature(), plan.call(), plan.crossings())
+            || !names_declared(*associated, resolved)
+        {
             continue;
         }
         let selector_bytes = associated.identity().selector().retained_bytes();
@@ -2398,7 +2400,15 @@ fn build(
                 .checked_add(selector)
         });
         allocation.retain_checked(Some(1), bytes)?;
-        let signature = signature_with(&types, plan.signature(), None, allocation)?;
+        // A callable `Self`, as a function is of iced's `Function::with`,
+        // is the closure's type.
+        let signature = callable_signature(
+            &types,
+            plan.signature(),
+            plan.call(),
+            plan.crossings(),
+            allocation,
+        )?;
         builder.item(
             host::item::Definition::function(path, signature)?
                 .imported(associated.identity().selector().try_clone()?),
@@ -2924,6 +2934,11 @@ fn opaque_types(
     };
     for entry in &facade.entries {
         visit(&entry.relative, entry.outcome, false);
+    }
+    // A trait's method over its `Self` is a function of its own
+    // (`surface::member`), as the runner's facade declares it.
+    for (path, associated) in &facade.self_members {
+        visit(path, *associated, false);
     }
     // A member's opaque output is declared in its owner's module, as
     // `image::io::__rawr_opaque_Reader__into_decoder` for `Reader`'s

@@ -14,7 +14,7 @@ pub(crate) mod cached;
 pub mod representability;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 93;
+const CLASSIFIER_VERSION: u32 = 94;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -1228,16 +1228,6 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         generics: &model::Generics,
         values: bool,
     ) -> (Option<model::Generics>, Vec<u32>) {
-        let callable = |predicate: &model::Predicate, of: u32| {
-            matches!(
-                predicate,
-                model::Predicate::Bound {
-                    ty: model::Type::Parameter { index, .. },
-                    bound: model::Bound::Trait { trait_id, .. },
-                } if *index == of
-                    && matches!(self.definition_name(trait_id), Some("Fn" | "FnMut" | "FnOnce"))
-            )
-        };
         let mut parameters = generics.parameters().cloned().collect::<Vec<_>>();
         let mut predicates = Vec::new();
         let mut changed = false;
@@ -1270,24 +1260,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 predicates.push(predicate.clone());
                 continue;
             }
-            let mut found = self
-                .graph
-                .implementations_of(trait_id)
-                .filter(|implementation| {
-                    let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-                        return false;
-                    };
-                    let model::Type::Parameter { owner, index } = implementation.self_type() else {
-                        return false;
-                    };
-                    id == trait_id
-                        && owner == implementation.id()
-                        && implementation
-                            .generics()
-                            .predicates()
-                            .any(|predicate| callable(predicate, *index))
-                });
-            let (Some(implementation), None) = (found.next(), found.next()) else {
+            let Some(implementation) = self.callable_blanket(trait_id) else {
                 predicates.push(predicate.clone());
                 continue;
             };
@@ -1394,6 +1367,134 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }),
             valued,
         )
+    }
+
+    /// The inputs and output of an opaque type's `Fn(A..) -> B` bound, as
+    /// `impl Fn(B) -> O` binds them: `None` without one, or when one of
+    /// them doesn't convert.
+    fn opaque_call(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Option<(
+        Vec<representability::convert::Type>,
+        representability::convert::Type,
+    )> {
+        let inputs = bounds.iter().find_map(|predicate| match predicate {
+            model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    },
+                ..
+            } if binders.is_empty() && self.is_core_trait(trait_id, "Fn") => {
+                match arguments.first() {
+                    Some(model::Argument::Type(model::Type::Tuple(inputs))) => Some(inputs),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })?;
+        let output = bounds.iter().find_map(|predicate| match predicate {
+            model::Predicate::ProjectionEquality {
+                projection: model::Type::Projection { trait_id, .. },
+                ty,
+            } if self.is_core_trait(trait_id, "FnOnce") => Some(ty),
+            _ => None,
+        })?;
+        let inputs = inputs
+            .iter()
+            .map(|input| self.convert(input).ok())
+            .collect::<Option<Vec<_>>>()?;
+        Some((inputs, self.convert(output).ok()?))
+    }
+
+    /// The one implementation of the crate trait `trait_id` for every
+    /// callable, as iced's `impl<F, A, B, O> Function<A, B, O> for F where
+    /// F: Fn(A, B) -> O`.
+    fn callable_blanket(
+        &self,
+        trait_id: &api::identity::Definition,
+    ) -> Option<&model::Implementation> {
+        let mut found = self
+            .graph
+            .implementations_of(trait_id)
+            .filter(|implementation| {
+                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                    return false;
+                };
+                let model::Type::Parameter { owner, index } = implementation.self_type() else {
+                    return false;
+                };
+                id == trait_id
+                    && owner == implementation.id()
+                    && implementation.generics().predicates().any(|predicate| {
+                        matches!(
+                            predicate,
+                            model::Predicate::Bound {
+                                ty: model::Type::Parameter { index: bounded, .. },
+                                bound: model::Bound::Trait { trait_id, .. },
+                            } if bounded == index
+                                && matches!(
+                                    self.definition_name(trait_id),
+                                    Some("Fn" | "FnMut" | "FnOnce")
+                                )
+                        )
+                    })
+            });
+        let (Some(implementation), None) = (found.next(), found.next()) else {
+            return None;
+        };
+        Some(implementation)
+    }
+
+    /// `<T as Trait<..>>::Name` as the trait's one implementation for every
+    /// callable sets it (`callable_blanket`), at the projection's self type
+    /// and arguments: the opaque `impl Fn(B) -> O` iced's `Function::with`
+    /// returns, where the call fills its `Self` with a callable. `None`
+    /// when the trait has no such implementation.
+    fn through_callable_blanket(&self, ty: &model::Type) -> Option<model::Type> {
+        let model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } = ty
+        else {
+            return None;
+        };
+        let implementation = self.callable_blanket(trait_id)?;
+        let name = self
+            .graph
+            .definition_index(associated)
+            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|definition| definition.display_path().last())?;
+        let value = self.associated_type(implementation, name)?;
+        let model::Trait::Trait {
+            arguments: implemented,
+            ..
+        } = implementation.trait_ref()
+        else {
+            return None;
+        };
+        let given = implemented
+            .iter()
+            .zip(arguments.iter())
+            .filter_map(|pair| match pair {
+                (
+                    model::Argument::Type(model::Type::Parameter { index, .. }),
+                    model::Argument::Type(argument),
+                ) => Some((*index, argument.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        relabel_type(value, implementation.id(), &|index| {
+            given
+                .iter()
+                .find(|(given, _)| *given == index)
+                .map(|(_, ty)| ty.clone())
+        })
     }
 
     fn callable_conversion(&self, generics: &model::Generics) -> Option<model::Generics> {
@@ -5095,6 +5196,10 @@ impl<P: api::Phase> Context<'_, P> {
             }
             let mut inputs = vec![this(receiver)];
             inputs.extend(signature.inputs().map(this));
+            // What the trait's implementation for every callable returns,
+            // as iced's `Function::with` returns `impl Fn(B) -> O`.
+            let output = this(signature.output());
+            let output = self.through_callable_blanket(&output).unwrap_or(output);
             let rewritten = model::Signature::new(
                 signature.safety(),
                 signature.const_function(),
@@ -5104,7 +5209,7 @@ impl<P: api::Phase> Context<'_, P> {
                 signature.binders().cloned().collect(),
                 model::Receiver::None,
                 inputs.into_boxed_slice(),
-                this(signature.output()),
+                output,
             )
             .with_guard(signature.guard().cloned());
             let generics =
@@ -5119,7 +5224,12 @@ impl<P: api::Phase> Context<'_, P> {
             let boxed = item.call().is_some()
                 && item.crossings().is_empty()
                 && output_boxes(item.signature().output());
-            if !boxed && (item.call().is_some() || !item.crossings().is_empty()) {
+            // A callable that is the receiver, as a function is of iced's
+            // `Function::with` through the trait's impl for every `Fn`,
+            // fills `Self` as any callable parameter's slot.
+            let callable_self = !item.crossings().is_empty()
+                && item.crossings().iter().all(|call| call.parameter() == 0);
+            if !boxed && !callable_self && (item.call().is_some() || !item.crossings().is_empty()) {
                 return Err(reject::Kind::CallableProtocol.into());
             }
             Ok(Representability::Invocation(callable::Invocation::new(
@@ -7563,6 +7673,26 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                     arguments.push(value);
                 }
+                // An `impl Fn(A..) -> B`, as iced's `Function::with` gives:
+                // each input one more argument, marked with the output's,
+                // so the value fills a callable parameter of that shape
+                // as itself (`Definition::callable`).
+                if let Some((inputs, output)) = self.opaque_call(bounds) {
+                    let callable = *crate::surface::identity::Definition::callable().as_bytes();
+                    let names = (0..inputs.len())
+                        .map(|index| format!("Input{index}"))
+                        .chain(["Output".to_owned()]);
+                    for (name, ty) in names.zip(inputs.into_iter().chain([output])) {
+                        let position =
+                            u32::try_from(arguments.len()).map_err(|_| Error::Cardinality)?;
+                        self.retain_str(&name)?;
+                        associated.push((
+                            representability::signature::Associated::new(callable, name.into()),
+                            position,
+                        ));
+                        arguments.push(ty);
+                    }
+                }
                 let definition = crate::surface::identity::Definition::of(id);
                 if !associated.is_empty() {
                     let mut opaques = self.opaque_associated.borrow_mut();
@@ -9239,10 +9369,23 @@ fn relabel_type(
             mutability: *mutability,
             ty: inner(ty)?,
         },
+        // An implementation's opaque type, as the `impl Fn(B) -> O` of
+        // iced's `impl<F, A, B, O> Function<A, B, O> for F`, at the types
+        // its parameters are given.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds
+                .iter()
+                .map(|bound| relabel_predicate(bound, from, renamed))
+                .collect::<Option<_>>()?,
+            captures: relabel_arguments(captures, from, renamed)?,
+        },
         model::Type::SelfType(id) if id == from => return None,
-        model::Type::FunctionPointer(_)
-        | model::Type::TraitObject { .. }
-        | model::Type::ImplTrait { .. } => return None,
+        model::Type::FunctionPointer(_) | model::Type::TraitObject { .. } => return None,
         other => other.clone(),
     })
 }
