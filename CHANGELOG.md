@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs. (#706)
 
 ## 0.3.96 (2026-11-01)
 
