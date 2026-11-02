@@ -513,6 +513,7 @@ fn primary_label(
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
         }
+        resolve::Error::ArgumentSignature { .. } => Some("found signature defined here".into()),
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
@@ -603,6 +604,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
         resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
+        resolve::Category::ArgumentSignature => code::RESOLVE_ARGUMENT_SIGNATURE,
         resolve::Category::ArgumentCount => match error {
             resolve::Error::ArgumentCount {
                 callee: resolve::Callee::Closure,
@@ -647,8 +649,30 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             "`{name}` was moved before this use; clone it before the move to keep a copy"
         )),
         resolve::Error::MissingCapability {
-            owner, capability, ..
-        } => builder.help(format!("derive `{capability}` for `{owner}`")),
+            owner,
+            capability,
+            derive,
+            required_by,
+            ..
+        } => {
+            let builder = match capability.as_str() {
+                "Display" => builder.help(format!(
+                    "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                )),
+                _ => builder,
+            };
+            let builder = match required_by {
+                Some(item) => builder.note(format!("required by a bound in `{item}`")),
+                None => builder,
+            };
+            if *derive && resolve::derivable(capability) {
+                builder.help(format!(
+                    "consider annotating `{owner}` with `#[derive({capability})]`"
+                ))
+            } else {
+                builder
+            }
+        }
         resolve::Error::CannotCompare {
             lhs, rhs, required, ..
         } => {
@@ -661,6 +685,17 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 )),
                 None => builder,
             }
+        }
+        resolve::Error::ArgumentSignature {
+            closure,
+            expected,
+            found,
+            ..
+        } => {
+            let kind = resolve::ArgumentSignature(*closure).kind();
+            builder.note(format!(
+                "expected {kind} signature `{expected}`\n   found {kind} signature `{found}`"
+            ))
         }
         resolve::Error::ArgumentCount {
             expected, found, ..
@@ -843,12 +878,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         ),
         resolve::Error::MissingCapability {
             owner, capability, ..
-        } => format!("`{owner}` does not provide `{capability}`"),
+        } => resolve::Unsatisfied(owner, capability).to_string(),
         resolve::Error::InvalidMatch { owner, reason, .. } => {
             format!("invalid match for `{owner}`: {reason}")
         }
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-            format!("unsupported syntax: {construct}")
+            resolve::Unsupported(construct).to_string()
         }
         resolve::Error::Syntax { message, .. } => message.to_string(),
         resolve::Error::UnlabeledJumpInWhileCondition { .. } => {
@@ -871,6 +906,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         .to_string(),
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             resolve::CannotCompare(lhs, rhs).to_string()
+        }
+        resolve::Error::ArgumentSignature { closure, .. } => {
+            resolve::ArgumentSignature(*closure).to_string()
         }
     }
 }
@@ -936,5 +974,46 @@ mod tests {
             report.notes().collect::<Vec<_>>(),
             vec!["generated diagnostic has no origin proof"]
         );
+    }
+
+    /// A missing trait reads as rustc's E0277, and suggests `#[derive]`
+    /// only for a derivable trait on the program's own type (#718).
+    #[test]
+    fn a_missing_trait_reads_as_rustcs_unsatisfied_bound() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn main() { let x: Point = \"\".parse(); }\n",
+        )
+        .expect("test source has a stable identity");
+        let at = Span::new(Position::new(1, 28), Position::new(1, 37));
+        let missing = |capability: &str, derive: bool| resolve::Error::MissingCapability {
+            owner: "Point".into(),
+            capability: capability.into(),
+            operation: at,
+            derive,
+            required_by: None,
+        };
+
+        let report = Report::from_resolution(source.clone(), None, &missing("FromStr", true))
+            .expect("the span is in the source");
+        assert_eq!(report.code(), code::RESOLVE_CAPABILITY);
+        assert_eq!(report.code().as_str(), "E0277");
+        assert_eq!(
+            report.message(),
+            "the trait bound `Point: FromStr` is not satisfied"
+        );
+        assert_eq!(report.help(), None);
+
+        let report = Report::from_resolution(source.clone(), None, &missing("Debug", true))
+            .expect("the span is in the source");
+        assert_eq!(report.message(), "`Point` doesn't implement `Debug`");
+        assert_eq!(
+            report.help(),
+            Some("consider annotating `Point` with `#[derive(Debug)]`")
+        );
+
+        let report = Report::from_resolution(source, None, &missing("Clone", false))
+            .expect("the span is in the source");
+        assert_eq!(report.help(), None);
     }
 }

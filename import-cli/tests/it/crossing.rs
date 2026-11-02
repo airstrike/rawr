@@ -1059,6 +1059,33 @@ fn a_closure_takes_the_output_a_native_opaque_future_binds() {
     assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
 
+/// iced's gallery (#637): `Task::future(image.download(size))`, where the
+/// program's own native method gives `impl Straw<Bytes, u32, String>`, so
+/// `Task::future`'s T is the `Result<Bytes, String>` the opaque type's
+/// `Future` binds through `Straw`, `Sipper` and `Core`, as rustc reads it.
+/// `.and_then` and `.then` take it from there. The output is `cargo run`'s.
+#[test]
+fn a_native_opaque_future_fills_a_future_parameter() {
+    let (rawr, cargo) = both_printed("crossing-futured", "futured.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "Some(Downloaded(Ok(Bytes(40))))\nSome(Downloaded(Err(\"empty\")))"
+    );
+}
+
+/// iced's color_palette (#638): palette's `ShiftHue::shift_hue(self, amount:
+/// Self::Scalar)` and `Lighten::lighten`, whose input is the trait's own
+/// associated type that each impl sets (`type Scalar = T`). The receiver's
+/// type decides the amount's, as rustc reads it. The output is `cargo
+/// run`'s.
+#[test]
+fn a_method_takes_its_traits_associated_type_of_the_receiver() {
+    let (rawr, cargo) = both_printed("crossing-hued", "hued.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.starts_with("hue 220 85"), "{rawr}");
+}
+
 /// fount's loading program: iced's `Task::future(impl Future<Output = T>)`
 /// of an async block that awaits a crate's `async fn`, then a closure that
 /// takes the block's output and matches on it. The output is a `Result`

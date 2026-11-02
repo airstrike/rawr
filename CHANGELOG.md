@@ -6,6 +6,30 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.99 (2026-11-01)
+
+- A closure or function whose parameter is `T` where the callable takes `&T` is refused with rustc's E0631, "type mismatch in closure arguments", naming both signatures. (#722)
+- An `.into()` whose target nothing fixes is refused with rustc's "type annotations needed" (E0283) instead of converting to itself, and a `Vec` of widgets is no longer converted one by one where a list of Elements is expected. (#723)
+
+## 0.3.98 (2026-11-01)
+
+- A type missing a trait reads as rustc's E0277 ("the trait bound `T: X` is not satisfied", or "`T` doesn't implement `Debug`"), with a "required by a bound in" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type. (#718)
+- A crate path that can't be used yet gives the Rust reason ("`x` can't be used yet: it takes a closure that isn't `'static`"), labelled where it is defined and exported, instead of an internal rejection name or "retained" evidence. (#719, #720)
+- A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name. (#721)
+
+## 0.3.97 (2026-11-01)
+
+- `String` and `&str` are separate types, as in rustc. A string literal where a `String` is declared is E0308, a `&String` becomes a `&str` only by deref coercion, `String +` takes a `&str`, and `.into()`, `.to_string()` and `String::from` make the `String` a declaration needs. (#706)
+
+## 0.3.96 (2026-11-01)
+
+- A native value whose type is a future, such as iced's gallery's `impl Straw<..>`, can be passed to a function that takes `impl Future<Output = T>`, such as `Task::future`, and `T` is its output. (#637)
+- A method whose input is an associated type its impl sets, such as palette's `shift_hue(self, amount: Self::Scalar)`, can be called. (#638)
+
+## 0.3.95 (2026-11-01)
+
+- rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused. (#691)
+
 ## 0.3.94 (2026-11-01)
 
 - `==` and `!=` choose the `PartialEq` impl rustc chooses: references compare through what they refer to, `String`, `str` and `&str` compare with each other, and `Vec`s, slices and arrays compare element by element. `&String == &str`, `&str == String`, `Vec<u8> == [u8; 3]` and `names.iter().position(|name| name == "Serif")` compile, and `&a < &b` compares what the references point to. A comparison rustc refuses gets its E0277, "can't compare `X` with `Y`", at the operator, with rustc's help and note. (#699)

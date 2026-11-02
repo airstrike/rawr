@@ -82,10 +82,10 @@ fn an_item_rawr_cant_bind_says_why() {
     let check = rawr_import("check", &root);
     let stderr = text(&check.stderr);
     assert!(!check.status.success(), "{stderr}");
-    assert!(stderr.contains("error[E0599]"), "{stderr}");
+    assert!(stderr.contains("error[E0425]"), "{stderr}");
     assert!(
         stderr.contains(
-            "rawr has no binding for `clear`: its signature has a slice type rawr can't hold there"
+            "`clear` can't be used yet: its signature has a slice type where one isn't supported yet"
         ),
         "{stderr}"
     );

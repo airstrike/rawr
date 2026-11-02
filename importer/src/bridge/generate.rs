@@ -726,15 +726,18 @@ enum Error {
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(bug) = self.bug() {
+            return write!(f, "rawr bug: {bug}");
+        }
         match self {
-            Self::MissingArgument => f.write_str("MissingArgument"),
-            Self::TypeMismatch => f.write_str("TypeMismatch"),
-            Self::StaleHandle => f.write_str("StaleHandle"),
-            Self::ArenaFull => f.write_str("ArenaFull"),
-            Self::Allocation => f.write_str("Allocation"),
-            Self::Malformed => f.write_str("Malformed"),
-            Self::Cardinality => f.write_str("Cardinality"),
-            Self::MissingAdapter => f.write_str("MissingAdapter"),
+            Self::MissingArgument
+            | Self::TypeMismatch
+            | Self::StaleHandle
+            | Self::Malformed
+            | Self::Cardinality
+            | Self::MissingAdapter => unreachable!("a rawr bug is written above"),
+            Self::ArenaFull => f.write_str("more than 1000000 values of crate types are alive at once"),
+            Self::Allocation => f.write_str("memory allocation failed"),
             Self::Stale => f.write_str("Stale"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
             Self::Leased => f.write_str(
@@ -743,7 +746,7 @@ impl std::fmt::Debug for Error {
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
             Self::NotClone(ty) => write!(
                 f,
-                "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
+                "reading a `{ty}` through a borrow guard is not supported yet: `{ty}` doesn't implement `Clone`"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
             Self::Home(reason) => f.write_str(reason),
@@ -752,6 +755,29 @@ impl std::fmt::Debug for Error {
 }
 
 impl Error {
+    /// What only a rawr bug causes: the program's types, argument counts
+    /// and moves are checked before any adapter runs (D664.1).
+    fn bug(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::MissingArgument => "an adapter ran without one of its arguments",
+            Self::TypeMismatch => "a value reached an adapter as a type its signature doesn't take",
+            Self::StaleHandle => "a crate value's handle was used after its value was released",
+            Self::Malformed => "an adapter invocation's payload is malformed",
+            Self::Cardinality => "an adapter ran with a number of arguments it doesn't take",
+            Self::MissingAdapter => "a call names an adapter the generated table doesn't have",
+            _ => return None,
+        })
+    }
+
+    /// The error as the program sees it. One that only a rawr bug causes
+    /// panics, naming the bug.
+    fn reported(self) -> Self {
+        if let Some(bug) = self.bug() {
+            panic!("rawr bug: {bug}");
+        }
+        self
+    }
+
     fn code(&self) -> u8 {
         match self {
             Self::MissingArgument => 1,
@@ -1529,7 +1555,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
 }
 
 fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
-    __rawr_internal::EvalAltResult::ErrorRuntime(format!("native place: {error:?}").into(), __rawr_internal::Position::NONE).into()
+    runtime_error(error)
 }
 
 impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
@@ -1643,7 +1669,7 @@ fn materialize(
         }
         Ok(output)
     })
-    .map_err(|error| format!("{error:?}"))
+    .map_err(|error| format!("{:?}", error.reported()))
 }
 
 /// [`materialize`] of an output that holds script values an erased generic
@@ -1654,7 +1680,7 @@ fn materialize_checked(
     convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, String> {
     let output = materialize(witness, convert)?;
-    check_values(witness, &output).map_err(|error| format!("{error:?}"))?;
+    check_values(witness, &output).map_err(|error| format!("{:?}", error.reported()))?;
     Ok(output)
 }
 
@@ -1722,11 +1748,23 @@ fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__r
 /// that runs it (D527).
 #[allow(dead_code)]
 fn take_script(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Script, Error> {
-    let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
-    (**value)
-        .take()
+    take_future(arguments, index).map(__rawr_internal::future::Future::into_script)
+}
+
+/// The core's future at argument `index`: a script future, or a native
+/// value whose opaque type is a future, as a program's own `impl Straw<..>`
+/// is, which its table makes one of where it was made.
+#[allow(dead_code)]
+fn take_future(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::future::Future, Error> {
+    let mut value = (**arguments.values.get_mut(index).ok_or(Error::MissingArgument)?).take();
+    let handle = value.read_lock::<NativeHandle>().map(|handle| handle.clone());
+    if let Some(handle) = handle {
+        let table = arguments.arena.opaque(&handle)?;
+        let mut values = [&mut value];
+        value = table.future(&mut Arguments { values: &mut values, arena: arguments.arena })?;
+    }
+    value
         .try_cast_result::<__rawr_internal::future::Future>()
-        .map(__rawr_internal::future::Future::into_script)
         .map_err(|_| Error::TypeMismatch)
 }
 
@@ -2004,6 +2042,15 @@ impl OpaqueTable {
         let entry = self.0.get(index).ok_or(Error::TypeMismatch)?;
         entry(arguments, self)
     }
+
+    /// The core's future of the value at argument 0, from the entry every
+    /// table ends with: one that makes it when the type is a future, and
+    /// refuses it otherwise.
+    #[allow(dead_code)]
+    fn future(self, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
+        let entry = self.0.last().ok_or(Error::TypeMismatch)?;
+        entry(arguments, self)
+    }
 }
 
 /// The table of `entries`, each a call that takes a value of `T`'s type.
@@ -2230,9 +2277,9 @@ fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> 
     Ok(output)
 }
 
-fn runtime_error(error: impl std::fmt::Debug) -> Box<__rawr_internal::EvalAltResult> {
+fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime(
-        format!("{error:?}").into(),
+        format!("{:?}", error.reported()).into(),
         __rawr_internal::Position::NONE,
     )
     .into()
@@ -3035,6 +3082,21 @@ mod __rawr_profile_host {
                         }) as __rawr_internal::future::Finish
                     })
                 }))
+            }))
+        }
+
+        /// The core's future of a native value whose type is a future, as
+        /// a program's own `impl Straw<..>` is, where a future is taken:
+        /// its output is made a Rawr value on the thread that owns the
+        /// program, and taken back as the native type the call names.
+        pub fn native(task: Task<Materialize>) -> Dynamic {
+            Dynamic::from(__rawr_internal::future::Future::native(move || {
+                let future = (task.0)();
+                Box::pin(async move {
+                    let materialize = future.await;
+                    Box::new(move || materialize(None).map_err(__rawr_internal::future::error))
+                        as __rawr_internal::future::Finish
+                })
             }))
         }
     }
@@ -7319,6 +7381,32 @@ fn opaque_table_source(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
         ));
     }
+    // Last, the core's future of the value, when its type is a future, as
+    // a program's own `impl Straw<..>` is: where a call takes a future,
+    // as iced's `Task::future(impl Future<Output = T>)` does, the value
+    // goes as that future (`take_future`).
+    let future = match &returned {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => OPAQUE_FUTURES
+            .with_borrow(|futures| futures.get(definition.as_bytes()).copied())
+            .and_then(|position| arguments.get(usize::try_from(position).ok()?)),
+        _ => None,
+    };
+    let body = match future {
+        Some(element) => {
+            let mut body = Vec::new();
+            body.write_all(b"    let value = take_like(arguments, 0, _w)?;\n")
+                .map_err(request::unwritable)?;
+            render_give_task(element, "value", "native", &mut body)?;
+            String::from_utf8(body).map_err(request::unwritable)?
+        }
+        None => "    Err(Error::TypeMismatch)".to_owned(),
+    };
+    entries.push(format!(
+        "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w, &arguments);\n{body}\n}}"
+    ));
     Ok(Some(format!(
         "{{
         static TABLE: std::sync::OnceLock<Box<[OpaqueEntry]>> = std::sync::OnceLock::new();
@@ -7717,7 +7805,7 @@ fn render_adapter_body(
                 }
                 .map_err(request::unwritable)?;
                 if let Some(element) = future_output(returned) {
-                    render_give_task(element, "output", output)?;
+                    render_give_task(element, "output", "imported", output)?;
                 } else {
                     render_give_with(signature, substitutions, "output", output)?;
                 }
@@ -7965,7 +8053,7 @@ fn render_adapter_body(
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 let element = future_output(returned)
                     .ok_or_else(|| request::drift("borrowed async method output"))?;
-                render_give_task(element, "output", output)?;
+                render_give_task(element, "output", "imported", output)?;
             } else if let Some(guard) = signature.guard()
                 && !matches!(receiver, Receiver::Owned)
             {
@@ -8129,7 +8217,7 @@ fn render_adapter_body(
                 let returned = &substituted(signature.output(), signature, substitutions)?;
                 match future_output(returned) {
                     Some(element) if matches!(receiver, Receiver::Owned) => {
-                        render_give_task(element, "output", output)?;
+                        render_give_task(element, "output", "imported", output)?;
                     }
                     _ => render_give_with(signature, substitutions, "output", output)?,
                 }
@@ -12354,7 +12442,7 @@ fn render_take(
             render_from_dynamic(element, "value", 0, &mut converted)?;
             return writeln!(
                 output,
-                "    let argument_{local} = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().try_cast_result::<__rawr_internal::future::Future>().map_err(|_| Error::TypeMismatch)?.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")));"
+                "    let argument_{local} = take_future(arguments, {index})?.into_native(|value: Dynamic| with_arena(|arena| {{ let mut none: [&mut Dynamic; 0] = []; let arguments = &mut Arguments {{ values: &mut none, arena }}; let _ = &arguments; {converted} }}).unwrap_or_else(|error| panic!(\"rawr: an async block gave back a value native code can't take: {{error:?}}\")));"
             )
             .map_err(request::unwritable);
         }
@@ -13095,10 +13183,13 @@ fn future_output(ty: &convert::Type) -> Option<&convert::Type> {
 
 /// Project an iced `Task<T>`, or a Rust future of `T`, into the facade's
 /// `Task`. Each `T` it yields becomes a Rawr value on the UI thread, never
-/// in the stream.
+/// in the stream. `wrap` is `imported` for a call's output, which takes the
+/// call's witness, or `native` for a value of a future's type taken where a
+/// future is.
 fn render_give_task(
     element: &convert::Type,
     value: &str,
+    wrap: &str,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let mut converted = String::new();
@@ -13110,7 +13201,7 @@ fn render_give_task(
     };
     writeln!(
         output,
-        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::imported(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
+        "    let task = {{\n        #[allow(unused_imports)]\n        use __rawr_profile_host::task::{{ViaFuture as _, ViaTask as _}};\n        (&__rawr_profile_host::task::Project::new({value})).into_task()\n    }};\n    Ok(__rawr_profile_host::task::{wrap}(task.map(|value| -> __rawr_profile_host::task::Materialize {{\n        Box::new(move |witness| {materialize}(witness, move |arguments| {converted}))\n    }})))"
     )
     .map_err(request::unwritable)
 }
@@ -13518,6 +13609,30 @@ fn instance_substituted<'a>(
         convert::Type::Option(element) => {
             convert::Type::Option(Box::new(instance_substituted(element, types)?))
         }
+        // `impl<T, E> Task<Result<T, E>>`, as iced's `and_then` has.
+        convert::Type::Result(ok, err) => convert::Type::Result(
+            Box::new(instance_substituted(ok, types)?),
+            Box::new(instance_substituted(err, types)?),
+        ),
+        convert::Type::Tuple(members) => convert::Type::Tuple(
+            members
+                .iter()
+                .map(|member| instance_substituted(member, types))
+                .collect::<Option<Box<[_]>>>()?,
+        ),
+        convert::Type::Sequence {
+            element,
+            owned,
+            length,
+        } => convert::Type::Sequence {
+            element: Box::new(instance_substituted(element, types)?),
+            owned: *owned,
+            length: *length,
+        },
+        convert::Type::Borrowed { mutable, ty } => convert::Type::Borrowed {
+            mutable: *mutable,
+            ty: Box::new(instance_substituted(ty, types)?),
+        },
         other => other.clone(),
     })
 }
@@ -13542,6 +13657,11 @@ thread_local! {
     /// Each with the positions of the arguments that are the associated
     /// types its bounds bind.
     static OPAQUE_TYPES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], Box<[u32]>>> =
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    /// The opaque types that are futures, as `impl Straw<..>` is through
+    /// `Core`, by identity: the position of the argument that is their
+    /// `Future::Output`.
+    static OPAQUE_FUTURES: std::cell::RefCell<std::collections::BTreeMap<[u8; 32], u32>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     /// The imported types that carry lifetimes (D558 tier 1), by identity:
     /// how many lifetime parameters each declares, and whether it is
@@ -14714,6 +14834,20 @@ impl TypePaths {
                 }));
             }
         });
+        OPAQUE_FUTURES.with_borrow_mut(|futures| {
+            futures.clear();
+            let future = *crate::surface::identity::Definition::future().as_bytes();
+            for owner in facade
+                .into_iter()
+                .flat_map(crate::surface::facade::Plan::facades)
+            {
+                futures.extend(owner.types().filter(|ty| ty.opaque()).filter_map(|ty| {
+                    ty.associated()
+                        .find(|(identity, _, _)| *identity == future)
+                        .map(|(_, _, position)| (*ty.identity(), position))
+                }));
+            }
+        });
         COPY_TYPES.with_borrow_mut(|copy| {
             copy.clear();
             for owner in facade
@@ -14824,6 +14958,7 @@ impl Drop for TypePaths {
         TRAIT_DEFAULTS.with_borrow_mut(std::collections::BTreeMap::clear);
         COPY_TYPES.with_borrow_mut(std::collections::BTreeSet::clear);
         OPAQUE_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
+        OPAQUE_FUTURES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_TYPES.with_borrow_mut(std::collections::BTreeMap::clear);
         SCOPED_PATHS.with_borrow_mut(std::collections::BTreeMap::clear);
         TYPE_TRAITS.with_borrow_mut(std::collections::BTreeMap::clear);
@@ -15862,7 +15997,7 @@ mod tests {
         assert_eq!(arguments[0], Type::Option(Box::new(value())));
         assert!(super::holds_value(&arguments[0]));
         let mut task = Vec::new();
-        super::render_give_task(&arguments[0], "output", &mut task).unwrap();
+        super::render_give_task(&arguments[0], "output", "imported", &mut task).unwrap();
         let task = String::from_utf8(task).unwrap();
         assert!(task.contains("materialize_checked(witness"), "{task}");
         assert!(

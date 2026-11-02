@@ -150,7 +150,7 @@ fn callable(signature: &syn::Signature, first: usize) -> syn::Result<Callable> {
                 let owned = quote! { <#target as ::rawr::host::export::Param>::Owned };
                 callable
                     .inputs
-                    .push(quote! { <#owned as ::rawr::host::export::Value>::ty() });
+                    .push(quote! { <#target as ::rawr::host::export::Param>::ty() });
                 callable.reads.push(quote! {
                     let #local: #owned = ::rawr::host::export::Value::from_dynamic(&*args[#slot])?;
                 });

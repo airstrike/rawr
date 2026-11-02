@@ -127,6 +127,8 @@ impl Parser<'_> {
                         owner: from.name(&self.models),
                         capability: "Display".into(),
                         operation: span,
+                        derive: matches!(from, Ty::Script(..)),
+                        required_by: None,
                     });
                 };
                 (display, self.debug_source(&from, local, span)?)

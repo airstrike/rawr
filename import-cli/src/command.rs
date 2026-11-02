@@ -17,7 +17,7 @@ const HELP: &str = "rawr-import: runs Rawr programs that use Rust crates\n\n\
 frontmatter, or native modules. The program runs in a runner that links the\n\
 rawr crate and the program's own dependencies, built in the project's build\n\
 directory beside `cargo build`.\n\n\
-Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n\n\
+Usage:\n  rawr-import [run] [path] [-- args]   Run a program, with its arguments after `--`\n  rawr-import check [path]             Check a program without running it\n  rawr-import cache clean              Remove what rawr's home holds that no build is using\n\n\
 Options:\n  -h, --help       Show this help\n  -V, --version    Show the version";
 
 /// Run `rawr-import` with `arguments`, the executable name excluded.
@@ -59,6 +59,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             println!("rawr-import {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        Some("cache") => return cache(&words[1..]),
         Some("run") => path(&words[1..]).map(|path| (false, path)),
         Some("check") if !program_arguments.is_empty() => {
             Err("`check` takes no program arguments".to_owned())
@@ -73,6 +74,32 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `rawr cache clean`: remove what rawr's home holds per machine and no
+/// build is using now (hosts, runtimes, bindings and the nightly check
+/// build), as D608.7 lets cleanup do. `cargo clean` removes the rest.
+fn cache(words: &[String]) -> ExitCode {
+    match words {
+        [clean] if clean == "clean" => {}
+        [help] if matches!(help.as_str(), "-h" | "--help") => {
+            println!("{HELP}");
+            return ExitCode::SUCCESS;
+        }
+        _ => {
+            eprintln!("error: `cache` takes `clean`; run `rawr-import --help` for usage");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(cargo_home) = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+    else {
+        eprintln!("error: rawr's home needs the environment variable `CARGO_HOME` or `HOME`");
+        return ExitCode::FAILURE;
+    };
+    rawr_import::host::clean(&cargo_home);
+    ExitCode::SUCCESS
 }
 
 fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {

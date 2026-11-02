@@ -115,7 +115,7 @@ fn data_limits_scan_nested_nominal_fields_and_payloads() {
             r#"
                 struct Label { text: String }
                 enum Envelope { Value(Label) }
-                Envelope::Value(Label { text: "too long" })
+                Envelope::Value(Label { text: "too long".to_string() })
             "#,
         )
         .unwrap();

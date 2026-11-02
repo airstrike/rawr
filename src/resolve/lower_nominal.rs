@@ -4274,14 +4274,18 @@ fn owned_symbolic_type(ty: &type_ref::Type) -> Option<Ty> {
 }
 
 /// A symbolic callable's input: an owned value, or a shared borrow of one as
-/// in an iced style function's `&Theme`; the runtime passes either by value.
+/// in an iced style function's `&Theme`. Its type keeps the borrow, which
+/// the runtime passes by value.
 fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
     match ty {
         type_ref::Type::Reference {
             mutable: false,
             target,
             ..
-        } => exact_symbolic_type(target),
+        } => exact_symbolic_type(target).map(|target| Ty::Reference {
+            mutable: false,
+            target: Box::new(target),
+        }),
         _ => exact_symbolic_type(ty),
     }
 }
@@ -8389,8 +8393,9 @@ enum Ty {
     Float(Float),
     String,
     /// `&str`: a borrowed string, the same text as a `String` at runtime.
-    /// It is `Copy`, so a use never moves it. It unifies with `String`, as
-    /// Rawr has always taken a `&str` where a `String` is declared.
+    /// It is `Copy`, so a use never moves it. It is a distinct type from
+    /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
+    /// coercion.
     Str,
     InclusiveRange,
     /// `a..=b` of floats: Rust's `RangeInclusive<f64>`, bounds only.
@@ -13146,6 +13151,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: kind.name().into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
         }
@@ -13159,6 +13166,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: trait_name,
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
         }
@@ -13387,6 +13396,8 @@ impl<'a> Parser<'a> {
                             owner: name.clone(),
                             capability: "Default".into(),
                             operation: span,
+                            derive: false,
+                            required_by: None,
                         });
                     }
                     format!("{DEFAULT_DISPATCHER}({})", witness_variable(name))
@@ -14186,6 +14197,8 @@ impl<'a> Parser<'a> {
                     owner: owner.name(&self.models),
                     capability,
                     operation: trait_name.span,
+                    derive: matches!(owner, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             // `impl Both<i64> for C` needs `C: Convert<i64>` for `trait
@@ -14213,6 +14226,8 @@ impl<'a> Parser<'a> {
                         owner: owner.name(&self.models),
                         capability: format!("{parent}<{names}>").into(),
                         operation: trait_name.span,
+                        derive: matches!(owner, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
             }
@@ -14256,15 +14271,11 @@ impl<'a> Parser<'a> {
                 });
             if let Some(capability) = missing {
                 return Err(Error::MissingCapability {
-                    owner: format!(
-                        "{} (`{}::{}`)",
-                        ty.name(&self.models),
-                        trait_name.text,
-                        name.text
-                    )
-                    .into(),
+                    owner: ty.name(&self.models),
                     capability,
                     operation: name.span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: Some(format!("{}::{}", trait_name.text, name.text).into()),
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;
@@ -15184,14 +15195,16 @@ impl<'a> Parser<'a> {
         let least = if name == "select" { 1 } else { 2 };
         if count < least || count > MOST {
             return Err(unsupported(
-                format!("`{name}!` of {count} futures; Rawr takes {least} to {MOST}"),
+                format!(
+                    "`{name}!` of {count} futures is not supported yet; it takes {least} to {MOST}"
+                ),
                 end,
             ));
         }
         // The core has `join!` only, so far (D513.7).
         if count > 1 && name != "join" {
             return Err(unsupported(
-                format!("`{name}!`; Rawr runs `join!` here so far"),
+                format!("`{name}!` of more than one future is not supported yet; `join!` is"),
                 end,
             ));
         }
@@ -15736,6 +15749,8 @@ impl<'a> Parser<'a> {
             owner: ty.name(&this.models),
             capability: trait_name.clone(),
             operation: call,
+            derive: matches!(ty, Ty::Script(..)),
+            required_by: None,
         };
         let generic_trait = self
             .models
@@ -16333,21 +16348,15 @@ impl<'a> Parser<'a> {
         let pending = std::mem::take(&mut self.pending_conversions);
         for conversion in pending {
             let target = self.inference.resolve(&conversion.target);
-            let helper = if matches!(target, Ty::Infer(_))
-                && conversion
-                    .host
-                    .as_ref()
-                    .is_some_and(|host| host.forms.is_empty())
-            {
-                // An imported value's `.into()` that no use fixes: itself,
-                // through rustc's reflexive `From<T> for T`.
-                self.unify_type(&conversion.target, &conversion.source);
-                String::new()
-            } else if matches!(target, Ty::Infer(_)) {
+            let helper = if matches!(target, Ty::Infer(_)) {
+                let source = conversion.source.name(&self.models);
                 return Err(Error::InvalidMethodCall {
-                    owner: conversion.source.name(&self.models),
+                    owner: source.clone(),
                     method: "into".into(),
-                    reason: "type annotations needed: the target of `.into()` is unknown".into(),
+                    reason: format!(
+                        "type annotations needed: the type must implement `From<{source}>` (E0283)"
+                    )
+                    .into(),
                     call: conversion.span,
                 });
             } else if self.unifies(&target, &conversion.source) {
@@ -16439,6 +16448,8 @@ impl<'a> Parser<'a> {
                     owner: target.name(&self.models),
                     capability: format!("From<{}>", conversion.source.name(&self.models)).into(),
                     operation: conversion.span,
+                    derive: matches!(target, Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let helper = if helper.ends_with(", ") {
@@ -16716,7 +16727,7 @@ impl<'a> Parser<'a> {
                     output,
                     span,
                 } = *operation;
-                for (parameter, ty, required) in requirements.iter() {
+                for (_, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     // A parameter no script value fixes is rustc's to infer
                     // and to check (D594). So is one a crate's own type
@@ -16738,14 +16749,13 @@ impl<'a> Parser<'a> {
                     for capability in required.iter() {
                         if !self.type_provides(&ty, capability) {
                             return Err(Error::MissingCapability {
-                                owner: format!(
-                                    "{} parameter `{parameter}` instantiated as {}",
-                                    item.path(),
-                                    ty.name(&self.models)
-                                )
-                                .into(),
+                                owner: ty.name(&self.models),
                                 capability: capability.name().into(),
                                 operation: span,
+                                derive: matches!(ty, Ty::Script(..)),
+                                required_by: Some(
+                                    crate::host::path::public(&item.path()).as_ref().into(),
+                                ),
                             });
                         }
                     }
@@ -17547,8 +17557,6 @@ impl<'a> Parser<'a> {
         let mut matched = None;
         let mut matched_stringy = false;
         let mut match_count = 0;
-        let mut matched_exact = false;
-        let mut exact_count = 0_usize;
         for item in items {
             let checkpoint = self.inference.checkpoint();
             let signature =
@@ -17581,36 +17589,14 @@ impl<'a> Parser<'a> {
             };
             if matches_inputs && self.host_requirements_hold(&signature) {
                 match_count += 1;
-                // rustc picks the impl by the argument's exact type: a
-                // literal is a `&'static str`, a `String` value is not,
-                // as iced's `Id::from` of each takes.
-                let exact = repeated
-                    || signature
-                        .inputs
-                        .iter()
-                        .zip(arguments)
-                        .all(|(expected, argument)| {
-                            !matches!(
-                                (
-                                    self.inference.resolve(expected),
-                                    self.inference.resolve(&argument.ty)
-                                ),
-                                (Ty::Str, Ty::String) | (Ty::String, Ty::Str)
-                            )
-                        });
-                exact_count += usize::from(exact);
                 // A form taking a string comes first for an argument whose
                 // type is not known yet.
                 let stringy = signature
                     .inputs
                     .iter()
                     .any(|input| self.inference.resolve(input).is_text());
-                if matched.is_none()
-                    || exact && !matched_exact
-                    || exact == matched_exact && stringy && !matched_stringy
-                {
+                if matched.is_none() || stringy && !matched_stringy {
                     matched_stringy = stringy;
-                    matched_exact = exact;
                     matched = Some((item.clone(), signature, self.inference.patch(checkpoint)));
                 }
             }
@@ -17664,14 +17650,6 @@ impl<'a> Parser<'a> {
             1 => {
                 let (item, signature, patch) =
                     matched.expect("the one form that matched is kept as the match");
-                self.inference.apply(patch);
-                Ok((item, signature))
-            }
-            // Several forms take the arguments, and one takes each string
-            // as the form it is written in.
-            _ if exact_count == 1
-                && let Some((item, signature, patch)) = matched =>
-            {
                 self.inference.apply(patch);
                 Ok((item, signature))
             }
@@ -19575,6 +19553,8 @@ impl<'a> Parser<'a> {
                 owner: value.ty.name(&self.models),
                 capability: "Default".into(),
                 operation: expression,
+                derive: matches!(value.ty, Ty::Script(..)),
+                required_by: None,
             });
         }
         Ok(value)
@@ -25653,7 +25633,7 @@ impl<'a> Parser<'a> {
             (&expected, actual),
             (Ty::Int(_), Ty::Int(_))
                 | (Ty::Char, Ty::Char)
-                | (Ty::String | Ty::Str, Ty::String | Ty::Str)
+                | (Ty::Str, Ty::Str)
                 | (Ty::Bool, Ty::Bool)
                 | (Ty::Float(_), Ty::Float(_))
                 | (Ty::Ordering, Ty::Ordering)
@@ -30439,12 +30419,7 @@ impl<'a> Parser<'a> {
                 ][..],
                 Some(Ty::Bool),
             ),
-            // `String + &str` concatenates; Rawr spells both as `String`.
-            Token::Plus => (
-                "+",
-                &[Ty::Int(Int::I64), Ty::Float(Float::F64), Ty::String][..],
-                None,
-            ),
+            Token::Plus => ("+", NUMBERS, None),
             Token::Minus => ("-", NUMBERS, None),
             Token::Multiply => ("*", NUMBERS, None),
             Token::Divide => ("/", NUMBERS, None),
@@ -30480,8 +30455,10 @@ impl<'a> Parser<'a> {
         if let Some(value) = self.time_binary(symbol, lhs.clone(), rhs.clone())? {
             return Ok(value);
         }
-        if symbol == "+" {
-            self.strip_string_reference(&mut rhs);
+        // `impl Add<&str> for String`: a `&String` derefs to the `&str`.
+        if symbol == "+" && self.inference.resolve(&lhs.ty) == Ty::String {
+            self.coerce_expr(&Ty::Str, &mut rhs)?;
+            return Ok(self.binary(lhs, symbol, rhs, Ty::String));
         }
         if matches!(symbol, "<" | ">" | "<=" | ">=")
             && let Some(value) = self.partial_ord_operator(symbol, &lhs, &mut rhs)?
@@ -31271,6 +31248,8 @@ impl<'a> Parser<'a> {
                 owner: owner_ty.name(&self.models),
                 capability: format!("Index<{}>", index_ty.name(&self.models)).into(),
                 operation: expression,
+                derive: matches!(owner_ty, Ty::Script(..)),
+                required_by: None,
             });
         };
         let substitution = self.method_substitution(&definition, Some(&owner_ty), expression)?;
@@ -31494,9 +31473,9 @@ impl<'a> Parser<'a> {
                     None => refused,
                 }
             }
-            (Compared::Ty(Ty::String), Compared::Ty(Ty::String | Ty::Str)) => {
-                Ok(PartialEqImpl::Own)
-            }
+            (Compared::Ty(Ty::String), Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Own),
+            // `impl PartialEq<&str> for String`.
+            (Compared::Ty(Ty::String), Compared::Ty(Ty::Str)) => Ok(PartialEqImpl::Between),
             // `impl PartialEq<str> for String` and `PartialEq<String> for str`.
             (Compared::Ty(Ty::String), Compared::Str)
             | (Compared::Str, Compared::Ty(Ty::String)) => Ok(PartialEqImpl::Between),
@@ -31652,6 +31631,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "PartialEq".into(),
                     operation: expression,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             let equal = self.equal_source(
@@ -31706,6 +31687,8 @@ impl<'a> Parser<'a> {
                 owner: peeled.name(&self.models),
                 capability: "PartialEq".into(),
                 operation: lhs.span,
+                derive: matches!(peeled, Ty::Script(..)),
+                required_by: None,
             }),
             // Tuples and arrays of crate types: element by element, each by
             // its type's own `eq` where it has one.
@@ -31716,6 +31699,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: expression,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 let equal = self.prelude_op(
@@ -32538,6 +32523,8 @@ impl<'a> Parser<'a> {
                 owner: ty.name(&self.models),
                 capability: "Ord".into(),
                 operation: member_span,
+                derive: matches!(ty, Ty::Script(..)),
+                required_by: None,
             });
         };
         let [first, second, third] = names;
@@ -33352,6 +33339,8 @@ impl<'a> Parser<'a> {
                 owner: other.name(&self.models),
                 capability: "FromStr".into(),
                 operation: span,
+                derive: matches!(other, Ty::Script(..)),
+                required_by: None,
             }),
         }
     }
@@ -33530,13 +33519,13 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let mut operands = vec![value.rendered_source(), code.to_string().into()];
-                for argument in &arguments {
+                for argument in &mut arguments {
                     let expected = match (name, self.inference.resolve(&argument.ty)) {
                         ("repeat" | "is_char_boundary", _) => Ty::Int(Int::Usize),
                         (_, Ty::Char) => Ty::Char,
-                        _ => Ty::String,
+                        _ => Ty::Str,
                     };
-                    self.require_type(&expected, &argument.ty, argument.span)?;
+                    self.coerce_expr(&expected, argument)?;
                     operands.push(argument.rendered_source());
                 }
                 operands.resize_with(4, || "()".into());
@@ -33573,7 +33562,7 @@ impl<'a> Parser<'a> {
                 for (index, argument) in arguments.iter_mut().enumerate() {
                     let expected = match (member.as_str(), index) {
                         ("insert", 1) => Ty::Char,
-                        ("insert_str", 1) => Ty::String,
+                        ("insert_str", 1) => Ty::Str,
                         _ => Ty::Int(Int::Usize),
                     };
                     self.coerce_expr(&expected, argument)?;
@@ -33604,9 +33593,9 @@ impl<'a> Parser<'a> {
                     self.coerce_expr(&Ty::Int(Int::Usize), count)?;
                     let expected = match self.inference.resolve(&pattern.ty) {
                         Ty::Char => Ty::Char,
-                        _ => Ty::String,
+                        _ => Ty::Str,
                     };
-                    self.require_type(&expected, &pattern.ty, pattern.span)?;
+                    self.coerce_expr(&expected, pattern)?;
                     operands.push(count.rendered_source());
                     operands.push(pattern.rendered_source());
                 }
@@ -33634,13 +33623,14 @@ impl<'a> Parser<'a> {
                 let pieces = self.operator_expr(pieces, array, expression);
                 return Ok(self.array_iterator(&pieces, item, end));
             }
-            ("push_str" | "push", [argument]) => {
+            ("push_str" | "push", [_]) => {
                 let expected = if member.as_str() == "push" {
                     Ty::Char
                 } else {
-                    Ty::String
+                    Ty::Str
                 };
-                self.require_type(&expected, &argument.ty, argument.span)?;
+                self.coerce_expr(&expected, &mut arguments[0])?;
+                let argument = &arguments[0];
                 let Some(Lvalue::Binding { binding, .. }) = &value.lvalue else {
                     // A field, an element or a nested place: changed in
                     // place and stored back like the other `String` changes.
@@ -34326,8 +34316,7 @@ impl<'a> Parser<'a> {
                         span(value.span.start(), end),
                     ));
                 };
-                self.strip_string_reference(text);
-                self.require_type(&Ty::String, &text.ty, text.span)?;
+                self.coerce_expr(&Ty::Str, text)?;
                 let mut source = origin::Fragment::plain("{ ");
                 source.push(value.rendered_source());
                 source.push_text(" += (");
@@ -34488,6 +34477,8 @@ impl<'a> Parser<'a> {
                         owner: name,
                         capability: "Clone".into(),
                         operation: member_span,
+                        derive: false,
+                        required_by: None,
                     });
                 }
                 // A hand-written `Clone` runs for the value's type.
@@ -36160,6 +36151,8 @@ impl<'a> Parser<'a> {
                             owner: "Vec<T>".into(),
                             capability: format!("From<{}>", ty.name(&self.models)).into(),
                             operation: call,
+                            derive: false,
+                            required_by: None,
                         });
                     }
                 };
@@ -36701,6 +36694,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Default".into(),
                         operation: call,
+                        derive: matches!(target, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.default_source(&target, call)?
@@ -36764,6 +36759,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Default".into(),
                         operation: call,
+                        derive: matches!(target, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 let new = self.temporary("new");
@@ -36840,8 +36837,7 @@ impl<'a> Parser<'a> {
             let [name] = arguments.as_mut_slice() else {
                 return Err(self.unsupported("a debug builder without its one name"));
             };
-            self.strip_string_reference(name);
-            self.require_type(&Ty::String, &name.ty, name.span)?;
+            self.coerce_expr(&Ty::Str, name)?;
             name.rendered_source().surrounded("(", ")")
         };
         let mut parts = Vec::new();
@@ -36862,8 +36858,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 ("debug_struct", "field", [name, field]) => {
-                    self.strip_string_reference(name);
-                    self.require_type(&Ty::String, &name.ty, name.span)?;
+                    self.coerce_expr(&Ty::Str, name)?;
                     let debug =
                         self.debug_source(&field.ty, field.rendered_source(), field.span)?;
                     let mut part = name.rendered_source().surrounded("(", ")");
@@ -37175,6 +37170,8 @@ impl<'a> Parser<'a> {
                     owner: name,
                     capability: "Default".into(),
                     operation: member_span,
+                    derive: false,
+                    required_by: None,
                 });
             }
             self.capture_witnesses();
@@ -37877,23 +37874,24 @@ impl<'a> Parser<'a> {
                 source: self.lifted[index].span,
             });
         }
-        // A shared borrow of a script value stays one, as `|event: &Event|`
-        // makes a crate's `impl Fn(T)` take `T = &Event`, which is `Clone`
-        // where `Event` isn't; its proxy shares the value either way.
-        let inputs: Box<[Ty]> = inputs
-            .iter()
-            .map(|input| match input {
-                Ty::Reference {
-                    mutable: false,
-                    target,
-                } if !matches!(self.inference.resolve(target), Ty::Script(..)) => {
-                    (**target).clone()
-                }
-                input => input.clone(),
-            })
-            .collect();
+        // The closure's type keeps its parameters' borrows, which the
+        // runtime passes by value. Its signature names a shared borrow of a
+        // script value only, as `|event: &Event|` makes a crate's `impl
+        // Fn(T)` take `T = &Event`, which is `Clone` where `Event` isn't;
+        // its proxy shares the value either way.
         let signature = Ty::Fn {
-            inputs: inputs.clone(),
+            inputs: inputs
+                .iter()
+                .map(|input| match input {
+                    Ty::Reference {
+                        mutable: false,
+                        target,
+                    } if !matches!(self.inference.resolve(target), Ty::Script(..)) => {
+                        (**target).clone()
+                    }
+                    input => input.clone(),
+                })
+                .collect(),
             output: output.clone(),
         }
         .name(&self.models);
@@ -39066,6 +39064,8 @@ impl<'a> Parser<'a> {
                     owner: error.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(error.as_ref(), Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
@@ -39325,8 +39325,7 @@ impl<'a> Parser<'a> {
             }
             "expect" => {
                 arity(1, &arguments)?;
-                self.strip_string_reference(&mut arguments[0]);
-                self.require_type(&Ty::String, &arguments[0].ty, arguments[0].span)?;
+                self.coerce_expr(&Ty::Str, &mut arguments[0])?;
                 let expected = self.prelude_op(
                     PreludeOp::Expect,
                     [o.as_str().into(), arguments[0].rendered_source()],
@@ -39635,6 +39634,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Copy".into(),
                         operation: member_span,
+                        derive: matches!(target.as_ref(), Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 source.push_text(o.as_str());
@@ -39819,6 +39820,8 @@ impl<'a> Parser<'a> {
                     owner: this.inference.resolve(ty).name(&this.models),
                     capability: "Debug".into(),
                     operation: member_span,
+                    derive: matches!(this.inference.resolve(ty), Ty::Script(..)),
+                    required_by: None,
                 })
             }
         };
@@ -39904,8 +39907,7 @@ impl<'a> Parser<'a> {
             }
             "expect" | "expect_err" => {
                 arity(1, &arguments)?;
-                self.strip_string_reference(&mut arguments[0]);
-                self.require_type(&Ty::String, &arguments[0].ty, arguments[0].span)?;
+                self.coerce_expr(&Ty::Str, &mut arguments[0])?;
                 let (op, other, ty) = if member.as_str() == "expect" {
                     (PreludeOp::ExpectOk, &err, ok.clone())
                 } else {
@@ -40192,6 +40194,8 @@ impl<'a> Parser<'a> {
                             owner: model.name().into(),
                             capability: "Default".into(),
                             operation: span,
+                            derive: true,
+                            required_by: None,
                         }
                     })?;
                 let helper = self.push_op(Op::Default {
@@ -40236,6 +40240,8 @@ impl<'a> Parser<'a> {
                             owner: ty.name(&self.models),
                             capability: "Default".into(),
                             operation: span,
+                            derive: matches!(ty, Ty::Script(..)),
+                            required_by: None,
                         });
                     }
                     // An imported type's `default` comes from its crate's
@@ -40258,6 +40264,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "Default".into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 })
             }
         })
@@ -40350,6 +40358,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
@@ -40361,6 +40371,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 if self.models.std_traits.contains("PartialEq") {
@@ -40381,6 +40393,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
@@ -40463,6 +40477,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "Debug".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 if self.models.std_traits.contains("Debug") {
@@ -40662,6 +40678,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "Debug".into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 })
             }
         })
@@ -40976,7 +40994,7 @@ impl<'a> Parser<'a> {
                 }
                 let separator = match arguments.first_mut() {
                     Some(separator) => {
-                        self.coerce_expr(&Ty::String, separator)?;
+                        self.coerce_expr(&Ty::Str, separator)?;
                         separator.rendered_source()
                     }
                     None => "\"\"".into(),
@@ -41429,6 +41447,8 @@ impl<'a> Parser<'a> {
             owner: ty.name(&this.models),
             capability: "Ord".into(),
             operation: value.span,
+            derive: matches!(ty, Ty::Script(..)),
+            required_by: None,
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
         let pair = (
@@ -41597,6 +41617,8 @@ impl<'a> Parser<'a> {
                     owner: output.name(&self.models),
                     capability: "Ord".into(),
                     operation: member_span,
+                    derive: matches!(output, Ty::Script(..)),
+                    required_by: None,
                 })?
             } else {
                 origin::Fragment::plain(format!("{function}.call({best}, {current})"))
@@ -41611,6 +41633,8 @@ impl<'a> Parser<'a> {
                 owner: element.name(&self.models),
                 capability: "Ord".into(),
                 operation: member_span,
+                derive: matches!(element, Ty::Script(..)),
+                required_by: None,
             })?
         };
         let key_value = if keyed {
@@ -44504,15 +44528,16 @@ impl<'a> Parser<'a> {
             && let [argument] = arguments.as_mut_slice()
         {
             let source = self.inference.resolve(&argument.ty);
-            // `String::from(&str)`, also of a `String`.
-            if builtin == Ty::String {
-                let mut stripped = argument.clone();
-                self.strip_string_reference(&mut stripped);
-                if self.unifies(&Ty::String, &stripped.ty) {
-                    self.require_type(&Ty::String, &stripped.ty, stripped.span)?;
-                    let source = stripped.rendered_source();
-                    return Ok(self.operator_expr(source, Ty::String, expression));
+            // `String`'s `From<&str>`, `From<&String>` and `From<String>`.
+            if builtin == Ty::String
+                && match &source {
+                    Ty::Str | Ty::String => true,
+                    Ty::Reference { target, .. } => self.inference.resolve(target) == Ty::String,
+                    _ => false,
                 }
+            {
+                let source = argument.rendered_source();
+                return Ok(self.operator_expr(source, Ty::String, expression));
             }
             if let Some((definition, from, _)) =
                 owner.and_then(|id| self.select_conversion(id, None, &source, expression))
@@ -44592,6 +44617,8 @@ impl<'a> Parser<'a> {
                 owner: name,
                 capability: format!("From<{}>", source.name(&self.models)).into(),
                 operation: expression,
+                derive: false,
+                required_by: None,
             });
         }
         // A crate trait's function without `self` for this type.
@@ -45004,6 +45031,8 @@ impl<'a> Parser<'a> {
                             owner: full.into(),
                             capability: format!("From<{}>", source.name(&self.models)).into(),
                             operation: call,
+                            derive: false,
+                            required_by: None,
                         });
                     };
                     self.coerce_expr(&from, argument)?;
@@ -45505,6 +45534,8 @@ impl<'a> Parser<'a> {
                     owner: model.name().into(),
                     capability: format!("From<{}>", source.name(&self.models)).into(),
                     operation: call,
+                    derive: true,
+                    required_by: None,
                 });
             };
             self.coerce_expr(&from, argument)?;
@@ -47045,6 +47076,51 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// rustc's E0631: a closure or function passed where a callable of as
+    /// many parameters is expected, whose parameters are not the callable's,
+    /// as `|s: State|` where `Fn(&State)` is.
+    fn argument_signature(&mut self, expected: &Ty, actual: &Ty, at: Span) -> Option<Error> {
+        let (Ty::Callable { inputs: want, .. } | Ty::Fn { inputs: want, .. }) = expected else {
+            return None;
+        };
+        let (closure, have) = match actual {
+            Ty::FnItem { key, inputs, .. } => (key.name().contains("{closure#"), inputs),
+            // A closure or function the host is given, as its callable.
+            Ty::Callable {
+                inputs,
+                item: Some(item),
+                ..
+            } => (item.key().name().contains("{closure#"), inputs),
+            Ty::Fn { inputs, .. } => (true, inputs),
+            _ => return None,
+        };
+        if want.len() != have.len() {
+            return None;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let fits = want
+            .iter()
+            .zip(have.iter())
+            .all(|(want, have)| self.unify_type(want, have));
+        self.inference.rollback(checkpoint);
+        if fits {
+            return None;
+        }
+        let signature = |inputs: &[Ty], models: &_| {
+            let inputs = inputs
+                .iter()
+                .map(|input| self.inference.resolve(input).name(models).to_string())
+                .collect::<Vec<_>>();
+            format!("fn({}) -> _", inputs.join(", "))
+        };
+        Some(Error::ArgumentSignature {
+            closure,
+            expected: signature(want, &self.models).into(),
+            found: signature(have, &self.models).into(),
+            at,
+        })
+    }
+
     fn require_type(&mut self, expected: &Ty, actual: &Ty, span: Span) -> Result<(), Error> {
         if self.unify_type(expected, actual) {
             return Ok(());
@@ -47053,6 +47129,9 @@ impl<'a> Parser<'a> {
             self.inference.resolve(expected),
             self.inference.resolve(actual),
         );
+        if let Some(error) = self.argument_signature(&expected, &actual, span) {
+            return Err(error);
+        }
         let mut found = actual.name(&self.models).to_string();
         // Arrays of two lengths: rustc's label for them.
         if let (
@@ -47228,9 +47307,9 @@ impl<'a> Parser<'a> {
             };
             value.ty = source.clone();
         }
-        // Deref coercion: `&String`, or `&Arc<String>`, where `&str`
-        // (`String`) is expected.
-        if target.is_text()
+        // Deref coercion: `&String`, or `&Arc<String>`, where `&str` is
+        // expected.
+        if target == Ty::Str
             && let Some((unboxed, _)) = self.unbox(&source)
         {
             source = unboxed;
@@ -47238,13 +47317,14 @@ impl<'a> Parser<'a> {
         }
         // `&&String` and `&&&str` deref to `&str` through every reference.
         let mut stripped = source.clone();
-        while target.is_text()
+        while target == Ty::Str
             && let Ty::Reference { target: from, .. } = &stripped
             && let inner @ Ty::Reference { .. } = self.inference.resolve(from)
         {
             stripped = inner;
         }
-        if target.is_text() && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
+        if target == Ty::Str
+            && matches!(&stripped, Ty::Reference { target, .. } if target.is_text())
         {
             source = Ty::Str;
             value.ty = Ty::Str;
@@ -47302,6 +47382,8 @@ impl<'a> Parser<'a> {
                     owner: from_error.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(from_error.as_ref(), Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
@@ -47328,6 +47410,8 @@ impl<'a> Parser<'a> {
                     owner: source.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(source, Ty::Script(..)),
+                    required_by: None,
                 });
             };
             *value = self.operator_expr(object, target, value.span);
@@ -47377,6 +47461,8 @@ impl<'a> Parser<'a> {
                     owner: concrete.name(&self.models),
                     capability: trait_name,
                     operation: value.span,
+                    derive: matches!(concrete, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.
@@ -47410,6 +47496,26 @@ impl<'a> Parser<'a> {
         if self.coerce_children(&source, &target, value)? {
             return Ok(None);
         }
+        // A native value whose opaque type is a future, whatever bound
+        // makes it one, as a program's own `impl Straw<..>` is through
+        // `Core`, goes where a future is taken, as rustc passes it to
+        // iced's `Task::future(impl Future<Output = T>)`: its `Output` is
+        // the future's.
+        #[cfg(feature = "rust-import")]
+        if let Some(expected) = self.task_output(&target)
+            && let Ty::Host { proof, arguments } = &source
+            && let Some(given) = proof
+                .definition
+                .associated(
+                    rawr_import::surface::identity::Definition::future().as_bytes(),
+                    "Output",
+                )
+                .and_then(|position| arguments.get(position))
+        {
+            let given = given.clone();
+            self.require_type(&expected, &given, value.span)?;
+            return Ok(None);
+        }
         let checkpoint = self.inference.checkpoint();
         if let Some((key, projected)) = self.selected_projection(&source, &target)
             && self.unify_type(&target, &projected)
@@ -47441,9 +47547,9 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
-    /// iced's `impl IntoIterator<Item = impl Into<Element>>`, a facade slice
-    /// of Elements: a `Vec`, array or iterator of widgets converts each one,
-    /// as `column(texts)` takes a `Vec<Text>`.
+    /// iced's `impl IntoIterator<Item = Element>`, a facade slice of
+    /// Elements: an array or an iterator of Elements is taken as the slice,
+    /// as `column([a, b])` takes `[Element; 2]`.
     fn coerce_children(
         &mut self,
         source: &Ty,
@@ -47516,38 +47622,17 @@ impl<'a> Parser<'a> {
             }
             same
         };
-        if same {
-            if !fixed && !iterator {
-                return Ok(false);
-            }
-            // An array or an iterator of Elements already: only its type
-            // widens to the slice.
-            if iterator {
-                self.collect_children(value);
-            }
-            value.ty = target.clone();
-            return Ok(true);
+        // Items of another type are `Item = Element` unmet (E0271), as
+        // rustc holds `column(texts)`: no coercion converts each one.
+        if !same || (!fixed && !iterator) {
+            return Ok(false);
         }
-        let item = self.temporary("child");
-        let mut element = self.operator_expr(
-            origin::Fragment::plain(item.clone()),
-            source_element,
-            value.span,
-        );
-        self.coerce_expr(&target_element, &mut element)?;
+        // An array or an iterator of Elements already: only its type widens
+        // to the slice.
         if iterator {
             self.collect_children(value);
         }
-        let mut rendered = origin::Fragment::plain("(");
-        rendered.push(value.rendered_source());
-        rendered.push_text(format!(").map(|{item}| "));
-        rendered.push(element.rendered_source());
-        rendered.push_text(")");
-        value.prelude = origin::Fragment::default();
-        value.source = rendered;
         value.ty = target.clone();
-        value.lvalue = None;
-        value.source.cover(value.span);
         Ok(true)
     }
 
@@ -47720,8 +47805,11 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        // Text converts into a `String`, through `From<&str>` or
+        // `From<T> for T` (or into a boxed error, `box_returned_error`).
         if source.is_text() {
             self.text_into.push(value.span);
+            value.ty = Ty::String;
         }
         Ok(value.retain_origin())
     }
@@ -47747,9 +47835,8 @@ impl<'a> Parser<'a> {
             },
             method: method.into(),
             reason: format!(
-                "`{source}` has no `From` conversion into `{target}`. iced master has no `From` \
-                 conversion from a widget into `Element`, unlike iced 0.13 and 0.14, so pass the \
-                 widget as it is or call `.boxed()`"
+                "the trait bound `{target}: From<{source}>` is not satisfied; pass the widget \
+                 as it is, or call `.boxed()`"
             )
             .into(),
             call,
@@ -47832,6 +47919,8 @@ impl<'a> Parser<'a> {
                         owner: owner.name().into(),
                         capability: trait_name,
                         operation: call,
+                        derive: true,
+                        required_by: None,
                     });
                 };
                 let item = crate::item::Value::new(
@@ -48228,9 +48317,6 @@ impl<'a> Parser<'a> {
             return true;
         }
         match (&expected, &actual) {
-            // Rawr takes a `&str` where a `String` is declared, and the
-            // other way round.
-            (Ty::String, Ty::Str) | (Ty::Str, Ty::String) => true,
             (Ty::Infer(id), _) => {
                 self.inference.bind(*id, actual);
                 true
@@ -48334,25 +48420,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        let actual = match actual {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => (**target).clone(),
-                            actual => actual.clone(),
-                        };
-                        // A `&T` the host gives a closure is the closure's
-                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
-                        let expected = match self.inference.resolve(expected) {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => *target,
-                            expected => expected,
-                        };
-                        self.unify_type(&expected, &actual)
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             // A closure a crate value holds, as `Map<W, F, A>` from iced's
@@ -48439,28 +48507,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        if self.unify_type(expected, actual) {
-                            return true;
-                        }
-                        // A `&T` the host gives a closure is the closure's
-                        // `T`, as pane_grid's `view(pane, &state, ..)` is.
-                        match (
-                            self.inference.resolve(expected),
-                            self.inference.resolve(actual),
-                        ) {
-                            (
-                                Ty::Reference {
-                                    mutable: false,
-                                    target,
-                                },
-                                actual,
-                            ) if !matches!(actual, Ty::Reference { .. }) => {
-                                self.unify_type(&target, &actual)
-                            }
-                            _ => false,
-                        }
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             // A stream's tuple spread over a closure of as many parameters,
@@ -48496,7 +48543,7 @@ impl<'a> Parser<'a> {
             }
             // A crate's function where a host callable is expected, as
             // `.style(container::rounded_box)`: the adapter passes the Rust
-            // function itself, so a `&T` it takes is the callable's `&T`.
+            // function itself.
             #[cfg(feature = "rust-import")]
             (
                 Ty::Callable {
@@ -48519,18 +48566,7 @@ impl<'a> Parser<'a> {
                 expected_inputs
                     .iter()
                     .zip(actual_inputs.iter())
-                    .all(|(expected, actual)| {
-                        let unborrowed = |ty: Ty| match ty {
-                            Ty::Reference {
-                                mutable: false,
-                                target,
-                            } => *target,
-                            ty => ty,
-                        };
-                        let expected = unborrowed(self.inference.resolve(expected));
-                        let actual = unborrowed(self.inference.resolve(actual));
-                        self.unify_type(&expected, &actual)
-                    })
+                    .all(|(expected, actual)| self.unify_type(expected, actual))
                     && self.unify_type(expected_output, actual_output)
             }
             #[cfg(feature = "rust-import")]
@@ -48684,6 +48720,8 @@ impl<'a> Parser<'a> {
             owner: model.name().into(),
             capability: capability.name().into(),
             operation: span,
+            derive: true,
+            required_by: None,
         })
     }
 
@@ -54201,7 +54239,7 @@ match payload {{ Payload::Pair({pattern}) => 1, Payload::Empty => 0 }}
             .unwrap();
 
         for input in [
-            type_ref::Type::builtin(type_ref::Builtin::String),
+            type_ref::Type::reference(false, type_ref::Type::builtin(type_ref::Builtin::String)),
             type_ref::Type::builtin(type_ref::Builtin::I64),
             type_ref::Type::builtin(type_ref::Builtin::Bool),
         ] {

@@ -36,6 +36,50 @@ pub struct Image {
 impl Image {
     /// As many placeholders as the gallery shows before it has images.
     pub const LIMIT: usize = 2;
+
+    /// The image's bytes, or an error, behind `impl Straw<..>`, as iced's
+    /// gallery's `Image::download(self, size)` gives.
+    pub fn download(self, size: Size) -> impl events::Straw<Bytes, u32, String> {
+        Downloaded(match size {
+            Size::Original => self.url.len() as u32 + self.id,
+            Size::Thumbnail { width } => width,
+        })
+    }
+}
+
+/// Downloaded bytes, as their count, as iced's gallery's `civitai::Bytes`.
+#[derive(Debug, Clone)]
+pub struct Bytes(pub u32);
+
+struct Downloaded(u32);
+
+impl Future for Downloaded {
+    type Output = Result<Bytes, String>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::task::Poll::Ready(match self.0 {
+            0 => Err("empty".to_owned()),
+            length => Ok(Bytes(length * 3)),
+        })
+    }
+}
+
+impl events::Sip for Downloaded {
+    type Item = u32;
+
+    fn sipped(self) -> Vec<u32> {
+        vec![self.0]
+    }
+}
+
+/// What the gallery downloads, as iced's gallery's `civitai::Size`.
+#[derive(Debug, Clone, Copy)]
+pub enum Size {
+    Original,
+    Thumbnail { width: u32 },
 }
 
 impl std::fmt::Display for Image {

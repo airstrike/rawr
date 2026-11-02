@@ -35,6 +35,10 @@ fn string() -> type_ref::Type {
     type_ref::Type::builtin(type_ref::Builtin::String)
 }
 
+fn text() -> type_ref::Type {
+    type_ref::Type::reference(false, string())
+}
+
 fn bytes() -> type_ref::Type {
     type_ref::Type::slice(type_ref::Type::builtin(type_ref::Builtin::U8))
 }
@@ -169,7 +173,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
 
     builder.module("fs")?;
     let path = || -> Result<Vec<Type>, host::Error> {
-        Ok(vec![string(), Type::registered(super::path::PATH)?])
+        Ok(vec![text(), string(), Type::registered(super::path::PATH)?])
     };
     for function in FUNCTIONS {
         let mut options = Vec::new();
@@ -177,7 +181,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
             options.push(path()?);
         }
         if function.contents {
-            options.push(vec![string(), bytes()]);
+            options.push(vec![text(), string(), bytes()]);
         }
         for parameters in combinations(&options) {
             let mut signature = signature::Builder::new();

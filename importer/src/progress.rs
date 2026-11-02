@@ -158,12 +158,22 @@ pub fn note(key: &str, line: &str) {
         return;
     }
     state.notes.push(key.into());
+    say_above(&mut state, line);
+}
+
+/// Print `line` above the status line, every time.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn say(line: &str) {
+    say_above(&mut lock(), line);
+}
+
+fn say_above(state: &mut State, line: &str) {
     let shown = state.drawn;
-    clear(&mut state);
+    clear(state);
     crate::process::say(line);
     if shown {
         state.drawn = true;
-        draw(&mut state);
+        draw(state);
     }
 }
 

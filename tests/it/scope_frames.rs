@@ -87,7 +87,7 @@ fn the_rest_of_the_block_runs_in_the_frame() {
         let p = words(text);
         let a = next_word(p);
         let b = next_word(p);
-        a + "," + b
+        a + "," + &b
     "#,
     )
     .unwrap();
@@ -144,7 +144,7 @@ fn nested_frames_both_close() {
         let q = words("1 2");
         let x = next_word(p);
         let one = next_word(q);
-        x + one + next_word(p)
+        x + &one + &next_word(p)
     "#,
     )
     .unwrap();

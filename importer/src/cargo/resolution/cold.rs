@@ -593,39 +593,51 @@ pub(in crate::cargo) fn build(
 ) -> Result<(Box<[u8]>, Box<[(OsString, OsString)]>)> {
     require_configs(layout)?;
     let paths = layout.final_form();
-    let rawr = crate::location::rawr_directory(&request.project_root, request.config.environment());
-    let io = |operation, path: &Path| {
-        let path = path.to_path_buf();
-        move |source| Error::Io {
-            operation,
-            path,
-            source,
-        }
-    };
-    // Rawr's own build directory under `<target>/rawr`: only this pinned
-    // nightly build uses it, so Cargo's freshness there is this build's
-    // alone, and `cargo build` never sees its units (D609.2).
-    let build = rawr.join("build");
-    let shared = crate::deps::directory(&build)
-        .map_err(io("create Rawr's Cargo build directory", &build))?;
+    // One build directory per machine per pinned toolchain, in rawr's home
+    // (D700). Only this pinned nightly build uses it, so Cargo's freshness
+    // there is this build's alone, `cargo build` never sees its units, and a
+    // second project rechecks only what its own closure adds.
+    let home = home(request)?;
+    let shared = crate::deps::nightly_directory(&home);
     let mut prefix = prefix(request, paths.config())?;
     // The shared directory overrides the reserved config's bundle build root;
     // relocation then fills that root with the files this resolution reads.
     prefix.extend(shared_arguments(&shared));
     let tail = cargo::cargo_build_arguments(paths.manifest(), &request.target, &request.profile);
     let command = cargo::cargo_build_command(request, prefix, tail, environment)?;
-    let _lock = crate::deps::lock(&rawr).map_err(io("lock shared Cargo build directory", &rawr))?;
+    // Held across the Cargo run and the copy of what it wrote: another
+    // project's build would rewrite those files, and cleanup skips a held
+    // directory. Extraction then reads the bundle's copies.
+    let lock = crate::deps::nightly_lock(&shared).map_err(|source| Error::Io {
+        operation: "lock rawr's nightly build directory",
+        path: shared.clone(),
+        source,
+    })?;
     let bytes = native
         .run(&command, limits.process)?
         .checked(Program::Cargo)?;
-    crate::deps::prune_rawr(&shared, &bytes);
     super::relocate::unshare(paths.target())?;
     let bytes = super::relocate::relocate(&bytes, &shared, paths.build())?;
+    drop(lock);
+    crate::deps::retire_nightly(&home, &shared);
     Ok((bytes, command.into_environment()))
 }
 
-/// Build in `shared`, Rawr's own build directory, with Cargo's own
-/// freshness rules, so a later resolution reuses this one's units.
+/// Rawr's home for `request`'s environment.
+pub(in crate::cargo) fn home(request: &Request) -> Result<std::path::PathBuf> {
+    let cargo_home = request
+        .config
+        .environment()
+        .cargo_home()?
+        .ok_or_else(|| Error::Request {
+            reason: "rawr's home needs the environment variable `CARGO_HOME` or `HOME`".into(),
+        })?;
+    Ok(crate::store::home(&cargo_home))
+}
+
+/// Build in `shared`, the pinned nightly's build directory, with Cargo's own
+/// freshness rules, so a later resolution, of this project or another,
+/// reuses this one's units.
 pub(in crate::cargo) fn shared_arguments(shared: &Path) -> [OsString; 2] {
     let value = toml_edit::Value::from(shared.to_string_lossy().as_ref()).to_string();
     ["--config".into(), format!("build.build-dir={value}").into()]
