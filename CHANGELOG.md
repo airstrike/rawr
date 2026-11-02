@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A std type in a crate's signature is rawr's own type in every position: functions take tuples and `Range<usize>`, and take and give `Box<T>`, read from std's own table. A std type rawr can't pass to a crate yet, such as `Rc`, `Arc` or `HashMap`, reports "rawr doesn't run `X` yet" where the function is called. (#746, #707)
+- A crate type's `Index`, `FromStr` and `Iterator` impls work as its own trait impls do: `grid[i]`, `"1,2".parse::<Coords>()` and a `for` loop over it call them. (#709)
 
 ## 0.3.111 (2026-11-02)
 
