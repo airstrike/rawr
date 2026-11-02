@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.103 (2026-11-01)
+
 - A `&str` inside a tuple or `Option` input, such as an async fn's `(&str, &Catalog)`, and a string literal beside a widget in `column!` are typed `&str`, as rustc reads them, after #706 made `String` and `&str` distinct. (#750)
 
 ## 0.3.102 (2026-11-01)
