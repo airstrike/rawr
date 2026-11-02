@@ -250,6 +250,31 @@ pub(super) fn resolve(
             if super::std_phantom(&written) && !types.contains_key("PhantomData") {
                 return Ok(Type::Unit(path.span));
             }
+            // A bare `str`, as `AsRef<str>` writes it, is the text a `&str`
+            // is: Rawr's `String` marked borrowed (`Type::is_str`).
+            if written == "str"
+                && path.segments[0].arguments.is_empty()
+                && !types.contains_key("str")
+            {
+                return Ok(Type::Path(Path {
+                    name: "String".into(),
+                    target: Target::Builtin,
+                    arguments: Box::new([Argument::Lifetime(path.span)]),
+                    span: path.span,
+                }));
+            }
+            // `fmt::Error`, which a `fmt::Result` holds, is `()`: Rawr's
+            // formatter never fails.
+            if matches!(
+                written.as_str(),
+                "fmt::Error" | "std::fmt::Error" | "core::fmt::Error"
+            ) && path
+                .segments
+                .iter()
+                .all(|segment| segment.arguments.is_empty())
+            {
+                return Ok(Type::Unit(path.span));
+            }
             // A crate's type alias written by its path, as `iced::Result`.
             let host_alias = (!types.contains_key(written.as_str()))
                 .then(|| match host.entry(&super::std_reexport(&written, host)) {

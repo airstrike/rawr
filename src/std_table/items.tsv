@@ -12,10 +12,10 @@ alloc::borrow::Cow::into_owned	assoc-fn	s
 alloc::borrow::Cow::is_borrowed	assoc-fn	u cow_is_borrowed 65143 -	
 alloc::borrow::Cow::is_owned	assoc-fn	u cow_is_borrowed 65143 -	
 alloc::borrow::Cow::to_mut	assoc-fn	s	
-alloc::borrow::ToOwned	trait	s	
-alloc::borrow::ToOwned::Owned	assoc-type	s	required
-alloc::borrow::ToOwned::clone_into	assoc-fn	s	provided
-alloc::borrow::ToOwned::to_owned	assoc-fn	s	required
+alloc::borrow::ToOwned	trait	s		
+alloc::borrow::ToOwned::Owned	assoc-type	s	required	type Owned: std::borrow::Borrow<Self>
+alloc::borrow::ToOwned::clone_into	assoc-fn	s	provided	fn clone_into(&self, target: &mut Self::Owned)
+alloc::borrow::ToOwned::to_owned	assoc-fn	s	required	fn to_owned(&self) -> Self::Owned
 alloc::boxed::Box	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::boxed::Box::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::boxed::Box::as_mut_ptr	assoc-fn	s	
@@ -562,12 +562,12 @@ alloc::rc::Weak::ptr_eq	assoc-fn	s
 alloc::rc::Weak::strong_count	assoc-fn	s	
 alloc::rc::Weak::upgrade	assoc-fn	s	
 alloc::rc::Weak::weak_count	assoc-fn	s	
-alloc::slice::Concat	trait	u slice_concat_trait 27747 -	Item
-alloc::slice::Concat::Output	assoc-type	u slice_concat_trait 27747 -	required
-alloc::slice::Concat::concat	assoc-fn	u slice_concat_trait 27747 -	required
-alloc::slice::Join	trait	u slice_concat_trait 27747 -	Separator
-alloc::slice::Join::Output	assoc-type	u slice_concat_trait 27747 -	required
-alloc::slice::Join::join	assoc-fn	u slice_concat_trait 27747 -	required
+alloc::slice::Concat	trait	u slice_concat_trait 27747 -	Item	
+alloc::slice::Concat::Output	assoc-type	u slice_concat_trait 27747 -	required	type Output
+alloc::slice::Concat::concat	assoc-fn	u slice_concat_trait 27747 -	required	fn concat(slice: &Self) -> Self::Output
+alloc::slice::Join	trait	u slice_concat_trait 27747 -	Separator	
+alloc::slice::Join::Output	assoc-type	u slice_concat_trait 27747 -	required	type Output
+alloc::slice::Join::join	assoc-fn	u slice_concat_trait 27747 -	required	fn join(slice: &Self, sep: Separator) -> Self::Output
 alloc::str::convert_while_ascii	fn	u str_internals - -	
 alloc::str::from_boxed_utf8_unchecked	fn	s	
 alloc::string::Drain	struct	s	'a
@@ -631,8 +631,8 @@ alloc::string::String::try_reserve	assoc-fn	s
 alloc::string::String::try_reserve_exact	assoc-fn	s	
 alloc::string::String::try_with_capacity	assoc-fn	u try_with_capacity 91913 -	
 alloc::string::String::with_capacity	assoc-fn	s	
-alloc::string::ToString	trait	s	
-alloc::string::ToString::to_string	assoc-fn	s	required
+alloc::string::ToString	trait	s		
+alloc::string::ToString::to_string	assoc-fn	s	required	fn to_string(&self) -> String
 alloc::sync::Arc	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::sync::Arc::allocator	assoc-fn	u allocator_api 32838 -	
 alloc::sync::Arc::as_ptr	assoc-fn	s	
@@ -707,12 +707,12 @@ alloc::sync::Weak::ptr_eq	assoc-fn	s
 alloc::sync::Weak::strong_count	assoc-fn	s	
 alloc::sync::Weak::upgrade	assoc-fn	s	
 alloc::sync::Weak::weak_count	assoc-fn	s	
-alloc::task::LocalWake	trait	u local_waker 118959 -	
-alloc::task::LocalWake::wake	assoc-fn	u local_waker 118959 -	required
-alloc::task::LocalWake::wake_by_ref	assoc-fn	u local_waker 118959 -	provided
-alloc::task::Wake	trait	s	
-alloc::task::Wake::wake	assoc-fn	s	required
-alloc::task::Wake::wake_by_ref	assoc-fn	s	provided
+alloc::task::LocalWake	trait	u local_waker 118959 -		
+alloc::task::LocalWake::wake	assoc-fn	u local_waker 118959 -	required	fn wake(self: std::rc::Rc<Self>)
+alloc::task::LocalWake::wake_by_ref	assoc-fn	u local_waker 118959 -	provided	fn wake_by_ref(self: &std::rc::Rc<Self>)
+alloc::task::Wake	trait	s		
+alloc::task::Wake::wake	assoc-fn	s	required	fn wake(self: std::sync::Arc<Self>)
+alloc::task::Wake::wake_by_ref	assoc-fn	s	provided	fn wake_by_ref(self: &std::sync::Arc<Self>)
 alloc::task::local_waker_fn	fn	u waker_fn 149580 -	F
 alloc::task::waker_fn	fn	u waker_fn 149580 -	F
 alloc::vec::Vec	struct	s	T A=std::alloc::Global?allocator_api#32838
@@ -906,19 +906,19 @@ char::to_titlecase	assoc-fn	u titlecase 153892 -
 char::to_u32	assoc-fn	u char_to_u32 158938 -	
 char::to_uppercase	assoc-fn	s	
 core::alloc::AllocError	struct	u allocator_api 32838 -	
-core::alloc::Allocator	trait	u allocator_api 32838 -	
-core::alloc::Allocator::allocate	assoc-fn	u allocator_api 32838 -	required
-core::alloc::Allocator::allocate_zeroed	assoc-fn	u allocator_api 32838 -	provided
-core::alloc::Allocator::by_ref	assoc-fn	u allocator_api 32838 -	provided
-core::alloc::Allocator::deallocate	assoc-fn	u allocator_api 32838 -	required
-core::alloc::Allocator::grow	assoc-fn	u allocator_api 32838 -	provided
-core::alloc::Allocator::grow_zeroed	assoc-fn	u allocator_api 32838 -	provided
-core::alloc::Allocator::shrink	assoc-fn	u allocator_api 32838 -	provided
-core::alloc::global::GlobalAlloc	trait	s	
-core::alloc::global::GlobalAlloc::alloc	assoc-fn	s	required
-core::alloc::global::GlobalAlloc::alloc_zeroed	assoc-fn	s	provided
-core::alloc::global::GlobalAlloc::dealloc	assoc-fn	s	required
-core::alloc::global::GlobalAlloc::realloc	assoc-fn	s	provided
+core::alloc::Allocator	trait	u allocator_api 32838 -		
+core::alloc::Allocator::allocate	assoc-fn	u allocator_api 32838 -	required	fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError>
+core::alloc::Allocator::allocate_zeroed	assoc-fn	u allocator_api 32838 -	provided	fn allocate_zeroed(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError>
+core::alloc::Allocator::by_ref	assoc-fn	u allocator_api 32838 -	provided	fn by_ref(&self) -> &Self
+core::alloc::Allocator::deallocate	assoc-fn	u allocator_api 32838 -	required	fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout)
+core::alloc::Allocator::grow	assoc-fn	u allocator_api 32838 -	provided	fn grow(&self, ptr: std::ptr::NonNull<u8>, old_layout: std::alloc::Layout, new_layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError>
+core::alloc::Allocator::grow_zeroed	assoc-fn	u allocator_api 32838 -	provided	fn grow_zeroed(&self, ptr: std::ptr::NonNull<u8>, old_layout: std::alloc::Layout, new_layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError>
+core::alloc::Allocator::shrink	assoc-fn	u allocator_api 32838 -	provided	fn shrink(&self, ptr: std::ptr::NonNull<u8>, old_layout: std::alloc::Layout, new_layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, std::alloc::AllocError>
+core::alloc::global::GlobalAlloc	trait	s		
+core::alloc::global::GlobalAlloc::alloc	assoc-fn	s	required	fn alloc(&self, layout: std::alloc::Layout) -> *mut u8
+core::alloc::global::GlobalAlloc::alloc_zeroed	assoc-fn	s	provided	fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8
+core::alloc::global::GlobalAlloc::dealloc	assoc-fn	s	required	fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout)
+core::alloc::global::GlobalAlloc::realloc	assoc-fn	s	provided	fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8
 core::alloc::layout::Layout	struct	s	
 core::alloc::layout::Layout::adjust_alignment_to	assoc-fn	u ptr_alignment_type 102070 -	
 core::alloc::layout::Layout::align	assoc-fn	s	
@@ -942,8 +942,8 @@ core::alloc::layout::Layout::repeat_packed	assoc-fn	s
 core::alloc::layout::Layout::size	assoc-fn	s	
 core::alloc::layout::LayoutErr	type	s	
 core::alloc::layout::LayoutError	struct	s	
-core::any::Any	trait	s	
-core::any::Any::type_id	assoc-fn	s	required
+core::any::Any	trait	s		
+core::any::Any::type_id	assoc-fn	s	required	fn type_id(&self) -> std::any::TypeId
 core::any::TypeId	struct	s	
 core::any::TypeId::field	assoc-fn	u type_info 146922 -	
 core::any::TypeId::fields	assoc-fn	u type_info 146922 -	
@@ -1128,28 +1128,28 @@ core::ascii::ascii_char::AsciiChar::to_uppercase	assoc-fn	u ascii_char 110998 -
 core::ascii::escape_default	fn	s	
 core::asserting::Capture	struct	u generic_assert_internals 44838 -	E M
 core::asserting::Capture::new	assoc-fn	u generic_assert_internals 44838 -	
-core::asserting::Printable	trait	u generic_assert_internals 44838 -	
-core::asserting::TryCaptureGeneric	trait	u generic_assert_internals 44838 -	E M
-core::asserting::TryCaptureGeneric::try_capture	assoc-fn	u generic_assert_internals 44838 -	required
-core::asserting::TryCapturePrintable	trait	u generic_assert_internals 44838 -	E M
-core::asserting::TryCapturePrintable::try_capture	assoc-fn	u generic_assert_internals 44838 -	required
+core::asserting::Printable	trait	u generic_assert_internals 44838 -		Copy + std::fmt::Debug
+core::asserting::TryCaptureGeneric	trait	u generic_assert_internals 44838 -	E M	
+core::asserting::TryCaptureGeneric::try_capture	assoc-fn	u generic_assert_internals 44838 -	required	fn try_capture(&self, to: &mut core::asserting::Capture<E, M>)
+core::asserting::TryCapturePrintable	trait	u generic_assert_internals 44838 -	E M	
+core::asserting::TryCapturePrintable::try_capture	assoc-fn	u generic_assert_internals 44838 -	required	fn try_capture(&self, to: &mut core::asserting::Capture<E, M>)
 core::asserting::TryCaptureWithDebug	struct	u generic_assert_internals 44838 -	
 core::asserting::TryCaptureWithoutDebug	struct	u generic_assert_internals 44838 -	
 core::asserting::Wrapper	struct	u generic_assert_internals 44838 -	T
-core::async_iter::async_iter::AsyncIterator	trait	u async_iterator 79024 -	
-core::async_iter::async_iter::AsyncIterator::Item	assoc-type	u async_iterator 79024 -	required
-core::async_iter::async_iter::AsyncIterator::poll_next	assoc-fn	u async_iterator 79024 -	required
-core::async_iter::async_iter::AsyncIterator::size_hint	assoc-fn	u async_iterator 79024 -	provided
-core::async_iter::async_iter::IntoAsyncIterator	trait	u async_iterator 79024 -	
-core::async_iter::async_iter::IntoAsyncIterator::IntoAsyncIter	assoc-type	u async_iterator 79024 -	required
-core::async_iter::async_iter::IntoAsyncIterator::Item	assoc-type	u async_iterator 79024 -	required
-core::async_iter::async_iter::IntoAsyncIterator::into_async_iter	assoc-fn	u async_iterator 79024 -	required
+core::async_iter::async_iter::AsyncIterator	trait	u async_iterator 79024 -		
+core::async_iter::async_iter::AsyncIterator::Item	assoc-type	u async_iterator 79024 -	required	type Item
+core::async_iter::async_iter::AsyncIterator::poll_next	assoc-fn	u async_iterator 79024 -	required	fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Option<Self::Item>>
+core::async_iter::async_iter::AsyncIterator::size_hint	assoc-fn	u async_iterator 79024 -	provided	fn size_hint(&self) -> (usize, Option<usize>)
+core::async_iter::async_iter::IntoAsyncIterator	trait	u async_iterator 79024 -		
+core::async_iter::async_iter::IntoAsyncIterator::IntoAsyncIter	assoc-type	u async_iterator 79024 -	required	type IntoAsyncIter: std::async_iter::AsyncIterator<Item = Self::Item>
+core::async_iter::async_iter::IntoAsyncIterator::Item	assoc-type	u async_iterator 79024 -	required	type Item
+core::async_iter::async_iter::IntoAsyncIterator::into_async_iter	assoc-fn	u async_iterator 79024 -	required	fn into_async_iter(self) -> Self::IntoAsyncIter
 core::async_iter::from_iter::FromIter	struct	u async_iter_from_iter 81798 -	I
 core::async_iter::from_iter::from_iter	fn	u async_iter_from_iter 81798 -	I
-core::borrow::Borrow	trait	s	Borrowed
-core::borrow::Borrow::borrow	assoc-fn	s	required
-core::borrow::BorrowMut	trait	s	Borrowed
-core::borrow::BorrowMut::borrow_mut	assoc-fn	s	required
+core::borrow::Borrow	trait	s	Borrowed	
+core::borrow::Borrow::borrow	assoc-fn	s	required	fn borrow(&self) -> &Borrowed
+core::borrow::BorrowMut	trait	s	Borrowed	std::borrow::Borrow<Borrowed>
+core::borrow::BorrowMut::borrow_mut	assoc-fn	s	required	fn borrow_mut(&mut self) -> &mut Borrowed
 core::bstr::ByteStr	struct	u bstr 134915 -	
 core::bstr::ByteStr::as_byte_str	assoc-fn	u bstr 134915 -	
 core::bstr::ByteStr::as_bytes	assoc-fn	u bstr_internals - -	
@@ -1178,7 +1178,7 @@ core::cell::Cell::set	assoc-fn	s
 core::cell::Cell::swap	assoc-fn	s	
 core::cell::Cell::take	assoc-fn	s	
 core::cell::Cell::update	assoc-fn	s	
-core::cell::CloneFromCell	trait	u cell_get_cloned 145329 -	
+core::cell::CloneFromCell	trait	u cell_get_cloned 145329 -		Clone
 core::cell::Ref	struct	s	'b T
 core::cell::Ref::clone	assoc-fn	s	
 core::cell::Ref::filter_map	assoc-fn	s	
@@ -1271,24 +1271,24 @@ core::char::methods::encode_utf8_raw	fn	u char_internals - exposed only for libs
 core::char::methods::encode_utf8_raw_unchecked	fn	u char_internals - exposed only for libstd	
 core::clone::AssertParamIsClone	struct	u derive_clone_copy_internals - deriving hack, should not be public	T
 core::clone::AssertParamIsCopy	struct	u derive_clone_copy_internals - deriving hack, should not be public	T
-core::clone::Clone	macro	s	
-core::clone::Clone::clone	assoc-fn	s	required
-core::clone::Clone::clone_from	assoc-fn	s	provided
-core::clone::CloneToUninit	trait	u clone_to_uninit 126799 -	
-core::clone::CloneToUninit::clone_to_uninit	assoc-fn	u clone_to_uninit 126799 -	required
-core::clone::Share	trait	u share_trait 156756 -	
-core::clone::Share::share	assoc-fn	u share_trait 156756 -	provided
-core::clone::TrivialClone	trait	u trivial_clone - this isn't part of any API guarantee	
-core::clone::UseCloned	trait	u ergonomic_clones 132290 -	
+core::clone::Clone	trait	s		Sized
+core::clone::Clone::clone	assoc-fn	s	required	fn clone(&self) -> Self
+core::clone::Clone::clone_from	assoc-fn	s	provided	fn clone_from(&mut self, source: &Self)
+core::clone::CloneToUninit	trait	u clone_to_uninit 126799 -		
+core::clone::CloneToUninit::clone_to_uninit	assoc-fn	u clone_to_uninit 126799 -	required	fn clone_to_uninit(&self, dest: *mut u8)
+core::clone::Share	trait	u share_trait 156756 -		Clone
+core::clone::Share::share	assoc-fn	u share_trait 156756 -	provided	fn share(&self) -> Self
+core::clone::TrivialClone	trait	u trivial_clone - this isn't part of any API guarantee		Clone
+core::clone::UseCloned	trait	u ergonomic_clones 132290 -		Clone
 core::cmp::AssertParamIsEq	struct	u derive_eq_internals - deriving hack, should not be public	T
-core::cmp::Eq	macro	s	
-core::cmp::Eq::assert_fields_are_eq	assoc-fn	u derive_eq_internals - -	provided
-core::cmp::Eq::assert_receiver_is_total_eq	assoc-fn	s	provided
-core::cmp::Ord	macro	s	
-core::cmp::Ord::clamp	assoc-fn	s	provided
-core::cmp::Ord::cmp	assoc-fn	s	required
-core::cmp::Ord::max	assoc-fn	s	provided
-core::cmp::Ord::min	assoc-fn	s	provided
+core::cmp::Eq	trait	s		PartialEq
+core::cmp::Eq::assert_fields_are_eq	assoc-fn	u derive_eq_internals - -	provided	fn assert_fields_are_eq(&self)
+core::cmp::Eq::assert_receiver_is_total_eq	assoc-fn	s	provided	fn assert_receiver_is_total_eq(&self)
+core::cmp::Ord	trait	s		Eq + PartialOrd
+core::cmp::Ord::clamp	assoc-fn	s	provided	fn clamp(self, min: Self, max: Self) -> Self
+core::cmp::Ord::cmp	assoc-fn	s	required	fn cmp(&self, other: &Self) -> std::cmp::Ordering
+core::cmp::Ord::max	assoc-fn	s	provided	fn max(self, other: Self) -> Self
+core::cmp::Ord::min	assoc-fn	s	provided	fn min(self, other: Self) -> Self
 core::cmp::Ordering	enum	s	
 core::cmp::Ordering::Equal	variant	s	
 core::cmp::Ordering::Greater	variant	s	
@@ -1302,19 +1302,19 @@ core::cmp::Ordering::is_ne	assoc-fn	s
 core::cmp::Ordering::reverse	assoc-fn	s	
 core::cmp::Ordering::then	assoc-fn	s	
 core::cmp::Ordering::then_with	assoc-fn	s	
-core::cmp::PartialEq	trait	s	Rhs=Self
-core::cmp::PartialEq::eq	assoc-fn	s	required
-core::cmp::PartialEq::ne	assoc-fn	s	provided
-core::cmp::PartialOrd	trait	s	Rhs=Self
-core::cmp::PartialOrd::__chaining_ge	assoc-fn	u partial_ord_chaining_methods - -	provided
-core::cmp::PartialOrd::__chaining_gt	assoc-fn	u partial_ord_chaining_methods - -	provided
-core::cmp::PartialOrd::__chaining_le	assoc-fn	u partial_ord_chaining_methods - -	provided
-core::cmp::PartialOrd::__chaining_lt	assoc-fn	u partial_ord_chaining_methods - -	provided
-core::cmp::PartialOrd::ge	assoc-fn	s	provided
-core::cmp::PartialOrd::gt	assoc-fn	s	provided
-core::cmp::PartialOrd::le	assoc-fn	s	provided
-core::cmp::PartialOrd::lt	assoc-fn	s	provided
-core::cmp::PartialOrd::partial_cmp	assoc-fn	s	required
+core::cmp::PartialEq	trait	s	Rhs=Self	
+core::cmp::PartialEq::eq	assoc-fn	s	required	fn eq(&self, other: &Rhs) -> bool
+core::cmp::PartialEq::ne	assoc-fn	s	provided	fn ne(&self, other: &Rhs) -> bool
+core::cmp::PartialOrd	trait	s	Rhs=Self	PartialEq<Rhs>
+core::cmp::PartialOrd::__chaining_ge	assoc-fn	u partial_ord_chaining_methods - -	provided	fn __chaining_ge(&self, other: &Rhs) -> std::ops::ControlFlow<bool>
+core::cmp::PartialOrd::__chaining_gt	assoc-fn	u partial_ord_chaining_methods - -	provided	fn __chaining_gt(&self, other: &Rhs) -> std::ops::ControlFlow<bool>
+core::cmp::PartialOrd::__chaining_le	assoc-fn	u partial_ord_chaining_methods - -	provided	fn __chaining_le(&self, other: &Rhs) -> std::ops::ControlFlow<bool>
+core::cmp::PartialOrd::__chaining_lt	assoc-fn	u partial_ord_chaining_methods - -	provided	fn __chaining_lt(&self, other: &Rhs) -> std::ops::ControlFlow<bool>
+core::cmp::PartialOrd::ge	assoc-fn	s	provided	fn ge(&self, other: &Rhs) -> bool
+core::cmp::PartialOrd::gt	assoc-fn	s	provided	fn gt(&self, other: &Rhs) -> bool
+core::cmp::PartialOrd::le	assoc-fn	s	provided	fn le(&self, other: &Rhs) -> bool
+core::cmp::PartialOrd::lt	assoc-fn	s	provided	fn lt(&self, other: &Rhs) -> bool
+core::cmp::PartialOrd::partial_cmp	assoc-fn	s	required	fn partial_cmp(&self, other: &Rhs) -> Option<std::cmp::Ordering>
 core::cmp::Reverse	struct	s	T
 core::cmp::max	fn	s	T
 core::cmp::max_by	fn	s	T F
@@ -1326,39 +1326,39 @@ core::cmp::minmax	fn	u cmp_minmax 115939 -	T
 core::cmp::minmax_by	fn	u cmp_minmax 115939 -	T F
 core::cmp::minmax_by_key	fn	u cmp_minmax 115939 -	T F K
 core::contracts::build_check_ensures	fn	u contracts_internals 128044 -	Ret C
-core::convert::AsMut	trait	s	T
-core::convert::AsMut::as_mut	assoc-fn	s	required
-core::convert::AsRef	trait	s	T
-core::convert::AsRef::as_ref	assoc-fn	s	required
-core::convert::From	trait	s	T
-core::convert::From::from	assoc-fn	s	required
+core::convert::AsMut	trait	s	T	
+core::convert::AsMut::as_mut	assoc-fn	s	required	fn as_mut(&mut self) -> &mut T
+core::convert::AsRef	trait	s	T	
+core::convert::AsRef::as_ref	assoc-fn	s	required	fn as_ref(&self) -> &T
+core::convert::From	trait	s	T	Sized
+core::convert::From::from	assoc-fn	s	required	fn from(value: T) -> Self
 core::convert::Infallible	enum	s	
-core::convert::Into	trait	s	T
-core::convert::Into::into	assoc-fn	s	required
-core::convert::TryFrom	trait	s	T
-core::convert::TryFrom::Error	assoc-type	s	required
-core::convert::TryFrom::try_from	assoc-fn	s	required
-core::convert::TryInto	trait	s	T
-core::convert::TryInto::Error	assoc-type	s	required
-core::convert::TryInto::try_into	assoc-fn	s	required
+core::convert::Into	trait	s	T	Sized
+core::convert::Into::into	assoc-fn	s	required	fn into(self) -> T
+core::convert::TryFrom	trait	s	T	Sized
+core::convert::TryFrom::Error	assoc-type	s	required	type Error
+core::convert::TryFrom::try_from	assoc-fn	s	required	fn try_from(value: T) -> Result<Self, Self::Error>
+core::convert::TryInto	trait	s	T	Sized
+core::convert::TryInto::Error	assoc-type	s	required	type Error
+core::convert::TryInto::try_into	assoc-fn	s	required	fn try_into(self) -> Result<T, Self::Error>
 core::convert::identity	fn	s	T
-core::convert::num::BoundedCastFromInt	trait	u integer_casts 157388 -	T
-core::convert::num::BoundedCastFromInt::saturating_cast_from	assoc-fn	u integer_casts 157388 -	required
-core::convert::num::BoundedCastFromInt::wrapping_cast_from	assoc-fn	u integer_casts 157388 -	required
-core::convert::num::CheckedCastFromInt	trait	u integer_casts 157388 -	T
-core::convert::num::CheckedCastFromInt::checked_cast_from	assoc-fn	u integer_casts 157388 -	required
-core::convert::num::CheckedCastFromInt::strict_cast_from	assoc-fn	u integer_casts 157388 -	required
-core::convert::num::CheckedCastFromInt::unchecked_cast_from	assoc-fn	u integer_casts 157388 -	required
-core::convert::num::FloatToInt	trait	u convert_float_to_int 67057 -	Int
-core::convert::num::FloatToInt::to_int_unchecked	assoc-fn	u convert_float_to_int 67057 -	required
-core::default::Default	macro	s	
-core::default::Default::default	assoc-fn	s	required
-core::error::Error	trait	s	
-core::error::Error::cause	assoc-fn	s	provided
-core::error::Error::description	assoc-fn	s	provided
-core::error::Error::provide	assoc-fn	u error_generic_member_access 99301 -	provided
-core::error::Error::source	assoc-fn	s	provided
-core::error::Error::type_id	assoc-fn	u error_type_id 60784 this is memory-unsafe to override in user code	provided
+core::convert::num::BoundedCastFromInt	trait	u integer_casts 157388 -	T	Sized
+core::convert::num::BoundedCastFromInt::saturating_cast_from	assoc-fn	u integer_casts 157388 -	required	fn saturating_cast_from(value: T) -> Self
+core::convert::num::BoundedCastFromInt::wrapping_cast_from	assoc-fn	u integer_casts 157388 -	required	fn wrapping_cast_from(value: T) -> Self
+core::convert::num::CheckedCastFromInt	trait	u integer_casts 157388 -	T	Sized
+core::convert::num::CheckedCastFromInt::checked_cast_from	assoc-fn	u integer_casts 157388 -	required	fn checked_cast_from(value: T) -> Option<Self>
+core::convert::num::CheckedCastFromInt::strict_cast_from	assoc-fn	u integer_casts 157388 -	required	fn strict_cast_from(value: T) -> Self
+core::convert::num::CheckedCastFromInt::unchecked_cast_from	assoc-fn	u integer_casts 157388 -	required	fn unchecked_cast_from(value: T) -> Self
+core::convert::num::FloatToInt	trait	u convert_float_to_int 67057 -	Int	Sized
+core::convert::num::FloatToInt::to_int_unchecked	assoc-fn	u convert_float_to_int 67057 -	required	fn to_int_unchecked(self) -> Int
+core::default::Default	trait	s		Sized
+core::default::Default::default	assoc-fn	s	required	fn default() -> Self
+core::error::Error	trait	s		std::fmt::Debug + std::fmt::Display
+core::error::Error::cause	assoc-fn	s	provided	fn cause(&self) -> Option<&dyn std::error::Error>
+core::error::Error::description	assoc-fn	s	provided	fn description(&self) -> &str
+core::error::Error::provide	assoc-fn	u error_generic_member_access 99301 -	provided	fn provide(&self, request: &mut std::error::Request)
+core::error::Error::source	assoc-fn	s	provided	fn source(&self) -> Option<&dyn std::error::Error>
+core::error::Error::type_id	assoc-fn	u error_type_id 60784 this is memory-unsafe to override in user code	provided	fn type_id(&self, a1: core::error::private::Internal) -> std::any::TypeId
 core::error::Request	struct	u error_generic_member_access 99301 -	'a
 core::error::Request::provide_ref	assoc-fn	u error_generic_member_access 99301 -	
 core::error::Request::provide_ref_with	assoc-fn	u error_generic_member_access 99301 -	
@@ -1569,13 +1569,13 @@ core::ffi::primitives::c_uint	type	s
 core::ffi::primitives::c_ulong	type	s	
 core::ffi::primitives::c_ulonglong	type	s	
 core::ffi::primitives::c_ushort	type	s	
-core::ffi::va_list::VaArgSafe	trait	u c_variadic 44930 the `c_variadic` feature has not been properly tested on all supported platforms	
+core::ffi::va_list::VaArgSafe	trait	u c_variadic 44930 the `c_variadic` feature has not been properly tested on all supported platforms		Copy
 core::ffi::va_list::VaList	struct	u c_variadic 44930 the `c_variadic` feature has not been properly tested on all supported platforms	'a
 core::ffi::va_list::VaList::next_arg	assoc-fn	u c_variadic 44930 the `c_variadic` feature has not been properly tested on all supported platforms	
-core::field::Field	trait	u field_projections 145383 -	
-core::field::Field::Base	assoc-type	u field_projections 145383 -	required
-core::field::Field::OFFSET	assoc-const	u field_projections 145383 -	provided
-core::field::Field::Type	assoc-type	u field_projections 145383 -	required
+core::field::Field	trait	u field_projections 145383 -		Send + Sync + Copy
+core::field::Field::Base	assoc-type	u field_projections 145383 -	required	type Base
+core::field::Field::OFFSET	assoc-const	u field_projections 145383 -	provided	const OFFSET: usize
+core::field::Field::Type	assoc-type	u field_projections 145383 -	required	type Type
 core::field::FieldRepresentingType	struct	u field_representing_type_raw - -	T const:VARIANT const:FIELD
 core::field::field_of	macro	u field_projections 145383 -	
 core::fmt::Alignment	enum	s	
@@ -1589,15 +1589,15 @@ core::fmt::Arguments::estimated_capacity	assoc-fn	u fmt_internals - -
 core::fmt::Arguments::from_str	assoc-fn	u fmt_arguments_from_str 148905 -	
 core::fmt::Arguments::from_str_nonconst	assoc-fn	u fmt_internals - -	
 core::fmt::Arguments::new	assoc-fn	u fmt_internals - -	
-core::fmt::Binary	trait	s	
-core::fmt::Binary::fmt	assoc-fn	s	required
-core::fmt::Debug	trait	s	
-core::fmt::Debug::fmt	assoc-fn	s	required
+core::fmt::Binary	trait	s		
+core::fmt::Binary::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::Debug	trait	s		
+core::fmt::Debug::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::DebugAsHex	enum	u formatting_options 118117 -	
 core::fmt::DebugAsHex::Lower	variant	u formatting_options 118117 -	
 core::fmt::DebugAsHex::Upper	variant	u formatting_options 118117 -	
-core::fmt::Display	trait	s	
-core::fmt::Display::fmt	assoc-fn	s	required
+core::fmt::Display	trait	s		
+core::fmt::Display::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::Error	struct	s	
 core::fmt::Formatter	struct	s	'a
 core::fmt::Formatter::align	assoc-fn	s	
@@ -1653,26 +1653,26 @@ core::fmt::FormattingOptions::precision	assoc-fn	u formatting_options 118117 -
 core::fmt::FormattingOptions::sign	assoc-fn	u formatting_options 118117 -	
 core::fmt::FormattingOptions::sign_aware_zero_pad	assoc-fn	u formatting_options 118117 -	
 core::fmt::FormattingOptions::width	assoc-fn	u formatting_options 118117 -	
-core::fmt::LowerExp	trait	s	
-core::fmt::LowerExp::fmt	assoc-fn	s	required
-core::fmt::LowerHex	trait	s	
-core::fmt::LowerHex::fmt	assoc-fn	s	required
-core::fmt::Octal	trait	s	
-core::fmt::Octal::fmt	assoc-fn	s	required
-core::fmt::Pointer	trait	s	
-core::fmt::Pointer::fmt	assoc-fn	s	required
+core::fmt::LowerExp	trait	s		
+core::fmt::LowerExp::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::LowerHex	trait	s		
+core::fmt::LowerHex::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::Octal	trait	s		
+core::fmt::Octal::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::Pointer	trait	s		
+core::fmt::Pointer::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::Result	type	s	
 core::fmt::Sign	enum	u formatting_options 118117 -	
 core::fmt::Sign::Minus	variant	u formatting_options 118117 -	
 core::fmt::Sign::Plus	variant	u formatting_options 118117 -	
-core::fmt::UpperExp	trait	s	
-core::fmt::UpperExp::fmt	assoc-fn	s	required
-core::fmt::UpperHex	trait	s	
-core::fmt::UpperHex::fmt	assoc-fn	s	required
-core::fmt::Write	trait	s	
-core::fmt::Write::write_char	assoc-fn	s	provided
-core::fmt::Write::write_fmt	assoc-fn	s	provided
-core::fmt::Write::write_str	assoc-fn	s	required
+core::fmt::UpperExp	trait	s		
+core::fmt::UpperExp::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::UpperHex	trait	s		
+core::fmt::UpperHex::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
+core::fmt::Write	trait	s		
+core::fmt::Write::write_char	assoc-fn	s	provided	fn write_char(&mut self, c: char) -> Result<(), std::fmt::Error>
+core::fmt::Write::write_fmt	assoc-fn	s	provided	fn write_fmt(&mut self, args: std::fmt::Arguments) -> Result<(), std::fmt::Error>
+core::fmt::Write::write_str	assoc-fn	s	required	fn write_str(&mut self, s: &str) -> Result<(), std::fmt::Error>
 core::fmt::builders::DebugList	struct	s	'a 'b
 core::fmt::builders::DebugList::entries	assoc-fn	s	
 core::fmt::builders::DebugList::entry	assoc-fn	s	
@@ -1709,22 +1709,22 @@ core::fmt::builders::from_fn	fn	s	F
 core::fmt::macros::Debug	macro	s	
 core::fmt::num_buffer::NumBuffer	struct	s	T
 core::fmt::num_buffer::NumBuffer::new	assoc-fn	s	
-core::fmt::num_buffer::NumBufferTrait	trait	u fmt_internals - -	
-core::fmt::num_buffer::NumBufferTrait::Buf	assoc-type	u fmt_internals - -	required
-core::fmt::num_buffer::NumBufferTrait::DEFAULT	assoc-const	u fmt_internals - -	required
+core::fmt::num_buffer::NumBufferTrait	trait	u fmt_internals - -		
+core::fmt::num_buffer::NumBufferTrait::Buf	assoc-type	u fmt_internals - -	required	type Buf: AsRef<[std::mem::MaybeUninit<u8>]> + AsMut<[std::mem::MaybeUninit<u8>]>
+core::fmt::num_buffer::NumBufferTrait::DEFAULT	assoc-const	u fmt_internals - -	required	const DEFAULT: Self::Buf
 core::fmt::write	fn	s	
 core::future::ResumeTy	struct	u gen_future - -	
-core::future::async_drop::AsyncDrop	trait	u async_drop 126482 -	
-core::future::async_drop::AsyncDrop::drop	assoc-fn	u async_drop 126482 -	required
+core::future::async_drop::AsyncDrop	trait	u async_drop 126482 -		
+core::future::async_drop::AsyncDrop::drop	assoc-fn	u async_drop 126482 -	required	fn drop(self: std::pin::Pin<&mut Self>) -> _
 core::future::async_drop::async_drop_in_place	fn	u async_drop 126482 -	T
-core::future::future::Future	trait	s	
-core::future::future::Future::Output	assoc-type	s	required
-core::future::future::Future::poll	assoc-fn	s	required
+core::future::future::Future	trait	s		
+core::future::future::Future::Output	assoc-type	s	required	type Output
+core::future::future::Future::poll	assoc-fn	s	required	fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Self::Output>
 core::future::get_context	fn	u gen_future - -	'a 'b
-core::future::into_future::IntoFuture	trait	s	
-core::future::into_future::IntoFuture::IntoFuture	assoc-type	s	required
-core::future::into_future::IntoFuture::Output	assoc-type	s	required
-core::future::into_future::IntoFuture::into_future	assoc-fn	s	required
+core::future::into_future::IntoFuture	trait	s		
+core::future::into_future::IntoFuture::IntoFuture	assoc-type	s	required	type IntoFuture: Future<Output = Self::Output>
+core::future::into_future::IntoFuture::Output	assoc-type	s	required	type Output
+core::future::into_future::IntoFuture::into_future	assoc-fn	s	required	fn into_future(self) -> Self::IntoFuture
 core::future::join::join	macro	u future_join 91642 -	
 core::future::pending::Pending	struct	s	T
 core::future::pending::pending	fn	s	T
@@ -1733,32 +1733,32 @@ core::future::poll_fn::poll_fn	fn	s	T F
 core::future::ready::Ready	struct	s	T
 core::future::ready::Ready::into_inner	assoc-fn	s	
 core::future::ready::ready	fn	s	T
-core::hash::BuildHasher	trait	s	
-core::hash::BuildHasher::Hasher	assoc-type	s	required
-core::hash::BuildHasher::build_hasher	assoc-fn	s	required
-core::hash::BuildHasher::hash_one	assoc-fn	s	provided
+core::hash::BuildHasher	trait	s		
+core::hash::BuildHasher::Hasher	assoc-type	s	required	type Hasher: std::hash::Hasher
+core::hash::BuildHasher::build_hasher	assoc-fn	s	required	fn build_hasher(&self) -> Self::Hasher
+core::hash::BuildHasher::hash_one	assoc-fn	s	provided	fn hash_one<T: std::hash::Hash>(&self, x: T) -> u64
 core::hash::BuildHasherDefault	struct	s	H
 core::hash::BuildHasherDefault::new	assoc-fn	s	
-core::hash::Hash	trait	s	
-core::hash::Hash::hash	assoc-fn	s	required
-core::hash::Hash::hash_slice	assoc-fn	s	provided
-core::hash::Hasher	trait	s	
-core::hash::Hasher::finish	assoc-fn	s	required
-core::hash::Hasher::write	assoc-fn	s	required
-core::hash::Hasher::write_i128	assoc-fn	s	provided
-core::hash::Hasher::write_i16	assoc-fn	s	provided
-core::hash::Hasher::write_i32	assoc-fn	s	provided
-core::hash::Hasher::write_i64	assoc-fn	s	provided
-core::hash::Hasher::write_i8	assoc-fn	s	provided
-core::hash::Hasher::write_isize	assoc-fn	s	provided
-core::hash::Hasher::write_length_prefix	assoc-fn	u hasher_prefixfree_extras 96762 -	provided
-core::hash::Hasher::write_str	assoc-fn	u hasher_prefixfree_extras 96762 -	provided
-core::hash::Hasher::write_u128	assoc-fn	s	provided
-core::hash::Hasher::write_u16	assoc-fn	s	provided
-core::hash::Hasher::write_u32	assoc-fn	s	provided
-core::hash::Hasher::write_u64	assoc-fn	s	provided
-core::hash::Hasher::write_u8	assoc-fn	s	provided
-core::hash::Hasher::write_usize	assoc-fn	s	provided
+core::hash::Hash	trait	s		
+core::hash::Hash::hash	assoc-fn	s	required	fn hash<H: std::hash::Hasher>(&self, state: &mut H)
+core::hash::Hash::hash_slice	assoc-fn	s	provided	fn hash_slice<H: std::hash::Hasher>(data: &[Self], state: &mut H)
+core::hash::Hasher	trait	s		
+core::hash::Hasher::finish	assoc-fn	s	required	fn finish(&self) -> u64
+core::hash::Hasher::write	assoc-fn	s	required	fn write(&mut self, bytes: &[u8])
+core::hash::Hasher::write_i128	assoc-fn	s	provided	fn write_i128(&mut self, i: i128)
+core::hash::Hasher::write_i16	assoc-fn	s	provided	fn write_i16(&mut self, i: i16)
+core::hash::Hasher::write_i32	assoc-fn	s	provided	fn write_i32(&mut self, i: i32)
+core::hash::Hasher::write_i64	assoc-fn	s	provided	fn write_i64(&mut self, i: i64)
+core::hash::Hasher::write_i8	assoc-fn	s	provided	fn write_i8(&mut self, i: i8)
+core::hash::Hasher::write_isize	assoc-fn	s	provided	fn write_isize(&mut self, i: isize)
+core::hash::Hasher::write_length_prefix	assoc-fn	u hasher_prefixfree_extras 96762 -	provided	fn write_length_prefix(&mut self, len: usize)
+core::hash::Hasher::write_str	assoc-fn	u hasher_prefixfree_extras 96762 -	provided	fn write_str(&mut self, s: &str)
+core::hash::Hasher::write_u128	assoc-fn	s	provided	fn write_u128(&mut self, i: u128)
+core::hash::Hasher::write_u16	assoc-fn	s	provided	fn write_u16(&mut self, i: u16)
+core::hash::Hasher::write_u32	assoc-fn	s	provided	fn write_u32(&mut self, i: u32)
+core::hash::Hasher::write_u64	assoc-fn	s	provided	fn write_u64(&mut self, i: u64)
+core::hash::Hasher::write_u8	assoc-fn	s	provided	fn write_u8(&mut self, i: u8)
+core::hash::Hasher::write_usize	assoc-fn	s	provided	fn write_usize(&mut self, i: usize)
 core::hash::macros::Hash	macro	s	
 core::hash::sip::SipHasher	struct	s	
 core::hash::sip::SipHasher13	struct	u hashmap_internals - use `std::hash::DefaultHasher` instead	
@@ -1869,16 +1869,16 @@ core::intrinsics::expf64	fn	u core_intrinsics - intrinsics are unlikely to ever 
 core::intrinsics::fabs	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
 core::intrinsics::fadd_algebraic	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
 core::intrinsics::fadd_fast	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
-core::intrinsics::fallback::CarryingMulAdd	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	
-core::intrinsics::fallback::CarryingMulAdd::Unsigned	assoc-type	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
-core::intrinsics::fallback::CarryingMulAdd::carrying_mul_add	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
-core::intrinsics::fallback::CarrylessMul	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	
-core::intrinsics::fallback::CarrylessMul::carryless_mul	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
-core::intrinsics::fallback::DisjointBitOr	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	
-core::intrinsics::fallback::DisjointBitOr::disjoint_bitor	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
-core::intrinsics::fallback::FunnelShift	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	
-core::intrinsics::fallback::FunnelShift::unchecked_funnel_shl	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
-core::intrinsics::fallback::FunnelShift::unchecked_funnel_shr	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required
+core::intrinsics::fallback::CarryingMulAdd	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used		Copy
+core::intrinsics::fallback::CarryingMulAdd::Unsigned	assoc-type	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	type Unsigned: Copy
+core::intrinsics::fallback::CarryingMulAdd::carrying_mul_add	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	fn carrying_mul_add(self, multiplicand: Self, addend: Self, carry: Self) -> (Self::Unsigned, Self)
+core::intrinsics::fallback::CarrylessMul	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used		Copy
+core::intrinsics::fallback::CarrylessMul::carryless_mul	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	fn carryless_mul(self, rhs: Self) -> Self
+core::intrinsics::fallback::DisjointBitOr	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used		Copy
+core::intrinsics::fallback::DisjointBitOr::disjoint_bitor	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	fn disjoint_bitor(self, other: Self) -> Self
+core::intrinsics::fallback::FunnelShift	trait	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used		Copy
+core::intrinsics::fallback::FunnelShift::unchecked_funnel_shl	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	fn unchecked_funnel_shl(self, rhs: Self, shift: u32) -> Self
+core::intrinsics::fallback::FunnelShift::unchecked_funnel_shr	assoc-fn	u core_intrinsics_fallbacks - The fallbacks will never be stable, as they exist only to be called by the fallback MIR, but they're exported so they can be tested on platforms where the fallback MIR isn't actually used	required	fn unchecked_funnel_shr(self, rhs: Self, shift: u32) -> Self
 core::intrinsics::fdiv_algebraic	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
 core::intrinsics::fdiv_fast	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
 core::intrinsics::field_offset	fn	u field_projections 145383 -	F
@@ -2076,7 +2076,7 @@ core::intrinsics::wrapping_mul	fn	u core_intrinsics - intrinsics are unlikely to
 core::intrinsics::wrapping_sub	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
 core::intrinsics::write_bytes	fn	s	T
 core::intrinsics::write_via_move	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T
-core::io::IoHandle	trait	u core_io_internals - exposed only for libstd	
+core::io::IoHandle	trait	u core_io_internals - exposed only for libstd		
 core::io::borrowed_buf::BorrowedBuf	struct	u core_io_borrowed_buf 117693 -	'data T
 core::io::borrowed_buf::BorrowedBuf::capacity	assoc-fn	u core_io_borrowed_buf 117693 -	
 core::io::borrowed_buf::BorrowedBuf::clear	assoc-fn	u core_io_borrowed_buf 117693 -	
@@ -2110,13 +2110,13 @@ core::io::cursor::Cursor::position	assoc-fn	u core_io 154046 -
 core::io::cursor::Cursor::set_position	assoc-fn	u core_io 154046 -	
 core::io::cursor::Cursor::split	assoc-fn	u cursor_split 86369 -	
 core::io::cursor::Cursor::split_mut	assoc-fn	u cursor_split 86369 -	
-core::io::cursor::WriteThroughCursor	trait	u core_io_internals - exposed only for libstd	
-core::io::cursor::WriteThroughCursor::flush	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::cursor::WriteThroughCursor::is_write_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::cursor::WriteThroughCursor::write	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::cursor::WriteThroughCursor::write_all	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::cursor::WriteThroughCursor::write_all_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::cursor::WriteThroughCursor::write_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required
+core::io::cursor::WriteThroughCursor	trait	u core_io_internals - exposed only for libstd		Sized
+core::io::cursor::WriteThroughCursor::flush	assoc-fn	u core_io_internals - exposed only for libstd	required	fn flush(this: &mut std::io::Cursor<Self>) -> Result<(), std::io::Error>
+core::io::cursor::WriteThroughCursor::is_write_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required	fn is_write_vectored(this: &std::io::Cursor<Self>) -> bool
+core::io::cursor::WriteThroughCursor::write	assoc-fn	u core_io_internals - exposed only for libstd	required	fn write(this: &mut std::io::Cursor<Self>, buf: &[u8]) -> Result<usize, std::io::Error>
+core::io::cursor::WriteThroughCursor::write_all	assoc-fn	u core_io_internals - exposed only for libstd	required	fn write_all(this: &mut std::io::Cursor<Self>, buf: &[u8]) -> Result<(), std::io::Error>
+core::io::cursor::WriteThroughCursor::write_all_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required	fn write_all_vectored(this: &mut std::io::Cursor<Self>, bufs: &mut [std::io::IoSlice]) -> Result<(), std::io::Error>
+core::io::cursor::WriteThroughCursor::write_vectored	assoc-fn	u core_io_internals - exposed only for libstd	required	fn write_vectored(this: &mut std::io::Cursor<Self>, bufs: &[std::io::IoSlice]) -> Result<usize, std::io::Error>
 core::io::cursor::slice_write	fn	u core_io_internals - exposed only for libstd	
 core::io::cursor::slice_write_all	fn	u core_io_internals - exposed only for libstd	
 core::io::cursor::slice_write_all_vectored	fn	u core_io_internals - exposed only for libstd	
@@ -2203,21 +2203,21 @@ core::io::io_slice::IoSliceMut::advance	assoc-fn	u core_io 154046 -
 core::io::io_slice::IoSliceMut::advance_slices	assoc-fn	u core_io 154046 -	
 core::io::io_slice::IoSliceMut::into_slice	assoc-fn	u io_slice_as_bytes 132818 -	
 core::io::io_slice::IoSliceMut::new	assoc-fn	u core_io 154046 -	
-core::io::seek::Seek	trait	s	
-core::io::seek::Seek::rewind	assoc-fn	s	provided
-core::io::seek::Seek::seek	assoc-fn	s	required
-core::io::seek::Seek::seek_relative	assoc-fn	s	provided
-core::io::seek::Seek::stream_len	assoc-fn	u seek_stream_len 59359 -	provided
-core::io::seek::Seek::stream_position	assoc-fn	s	provided
+core::io::seek::Seek	trait	s		
+core::io::seek::Seek::rewind	assoc-fn	s	provided	fn rewind(&mut self) -> Result<(), std::io::Error>
+core::io::seek::Seek::seek	assoc-fn	s	required	fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64, std::io::Error>
+core::io::seek::Seek::seek_relative	assoc-fn	s	provided	fn seek_relative(&mut self, offset: i64) -> Result<(), std::io::Error>
+core::io::seek::Seek::stream_len	assoc-fn	u seek_stream_len 59359 -	provided	fn stream_len(&mut self) -> Result<u64, std::io::Error>
+core::io::seek::Seek::stream_position	assoc-fn	s	provided	fn stream_position(&mut self) -> Result<u64, std::io::Error>
 core::io::seek::SeekFrom	enum	s	
 core::io::seek::SeekFrom::Current	variant	s	
 core::io::seek::SeekFrom::End	variant	s	
 core::io::seek::SeekFrom::Start	variant	s	
 core::io::seek::stream_len_default	fn	u core_io_internals - exposed only for libstd	T
-core::io::size_hint::SizeHint	trait	u core_io_internals - exposed only for libstd	
-core::io::size_hint::SizeHint::lower_bound	assoc-fn	u core_io_internals - exposed only for libstd	required
-core::io::size_hint::SizeHint::size_hint	assoc-fn	u core_io_internals - exposed only for libstd	provided
-core::io::size_hint::SizeHint::upper_bound	assoc-fn	u core_io_internals - exposed only for libstd	required
+core::io::size_hint::SizeHint	trait	u core_io_internals - exposed only for libstd		
+core::io::size_hint::SizeHint::lower_bound	assoc-fn	u core_io_internals - exposed only for libstd	required	fn lower_bound(&self) -> usize
+core::io::size_hint::SizeHint::size_hint	assoc-fn	u core_io_internals - exposed only for libstd	provided	fn size_hint(&self) -> (usize, Option<usize>)
+core::io::size_hint::SizeHint::upper_bound	assoc-fn	u core_io_internals - exposed only for libstd	required	fn upper_bound(&self) -> Option<usize>
 core::io::util::Chain	struct	s	T U
 core::io::util::Chain::get_mut	assoc-fn	u core_io 154046 -	
 core::io::util::Chain::get_ref	assoc-fn	u core_io 154046 -	
@@ -2237,19 +2237,19 @@ core::io::util::empty	fn	s
 core::io::util::repeat	fn	s	
 core::io::util::sink	fn	s	
 core::io::util::take	fn	u core_io_internals - exposed only for libstd	T
-core::io::write::Write	trait	s	
-core::io::write::Write::by_ref	assoc-fn	s	provided
-core::io::write::Write::flush	assoc-fn	s	required
-core::io::write::Write::is_write_vectored	assoc-fn	u can_vector 69941 -	provided
-core::io::write::Write::write	assoc-fn	s	required
-core::io::write::Write::write_all	assoc-fn	s	provided
-core::io::write::Write::write_all_vectored	assoc-fn	u write_all_vectored 70436 -	provided
-core::io::write::Write::write_fmt	assoc-fn	s	provided
-core::io::write::Write::write_vectored	assoc-fn	s	provided
+core::io::write::Write	trait	s		
+core::io::write::Write::by_ref	assoc-fn	s	provided	fn by_ref(&mut self) -> &mut Self
+core::io::write::Write::flush	assoc-fn	s	required	fn flush(&mut self) -> Result<(), std::io::Error>
+core::io::write::Write::is_write_vectored	assoc-fn	u can_vector 69941 -	provided	fn is_write_vectored(&self) -> bool
+core::io::write::Write::write	assoc-fn	s	required	fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error>
+core::io::write::Write::write_all	assoc-fn	s	provided	fn write_all(&mut self, buf: &[u8]) -> Result<(), std::io::Error>
+core::io::write::Write::write_all_vectored	assoc-fn	u write_all_vectored 70436 -	provided	fn write_all_vectored(&mut self, bufs: &mut [std::io::IoSlice]) -> Result<(), std::io::Error>
+core::io::write::Write::write_fmt	assoc-fn	s	provided	fn write_fmt(&mut self, args: std::fmt::Arguments) -> Result<(), std::io::Error>
+core::io::write::Write::write_vectored	assoc-fn	s	provided	fn write_vectored(&mut self, bufs: &[std::io::IoSlice]) -> Result<usize, std::io::Error>
 core::io::write::default_write_vectored	fn	u core_io_internals - exposed only for libstd	F
-core::iter::adapters::SourceIter	trait	u inplace_iteration - -	
-core::iter::adapters::SourceIter::Source	assoc-type	u inplace_iteration - -	required
-core::iter::adapters::SourceIter::as_inner	assoc-fn	u inplace_iteration - -	required
+core::iter::adapters::SourceIter	trait	u inplace_iteration - -		
+core::iter::adapters::SourceIter::Source	assoc-type	u inplace_iteration - -	required	type Source
+core::iter::adapters::SourceIter::as_inner	assoc-fn	u inplace_iteration - -	required	fn as_inner(&mut self) -> &mut Self::Source
 core::iter::adapters::array_chunks::ArrayChunks	struct	u iter_array_chunks 100450 -	I const:N
 core::iter::adapters::array_chunks::ArrayChunks::into_remainder	assoc-fn	u iter_array_chunks 100450 -	
 core::iter::adapters::by_ref_sized::ByRefSized	struct	u std_internals - -	'a I
@@ -2287,22 +2287,22 @@ core::iter::adapters::skip_while::SkipWhile	struct	s	I P
 core::iter::adapters::step_by::StepBy	struct	s	I
 core::iter::adapters::take::Take	struct	s	I
 core::iter::adapters::take_while::TakeWhile	struct	s	I P
-core::iter::adapters::zip::TrustedRandomAccess	trait	u trusted_random_access - -	
-core::iter::adapters::zip::TrustedRandomAccessNoCoerce	trait	u trusted_random_access - -	
-core::iter::adapters::zip::TrustedRandomAccessNoCoerce::MAY_HAVE_SIDE_EFFECT	assoc-const	u trusted_random_access - -	required
-core::iter::adapters::zip::TrustedRandomAccessNoCoerce::size	assoc-fn	u trusted_random_access - -	provided
+core::iter::adapters::zip::TrustedRandomAccess	trait	u trusted_random_access - -		
+core::iter::adapters::zip::TrustedRandomAccessNoCoerce	trait	u trusted_random_access - -		Sized
+core::iter::adapters::zip::TrustedRandomAccessNoCoerce::MAY_HAVE_SIDE_EFFECT	assoc-const	u trusted_random_access - -	required	const MAY_HAVE_SIDE_EFFECT: bool
+core::iter::adapters::zip::TrustedRandomAccessNoCoerce::size	assoc-fn	u trusted_random_access - -	provided	fn size(&self) -> usize
 core::iter::adapters::zip::Zip	struct	s	A B
 core::iter::adapters::zip::zip	fn	s	A B
-core::iter::range::Step	trait	u step_trait 42168 -	
-core::iter::range::Step::backward	assoc-fn	u step_trait 42168 -	provided
-core::iter::range::Step::backward_checked	assoc-fn	u step_trait 42168 -	required
-core::iter::range::Step::backward_overflowing	assoc-fn	u step_trait 42168 -	required
-core::iter::range::Step::backward_unchecked	assoc-fn	u step_trait 42168 -	provided
-core::iter::range::Step::forward	assoc-fn	u step_trait 42168 -	provided
-core::iter::range::Step::forward_checked	assoc-fn	u step_trait 42168 -	required
-core::iter::range::Step::forward_overflowing	assoc-fn	u step_trait 42168 -	required
-core::iter::range::Step::forward_unchecked	assoc-fn	u step_trait 42168 -	provided
-core::iter::range::Step::steps_between	assoc-fn	u step_trait 42168 -	required
+core::iter::range::Step	trait	u step_trait 42168 -		Sized + Clone + PartialOrd
+core::iter::range::Step::backward	assoc-fn	u step_trait 42168 -	provided	fn backward(start: Self, count: usize) -> Self
+core::iter::range::Step::backward_checked	assoc-fn	u step_trait 42168 -	required	fn backward_checked(start: Self, count: usize) -> Option<Self>
+core::iter::range::Step::backward_overflowing	assoc-fn	u step_trait 42168 -	required	fn backward_overflowing(start: Self, count: usize) -> (Self, bool)
+core::iter::range::Step::backward_unchecked	assoc-fn	u step_trait 42168 -	provided	fn backward_unchecked(start: Self, count: usize) -> Self
+core::iter::range::Step::forward	assoc-fn	u step_trait 42168 -	provided	fn forward(start: Self, count: usize) -> Self
+core::iter::range::Step::forward_checked	assoc-fn	u step_trait 42168 -	required	fn forward_checked(start: Self, count: usize) -> Option<Self>
+core::iter::range::Step::forward_overflowing	assoc-fn	u step_trait 42168 -	required	fn forward_overflowing(start: Self, count: usize) -> (Self, bool)
+core::iter::range::Step::forward_unchecked	assoc-fn	u step_trait 42168 -	provided	fn forward_unchecked(start: Self, count: usize) -> Self
+core::iter::range::Step::steps_between	assoc-fn	u step_trait 42168 -	required	fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>)
 core::iter::sources::empty::Empty	struct	s	T
 core::iter::sources::empty::empty	fn	s	T
 core::iter::sources::from_coroutine::FromCoroutine	struct	u iter_from_coroutine 43122 coroutines are unstable	G
@@ -2322,118 +2322,118 @@ core::iter::sources::repeat_with::RepeatWith	struct	s	F
 core::iter::sources::repeat_with::repeat_with	fn	s	A F
 core::iter::sources::successors::Successors	struct	s	T F
 core::iter::sources::successors::successors	fn	s	T F
-core::iter::traits::accum::Product	trait	s	A=Self
-core::iter::traits::accum::Product::product	assoc-fn	s	required
-core::iter::traits::accum::Sum	trait	s	A=Self
-core::iter::traits::accum::Sum::sum	assoc-fn	s	required
-core::iter::traits::collect::Extend	trait	s	A
-core::iter::traits::collect::Extend::extend	assoc-fn	s	required
-core::iter::traits::collect::Extend::extend_one	assoc-fn	u extend_one 72631 -	provided
-core::iter::traits::collect::Extend::extend_one_unchecked	assoc-fn	u extend_one_unchecked - -	provided
-core::iter::traits::collect::Extend::extend_reserve	assoc-fn	u extend_one 72631 -	provided
-core::iter::traits::collect::FromIterator	trait	s	A
-core::iter::traits::collect::FromIterator::from_iter	assoc-fn	s	required
-core::iter::traits::collect::IntoIterator	trait	s	
-core::iter::traits::collect::IntoIterator::IntoIter	assoc-type	s	required
-core::iter::traits::collect::IntoIterator::Item	assoc-type	s	required
-core::iter::traits::collect::IntoIterator::into_iter	assoc-fn	s	required
-core::iter::traits::double_ended::DoubleEndedIterator	trait	s	
-core::iter::traits::double_ended::DoubleEndedIterator::advance_back_by	assoc-fn	u iter_advance_by 77404 -	provided
-core::iter::traits::double_ended::DoubleEndedIterator::next_back	assoc-fn	s	required
-core::iter::traits::double_ended::DoubleEndedIterator::next_chunk_back	assoc-fn	u iter_next_chunk 98326 -	provided
-core::iter::traits::double_ended::DoubleEndedIterator::nth_back	assoc-fn	s	provided
-core::iter::traits::double_ended::DoubleEndedIterator::rfind	assoc-fn	s	provided
-core::iter::traits::double_ended::DoubleEndedIterator::rfold	assoc-fn	s	provided
-core::iter::traits::double_ended::DoubleEndedIterator::try_rfold	assoc-fn	s	provided
-core::iter::traits::exact_size::ExactSizeIterator	trait	s	
-core::iter::traits::exact_size::ExactSizeIterator::is_empty	assoc-fn	u exact_size_is_empty 35428 -	provided
-core::iter::traits::exact_size::ExactSizeIterator::len	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator	trait	s	
-core::iter::traits::iterator::Iterator::Item	assoc-type	s	required
-core::iter::traits::iterator::Iterator::__iterator_get_unchecked	assoc-fn	u trusted_random_access - -	provided
-core::iter::traits::iterator::Iterator::advance_by	assoc-fn	u iter_advance_by 77404 -	provided
-core::iter::traits::iterator::Iterator::all	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::any	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::array_chunks	assoc-fn	u iter_array_chunks 100450 -	provided
-core::iter::traits::iterator::Iterator::by_ref	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::chain	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::cloned	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::cmp	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::cmp_by	assoc-fn	u iter_order_by 64295 -	provided
-core::iter::traits::iterator::Iterator::collect	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::collect_into	assoc-fn	u iter_collect_into 94780 -	provided
-core::iter::traits::iterator::Iterator::copied	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::count	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::cycle	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::enumerate	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::eq	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::eq_by	assoc-fn	u iter_order_by 64295 -	provided
-core::iter::traits::iterator::Iterator::filter	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::filter_map	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::find	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::find_map	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::flat_map	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::flatten	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::fold	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::for_each	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::fuse	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::ge	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::gt	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::inspect	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::intersperse	assoc-fn	u iter_intersperse 79524 -	provided
-core::iter::traits::iterator::Iterator::intersperse_with	assoc-fn	u iter_intersperse 79524 -	provided
-core::iter::traits::iterator::Iterator::is_partitioned	assoc-fn	u iter_is_partitioned 62544 -	provided
-core::iter::traits::iterator::Iterator::is_sorted	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::is_sorted_by	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::is_sorted_by_key	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::last	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::le	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::lt	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::map	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::map_while	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::map_windows	assoc-fn	u iter_map_windows 87155 -	provided
-core::iter::traits::iterator::Iterator::max	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::max_by	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::max_by_key	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::min	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::min_by	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::min_by_key	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::ne	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::next	assoc-fn	s	required
-core::iter::traits::iterator::Iterator::next_chunk	assoc-fn	u iter_next_chunk 98326 -	provided
-core::iter::traits::iterator::Iterator::nth	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::partial_cmp	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::partial_cmp_by	assoc-fn	u iter_order_by 64295 -	provided
-core::iter::traits::iterator::Iterator::partition	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::partition_in_place	assoc-fn	u iter_partition_in_place 62543 -	provided
-core::iter::traits::iterator::Iterator::peekable	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::position	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::product	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::reduce	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::rev	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::rposition	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::scan	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::size_hint	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::skip	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::skip_while	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::step_by	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::sum	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::take	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::take_while	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::try_collect	assoc-fn	u iterator_try_collect 94047 -	provided
-core::iter::traits::iterator::Iterator::try_find	assoc-fn	u try_find 63178 -	provided
-core::iter::traits::iterator::Iterator::try_fold	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::try_for_each	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::try_reduce	assoc-fn	u iterator_try_reduce 87053 -	provided
-core::iter::traits::iterator::Iterator::unzip	assoc-fn	s	provided
-core::iter::traits::iterator::Iterator::zip	assoc-fn	s	provided
-core::iter::traits::marker::FusedIterator	trait	s	
-core::iter::traits::marker::InPlaceIterable	trait	u inplace_iteration - -	
-core::iter::traits::marker::InPlaceIterable::EXPAND_BY	assoc-const	u inplace_iteration - -	required
-core::iter::traits::marker::InPlaceIterable::MERGE_BY	assoc-const	u inplace_iteration - -	required
-core::iter::traits::marker::TrustedFused	trait	u trusted_fused - -	
-core::iter::traits::marker::TrustedLen	trait	u trusted_len 37572 -	
-core::iter::traits::marker::TrustedStep	trait	u trusted_step 85731 -	
+core::iter::traits::accum::Product	trait	s	A=Self	Sized
+core::iter::traits::accum::Product::product	assoc-fn	s	required	fn product<I: Iterator<Item = A>>(iter: I) -> Self
+core::iter::traits::accum::Sum	trait	s	A=Self	Sized
+core::iter::traits::accum::Sum::sum	assoc-fn	s	required	fn sum<I: Iterator<Item = A>>(iter: I) -> Self
+core::iter::traits::collect::Extend	trait	s	A	
+core::iter::traits::collect::Extend::extend	assoc-fn	s	required	fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T)
+core::iter::traits::collect::Extend::extend_one	assoc-fn	u extend_one 72631 -	provided	fn extend_one(&mut self, item: A)
+core::iter::traits::collect::Extend::extend_one_unchecked	assoc-fn	u extend_one_unchecked - -	provided	fn extend_one_unchecked(&mut self, item: A)
+core::iter::traits::collect::Extend::extend_reserve	assoc-fn	u extend_one 72631 -	provided	fn extend_reserve(&mut self, additional: usize)
+core::iter::traits::collect::FromIterator	trait	s	A	Sized
+core::iter::traits::collect::FromIterator::from_iter	assoc-fn	s	required	fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self
+core::iter::traits::collect::IntoIterator	trait	s		
+core::iter::traits::collect::IntoIterator::IntoIter	assoc-type	s	required	type IntoIter: Iterator<Item = Self::Item>
+core::iter::traits::collect::IntoIterator::Item	assoc-type	s	required	type Item
+core::iter::traits::collect::IntoIterator::into_iter	assoc-fn	s	required	fn into_iter(self) -> Self::IntoIter
+core::iter::traits::double_ended::DoubleEndedIterator	trait	s		Iterator
+core::iter::traits::double_ended::DoubleEndedIterator::advance_back_by	assoc-fn	u iter_advance_by 77404 -	provided	fn advance_back_by(&mut self, n: usize) -> Result<(), std::num::NonZero<usize>>
+core::iter::traits::double_ended::DoubleEndedIterator::next_back	assoc-fn	s	required	fn next_back(&mut self) -> Option<Self::Item>
+core::iter::traits::double_ended::DoubleEndedIterator::next_chunk_back	assoc-fn	u iter_next_chunk 98326 -	provided	fn next_chunk_back(&mut self) -> Result<[Self::Item; N], std::array::IntoIter<Self::Item, N>>
+core::iter::traits::double_ended::DoubleEndedIterator::nth_back	assoc-fn	s	provided	fn nth_back(&mut self, n: usize) -> Option<Self::Item>
+core::iter::traits::double_ended::DoubleEndedIterator::rfind	assoc-fn	s	provided	fn rfind<P: FnMut(&Self::Item) -> bool>(&mut self, predicate: P) -> Option<Self::Item>
+core::iter::traits::double_ended::DoubleEndedIterator::rfold	assoc-fn	s	provided	fn rfold<B, F: FnMut(B, Self::Item) -> B>(self, init: B, f: F) -> B
+core::iter::traits::double_ended::DoubleEndedIterator::try_rfold	assoc-fn	s	provided	fn try_rfold<B, F: FnMut(B, Self::Item) -> R, R: std::ops::Try<Output = B>>(&mut self, init: B, f: F) -> R
+core::iter::traits::exact_size::ExactSizeIterator	trait	s		Iterator
+core::iter::traits::exact_size::ExactSizeIterator::is_empty	assoc-fn	u exact_size_is_empty 35428 -	provided	fn is_empty(&self) -> bool
+core::iter::traits::exact_size::ExactSizeIterator::len	assoc-fn	s	provided	fn len(&self) -> usize
+core::iter::traits::iterator::Iterator	trait	s		
+core::iter::traits::iterator::Iterator::Item	assoc-type	s	required	type Item
+core::iter::traits::iterator::Iterator::__iterator_get_unchecked	assoc-fn	u trusted_random_access - -	provided	fn __iterator_get_unchecked(&mut self, _idx: usize) -> Self::Item
+core::iter::traits::iterator::Iterator::advance_by	assoc-fn	u iter_advance_by 77404 -	provided	fn advance_by(&mut self, n: usize) -> Result<(), std::num::NonZero<usize>>
+core::iter::traits::iterator::Iterator::all	assoc-fn	s	provided	fn all<F: FnMut(Self::Item) -> bool>(&mut self, f: F) -> bool
+core::iter::traits::iterator::Iterator::any	assoc-fn	s	provided	fn any<F: FnMut(Self::Item) -> bool>(&mut self, f: F) -> bool
+core::iter::traits::iterator::Iterator::array_chunks	assoc-fn	u iter_array_chunks 100450 -	provided	fn array_chunks(self) -> std::iter::ArrayChunks<Self, N>
+core::iter::traits::iterator::Iterator::by_ref	assoc-fn	s	provided	fn by_ref(&mut self) -> &mut Self
+core::iter::traits::iterator::Iterator::chain	assoc-fn	s	provided	fn chain<U: IntoIterator<Item = Self::Item>>(self, other: U) -> std::iter::Chain<Self, <U as IntoIterator>::IntoIter>
+core::iter::traits::iterator::Iterator::cloned	assoc-fn	s	provided	fn cloned<T: Clone>(self) -> std::iter::Cloned<Self>
+core::iter::traits::iterator::Iterator::cmp	assoc-fn	s	provided	fn cmp<I: IntoIterator<Item = Self::Item>>(self, other: I) -> std::cmp::Ordering
+core::iter::traits::iterator::Iterator::cmp_by	assoc-fn	u iter_order_by 64295 -	provided	fn cmp_by<I: IntoIterator, F: FnMut(Self::Item, <I as IntoIterator>::Item) -> std::cmp::Ordering>(self, other: I, cmp: F) -> std::cmp::Ordering
+core::iter::traits::iterator::Iterator::collect	assoc-fn	s	provided	fn collect<B: FromIterator<Self::Item>>(self) -> B
+core::iter::traits::iterator::Iterator::collect_into	assoc-fn	u iter_collect_into 94780 -	provided	fn collect_into<E: Extend<Self::Item>>(self, collection: &mut E) -> &mut E
+core::iter::traits::iterator::Iterator::copied	assoc-fn	s	provided	fn copied<T: Copy>(self) -> std::iter::Copied<Self>
+core::iter::traits::iterator::Iterator::count	assoc-fn	s	provided	fn count(self) -> usize
+core::iter::traits::iterator::Iterator::cycle	assoc-fn	s	provided	fn cycle(self) -> std::iter::Cycle<Self>
+core::iter::traits::iterator::Iterator::enumerate	assoc-fn	s	provided	fn enumerate(self) -> std::iter::Enumerate<Self>
+core::iter::traits::iterator::Iterator::eq	assoc-fn	s	provided	fn eq<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::eq_by	assoc-fn	u iter_order_by 64295 -	provided	fn eq_by<I: IntoIterator, F: FnMut(Self::Item, <I as IntoIterator>::Item) -> bool>(self, other: I, eq: F) -> bool
+core::iter::traits::iterator::Iterator::filter	assoc-fn	s	provided	fn filter<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> std::iter::Filter<Self, P>
+core::iter::traits::iterator::Iterator::filter_map	assoc-fn	s	provided	fn filter_map<B, F: FnMut(Self::Item) -> Option<B>>(self, f: F) -> std::iter::FilterMap<Self, F>
+core::iter::traits::iterator::Iterator::find	assoc-fn	s	provided	fn find<P: FnMut(&Self::Item) -> bool>(&mut self, predicate: P) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::find_map	assoc-fn	s	provided	fn find_map<B, F: FnMut(Self::Item) -> Option<B>>(&mut self, f: F) -> Option<B>
+core::iter::traits::iterator::Iterator::flat_map	assoc-fn	s	provided	fn flat_map<U: IntoIterator, F: FnMut(Self::Item) -> U>(self, f: F) -> std::iter::FlatMap<Self, U, F>
+core::iter::traits::iterator::Iterator::flatten	assoc-fn	s	provided	fn flatten(self) -> std::iter::Flatten<Self>
+core::iter::traits::iterator::Iterator::fold	assoc-fn	s	provided	fn fold<B, F: FnMut(B, Self::Item) -> B>(self, init: B, f: F) -> B
+core::iter::traits::iterator::Iterator::for_each	assoc-fn	s	provided	fn for_each<F: FnMut(Self::Item)>(self, f: F)
+core::iter::traits::iterator::Iterator::fuse	assoc-fn	s	provided	fn fuse(self) -> std::iter::Fuse<Self>
+core::iter::traits::iterator::Iterator::ge	assoc-fn	s	provided	fn ge<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::gt	assoc-fn	s	provided	fn gt<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::inspect	assoc-fn	s	provided	fn inspect<F: FnMut(&Self::Item)>(self, f: F) -> std::iter::Inspect<Self, F>
+core::iter::traits::iterator::Iterator::intersperse	assoc-fn	u iter_intersperse 79524 -	provided	fn intersperse(self, separator: Self::Item) -> std::iter::Intersperse<Self>
+core::iter::traits::iterator::Iterator::intersperse_with	assoc-fn	u iter_intersperse 79524 -	provided	fn intersperse_with<G: FnMut() -> Self::Item>(self, separator: G) -> std::iter::IntersperseWith<Self, G>
+core::iter::traits::iterator::Iterator::is_partitioned	assoc-fn	u iter_is_partitioned 62544 -	provided	fn is_partitioned<P: FnMut(Self::Item) -> bool>(self, predicate: P) -> bool
+core::iter::traits::iterator::Iterator::is_sorted	assoc-fn	s	provided	fn is_sorted(self) -> bool
+core::iter::traits::iterator::Iterator::is_sorted_by	assoc-fn	s	provided	fn is_sorted_by<F: FnMut(&Self::Item, &Self::Item) -> bool>(self, compare: F) -> bool
+core::iter::traits::iterator::Iterator::is_sorted_by_key	assoc-fn	s	provided	fn is_sorted_by_key<F: FnMut(Self::Item) -> K, K: PartialOrd>(self, f: F) -> bool
+core::iter::traits::iterator::Iterator::last	assoc-fn	s	provided	fn last(self) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::le	assoc-fn	s	provided	fn le<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::lt	assoc-fn	s	provided	fn lt<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::map	assoc-fn	s	provided	fn map<B, F: FnMut(Self::Item) -> B>(self, f: F) -> std::iter::Map<Self, F>
+core::iter::traits::iterator::Iterator::map_while	assoc-fn	s	provided	fn map_while<B, P: FnMut(Self::Item) -> Option<B>>(self, predicate: P) -> std::iter::MapWhile<Self, P>
+core::iter::traits::iterator::Iterator::map_windows	assoc-fn	u iter_map_windows 87155 -	provided	fn map_windows<F: FnMut(&[Self::Item; N]) -> R, R>(self, f: F) -> std::iter::MapWindows<Self, F, N>
+core::iter::traits::iterator::Iterator::max	assoc-fn	s	provided	fn max(self) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::max_by	assoc-fn	s	provided	fn max_by<F: FnMut(&Self::Item, &Self::Item) -> std::cmp::Ordering>(self, compare: F) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::max_by_key	assoc-fn	s	provided	fn max_by_key<B: Ord, F: FnMut(&Self::Item) -> B>(self, f: F) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::min	assoc-fn	s	provided	fn min(self) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::min_by	assoc-fn	s	provided	fn min_by<F: FnMut(&Self::Item, &Self::Item) -> std::cmp::Ordering>(self, compare: F) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::min_by_key	assoc-fn	s	provided	fn min_by_key<B: Ord, F: FnMut(&Self::Item) -> B>(self, f: F) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::ne	assoc-fn	s	provided	fn ne<I: IntoIterator>(self, other: I) -> bool
+core::iter::traits::iterator::Iterator::next	assoc-fn	s	required	fn next(&mut self) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::next_chunk	assoc-fn	u iter_next_chunk 98326 -	provided	fn next_chunk(&mut self) -> Result<[Self::Item; N], std::array::IntoIter<Self::Item, N>>
+core::iter::traits::iterator::Iterator::nth	assoc-fn	s	provided	fn nth(&mut self, n: usize) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::partial_cmp	assoc-fn	s	provided	fn partial_cmp<I: IntoIterator>(self, other: I) -> Option<std::cmp::Ordering>
+core::iter::traits::iterator::Iterator::partial_cmp_by	assoc-fn	u iter_order_by 64295 -	provided	fn partial_cmp_by<I: IntoIterator, F: FnMut(Self::Item, <I as IntoIterator>::Item) -> Option<std::cmp::Ordering>>(self, other: I, partial_cmp: F) -> Option<std::cmp::Ordering>
+core::iter::traits::iterator::Iterator::partition	assoc-fn	s	provided	fn partition<B: Default + Extend<Self::Item>, F: FnMut(&Self::Item) -> bool>(self, f: F) -> (B, B)
+core::iter::traits::iterator::Iterator::partition_in_place	assoc-fn	u iter_partition_in_place 62543 -	provided	fn partition_in_place<T, P: FnMut(&T) -> bool>(self, predicate: P) -> usize
+core::iter::traits::iterator::Iterator::peekable	assoc-fn	s	provided	fn peekable(self) -> std::iter::Peekable<Self>
+core::iter::traits::iterator::Iterator::position	assoc-fn	s	provided	fn position<P: FnMut(Self::Item) -> bool>(&mut self, predicate: P) -> Option<usize>
+core::iter::traits::iterator::Iterator::product	assoc-fn	s	provided	fn product<P: std::iter::Product<Self::Item>>(self) -> P
+core::iter::traits::iterator::Iterator::reduce	assoc-fn	s	provided	fn reduce<F: FnMut(Self::Item, Self::Item) -> Self::Item>(self, f: F) -> Option<Self::Item>
+core::iter::traits::iterator::Iterator::rev	assoc-fn	s	provided	fn rev(self) -> std::iter::Rev<Self>
+core::iter::traits::iterator::Iterator::rposition	assoc-fn	s	provided	fn rposition<P: FnMut(Self::Item) -> bool>(&mut self, predicate: P) -> Option<usize>
+core::iter::traits::iterator::Iterator::scan	assoc-fn	s	provided	fn scan<St, B, F: FnMut(&mut St, Self::Item) -> Option<B>>(self, initial_state: St, f: F) -> std::iter::Scan<Self, St, F>
+core::iter::traits::iterator::Iterator::size_hint	assoc-fn	s	provided	fn size_hint(&self) -> (usize, Option<usize>)
+core::iter::traits::iterator::Iterator::skip	assoc-fn	s	provided	fn skip(self, n: usize) -> std::iter::Skip<Self>
+core::iter::traits::iterator::Iterator::skip_while	assoc-fn	s	provided	fn skip_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> std::iter::SkipWhile<Self, P>
+core::iter::traits::iterator::Iterator::step_by	assoc-fn	s	provided	fn step_by(self, step: usize) -> std::iter::StepBy<Self>
+core::iter::traits::iterator::Iterator::sum	assoc-fn	s	provided	fn sum<S: std::iter::Sum<Self::Item>>(self) -> S
+core::iter::traits::iterator::Iterator::take	assoc-fn	s	provided	fn take(self, n: usize) -> std::iter::Take<Self>
+core::iter::traits::iterator::Iterator::take_while	assoc-fn	s	provided	fn take_while<P: FnMut(&Self::Item) -> bool>(self, predicate: P) -> std::iter::TakeWhile<Self, P>
+core::iter::traits::iterator::Iterator::try_collect	assoc-fn	u iterator_try_collect 94047 -	provided	fn try_collect<B: FromIterator<<Self::Item as std::ops::Try>::Output>>(&mut self) -> <<Self::Item as std::ops::Try>::Residual as std::ops::Residual<B>>::TryType
+core::iter::traits::iterator::Iterator::try_find	assoc-fn	u try_find 63178 -	provided	fn try_find<R: std::ops::Try<Output = bool>, impl FnMut(&Self::Item) -> R: FnMut(&Self::Item) -> R>(&mut self, f: impl FnMut(&Self::Item) -> R) -> <<R as std::ops::Try>::Residual as std::ops::Residual<Option<Self::Item>>>::TryType
+core::iter::traits::iterator::Iterator::try_fold	assoc-fn	s	provided	fn try_fold<B, F: FnMut(B, Self::Item) -> R, R: std::ops::Try<Output = B>>(&mut self, init: B, f: F) -> R
+core::iter::traits::iterator::Iterator::try_for_each	assoc-fn	s	provided	fn try_for_each<F: FnMut(Self::Item) -> R, R: std::ops::Try<Output = ()>>(&mut self, f: F) -> R
+core::iter::traits::iterator::Iterator::try_reduce	assoc-fn	u iterator_try_reduce 87053 -	provided	fn try_reduce<R: std::ops::Try<Output = Self::Item>, impl [const] FnMut(Self::Item, Self::Item) -> R + [const] Destruct: FnMut(Self::Item, Self::Item) -> R>(&mut self, f: impl [const] FnMut(Self::Item, Self::Item) -> R + [const] Destruct) -> <<R as std::ops::Try>::Residual as std::ops::Residual<Option<<R as std::ops::Try>::Output>>>::TryType
+core::iter::traits::iterator::Iterator::unzip	assoc-fn	s	provided	fn unzip<A, B, FromA: Default + Extend<A>, FromB: Default + Extend<B>>(self) -> (FromA, FromB)
+core::iter::traits::iterator::Iterator::zip	assoc-fn	s	provided	fn zip<U: IntoIterator>(self, other: U) -> std::iter::Zip<Self, <U as IntoIterator>::IntoIter>
+core::iter::traits::marker::FusedIterator	trait	s		Iterator
+core::iter::traits::marker::InPlaceIterable	trait	u inplace_iteration - -		
+core::iter::traits::marker::InPlaceIterable::EXPAND_BY	assoc-const	u inplace_iteration - -	required	const EXPAND_BY: Option<std::num::NonZero<usize>>
+core::iter::traits::marker::InPlaceIterable::MERGE_BY	assoc-const	u inplace_iteration - -	required	const MERGE_BY: Option<std::num::NonZero<usize>>
+core::iter::traits::marker::TrustedFused	trait	u trusted_fused - -		
+core::iter::traits::marker::TrustedLen	trait	u trusted_len 37572 -		Iterator
+core::iter::traits::marker::TrustedStep	trait	u trusted_step 85731 -		Copy
 core::legacy_int_modules::i128::MAX	const	s	
 core::legacy_int_modules::i128::MIN	const	s	
 core::legacy_int_modules::i16::MAX	const	s	
@@ -2515,32 +2515,32 @@ core::macros::unimplemented	macro	s
 core::macros::unreachable	macro	s	
 core::macros::write	macro	s	
 core::macros::writeln	macro	s	
-core::marker::BikeshedGuaranteedNoDrop	trait	u bikeshed_guaranteed_no_drop - -	
+core::marker::BikeshedGuaranteedNoDrop	trait	u bikeshed_guaranteed_no_drop - -		
 core::marker::CoercePointee	macro	u derive_coerce_pointee 123430 -	
-core::marker::CoercePointeeValidated	trait	u coerce_pointee_validated - -	
-core::marker::CoerceShared	trait	u reborrow 145612 -	Target
+core::marker::CoercePointeeValidated	trait	u coerce_pointee_validated - -		
+core::marker::CoerceShared	trait	u reborrow 145612 -	Target	
 core::marker::ConstParamTy	macro	u min_adt_const_params 154042 -	
-core::marker::ConstParamTy_	trait	u const_param_ty_trait 95174 -	
-core::marker::Copy	macro	s	
-core::marker::Destruct	trait	u const_destruct 133214 -	
-core::marker::DiscriminantKind	trait	u discriminant_kind - this trait is unlikely to ever be stabilized, use `mem::discriminant` instead	
-core::marker::DiscriminantKind::Discriminant	assoc-type	u discriminant_kind - this trait is unlikely to ever be stabilized, use `mem::discriminant` instead	required
-core::marker::FnPtr	trait	u fn_ptr_trait - internal trait for implementing various traits for all function pointers	
-core::marker::FnPtr::addr	assoc-fn	u fn_ptr_trait - internal trait for implementing various traits for all function pointers	required
-core::marker::Freeze	trait	u freeze 121675 -	
-core::marker::MetaSized	trait	u sized_hierarchy 144404 -	
+core::marker::ConstParamTy_	trait	u const_param_ty_trait 95174 -		Eq
+core::marker::Copy	trait	s		Clone
+core::marker::Destruct	trait	u const_destruct 133214 -		
+core::marker::DiscriminantKind	trait	u discriminant_kind - this trait is unlikely to ever be stabilized, use `mem::discriminant` instead		
+core::marker::DiscriminantKind::Discriminant	assoc-type	u discriminant_kind - this trait is unlikely to ever be stabilized, use `mem::discriminant` instead	required	type Discriminant: Clone + Copy + std::fmt::Debug + Eq + PartialEq + std::hash::Hash + Send + Sync + Unpin
+core::marker::FnPtr	trait	u fn_ptr_trait - internal trait for implementing various traits for all function pointers		Copy + Clone
+core::marker::FnPtr::addr	assoc-fn	u fn_ptr_trait - internal trait for implementing various traits for all function pointers	required	fn addr(self) -> *const ()
+core::marker::Freeze	trait	u freeze 121675 -		
+core::marker::MetaSized	trait	u sized_hierarchy 144404 -		
 core::marker::PhantomData	struct	s	T
 core::marker::PhantomPinned	struct	s	
-core::marker::PointeeSized	trait	u sized_hierarchy 144404 -	
-core::marker::Reborrow	trait	u reborrow 145612 -	
-core::marker::Send	trait	s	
-core::marker::Sized	trait	s	
-core::marker::StructuralPartialEq	trait	u structural_match 31434 -	
-core::marker::Sync	trait	s	
-core::marker::Tuple	trait	u tuple_trait 157987 -	
-core::marker::Unpin	trait	s	
-core::marker::UnsafeUnpin	trait	u unsafe_unpin 125735 -	
-core::marker::Unsize	trait	u unsize 18598 -	T
+core::marker::PointeeSized	trait	u sized_hierarchy 144404 -		
+core::marker::Reborrow	trait	u reborrow 145612 -		
+core::marker::Send	trait	s		
+core::marker::Sized	trait	s		
+core::marker::StructuralPartialEq	trait	u structural_match 31434 -		
+core::marker::Sync	trait	s		
+core::marker::Tuple	trait	u tuple_trait 157987 -		
+core::marker::Unpin	trait	s		
+core::marker::UnsafeUnpin	trait	u unsafe_unpin 125735 -		
+core::marker::Unsize	trait	u unsize 18598 -	T	
 core::marker::direct_const_arg	macro	u min_generic_const_args 132980 -	
 core::marker::variance::PhantomContravariant	struct	u phantom_variance_markers 135806 -	T
 core::marker::variance::PhantomContravariant::new	assoc-fn	u phantom_variance_markers 135806 -	
@@ -2554,16 +2554,16 @@ core::marker::variance::PhantomInvariant	struct	u phantom_variance_markers 13580
 core::marker::variance::PhantomInvariant::new	assoc-fn	u phantom_variance_markers 135806 -	
 core::marker::variance::PhantomInvariantLifetime	struct	u phantom_variance_markers 135806 -	'a
 core::marker::variance::PhantomInvariantLifetime::new	assoc-fn	u phantom_variance_markers 135806 -	
-core::marker::variance::Variance	trait	u phantom_variance_markers 135806 -	
+core::marker::variance::Variance	trait	u phantom_variance_markers 135806 -		Default
 core::marker::variance::variance	fn	u phantom_variance_markers 135806 -	T
 core::mem::Discriminant	struct	s	T
-core::mem::SizedTypeProperties	trait	u sized_type_properties - -	
-core::mem::SizedTypeProperties::ALIGN	assoc-const	u sized_type_properties - -	provided
-core::mem::SizedTypeProperties::ALIGNMENT	assoc-const	u ptr_alignment_type 102070 -	provided
-core::mem::SizedTypeProperties::IS_ZST	assoc-const	u sized_type_properties - -	provided
-core::mem::SizedTypeProperties::LAYOUT	assoc-const	u sized_type_properties - -	provided
-core::mem::SizedTypeProperties::MAX_SLICE_LEN	assoc-const	u sized_type_properties - -	provided
-core::mem::SizedTypeProperties::SIZE	assoc-const	u sized_type_properties - -	provided
+core::mem::SizedTypeProperties	trait	u sized_type_properties - -		Sized
+core::mem::SizedTypeProperties::ALIGN	assoc-const	u sized_type_properties - -	provided	const ALIGN: usize
+core::mem::SizedTypeProperties::ALIGNMENT	assoc-const	u ptr_alignment_type 102070 -	provided	const ALIGNMENT: std::mem::Alignment
+core::mem::SizedTypeProperties::IS_ZST	assoc-const	u sized_type_properties - -	provided	const IS_ZST: bool
+core::mem::SizedTypeProperties::LAYOUT	assoc-const	u sized_type_properties - -	provided	const LAYOUT: std::alloc::Layout
+core::mem::SizedTypeProperties::MAX_SLICE_LEN	assoc-const	u sized_type_properties - -	provided	const MAX_SLICE_LEN: usize
+core::mem::SizedTypeProperties::SIZE	assoc-const	u sized_type_properties - -	provided	const SIZE: usize
 core::mem::align_of	fn	s	T
 core::mem::align_of_val	fn	s	T
 core::mem::align_of_val_raw	fn	u layout_for_ptr 69835 -	T
@@ -2632,8 +2632,8 @@ core::mem::transmutability::Assume::SAFETY	assoc-const	u transmutability 99571 -
 core::mem::transmutability::Assume::VALIDITY	assoc-const	u transmutability 99571 -	
 core::mem::transmutability::Assume::and	assoc-fn	u transmutability 99571 -	
 core::mem::transmutability::Assume::but_not	assoc-fn	u transmutability 99571 -	
-core::mem::transmutability::TransmuteFrom	trait	u transmutability 99571 -	Src const:ASSUME=_
-core::mem::transmutability::TransmuteFrom::transmute	assoc-fn	u transmutability 99571 -	provided
+core::mem::transmutability::TransmuteFrom	trait	u transmutability 99571 -	Src const:ASSUME=_	
+core::mem::transmutability::TransmuteFrom::transmute	assoc-fn	u transmutability 99571 -	provided	fn transmute(src: Src) -> Self
 core::mem::transmute_copy	fn	s	Src Dst
 core::mem::transmute_neo	fn	u transmute_neo 155079 -	Src Dst
 core::mem::transmute_prefix	fn	u transmute_prefix 155079 -	Src Dst
@@ -2843,9 +2843,9 @@ core::num::imp::bignum::Big32x40::mul_pow5	assoc-fn	u core_private_bignum - inte
 core::num::imp::bignum::Big32x40::mul_small	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::Big32x40::sub	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::Digit32	type	u core_private_bignum - internal routines only exposed for testing	
-core::num::imp::bignum::FullOps	trait	u core_private_bignum - internal routines only exposed for testing	
-core::num::imp::bignum::FullOps::full_div_rem	assoc-fn	u core_private_bignum - internal routines only exposed for testing	required
-core::num::imp::bignum::FullOps::full_mul_add	assoc-fn	u core_private_bignum - internal routines only exposed for testing	required
+core::num::imp::bignum::FullOps	trait	u core_private_bignum - internal routines only exposed for testing		Sized
+core::num::imp::bignum::FullOps::full_div_rem	assoc-fn	u core_private_bignum - internal routines only exposed for testing	required	fn full_div_rem(self, other: Self, borrow: Self) -> (Self, Self)
+core::num::imp::bignum::FullOps::full_mul_add	assoc-fn	u core_private_bignum - internal routines only exposed for testing	required	fn full_mul_add(self, other: Self, other2: Self, carry: Self) -> (Self, Self)
 core::num::imp::bignum::tests::Big8x3	struct	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::tests::Big8x3::add	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::tests::Big8x3::add_small	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
@@ -2861,13 +2861,13 @@ core::num::imp::bignum::tests::Big8x3::mul_pow2	assoc-fn	u core_private_bignum -
 core::num::imp::bignum::tests::Big8x3::mul_pow5	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::tests::Big8x3::mul_small	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
 core::num::imp::bignum::tests::Big8x3::sub	assoc-fn	u core_private_bignum - internal routines only exposed for testing	
-core::num::imp::dec2flt::Lemire	trait	u dec2flt - internal routines only exposed for testing	
-core::num::imp::dec2flt::Lemire::MAX_EXPONENT_DISGUISED_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided
-core::num::imp::dec2flt::Lemire::MAX_EXPONENT_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided
-core::num::imp::dec2flt::Lemire::MAX_MANTISSA_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided
-core::num::imp::dec2flt::Lemire::MIN_EXPONENT_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided
-core::num::imp::dec2flt::Lemire::from_u64	assoc-fn	u dec2flt - internal routines only exposed for testing	required
-core::num::imp::dec2flt::Lemire::pow10_fast_path	assoc-fn	u dec2flt - internal routines only exposed for testing	required
+core::num::imp::dec2flt::Lemire	trait	u dec2flt - internal routines only exposed for testing		
+core::num::imp::dec2flt::Lemire::MAX_EXPONENT_DISGUISED_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided	const MAX_EXPONENT_DISGUISED_FAST_PATH: i64
+core::num::imp::dec2flt::Lemire::MAX_EXPONENT_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided	const MAX_EXPONENT_FAST_PATH: i64
+core::num::imp::dec2flt::Lemire::MAX_MANTISSA_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided	const MAX_MANTISSA_FAST_PATH: u64
+core::num::imp::dec2flt::Lemire::MIN_EXPONENT_FAST_PATH	assoc-const	u dec2flt - internal routines only exposed for testing	provided	const MIN_EXPONENT_FAST_PATH: i64
+core::num::imp::dec2flt::Lemire::from_u64	assoc-fn	u dec2flt - internal routines only exposed for testing	required	fn from_u64(v: u64) -> Self
+core::num::imp::dec2flt::Lemire::pow10_fast_path	assoc-fn	u dec2flt - internal routines only exposed for testing	required	fn pow10_fast_path(exponent: usize) -> Self
 core::num::imp::dec2flt::dec2flt	fn	u dec2flt - internal routines only exposed for testing	F
 core::num::imp::dec2flt::decimal::Decimal	struct	u dec2flt - internal routines only exposed for testing	
 core::num::imp::dec2flt::decimal::Decimal::try_fast_path	assoc-fn	u dec2flt - internal routines only exposed for testing	
@@ -2886,8 +2886,8 @@ core::num::imp::flt2dec::MAX_SIG_DIGITS	const	u flt2dec - internal routines only
 core::num::imp::flt2dec::Sign	enum	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::Sign::Minus	variant	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::Sign::MinusPlus	variant	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::DecodableFloat	trait	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::DecodableFloat::min_pos_norm_value	assoc-fn	u flt2dec - internal routines only exposed for testing	required
+core::num::imp::flt2dec::decoder::DecodableFloat	trait	u flt2dec - internal routines only exposed for testing		Copy
+core::num::imp::flt2dec::decoder::DecodableFloat::min_pos_norm_value	assoc-fn	u flt2dec - internal routines only exposed for testing	required	fn min_pos_norm_value() -> Self
 core::num::imp::flt2dec::decoder::Decoded	struct	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::decoder::FullDecoded	enum	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::decoder::FullDecoded::Finite	variant	u flt2dec - internal routines only exposed for testing	
@@ -2924,34 +2924,34 @@ core::num::imp::fmt::Part::Num	variant	u numfmt - internal routines only exposed
 core::num::imp::fmt::Part::Zero	variant	u numfmt - internal routines only exposed for testing	
 core::num::imp::fmt::Part::len	assoc-fn	u numfmt - internal routines only exposed for testing	
 core::num::imp::fmt::Part::write	assoc-fn	u numfmt - internal routines only exposed for testing	
-core::num::imp::traits::Float	trait	u num_internals - internal routines only exposed for testing	
-core::num::imp::traits::Float::BITS	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::EXP_BIAS	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::EXP_BITS	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::EXP_MASK	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::EXP_MIN	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::EXP_SAT	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::INFINITE_POWER	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::INFINITY	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::Int	assoc-type	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::LARGEST_POWER_OF_TEN	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::MAX_EXPONENT_ROUND_TO_EVEN	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::MIN_EXPONENT_ROUND_TO_EVEN	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::NAN	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::NEG_INFINITY	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::NEG_NAN	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::SIG_BITS	assoc-const	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Float::SIG_MASK	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::SIG_TOTAL_BITS	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::SMALLEST_POWER_OF_TEN	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::classify	assoc-fn	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Float::to_bits	assoc-fn	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::FloatExt	trait	u num_internals - internal routines only exposed for testing	
-core::num::imp::traits::FloatExt::from_u64_bits	assoc-fn	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::FloatExt::integer_decode	assoc-fn	u num_internals - internal routines only exposed for testing	provided
-core::num::imp::traits::Int	trait	u num_internals - internal routines only exposed for testing	
-core::num::imp::traits::Int::ONE	assoc-const	u num_internals - internal routines only exposed for testing	required
-core::num::imp::traits::Int::ZERO	assoc-const	u num_internals - internal routines only exposed for testing	required
+core::num::imp::traits::Float	trait	u num_internals - internal routines only exposed for testing		Sized + std::ops::Div<Output = Self> + std::ops::Neg<Output = Self> + std::ops::Mul<Output = Self> + std::ops::Add<Output = Self> + std::fmt::Debug + PartialEq + PartialOrd + Default + Clone + Copy
+core::num::imp::traits::Float::BITS	assoc-const	u num_internals - internal routines only exposed for testing	required	const BITS: u32
+core::num::imp::traits::Float::EXP_BIAS	assoc-const	u num_internals - internal routines only exposed for testing	provided	const EXP_BIAS: u32
+core::num::imp::traits::Float::EXP_BITS	assoc-const	u num_internals - internal routines only exposed for testing	provided	const EXP_BITS: u32
+core::num::imp::traits::Float::EXP_MASK	assoc-const	u num_internals - internal routines only exposed for testing	required	const EXP_MASK: Self::Int
+core::num::imp::traits::Float::EXP_MIN	assoc-const	u num_internals - internal routines only exposed for testing	provided	const EXP_MIN: i32
+core::num::imp::traits::Float::EXP_SAT	assoc-const	u num_internals - internal routines only exposed for testing	provided	const EXP_SAT: u32
+core::num::imp::traits::Float::INFINITE_POWER	assoc-const	u num_internals - internal routines only exposed for testing	provided	const INFINITE_POWER: i32
+core::num::imp::traits::Float::INFINITY	assoc-const	u num_internals - internal routines only exposed for testing	required	const INFINITY: Self
+core::num::imp::traits::Float::Int	assoc-type	u num_internals - internal routines only exposed for testing	required	type Int: Into<u64>
+core::num::imp::traits::Float::LARGEST_POWER_OF_TEN	assoc-const	u num_internals - internal routines only exposed for testing	provided	const LARGEST_POWER_OF_TEN: i32
+core::num::imp::traits::Float::MAX_EXPONENT_ROUND_TO_EVEN	assoc-const	u num_internals - internal routines only exposed for testing	required	const MAX_EXPONENT_ROUND_TO_EVEN: i32
+core::num::imp::traits::Float::MIN_EXPONENT_ROUND_TO_EVEN	assoc-const	u num_internals - internal routines only exposed for testing	required	const MIN_EXPONENT_ROUND_TO_EVEN: i32
+core::num::imp::traits::Float::NAN	assoc-const	u num_internals - internal routines only exposed for testing	required	const NAN: Self
+core::num::imp::traits::Float::NEG_INFINITY	assoc-const	u num_internals - internal routines only exposed for testing	required	const NEG_INFINITY: Self
+core::num::imp::traits::Float::NEG_NAN	assoc-const	u num_internals - internal routines only exposed for testing	required	const NEG_NAN: Self
+core::num::imp::traits::Float::SIG_BITS	assoc-const	u num_internals - internal routines only exposed for testing	provided	const SIG_BITS: u32
+core::num::imp::traits::Float::SIG_MASK	assoc-const	u num_internals - internal routines only exposed for testing	required	const SIG_MASK: Self::Int
+core::num::imp::traits::Float::SIG_TOTAL_BITS	assoc-const	u num_internals - internal routines only exposed for testing	required	const SIG_TOTAL_BITS: u32
+core::num::imp::traits::Float::SMALLEST_POWER_OF_TEN	assoc-const	u num_internals - internal routines only exposed for testing	required	const SMALLEST_POWER_OF_TEN: i32
+core::num::imp::traits::Float::classify	assoc-fn	u num_internals - internal routines only exposed for testing	required	fn classify(self) -> std::num::FpCategory
+core::num::imp::traits::Float::to_bits	assoc-fn	u num_internals - internal routines only exposed for testing	required	fn to_bits(self) -> Self::Int
+core::num::imp::traits::FloatExt	trait	u num_internals - internal routines only exposed for testing		
+core::num::imp::traits::FloatExt::from_u64_bits	assoc-fn	u num_internals - internal routines only exposed for testing	required	fn from_u64_bits(v: u64) -> Self
+core::num::imp::traits::FloatExt::integer_decode	assoc-fn	u num_internals - internal routines only exposed for testing	provided	fn integer_decode(self) -> (u64, i16, i8)
+core::num::imp::traits::Int	trait	u num_internals - internal routines only exposed for testing		Sized + Clone + Copy + std::fmt::Debug + std::ops::Shr<u32, Output = Self> + std::ops::Shl<u32, Output = Self> + std::ops::BitAnd<Output = Self> + std::ops::BitOr<Output = Self> + PartialEq
+core::num::imp::traits::Int::ONE	assoc-const	u num_internals - internal routines only exposed for testing	required	const ONE: Self
+core::num::imp::traits::Int::ZERO	assoc-const	u num_internals - internal routines only exposed for testing	required	const ZERO: Self
 core::num::niche_types::CodePointInner	struct	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::CodePointInner::ZERO	assoc-const	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::CodePointInner::as_inner	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
@@ -3023,8 +3023,8 @@ core::num::niche_types::NonZeroUsizeInner::as_inner	assoc-fn	u temporary_niche_t
 core::num::niche_types::NonZeroUsizeInner::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::NonZeroUsizeInner::new_unchecked	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::NotAllOnes	type	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	T
-core::num::niche_types::NotAllOnesHelper	trait	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
-core::num::niche_types::NotAllOnesHelper::Type	assoc-type	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	required
+core::num::niche_types::NotAllOnesHelper	trait	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along		
+core::num::niche_types::NotAllOnesHelper::Type	assoc-type	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	required	type Type
 core::num::niche_types::U32NotAllOnes	struct	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::U32NotAllOnes::as_inner	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
 core::num::niche_types::U32NotAllOnes::new	assoc-fn	u temporary_niche_types - for core, alloc, and std internals until pattern types are further along	
@@ -3106,8 +3106,8 @@ core::num::nonzero::NonZeroU32	type	s
 core::num::nonzero::NonZeroU64	type	s	
 core::num::nonzero::NonZeroU8	type	s	
 core::num::nonzero::NonZeroUsize	type	s	
-core::num::nonzero::ZeroablePrimitive	trait	u nonzero_internals - implementation detail which may disappear or be replaced at any time	
-core::num::nonzero::ZeroablePrimitive::NonZeroInner	assoc-type	u nonzero_internals - implementation detail which may disappear or be replaced at any time	required
+core::num::nonzero::ZeroablePrimitive	trait	u nonzero_internals - implementation detail which may disappear or be replaced at any time		Sized + Copy
+core::num::nonzero::ZeroablePrimitive::NonZeroInner	assoc-type	u nonzero_internals - implementation detail which may disappear or be replaced at any time	required	type NonZeroInner: Copy
 core::num::saturating::Saturating	struct	s	T
 core::num::saturating::Saturating::BITS	assoc-const	s	
 core::num::saturating::Saturating::MAX	assoc-const	s	
@@ -3153,71 +3153,71 @@ core::num::wrapping::Wrapping::swap_bytes	assoc-fn	u wrapping_int_impl 32463 -
 core::num::wrapping::Wrapping::to_be	assoc-fn	u wrapping_int_impl 32463 -	
 core::num::wrapping::Wrapping::to_le	assoc-fn	u wrapping_int_impl 32463 -	
 core::num::wrapping::Wrapping::trailing_zeros	assoc-fn	u wrapping_int_impl 32463 -	
-core::ops::arith::Add	trait	s	Rhs=Self
-core::ops::arith::Add::Output	assoc-type	s	required
-core::ops::arith::Add::add	assoc-fn	s	required
-core::ops::arith::AddAssign	trait	s	Rhs=Self
-core::ops::arith::AddAssign::add_assign	assoc-fn	s	required
-core::ops::arith::Div	trait	s	Rhs=Self
-core::ops::arith::Div::Output	assoc-type	s	required
-core::ops::arith::Div::div	assoc-fn	s	required
-core::ops::arith::DivAssign	trait	s	Rhs=Self
-core::ops::arith::DivAssign::div_assign	assoc-fn	s	required
-core::ops::arith::Mul	trait	s	Rhs=Self
-core::ops::arith::Mul::Output	assoc-type	s	required
-core::ops::arith::Mul::mul	assoc-fn	s	required
-core::ops::arith::MulAssign	trait	s	Rhs=Self
-core::ops::arith::MulAssign::mul_assign	assoc-fn	s	required
-core::ops::arith::Neg	trait	s	
-core::ops::arith::Neg::Output	assoc-type	s	required
-core::ops::arith::Neg::neg	assoc-fn	s	required
-core::ops::arith::Rem	trait	s	Rhs=Self
-core::ops::arith::Rem::Output	assoc-type	s	required
-core::ops::arith::Rem::rem	assoc-fn	s	required
-core::ops::arith::RemAssign	trait	s	Rhs=Self
-core::ops::arith::RemAssign::rem_assign	assoc-fn	s	required
-core::ops::arith::Sub	trait	s	Rhs=Self
-core::ops::arith::Sub::Output	assoc-type	s	required
-core::ops::arith::Sub::sub	assoc-fn	s	required
-core::ops::arith::SubAssign	trait	s	Rhs=Self
-core::ops::arith::SubAssign::sub_assign	assoc-fn	s	required
-core::ops::async_function::AsyncFn	trait	s	Args
-core::ops::async_function::AsyncFn::async_call	assoc-fn	u async_fn_traits - -	required
-core::ops::async_function::AsyncFnMut	trait	s	Args
-core::ops::async_function::AsyncFnMut::CallRefFuture	assoc-type	u async_fn_traits - -	required
-core::ops::async_function::AsyncFnMut::async_call_mut	assoc-fn	u async_fn_traits - -	required
-core::ops::async_function::AsyncFnOnce	trait	s	Args
-core::ops::async_function::AsyncFnOnce::CallOnceFuture	assoc-type	u async_fn_traits - -	required
-core::ops::async_function::AsyncFnOnce::Output	assoc-type	u async_fn_traits - -	required
-core::ops::async_function::AsyncFnOnce::async_call_once	assoc-fn	u async_fn_traits - -	required
-core::ops::bit::BitAnd	trait	s	Rhs=Self
-core::ops::bit::BitAnd::Output	assoc-type	s	required
-core::ops::bit::BitAnd::bitand	assoc-fn	s	required
-core::ops::bit::BitAndAssign	trait	s	Rhs=Self
-core::ops::bit::BitAndAssign::bitand_assign	assoc-fn	s	required
-core::ops::bit::BitOr	trait	s	Rhs=Self
-core::ops::bit::BitOr::Output	assoc-type	s	required
-core::ops::bit::BitOr::bitor	assoc-fn	s	required
-core::ops::bit::BitOrAssign	trait	s	Rhs=Self
-core::ops::bit::BitOrAssign::bitor_assign	assoc-fn	s	required
-core::ops::bit::BitXor	trait	s	Rhs=Self
-core::ops::bit::BitXor::Output	assoc-type	s	required
-core::ops::bit::BitXor::bitxor	assoc-fn	s	required
-core::ops::bit::BitXorAssign	trait	s	Rhs=Self
-core::ops::bit::BitXorAssign::bitxor_assign	assoc-fn	s	required
-core::ops::bit::Not	trait	s	
-core::ops::bit::Not::Output	assoc-type	s	required
-core::ops::bit::Not::not	assoc-fn	s	required
-core::ops::bit::Shl	trait	s	Rhs=Self
-core::ops::bit::Shl::Output	assoc-type	s	required
-core::ops::bit::Shl::shl	assoc-fn	s	required
-core::ops::bit::ShlAssign	trait	s	Rhs=Self
-core::ops::bit::ShlAssign::shl_assign	assoc-fn	s	required
-core::ops::bit::Shr	trait	s	Rhs=Self
-core::ops::bit::Shr::Output	assoc-type	s	required
-core::ops::bit::Shr::shr	assoc-fn	s	required
-core::ops::bit::ShrAssign	trait	s	Rhs=Self
-core::ops::bit::ShrAssign::shr_assign	assoc-fn	s	required
+core::ops::arith::Add	trait	s	Rhs=Self	
+core::ops::arith::Add::Output	assoc-type	s	required	type Output
+core::ops::arith::Add::add	assoc-fn	s	required	fn add(self, rhs: Rhs) -> Self::Output
+core::ops::arith::AddAssign	trait	s	Rhs=Self	
+core::ops::arith::AddAssign::add_assign	assoc-fn	s	required	fn add_assign(&mut self, rhs: Rhs)
+core::ops::arith::Div	trait	s	Rhs=Self	
+core::ops::arith::Div::Output	assoc-type	s	required	type Output
+core::ops::arith::Div::div	assoc-fn	s	required	fn div(self, rhs: Rhs) -> Self::Output
+core::ops::arith::DivAssign	trait	s	Rhs=Self	
+core::ops::arith::DivAssign::div_assign	assoc-fn	s	required	fn div_assign(&mut self, rhs: Rhs)
+core::ops::arith::Mul	trait	s	Rhs=Self	
+core::ops::arith::Mul::Output	assoc-type	s	required	type Output
+core::ops::arith::Mul::mul	assoc-fn	s	required	fn mul(self, rhs: Rhs) -> Self::Output
+core::ops::arith::MulAssign	trait	s	Rhs=Self	
+core::ops::arith::MulAssign::mul_assign	assoc-fn	s	required	fn mul_assign(&mut self, rhs: Rhs)
+core::ops::arith::Neg	trait	s		
+core::ops::arith::Neg::Output	assoc-type	s	required	type Output
+core::ops::arith::Neg::neg	assoc-fn	s	required	fn neg(self) -> Self::Output
+core::ops::arith::Rem	trait	s	Rhs=Self	
+core::ops::arith::Rem::Output	assoc-type	s	required	type Output
+core::ops::arith::Rem::rem	assoc-fn	s	required	fn rem(self, rhs: Rhs) -> Self::Output
+core::ops::arith::RemAssign	trait	s	Rhs=Self	
+core::ops::arith::RemAssign::rem_assign	assoc-fn	s	required	fn rem_assign(&mut self, rhs: Rhs)
+core::ops::arith::Sub	trait	s	Rhs=Self	
+core::ops::arith::Sub::Output	assoc-type	s	required	type Output
+core::ops::arith::Sub::sub	assoc-fn	s	required	fn sub(self, rhs: Rhs) -> Self::Output
+core::ops::arith::SubAssign	trait	s	Rhs=Self	
+core::ops::arith::SubAssign::sub_assign	assoc-fn	s	required	fn sub_assign(&mut self, rhs: Rhs)
+core::ops::async_function::AsyncFn	trait	s	Args	AsyncFnMut<Args>
+core::ops::async_function::AsyncFn::async_call	assoc-fn	u async_fn_traits - -	required	fn async_call(&self, args: Args) -> Self::CallRefFuture
+core::ops::async_function::AsyncFnMut	trait	s	Args	AsyncFnOnce<Args>
+core::ops::async_function::AsyncFnMut::CallRefFuture	assoc-type	u async_fn_traits - -	required	type CallRefFuture: Future<Output = Self::Output>
+core::ops::async_function::AsyncFnMut::async_call_mut	assoc-fn	u async_fn_traits - -	required	fn async_call_mut(&mut self, args: Args) -> Self::CallRefFuture
+core::ops::async_function::AsyncFnOnce	trait	s	Args	
+core::ops::async_function::AsyncFnOnce::CallOnceFuture	assoc-type	u async_fn_traits - -	required	type CallOnceFuture: Future<Output = Self::Output>
+core::ops::async_function::AsyncFnOnce::Output	assoc-type	u async_fn_traits - -	required	type Output
+core::ops::async_function::AsyncFnOnce::async_call_once	assoc-fn	u async_fn_traits - -	required	fn async_call_once(self, args: Args) -> Self::CallOnceFuture
+core::ops::bit::BitAnd	trait	s	Rhs=Self	
+core::ops::bit::BitAnd::Output	assoc-type	s	required	type Output
+core::ops::bit::BitAnd::bitand	assoc-fn	s	required	fn bitand(self, rhs: Rhs) -> Self::Output
+core::ops::bit::BitAndAssign	trait	s	Rhs=Self	
+core::ops::bit::BitAndAssign::bitand_assign	assoc-fn	s	required	fn bitand_assign(&mut self, rhs: Rhs)
+core::ops::bit::BitOr	trait	s	Rhs=Self	
+core::ops::bit::BitOr::Output	assoc-type	s	required	type Output
+core::ops::bit::BitOr::bitor	assoc-fn	s	required	fn bitor(self, rhs: Rhs) -> Self::Output
+core::ops::bit::BitOrAssign	trait	s	Rhs=Self	
+core::ops::bit::BitOrAssign::bitor_assign	assoc-fn	s	required	fn bitor_assign(&mut self, rhs: Rhs)
+core::ops::bit::BitXor	trait	s	Rhs=Self	
+core::ops::bit::BitXor::Output	assoc-type	s	required	type Output
+core::ops::bit::BitXor::bitxor	assoc-fn	s	required	fn bitxor(self, rhs: Rhs) -> Self::Output
+core::ops::bit::BitXorAssign	trait	s	Rhs=Self	
+core::ops::bit::BitXorAssign::bitxor_assign	assoc-fn	s	required	fn bitxor_assign(&mut self, rhs: Rhs)
+core::ops::bit::Not	trait	s		
+core::ops::bit::Not::Output	assoc-type	s	required	type Output
+core::ops::bit::Not::not	assoc-fn	s	required	fn not(self) -> Self::Output
+core::ops::bit::Shl	trait	s	Rhs=Self	
+core::ops::bit::Shl::Output	assoc-type	s	required	type Output
+core::ops::bit::Shl::shl	assoc-fn	s	required	fn shl(self, rhs: Rhs) -> Self::Output
+core::ops::bit::ShlAssign	trait	s	Rhs=Self	
+core::ops::bit::ShlAssign::shl_assign	assoc-fn	s	required	fn shl_assign(&mut self, rhs: Rhs)
+core::ops::bit::Shr	trait	s	Rhs=Self	
+core::ops::bit::Shr::Output	assoc-type	s	required	type Output
+core::ops::bit::Shr::shr	assoc-fn	s	required	fn shr(self, rhs: Rhs) -> Self::Output
+core::ops::bit::ShrAssign	trait	s	Rhs=Self	
+core::ops::bit::ShrAssign::shr_assign	assoc-fn	s	required	fn shr_assign(&mut self, rhs: Rhs)
 core::ops::control_flow::ControlFlow	enum	s	B C=()
 core::ops::control_flow::ControlFlow::Break	variant	s	
 core::ops::control_flow::ControlFlow::Continue	variant	s	
@@ -3230,37 +3230,37 @@ core::ops::control_flow::ControlFlow::is_break	assoc-fn	s
 core::ops::control_flow::ControlFlow::is_continue	assoc-fn	s	
 core::ops::control_flow::ControlFlow::map_break	assoc-fn	s	
 core::ops::control_flow::ControlFlow::map_continue	assoc-fn	s	
-core::ops::coroutine::Coroutine	trait	u coroutine_trait 43122 -	R=()
-core::ops::coroutine::Coroutine::Return	assoc-type	u coroutine_trait 43122 -	required
-core::ops::coroutine::Coroutine::Yield	assoc-type	u coroutine_trait 43122 -	required
-core::ops::coroutine::Coroutine::resume	assoc-fn	u coroutine_trait 43122 -	required
+core::ops::coroutine::Coroutine	trait	u coroutine_trait 43122 -	R=()	
+core::ops::coroutine::Coroutine::Return	assoc-type	u coroutine_trait 43122 -	required	type Return
+core::ops::coroutine::Coroutine::Yield	assoc-type	u coroutine_trait 43122 -	required	type Yield
+core::ops::coroutine::Coroutine::resume	assoc-fn	u coroutine_trait 43122 -	required	fn resume(self: std::pin::Pin<&mut Self>, arg: R) -> std::ops::CoroutineState<Self::Yield, Self::Return>
 core::ops::coroutine::CoroutineState	enum	u coroutine_trait 43122 -	Y R
 core::ops::coroutine::CoroutineState::Complete	variant	u coroutine_trait 43122 -	
 core::ops::coroutine::CoroutineState::Yielded	variant	u coroutine_trait 43122 -	
-core::ops::deref::Deref	trait	s	
-core::ops::deref::Deref::Target	assoc-type	s	required
-core::ops::deref::Deref::deref	assoc-fn	s	required
-core::ops::deref::DerefMut	trait	s	
-core::ops::deref::DerefMut::deref_mut	assoc-fn	s	required
-core::ops::deref::DerefPure	trait	u deref_pure_trait 87121 -	
-core::ops::deref::LegacyReceiver	trait	u legacy_receiver_trait - -	
-core::ops::deref::Receiver	trait	u arbitrary_self_types 44874 -	
-core::ops::deref::Receiver::Target	assoc-type	u arbitrary_self_types 44874 -	required
-core::ops::drop::Drop	trait	s	
-core::ops::drop::Drop::drop	assoc-fn	s	provided
-core::ops::drop::Drop::pin_drop	assoc-fn	u pin_ergonomics 130494 -	provided
-core::ops::function::Fn	trait	s	Args
-core::ops::function::Fn::call	assoc-fn	u fn_traits 29625 -	required
-core::ops::function::FnMut	trait	s	Args
-core::ops::function::FnMut::call_mut	assoc-fn	u fn_traits 29625 -	required
-core::ops::function::FnOnce	trait	s	Args
-core::ops::function::FnOnce::Output	assoc-type	s	required
-core::ops::function::FnOnce::call_once	assoc-fn	u fn_traits 29625 -	required
-core::ops::index::Index	trait	s	Idx
-core::ops::index::Index::Output	assoc-type	s	required
-core::ops::index::Index::index	assoc-fn	s	required
-core::ops::index::IndexMut	trait	s	Idx
-core::ops::index::IndexMut::index_mut	assoc-fn	s	required
+core::ops::deref::Deref	trait	s		
+core::ops::deref::Deref::Target	assoc-type	s	required	type Target: ?Sized
+core::ops::deref::Deref::deref	assoc-fn	s	required	fn deref(&self) -> &Self::Target
+core::ops::deref::DerefMut	trait	s		std::ops::Deref
+core::ops::deref::DerefMut::deref_mut	assoc-fn	s	required	fn deref_mut(&mut self) -> &mut Self::Target
+core::ops::deref::DerefPure	trait	u deref_pure_trait 87121 -		
+core::ops::deref::LegacyReceiver	trait	u legacy_receiver_trait - -		
+core::ops::deref::Receiver	trait	u arbitrary_self_types 44874 -		
+core::ops::deref::Receiver::Target	assoc-type	u arbitrary_self_types 44874 -	required	type Target: ?Sized
+core::ops::drop::Drop	trait	s		
+core::ops::drop::Drop::drop	assoc-fn	s	provided	fn drop(&mut self)
+core::ops::drop::Drop::pin_drop	assoc-fn	u pin_ergonomics 130494 -	provided	fn pin_drop(self: std::pin::Pin<&mut Self>)
+core::ops::function::Fn	trait	s	Args	FnMut(Args)
+core::ops::function::Fn::call	assoc-fn	u fn_traits 29625 -	required	fn call(&self, args: Args) -> Self::Output
+core::ops::function::FnMut	trait	s	Args	FnOnce(Args)
+core::ops::function::FnMut::call_mut	assoc-fn	u fn_traits 29625 -	required	fn call_mut(&mut self, args: Args) -> Self::Output
+core::ops::function::FnOnce	trait	s	Args	
+core::ops::function::FnOnce::Output	assoc-type	s	required	type Output
+core::ops::function::FnOnce::call_once	assoc-fn	u fn_traits 29625 -	required	fn call_once(self, args: Args) -> Self::Output
+core::ops::index::Index	trait	s	Idx	
+core::ops::index::Index::Output	assoc-type	s	required	type Output: ?Sized
+core::ops::index::Index::index	assoc-fn	s	required	fn index(&self, index: Idx) -> &Self::Output
+core::ops::index::IndexMut	trait	s	Idx	std::ops::Index<Idx>
+core::ops::index::IndexMut::index_mut	assoc-fn	s	required	fn index_mut(&mut self, index: Idx) -> &mut Self::Output
 core::ops::range::Bound	enum	s	T
 core::ops::range::Bound::Excluded	variant	s	
 core::ops::range::Bound::Included	variant	s	
@@ -3270,11 +3270,11 @@ core::ops::range::Bound::as_ref	assoc-fn	s
 core::ops::range::Bound::cloned	assoc-fn	s	
 core::ops::range::Bound::copied	assoc-fn	u bound_copied 145966 -	
 core::ops::range::Bound::map	assoc-fn	s	
-core::ops::range::IntoBounds	trait	u range_into_bounds 136903 -	T
-core::ops::range::IntoBounds::intersect	assoc-fn	u range_into_bounds 136903 -	provided
-core::ops::range::IntoBounds::into_bounds	assoc-fn	u range_into_bounds 136903 -	required
-core::ops::range::OneSidedRange	trait	u one_sided_range 69780 -	T
-core::ops::range::OneSidedRange::bound	assoc-fn	u one_sided_range 69780 -	required
+core::ops::range::IntoBounds	trait	u range_into_bounds 136903 -	T	std::ops::RangeBounds<T>
+core::ops::range::IntoBounds::intersect	assoc-fn	u range_into_bounds 136903 -	provided	fn intersect<R>(self, other: R) -> (std::collections::Bound<T>, std::collections::Bound<T>)
+core::ops::range::IntoBounds::into_bounds	assoc-fn	u range_into_bounds 136903 -	required	fn into_bounds(self) -> (std::collections::Bound<T>, std::collections::Bound<T>)
+core::ops::range::OneSidedRange	trait	u one_sided_range 69780 -	T	std::ops::RangeBounds<T>
+core::ops::range::OneSidedRange::bound	assoc-fn	u one_sided_range 69780 -	required	fn bound(self) -> (std::ops::OneSidedRangeBound, T)
 core::ops::range::OneSidedRangeBound	enum	u one_sided_range 69780 -	
 core::ops::range::OneSidedRangeBound::End	variant	u one_sided_range 69780 -	
 core::ops::range::OneSidedRangeBound::EndInclusive	variant	u one_sided_range 69780 -	
@@ -3282,11 +3282,11 @@ core::ops::range::OneSidedRangeBound::StartInclusive	variant	u one_sided_range 6
 core::ops::range::Range	struct	s	Idx
 core::ops::range::Range::contains	assoc-fn	s	
 core::ops::range::Range::is_empty	assoc-fn	s	
-core::ops::range::RangeBounds	trait	s	T
-core::ops::range::RangeBounds::contains	assoc-fn	s	provided
-core::ops::range::RangeBounds::end_bound	assoc-fn	s	required
-core::ops::range::RangeBounds::is_empty	assoc-fn	u range_bounds_is_empty 137300 -	provided
-core::ops::range::RangeBounds::start_bound	assoc-fn	s	required
+core::ops::range::RangeBounds	trait	s	T	
+core::ops::range::RangeBounds::contains	assoc-fn	s	provided	fn contains<U: PartialOrd<T> + ?Sized>(&self, item: &U) -> bool
+core::ops::range::RangeBounds::end_bound	assoc-fn	s	required	fn end_bound(&self) -> std::collections::Bound<&T>
+core::ops::range::RangeBounds::is_empty	assoc-fn	u range_bounds_is_empty 137300 -	provided	fn is_empty(&self) -> bool
+core::ops::range::RangeBounds::start_bound	assoc-fn	s	required	fn start_bound(&self) -> std::collections::Bound<&T>
 core::ops::range::RangeFrom	struct	s	Idx
 core::ops::range::RangeFrom::contains	assoc-fn	s	
 core::ops::range::RangeFull	struct	s	
@@ -3301,18 +3301,18 @@ core::ops::range::RangeTo	struct	s	Idx
 core::ops::range::RangeTo::contains	assoc-fn	s	
 core::ops::range::RangeToInclusive	struct	s	Idx
 core::ops::range::RangeToInclusive::contains	assoc-fn	s	
-core::ops::try_trait::FromResidual	trait	u try_trait_v2 84277 -	R=<Selfasstd::ops::Try>::Residual
-core::ops::try_trait::FromResidual::from_residual	assoc-fn	u try_trait_v2 84277 -	required
-core::ops::try_trait::Residual	trait	u try_trait_v2_residual 91285 -	O
-core::ops::try_trait::Residual::TryType	assoc-type	u try_trait_v2_residual 91285 -	required
-core::ops::try_trait::Try	trait	u try_trait_v2 84277 -	
-core::ops::try_trait::Try::Output	assoc-type	u try_trait_v2 84277 -	required
-core::ops::try_trait::Try::Residual	assoc-type	u try_trait_v2 84277 -	required
-core::ops::try_trait::Try::branch	assoc-fn	u try_trait_v2 84277 -	required
-core::ops::try_trait::Try::from_output	assoc-fn	u try_trait_v2 84277 -	required
+core::ops::try_trait::FromResidual	trait	u try_trait_v2 84277 -	R=<Selfasstd::ops::Try>::Residual	
+core::ops::try_trait::FromResidual::from_residual	assoc-fn	u try_trait_v2 84277 -	required	fn from_residual(residual: R) -> Self
+core::ops::try_trait::Residual	trait	u try_trait_v2_residual 91285 -	O	Sized
+core::ops::try_trait::Residual::TryType	assoc-type	u try_trait_v2_residual 91285 -	required	type TryType: std::ops::Try<Output = O, Residual = Self>
+core::ops::try_trait::Try	trait	u try_trait_v2 84277 -		
+core::ops::try_trait::Try::Output	assoc-type	u try_trait_v2 84277 -	required	type Output
+core::ops::try_trait::Try::Residual	assoc-type	u try_trait_v2 84277 -	required	type Residual
+core::ops::try_trait::Try::branch	assoc-fn	u try_trait_v2 84277 -	required	fn branch(self) -> std::ops::ControlFlow<Self::Residual, Self::Output>
+core::ops::try_trait::Try::from_output	assoc-fn	u try_trait_v2 84277 -	required	fn from_output(output: Self::Output) -> Self
 core::ops::try_trait::Yeet	struct	u try_trait_v2_yeet 96374 -	T
-core::ops::unsize::CoerceUnsized	trait	u coerce_unsized 18598 -	T
-core::ops::unsize::DispatchFromDyn	trait	u dispatch_from_dyn - -	T
+core::ops::unsize::CoerceUnsized	trait	u coerce_unsized 18598 -	T	Sized
+core::ops::unsize::DispatchFromDyn	trait	u dispatch_from_dyn - -	T	Sized
 core::option::IntoIter	struct	s	A
 core::option::Iter	struct	s	'a A
 core::option::IterMut	struct	s	'a A
@@ -3372,10 +3372,10 @@ core::option::Option::xor	assoc-fn	s
 core::option::Option::zip	assoc-fn	s	
 core::option::Option::zip_with	assoc-fn	u option_zip 70086 -	
 core::option::OptionFlatten	struct	u option_into_flat_iter 148441 -	A
-core::panic::PanicPayload	trait	u std_internals - -	
-core::panic::PanicPayload::as_str	assoc-fn	u std_internals - -	provided
-core::panic::PanicPayload::get	assoc-fn	u std_internals - -	required
-core::panic::PanicPayload::take_box	assoc-fn	u std_internals - -	required
+core::panic::PanicPayload	trait	u std_internals - -		std::fmt::Display
+core::panic::PanicPayload::as_str	assoc-fn	u std_internals - -	provided	fn as_str(&mut self) -> Option<&str>
+core::panic::PanicPayload::get	assoc-fn	u std_internals - -	required	fn get(&mut self) -> &dyn std::any::Any + Send
+core::panic::PanicPayload::take_box	assoc-fn	u std_internals - -	required	fn take_box(&mut self) -> *mut dyn std::any::Any + Send
 core::panic::abort_unwind	fn	u abort_unwind 130338 -	F R
 core::panic::const_assert	macro	u panic_internals - -	
 core::panic::const_panic	macro	u panic_internals - -	
@@ -3398,8 +3398,8 @@ core::panic::panic_info::PanicMessage::as_str	assoc-fn	s
 core::panic::unreachable_2015	macro	u edition_panic - use unreachable!() instead	
 core::panic::unreachable_2021	macro	u edition_panic - use unreachable!() instead	
 core::panic::unwind_safe::AssertUnwindSafe	struct	s	T
-core::panic::unwind_safe::RefUnwindSafe	trait	s	
-core::panic::unwind_safe::UnwindSafe	trait	s	
+core::panic::unwind_safe::RefUnwindSafe	trait	s		
+core::panic::unwind_safe::UnwindSafe	trait	s		
 core::panicking::AssertKind	enum	u panic_internals - internal details of the implementation of the `panic!` and related macros	
 core::panicking::AssertKind::Eq	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	
 core::panicking::AssertKind::Match	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	
@@ -3437,10 +3437,10 @@ core::panicking::panic_nounwind_fmt	fn	u panic_internals - internal details of t
 core::panicking::panic_nounwind_nobacktrace	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros	
 core::panicking::panic_str_2015	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros	
 core::panicking::unreachable_display	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros	T
-core::pat::RangePattern	trait	u pattern_type_range_trait 123646 -	
-core::pat::RangePattern::MAX	assoc-const	u pattern_type_range_trait 123646 -	required
-core::pat::RangePattern::MIN	assoc-const	u pattern_type_range_trait 123646 -	required
-core::pat::RangePattern::sub_one	assoc-fn	u pattern_type_range_trait 123646 -	required
+core::pat::RangePattern	trait	u pattern_type_range_trait 123646 -		
+core::pat::RangePattern::MAX	assoc-const	u pattern_type_range_trait 123646 -	required	const MAX: Self
+core::pat::RangePattern::MIN	assoc-const	u pattern_type_range_trait 123646 -	required	const MIN: Self
+core::pat::RangePattern::sub_one	assoc-fn	u pattern_type_range_trait 123646 -	required	fn sub_one(self) -> Self
 core::pat::pattern_type	macro	u pattern_type_macro 123646 -	
 core::pin::Pin	struct	s	Ptr
 core::pin::Pin::as_deref_mut	assoc-fn	s	
@@ -3459,7 +3459,7 @@ core::pin::Pin::new_unchecked	assoc-fn	s
 core::pin::Pin::set	assoc-fn	s	
 core::pin::Pin::static_mut	assoc-fn	s	
 core::pin::Pin::static_ref	assoc-fn	s	
-core::pin::PinCoerceUnsized	trait	u pin_coerce_unsized_trait 150112 -	
+core::pin::PinCoerceUnsized	trait	u pin_coerce_unsized_trait 150112 -		std::ops::Deref
 core::pin::pin	macro	s	
 core::pin::unreachable_pin_macro_type_constraint	fn	u pin_macro_internals - -	'a T
 core::pin::unsafe_pinned::UnsafePinned	struct	u unsafe_pinned 125735 -	T
@@ -3491,8 +3491,8 @@ core::ptr::metadata::DynMetadata	struct	u ptr_metadata 81513 -	Dyn
 core::ptr::metadata::DynMetadata::align_of	assoc-fn	u ptr_metadata 81513 -	
 core::ptr::metadata::DynMetadata::layout	assoc-fn	u ptr_metadata 81513 -	
 core::ptr::metadata::DynMetadata::size_of	assoc-fn	u ptr_metadata 81513 -	
-core::ptr::metadata::Pointee	trait	u ptr_metadata 81513 -	
-core::ptr::metadata::Pointee::Metadata	assoc-type	u ptr_metadata 81513 -	required
+core::ptr::metadata::Pointee	trait	u ptr_metadata 81513 -		
+core::ptr::metadata::Pointee::Metadata	assoc-type	u ptr_metadata 81513 -	required	type Metadata: std::fmt::Debug + Copy + Send + Sync + Ord + std::hash::Hash + Unpin
 core::ptr::metadata::Thin	trait-alias	u ptr_metadata 81513 -	
 core::ptr::metadata::from_raw_parts	fn	u ptr_metadata 81513 -	T
 core::ptr::metadata::from_raw_parts_mut	fn	u ptr_metadata 81513 -	T
@@ -3585,10 +3585,10 @@ core::ptr::write	fn	s	T
 core::ptr::write_bytes	fn	s	T
 core::ptr::write_unaligned	fn	s	T
 core::ptr::write_volatile	fn	s	T
-core::random::Distribution	trait	u random 130703 -	T
-core::random::Distribution::sample	assoc-fn	u random 130703 -	required
-core::random::Rng	trait	u random 130703 -	
-core::random::Rng::fill_bytes	assoc-fn	u random 130703 -	required
+core::random::Distribution	trait	u random 130703 -	T	
+core::random::Distribution::sample	assoc-fn	u random 130703 -	required	fn sample<impl Rng + ?Sized: ?Sized>(&self, source: &mut impl Rng + ?Sized) -> T
+core::random::Rng	trait	u random 130703 -		
+core::random::Rng::fill_bytes	assoc-fn	u random 130703 -	required	fn fill_bytes(&mut self, bytes: &mut [u8])
 core::range::Range	struct	s	Idx
 core::range::Range::contains	assoc-fn	s	
 core::range::Range::is_empty	assoc-fn	s	
@@ -3655,22 +3655,22 @@ core::result::Result::unwrap_unchecked	assoc-fn	s
 core::slice::GetDisjointMutError	enum	s	
 core::slice::GetDisjointMutError::IndexOutOfBounds	variant	s	
 core::slice::GetDisjointMutError::OverlappingIndices	variant	s	
-core::slice::GetDisjointMutIndex	trait	u get_disjoint_mut_helpers - -	
-core::slice::GetDisjointMutIndex::is_in_bounds	assoc-fn	u get_disjoint_mut_helpers - -	required
-core::slice::GetDisjointMutIndex::is_overlapping	assoc-fn	u get_disjoint_mut_helpers - -	required
-core::slice::SlicePattern	trait	u slice_pattern 56345 stopgap trait for slice patterns	
-core::slice::SlicePattern::Item	assoc-type	u slice_pattern 56345 stopgap trait for slice patterns	required
-core::slice::SlicePattern::as_slice	assoc-fn	u slice_pattern 56345 stopgap trait for slice patterns	required
+core::slice::GetDisjointMutIndex	trait	u get_disjoint_mut_helpers - -		Clone
+core::slice::GetDisjointMutIndex::is_in_bounds	assoc-fn	u get_disjoint_mut_helpers - -	required	fn is_in_bounds(&self, len: usize) -> bool
+core::slice::GetDisjointMutIndex::is_overlapping	assoc-fn	u get_disjoint_mut_helpers - -	required	fn is_overlapping(&self, other: &Self) -> bool
+core::slice::SlicePattern	trait	u slice_pattern 56345 stopgap trait for slice patterns		
+core::slice::SlicePattern::Item	assoc-type	u slice_pattern 56345 stopgap trait for slice patterns	required	type Item
+core::slice::SlicePattern::as_slice	assoc-fn	u slice_pattern 56345 stopgap trait for slice patterns	required	fn as_slice(&self) -> &[Self::Item]
 core::slice::ascii::EscapeAscii	struct	s	'a
 core::slice::ascii::is_ascii_simple	fn	u str_internals - -	
-core::slice::index::SliceIndex	trait	s	T
-core::slice::index::SliceIndex::Output	assoc-type	s	required
-core::slice::index::SliceIndex::get	assoc-fn	u slice_index_methods - -	required
-core::slice::index::SliceIndex::get_mut	assoc-fn	u slice_index_methods - -	required
-core::slice::index::SliceIndex::get_unchecked	assoc-fn	u slice_index_methods - -	required
-core::slice::index::SliceIndex::get_unchecked_mut	assoc-fn	u slice_index_methods - -	required
-core::slice::index::SliceIndex::index	assoc-fn	u slice_index_methods - -	required
-core::slice::index::SliceIndex::index_mut	assoc-fn	u slice_index_methods - -	required
+core::slice::index::SliceIndex	trait	s	T	
+core::slice::index::SliceIndex::Output	assoc-type	s	required	type Output: ?Sized
+core::slice::index::SliceIndex::get	assoc-fn	u slice_index_methods - -	required	fn get(self, slice: &T) -> Option<&Self::Output>
+core::slice::index::SliceIndex::get_mut	assoc-fn	u slice_index_methods - -	required	fn get_mut(self, slice: &mut T) -> Option<&mut Self::Output>
+core::slice::index::SliceIndex::get_unchecked	assoc-fn	u slice_index_methods - -	required	fn get_unchecked(self, slice: *const T) -> *const Self::Output
+core::slice::index::SliceIndex::get_unchecked_mut	assoc-fn	u slice_index_methods - -	required	fn get_unchecked_mut(self, slice: *mut T) -> *mut Self::Output
+core::slice::index::SliceIndex::index	assoc-fn	u slice_index_methods - -	required	fn index(self, slice: &T) -> &Self::Output
+core::slice::index::SliceIndex::index_mut	assoc-fn	u slice_index_methods - -	required	fn index_mut(self, slice: &mut T) -> &mut Self::Output
 core::slice::index::range	fn	u slice_range 76393 -	R
 core::slice::index::try_range	fn	u slice_range 76393 -	R
 core::slice::iter::ArrayWindows	struct	s	'a T const:N
@@ -3714,9 +3714,9 @@ core::slice::raw::from_ptr_range	fn	u slice_from_ptr_range 89792 -	'a T
 core::slice::raw::from_raw_parts	fn	s	'a T
 core::slice::raw::from_raw_parts_mut	fn	s	'a T
 core::slice::raw::from_ref	fn	s	T
-core::slice::sort::stable::BufGuard	trait	u slice_internals - exposed from core to be reused in std;	T
-core::slice::sort::stable::BufGuard::as_uninit_slice_mut	assoc-fn	u slice_internals - exposed from core to be reused in std;	required
-core::slice::sort::stable::BufGuard::with_capacity	assoc-fn	u slice_internals - exposed from core to be reused in std;	required
+core::slice::sort::stable::BufGuard	trait	u slice_internals - exposed from core to be reused in std;	T	
+core::slice::sort::stable::BufGuard::as_uninit_slice_mut	assoc-fn	u slice_internals - exposed from core to be reused in std;	required	fn as_uninit_slice_mut(&mut self) -> &mut [std::mem::MaybeUninit<T>]
+core::slice::sort::stable::BufGuard::with_capacity	assoc-fn	u slice_internals - exposed from core to be reused in std;	required	fn with_capacity(capacity: usize) -> Self
 core::slice::sort::stable::sort	fn	u slice_internals - exposed from core to be reused in std;	T F BufT
 core::slice::sort::unstable::partial_sort	fn	u slice_internals - exposed from core to be reused in std;	T F R
 core::slice::sort::unstable::sort	fn	u slice_internals - exposed from core to be reused in std;	T F
@@ -3775,36 +3775,36 @@ core::str::pattern::CharArraySearcher	struct	u pattern 27721 API not fully flesh
 core::str::pattern::CharPredicateSearcher	struct	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a F
 core::str::pattern::CharSearcher	struct	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
 core::str::pattern::CharSliceSearcher	struct	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a 'b
-core::str::pattern::DoubleEndedSearcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
-core::str::pattern::Pattern	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::Pattern::Searcher	assoc-type	u pattern 27721 API not fully fleshed out and ready to be stabilized	required
-core::str::pattern::Pattern::as_utf8_pattern	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Pattern::into_searcher	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required
-core::str::pattern::Pattern::is_contained_in	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Pattern::is_prefix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Pattern::is_suffix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Pattern::strip_prefix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Pattern::strip_suffix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::ReverseSearcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
-core::str::pattern::ReverseSearcher::next_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required
-core::str::pattern::ReverseSearcher::next_match_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::ReverseSearcher::next_reject_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
+core::str::pattern::DoubleEndedSearcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a	
+core::str::pattern::Pattern	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized		Sized
+core::str::pattern::Pattern::Searcher	assoc-type	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	type Searcher
+core::str::pattern::Pattern::as_utf8_pattern	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn as_utf8_pattern(&self) -> Option<std::str::pattern::Utf8Pattern>
+core::str::pattern::Pattern::into_searcher	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn into_searcher(self, haystack: &str) -> Self::Searcher
+core::str::pattern::Pattern::is_contained_in	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn is_contained_in(self, haystack: &str) -> bool
+core::str::pattern::Pattern::is_prefix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn is_prefix_of(self, haystack: &str) -> bool
+core::str::pattern::Pattern::is_suffix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn is_suffix_of(self, haystack: &str) -> bool
+core::str::pattern::Pattern::strip_prefix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn strip_prefix_of(self, haystack: &str) -> Option<&str>
+core::str::pattern::Pattern::strip_suffix_of	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn strip_suffix_of(self, haystack: &str) -> Option<&str>
+core::str::pattern::ReverseSearcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a	
+core::str::pattern::ReverseSearcher::next_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn next_back(&mut self) -> std::str::pattern::SearchStep
+core::str::pattern::ReverseSearcher::next_match_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_match_back(&mut self) -> Option<(usize, usize)>
+core::str::pattern::ReverseSearcher::next_reject_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_reject_back(&mut self) -> Option<(usize, usize)>
 core::str::pattern::SearchStep	enum	u pattern 27721 API not fully fleshed out and ready to be stabilized	
 core::str::pattern::SearchStep::Done	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
 core::str::pattern::SearchStep::Match	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
 core::str::pattern::SearchStep::Reject	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::Searcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
-core::str::pattern::Searcher::haystack	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required
-core::str::pattern::Searcher::next	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required
-core::str::pattern::Searcher::next_match	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
-core::str::pattern::Searcher::next_reject	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided
+core::str::pattern::Searcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a	
+core::str::pattern::Searcher::haystack	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn haystack(&self) -> &str
+core::str::pattern::Searcher::next	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn next(&mut self) -> std::str::pattern::SearchStep
+core::str::pattern::Searcher::next_match	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_match(&mut self) -> Option<(usize, usize)>
+core::str::pattern::Searcher::next_reject	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_reject(&mut self) -> Option<(usize, usize)>
 core::str::pattern::StrSearcher	struct	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a 'b
 core::str::pattern::Utf8Pattern	enum	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
 core::str::pattern::Utf8Pattern::CharPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
 core::str::pattern::Utf8Pattern::StringPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::traits::FromStr	trait	s	
-core::str::traits::FromStr::Err	assoc-type	s	required
-core::str::traits::FromStr::from_str	assoc-fn	s	required
+core::str::traits::FromStr	trait	s		Sized
+core::str::traits::FromStr::Err	assoc-type	s	required	type Err
+core::str::traits::FromStr::from_str	assoc-fn	s	required	fn from_str(s: &str) -> Result<Self, Self::Err>
 core::str::validations::next_code_point	fn	u str_internals - -	'a I
 core::str::validations::utf8_char_width	fn	u str_internals - -	
 core::sync::atomic::ATOMIC_BOOL_INIT	const	s	
@@ -3848,8 +3848,8 @@ core::sync::atomic::AtomicI32	type	s
 core::sync::atomic::AtomicI64	type	s	
 core::sync::atomic::AtomicI8	type	s	
 core::sync::atomic::AtomicIsize	type	s	
-core::sync::atomic::AtomicPrimitive	trait	u atomic_internals - implementation detail which may disappear or be replaced at any time	
-core::sync::atomic::AtomicPrimitive::Storage	assoc-type	u atomic_internals - implementation detail which may disappear or be replaced at any time	required
+core::sync::atomic::AtomicPrimitive	trait	u atomic_internals - implementation detail which may disappear or be replaced at any time		Sized + Copy
+core::sync::atomic::AtomicPrimitive::Storage	assoc-type	u atomic_internals - implementation detail which may disappear or be replaced at any time	required	type Storage
 core::sync::atomic::AtomicPtr	type	s	T
 core::sync::atomic::AtomicU16	type	s	
 core::sync::atomic::AtomicU32	type	s	
@@ -5524,14 +5524,14 @@ std::alloc::__default_lib_allocator::__rdl_realloc	fn	u alloc_internals - -
 std::alloc::rust_oom	fn	u alloc_internals - -	
 std::alloc::set_alloc_error_hook	fn	u alloc_error_hook 51245 -	
 std::alloc::take_alloc_error_hook	fn	u alloc_error_hook 51245 -	
-std::ascii::AsciiExt	trait	s	
-std::ascii::AsciiExt::Owned	assoc-type	s	required
-std::ascii::AsciiExt::eq_ignore_ascii_case	assoc-fn	s	required
-std::ascii::AsciiExt::is_ascii	assoc-fn	s	required
-std::ascii::AsciiExt::make_ascii_lowercase	assoc-fn	s	required
-std::ascii::AsciiExt::make_ascii_uppercase	assoc-fn	s	required
-std::ascii::AsciiExt::to_ascii_lowercase	assoc-fn	s	required
-std::ascii::AsciiExt::to_ascii_uppercase	assoc-fn	s	required
+std::ascii::AsciiExt	trait	s		
+std::ascii::AsciiExt::Owned	assoc-type	s	required	type Owned
+std::ascii::AsciiExt::eq_ignore_ascii_case	assoc-fn	s	required	fn eq_ignore_ascii_case(&self, other: &Self) -> bool
+std::ascii::AsciiExt::is_ascii	assoc-fn	s	required	fn is_ascii(&self) -> bool
+std::ascii::AsciiExt::make_ascii_lowercase	assoc-fn	s	required	fn make_ascii_lowercase(&mut self)
+std::ascii::AsciiExt::make_ascii_uppercase	assoc-fn	s	required	fn make_ascii_uppercase(&mut self)
+std::ascii::AsciiExt::to_ascii_lowercase	assoc-fn	s	required	fn to_ascii_lowercase(&self) -> Self::Owned
+std::ascii::AsciiExt::to_ascii_uppercase	assoc-fn	s	required	fn to_ascii_uppercase(&self) -> Self::Owned
 std::backtrace::Backtrace	struct	s	
 std::backtrace::Backtrace::capture	assoc-fn	s	
 std::backtrace::Backtrace::disabled	assoc-fn	s	
@@ -5847,36 +5847,36 @@ std::hash::random::DefaultHasher	struct	s
 std::hash::random::DefaultHasher::new	assoc-fn	s	
 std::hash::random::RandomState	struct	s	
 std::hash::random::RandomState::new	assoc-fn	s	
-std::io::BufRead	trait	s	
-std::io::BufRead::consume	assoc-fn	s	required
-std::io::BufRead::fill_buf	assoc-fn	s	required
-std::io::BufRead::has_data_left	assoc-fn	u buf_read_has_data_left 86423 -	provided
-std::io::BufRead::lines	assoc-fn	s	provided
-std::io::BufRead::read_line	assoc-fn	s	provided
-std::io::BufRead::read_until	assoc-fn	s	provided
-std::io::BufRead::skip_until	assoc-fn	s	provided
-std::io::BufRead::split	assoc-fn	s	provided
+std::io::BufRead	trait	s		std::io::Read
+std::io::BufRead::consume	assoc-fn	s	required	fn consume(&mut self, amount: usize)
+std::io::BufRead::fill_buf	assoc-fn	s	required	fn fill_buf(&mut self) -> Result<&[u8], std::io::Error>
+std::io::BufRead::has_data_left	assoc-fn	u buf_read_has_data_left 86423 -	provided	fn has_data_left(&mut self) -> Result<bool, std::io::Error>
+std::io::BufRead::lines	assoc-fn	s	provided	fn lines(self) -> std::io::Lines<Self>
+std::io::BufRead::read_line	assoc-fn	s	provided	fn read_line(&mut self, buf: &mut String) -> Result<usize, std::io::Error>
+std::io::BufRead::read_until	assoc-fn	s	provided	fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> Result<usize, std::io::Error>
+std::io::BufRead::skip_until	assoc-fn	s	provided	fn skip_until(&mut self, byte: u8) -> Result<usize, std::io::Error>
+std::io::BufRead::split	assoc-fn	s	provided	fn split(self, byte: u8) -> std::io::Split<Self>
 std::io::Bytes	struct	s	R
-std::io::FromEndianBytes	trait	u read_le_be_internals - internals	
-std::io::FromEndianBytes::read_be_from	assoc-fn	u read_le_be_internals - internals	required
-std::io::FromEndianBytes::read_le_from	assoc-fn	u read_le_be_internals - internals	required
+std::io::FromEndianBytes	trait	u read_le_be_internals - internals		Sized
+std::io::FromEndianBytes::read_be_from	assoc-fn	u read_le_be_internals - internals	required	fn read_be_from<impl Read: std::io::Read>(r: &mut impl Read) -> Result<Self, std::io::Error>
+std::io::FromEndianBytes::read_le_from	assoc-fn	u read_le_be_internals - internals	required	fn read_le_from<impl Read: std::io::Read>(r: &mut impl Read) -> Result<Self, std::io::Error>
 std::io::Lines	struct	s	B
-std::io::Read	trait	s	
-std::io::Read::by_ref	assoc-fn	s	provided
-std::io::Read::bytes	assoc-fn	s	provided
-std::io::Read::chain	assoc-fn	s	provided
-std::io::Read::is_read_vectored	assoc-fn	u can_vector 69941 -	provided
-std::io::Read::read	assoc-fn	s	required
-std::io::Read::read_array	assoc-fn	u read_array 148848 -	provided
-std::io::Read::read_be	assoc-fn	u read_le 156984 -	provided
-std::io::Read::read_buf	assoc-fn	u read_buf 78485 -	provided
-std::io::Read::read_buf_exact	assoc-fn	u read_buf 78485 -	provided
-std::io::Read::read_exact	assoc-fn	s	provided
-std::io::Read::read_le	assoc-fn	u read_le 156984 -	provided
-std::io::Read::read_to_end	assoc-fn	s	provided
-std::io::Read::read_to_string	assoc-fn	s	provided
-std::io::Read::read_vectored	assoc-fn	s	provided
-std::io::Read::take	assoc-fn	s	provided
+std::io::Read	trait	s		
+std::io::Read::by_ref	assoc-fn	s	provided	fn by_ref(&mut self) -> &mut Self
+std::io::Read::bytes	assoc-fn	s	provided	fn bytes(self) -> std::io::Bytes<Self>
+std::io::Read::chain	assoc-fn	s	provided	fn chain<R: std::io::Read>(self, next: R) -> std::io::Chain<Self, R>
+std::io::Read::is_read_vectored	assoc-fn	u can_vector 69941 -	provided	fn is_read_vectored(&self) -> bool
+std::io::Read::read	assoc-fn	s	required	fn read(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error>
+std::io::Read::read_array	assoc-fn	u read_array 148848 -	provided	fn read_array(&mut self) -> Result<[u8; N], std::io::Error>
+std::io::Read::read_be	assoc-fn	u read_le 156984 -	provided	fn read_be<T>(&mut self) -> Result<T, std::io::Error>
+std::io::Read::read_buf	assoc-fn	u read_buf 78485 -	provided	fn read_buf(&mut self, buf: std::io::BorrowedCursor<u8>) -> Result<(), std::io::Error>
+std::io::Read::read_buf_exact	assoc-fn	u read_buf 78485 -	provided	fn read_buf_exact(&mut self, cursor: std::io::BorrowedCursor<u8>) -> Result<(), std::io::Error>
+std::io::Read::read_exact	assoc-fn	s	provided	fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), std::io::Error>
+std::io::Read::read_le	assoc-fn	u read_le 156984 -	provided	fn read_le<T>(&mut self) -> Result<T, std::io::Error>
+std::io::Read::read_to_end	assoc-fn	s	provided	fn read_to_end(&mut self, buf: &mut Vec<u8>) -> Result<usize, std::io::Error>
+std::io::Read::read_to_string	assoc-fn	s	provided	fn read_to_string(&mut self, buf: &mut String) -> Result<usize, std::io::Error>
+std::io::Read::read_vectored	assoc-fn	s	provided	fn read_vectored(&mut self, bufs: &mut [std::io::IoSliceMut]) -> Result<usize, std::io::Error>
+std::io::Read::take	assoc-fn	s	provided	fn take(self, limit: u64) -> std::io::Take<Self>
 std::io::Split	struct	s	B
 std::io::buffered::IntoInnerError	struct	s	W
 std::io::buffered::IntoInnerError::error	assoc-fn	s	
@@ -5917,8 +5917,8 @@ std::io::pipe::PipeWriter	struct	s
 std::io::pipe::PipeWriter::try_clone	assoc-fn	s	
 std::io::pipe::pipe	fn	s	
 std::io::read_to_string	fn	s	R
-std::io::stdio::IsTerminal	trait	s	
-std::io::stdio::IsTerminal::is_terminal	assoc-fn	s	required
+std::io::stdio::IsTerminal	trait	s		
+std::io::stdio::IsTerminal::is_terminal	assoc-fn	s	required	fn is_terminal(&self) -> bool
 std::io::stdio::Stderr	struct	s	
 std::io::stdio::Stderr::lock	assoc-fn	s	
 std::io::stdio::StderrLock	struct	s	'a
@@ -5950,9 +5950,9 @@ std::net::Shutdown::Both	variant	s
 std::net::Shutdown::Read	variant	s	
 std::net::Shutdown::Write	variant	s	
 std::net::hostname::hostname	fn	u gethostname 135142 -	
-std::net::socket_addr::ToSocketAddrs	trait	s	
-std::net::socket_addr::ToSocketAddrs::Iter	assoc-type	s	required
-std::net::socket_addr::ToSocketAddrs::to_socket_addrs	assoc-fn	s	required
+std::net::socket_addr::ToSocketAddrs	trait	s		
+std::net::socket_addr::ToSocketAddrs::Iter	assoc-type	s	required	type Iter: Iterator<Item = std::net::SocketAddr>
+std::net::socket_addr::ToSocketAddrs::to_socket_addrs	assoc-fn	s	required	fn to_socket_addrs(&self) -> Result<Self::Iter, std::io::Error>
 std::net::tcp::Incoming	struct	s	'a
 std::net::tcp::IntoIncoming	struct	u tcplistener_into_incoming 88373 -	
 std::net::tcp::TcpListener	struct	s	
@@ -6207,8 +6207,8 @@ std::process::Stdio::inherit	assoc-fn	s
 std::process::Stdio::makes_pipe	assoc-fn	u stdio_makes_pipe 98288 -	
 std::process::Stdio::null	assoc-fn	s	
 std::process::Stdio::piped	assoc-fn	s	
-std::process::Termination	trait	s	
-std::process::Termination::report	assoc-fn	s	required
+std::process::Termination	trait	s		
+std::process::Termination::report	assoc-fn	s	required	fn report(self) -> std::process::ExitCode
 std::process::abort	fn	s	
 std::process::exit	fn	s	
 std::process::id	fn	s	

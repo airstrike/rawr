@@ -12374,3 +12374,294 @@ fn language_std_items_rawr_cannot_run_fail_at_their_use() {
         );
     }
 }
+
+/// D711 step 2: a program implements std's `FromStr`, whose declaration is
+/// std's, and `parse` is an ordinary `FromStr` lookup, by the turbofish or
+/// the expected type, with the impl's `Err` as the error. Expected output
+/// from rustc.
+#[test]
+fn language_std_trait_from_str_for_a_program_type() {
+    assert_eq!(
+        printed(
+            r#"
+use std::str::FromStr;
+#[derive(Debug)]
+struct Rgb(u8, u8, u8);
+impl FromStr for Rgb {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("bad {s}"));
+        }
+        let r = parts[0].trim().parse::<u8>().map_err(|e| e.to_string())?;
+        let g = parts[1].trim().parse::<u8>().map_err(|e| e.to_string())?;
+        let b = parts[2].trim().parse::<u8>().map_err(|e| e.to_string())?;
+        Ok(Rgb(r, g, b))
+    }
+}
+fn get(s: &str) -> Result<Rgb, String> {
+    let c: Rgb = s.parse()?;
+    Ok(c)
+}
+fn main() {
+    println!("{:?}", "1,2,3".parse::<Rgb>());
+    println!("{:?}", get("4, 5, 6"));
+    println!("{:?}", get("x"));
+    println!("{:?}", get("1,2,300"));
+    println!("{:?}", Rgb::from_str("7,8,9"));
+    let r: Result<i64, _> = FromStr::from_str("5");
+    println!("{:?} {:?}", r, i32::from_str("12"));
+}
+main();
+"#
+        ),
+        "Ok(Rgb(1, 2, 3))\nOk(Rgb(4, 5, 6))\nErr(\"bad x\")\n\
+         Err(\"number too large to fit in target type\")\nOk(Rgb(7, 8, 9))\nOk(5) Ok(12)\n"
+    );
+}
+
+/// `AsRef<str>` for a program's type: its `as_ref` called directly and
+/// through a bound (rustc's output).
+#[test]
+fn language_std_trait_as_ref_for_a_program_type() {
+    assert_eq!(
+        printed(
+            r#"
+struct Name(String);
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+fn show<S: AsRef<str>>(s: S) -> usize {
+    s.as_ref().len()
+}
+fn main() {
+    let n = Name("abc".to_string());
+    println!("{}", n.as_ref());
+    println!("{}", show(Name("hello".to_string())));
+}
+main();
+"#
+        ),
+        "abc\n5\n"
+    );
+}
+
+/// `Deref` and `DerefMut` declare as std declares them, `DerefMut`'s
+/// `Target` its `Deref` impl's, and `deref()` runs; a method found only
+/// through the deref is rawr's not-yet (D712.1), where rustc prints `3`.
+#[test]
+fn language_std_trait_deref_declares_and_auto_deref_is_not_yet() {
+    let source = |body: &str| {
+        format!(
+            r#"
+use std::ops::{{Deref, DerefMut}};
+struct Wrapper {{
+    v: Vec<i32>,
+}}
+impl Deref for Wrapper {{
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Vec<i32> {{
+        &self.v
+    }}
+}}
+impl DerefMut for Wrapper {{
+    fn deref_mut(&mut self) -> &mut Vec<i32> {{
+        &mut self.v
+    }}
+}}
+fn main() {{
+    let w = Wrapper {{ v: vec![1, 2, 3] }};
+    {body}
+}}
+main();
+"#
+        )
+    };
+    assert_eq!(
+        printed(&source(r#"println!("{}", w.deref().len());"#)),
+        "3\n"
+    );
+    let error = rejected_run(&source(r#"println!("{}", w.len());"#));
+    assert!(
+        error.contains("rawr doesn't run `std::ops::Deref` yet"),
+        "{error}"
+    );
+}
+
+/// `TryFrom` for a program's type, through its own path (rustc's output).
+#[test]
+fn language_std_trait_try_from_for_a_program_type() {
+    assert_eq!(
+        printed(
+            r#"
+use std::convert::TryFrom;
+#[derive(Debug)]
+struct Even(u32);
+impl TryFrom<u32> for Even {
+    type Error = String;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        if v % 2 == 0 {
+            Ok(Even(v))
+        } else {
+            Err(format!("{v} is odd"))
+        }
+    }
+}
+fn main() {
+    println!("{:?}", Even::try_from(4));
+    println!("{:?}", Even::try_from(5));
+}
+main();
+"#
+        ),
+        "Ok(Even(4))\nErr(\"5 is odd\")\n"
+    );
+}
+
+/// `IntoIterator` for a program's type, whose `IntoIter` is its own
+/// iterator: `into_iter()` and a `for` over the value (rustc's output).
+#[test]
+fn language_std_trait_into_iterator_for_a_program_type() {
+    assert_eq!(
+        printed(
+            r#"
+struct Bag {
+    items: Vec<i32>,
+}
+struct BagIter {
+    items: Vec<i32>,
+    at: usize,
+}
+impl Iterator for BagIter {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        let item = self.items.get(self.at).copied();
+        self.at += 1;
+        item
+    }
+}
+impl IntoIterator for Bag {
+    type Item = i32;
+    type IntoIter = BagIter;
+    fn into_iter(self) -> BagIter {
+        BagIter { items: self.items, at: 0 }
+    }
+}
+fn main() {
+    let b = Bag { items: vec![1, 2, 3] };
+    let mut total = 0;
+    for x in b.into_iter() {
+        total += x;
+    }
+    println!("{total}");
+    let c = Bag { items: vec![4, 5] };
+    let mut more = 0;
+    for x in c {
+        more += x;
+    }
+    println!("{more}");
+}
+main();
+"#
+        ),
+        "6\n9\n"
+    );
+}
+
+/// `std::fmt::Write` for a program's type: its `write_str`, and `write!`,
+/// which std's `write_fmt` hands to it (rustc's output).
+#[test]
+fn language_std_trait_fmt_write_for_a_program_type() {
+    assert_eq!(
+        printed(
+            r#"
+use std::fmt::{self, Write};
+struct Upper {
+    out: String,
+}
+impl Write for Upper {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.out.push_str(&s.to_uppercase());
+        Ok(())
+    }
+}
+fn main() {
+    let mut u = Upper { out: String::new() };
+    u.write_str("ab").unwrap();
+    write!(u, "{}-{}", "x", 1).unwrap();
+    writeln!(u, "!").unwrap();
+    print!("{}", u.out);
+}
+main();
+"#
+        ),
+        "ABX-1!\n"
+    );
+}
+
+/// Trait-path calls resolve through method lookup, from std's table, not a
+/// list (#711): `Iterator::next(&mut it)`, `FromStr::from_str`,
+/// `Clone::clone_from` and `std::cmp`'s `*_by*` (rustc's output).
+#[test]
+fn language_std_trait_path_calls() {
+    assert_eq!(
+        printed(
+            r#"
+use std::str::FromStr;
+fn main() {
+    let v = vec![3, 1, 2];
+    let mut it = v.iter();
+    println!("{:?}", Iterator::next(&mut it));
+    println!("{:?}", i32::from_str("12"));
+    let r: Result<i64, _> = FromStr::from_str("5");
+    println!("{:?}", r);
+    let mut a = String::from("a");
+    let b = String::from("bb");
+    Clone::clone_from(&mut a, &b);
+    println!("{a}");
+    println!("{}", std::cmp::max_by_key(-3i32, 2, |x: &i32| x.abs()));
+    println!("{}", std::cmp::min_by(5, 4, |a: &i32, b: &i32| a.cmp(b)));
+}
+main();
+"#
+        ),
+        "Some(3)\nOk(12)\nOk(5)\nbb\n-3\n4\n"
+    );
+}
+
+/// rustc's errors for an impl of a std trait that misses an item (E0046)
+/// and an impl of a trait nothing declares (E0405).
+#[test]
+fn language_std_trait_errors_are_rustcs() {
+    let error = rejected_run(
+        r#"
+use std::str::FromStr;
+struct S;
+impl FromStr for S {
+    type Err = ();
+}
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        error.contains("not all trait items implemented, missing: `from_str`"),
+        "{error}"
+    );
+    let error = rejected_run("struct S;\nimpl Frobnicate for S {}\nfn main() {}\nmain();");
+    assert!(
+        error.contains("cannot find trait `Frobnicate` in this scope"),
+        "{error}"
+    );
+}
+
+/// The error a program is refused with, run as `?play` runs it.
+fn rejected_run(source: &str) -> String {
+    match Engine::new().run(source) {
+        Ok(()) => panic!("Rust rejects this program, but it ran: {source}"),
+        Err(error) => error.to_string(),
+    }
+}

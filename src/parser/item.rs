@@ -1735,11 +1735,10 @@ fn parse_impl(
         // type's own, picked by its `Rhs` (references are values at
         // runtime).
         if let type_ref::Type::Reference { target, .. } = &owner
-            && path.segments.last().is_some_and(|last| {
-                crate::resolve::OPERATOR_TRAITS
-                    .iter()
-                    .any(|(_, name, _)| last.name.text == *name)
-            })
+            && path
+                .segments
+                .last()
+                .is_some_and(|last| crate::resolve::std_trait::is_operator(&last.name.text))
         {
             owner = (**target).clone();
         }

@@ -311,31 +311,17 @@ pub(crate) fn qualified(name: &str, binding: Option<&str>) -> Option<String> {
 
 /// The std trait a bound or an impl names by its path, as
 /// `std::fmt::Display` or `fmt::Debug` (after `use std::fmt;`): its name,
-/// when it is one of rawr's builtin traits.
+/// when it is a stable std trait (D711 step 2).
 pub(crate) fn trait_path(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item::Name> {
     let [prefix @ .., last] = segments else {
         return None;
     };
-    if prefix.is_empty()
-        || !last.arguments.is_empty()
-        || !super::BUILTIN_TRAITS.contains(&last.name.text.as_str())
-        || prefix.iter().any(|module| !module.arguments.is_empty())
-    {
+    if prefix.is_empty() || prefix.iter().any(|module| !module.arguments.is_empty()) {
         return None;
     }
-    let mut written = prefix
+    let written = segments
         .iter()
-        .chain([last])
         .map(|segment| segment.name.text.as_str())
         .collect::<Vec<_>>();
-    // A path from a std module a `use` brought in: `fmt::Display`.
-    if !std_table::is_root(written[0]) {
-        written.insert(0, "std");
-    }
-    match std_table::resolve(&written, Namespace::Type) {
-        Ok(Resolved::Path(path)) if path.kind == "trait" && path.stability == Stability::Stable => {
-            Some(last.name.clone())
-        }
-        _ => None,
-    }
+    super::std_trait::by_path(&written).map(|_| last.name.clone())
 }

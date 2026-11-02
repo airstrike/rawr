@@ -145,6 +145,33 @@ assert_eq!(order, Ordering::Less);
 println!("{order:?}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-ordering" data-out="out-ordering" aria-label="Run ordering.rs" hidden></button><b>rawr run ordering.rs</b><span id="out-ordering" aria-live="polite">Less</span></div>
 </div>
+<h2 id="std-traits">Implementing std&rsquo;s traits</h2>
+<p>Your type implements any stable std trait Rust lets it implement: <code>FromStr</code>, <code>AsRef</code>, <code>AsMut</code>, <code>Borrow</code>, <code>Deref</code>, <code>TryFrom</code>, <code>IntoIterator</code>, <code>Extend</code>, <code>Sum</code>, <code>fmt::Write</code>, <code>io::Write</code> and the rest. Each one is declared as std declares it, so a missing item is rustc&rsquo;s E0046 and a trait nothing brings into scope is E0405. <code>s.parse()</code> finds your <code>FromStr</code> by the turbofish or by the type the result is used as. A <code>for</code> loop takes your <code>IntoIterator</code>, and <code>write!</code> writes through your <code>fmt::Write</code>. Trait functions called by path, such as <code>Iterator::next(&amp;mut it)</code>, <code>Clone::clone_from(&amp;mut a, &amp;b)</code> and <code>std::cmp::max_by_key(a, b, f)</code>, are the method calls they name. Where rawr can&rsquo;t run a trait&rsquo;s machinery yet, such as a method found only through your <code>Deref</code>, the impl still declares, and the use fails with &ldquo;rawr doesn&rsquo;t run `std::ops::Deref` yet&rdquo;.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="from_str.rs" id="src-from-str">use std::str::FromStr;
+
+#[derive(Debug)]
+struct Rgb(u8, u8, u8);
+
+impl FromStr for Rgb {
+    type Err = String;
+
+    fn from_str(s: &amp;str) -&gt; Result&lt;Self, Self::Err&gt; {
+        let parts: Vec&lt;&amp;str&gt; = s.split(',').collect();
+        if parts.len() != 3 {
+            return Err(format!("bad {s}"));
+        }
+        let r = parts[0].trim().parse::&lt;u8&gt;().map_err(|e| e.to_string())?;
+        let g = parts[1].trim().parse::&lt;u8&gt;().map_err(|e| e.to_string())?;
+        let b = parts[2].trim().parse::&lt;u8&gt;().map_err(|e| e.to_string())?;
+        Ok(Rgb(r, g, b))
+    }
+}
+
+let c: Rgb = "1, 2, 3".parse().unwrap();
+println!("{c:?} {:?}", "x".parse::&lt;Rgb&gt;());</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-from-str" data-out="out-from-str" aria-label="Run from_str.rs" hidden></button><b>rawr run from_str.rs</b><span id="out-from-str" aria-live="polite">Rgb(1, 2, 3) Err("bad x")</span></div>
+</div>
 <h2 id="conversions">Conversions</h2>
 <p><code>From</code> and <code>Into</code> between your own types, and from your own type into a number type. <code>TryFrom</code> between integer types. <code>From::from</code>, <code>Into::into</code>, <code>Clone::clone</code>, <code>ToString::to_string</code>, the methods of <code>Option</code> and <code>Result</code>, and your own associated functions all work as values.</p>
 <div class="block">

@@ -11,6 +11,7 @@ pub(crate) mod macro_rules;
 pub(crate) mod native;
 pub(crate) mod package;
 pub(crate) mod std_path;
+pub(crate) mod std_trait;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
@@ -74,6 +75,9 @@ pub struct Program {
     /// The functions of trait impls for builtin types (`impl Shape for
     /// i64`): lowered with the methods, but not program members.
     builtin_methods: Box<[method::Definition]>,
+    /// The std traits the crate names, by name, from std's declarations
+    /// (D711 step 2).
+    std_traits: BTreeMap<ImmutableString, item::Trait>,
     qualified_functions: BTreeMap<(program::source::Id, Span), crate::item::Key>,
     qualified_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
     qualified_pattern_owners: BTreeMap<(program::source::Id, Span), type_def::Identity>,
@@ -302,6 +306,11 @@ impl Program {
         &self.items
     }
 
+    /// The std traits the crate names, by name (D711 step 2).
+    pub(crate) const fn std_traits(&self) -> &BTreeMap<ImmutableString, item::Trait> {
+        &self.std_traits
+    }
+
     #[allow(dead_code)]
     pub(crate) const fn types(&self) -> &[type_def::Definition] {
         &self.types
@@ -485,6 +494,7 @@ fn resolve_with_evidence_and_namespace(
     allocation_order: AllocationOrder,
     evidence: crate::diagnostic::Source,
 ) -> Result<Program, Error> {
+    std_trait::begin();
     #[cfg(feature = "rust-import")]
     let lexical = BTreeMap::from([(
         program::source::Id::ROOT,
@@ -531,7 +541,7 @@ fn resolve_with_evidence_and_namespace(
     let definitions = symbols
         .finish(&items, host)
         .map_err(LocatedError::into_error)?;
-    let (methods, builtin_methods) =
+    let (methods, builtin_methods, std_traits) =
         resolve_methods(&mut items, &definitions, host).map_err(LocatedError::into_error)?;
     resolve_functions(&mut items).map_err(LocatedError::into_error)?;
 
@@ -544,6 +554,7 @@ fn resolve_with_evidence_and_namespace(
         types: definitions.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         builtin_methods: builtin_methods.into_boxed_slice(),
+        std_traits,
         qualified_functions: BTreeMap::new(),
         qualified_owners: BTreeMap::new(),
         qualified_pattern_owners: BTreeMap::new(),
@@ -2311,6 +2322,7 @@ fn resolve_item(
                 reference_forwards: Box::default(),
                 generics: trait_generics,
                 declaration: None,
+                std: None,
             })
         }
         crate::item::Parsed::Function(parsed) => item::Kind::Function(resolve_function(
@@ -2659,17 +2671,25 @@ fn erase_trait_generics(
     }
 }
 
+/// A crate's methods, its impls' functions for builtin types, and the std
+/// traits it names by name (`std_trait::declarations`).
+type ResolvedMethods = (
+    Vec<method::Definition>,
+    Vec<method::Definition>,
+    BTreeMap<ImmutableString, item::Trait>,
+);
+
 fn resolve_methods(
     items: &mut Vec<item::Shell>,
     definitions: &[type_def::Definition],
     host: &host::Registry,
-) -> Result<(Vec<method::Definition>, Vec<method::Definition>), LocatedError> {
+) -> Result<ResolvedMethods, LocatedError> {
     forward::fold_reference_impls(items)?;
     declare_facade_traits(items, host)?;
     let items = items.as_mut_slice();
     elaborate_supertraits(items)?;
     resolve_projections(items)?;
-    let traits = trait_table(items)?;
+    let traits = trait_table(items, host)?;
     fill_trait_defaults(items, &traits);
     check_generic_arity(items, &traits)?;
     check_trait_bounds(items, &traits)?;
@@ -2681,9 +2701,10 @@ fn resolve_methods(
         BTreeMap::<(type_def::Id, ImmutableString), (program::source::Id, Span)>::new();
     let mut methods = Vec::new();
     let mut builtin_methods = Vec::new();
-    // `IndexMut`'s `Output` is its `Index` impl's: each owner's, by its
-    // type's spelling.
-    let index_outputs = items
+    // A supertrait's associated types are the owner's impl of it:
+    // `IndexMut`'s `Output` is its `Index` impl's, `DerefMut`'s `Target` its
+    // `Deref` impl's. Each impl's, by its trait and its owner's spelling.
+    let impl_associated = items
         .iter()
         .filter_map(|shell| {
             let item::Kind::Impl(item) = &shell.kind else {
@@ -2692,17 +2713,12 @@ fn resolve_methods(
             let Some(item::TraitImpl::User { name, .. }) = &item.trait_ else {
                 return None;
             };
-            if name.text != "Index" {
-                return None;
-            }
-            let (_, output) = item
-                .associated
-                .iter()
-                .find(|(associated, _)| associated.text == "Output")?;
-            Some((full_type_name(&item.owner), output.clone()))
+            Some((
+                (name.text.clone(), full_type_name(&item.owner)),
+                item.associated.to_vec(),
+            ))
         })
         .collect::<BTreeMap<_, _>>();
-
     // The default bodies an impl receives, which are lowered with it.
     #[cfg(test)]
     let mut received = std::collections::BTreeSet::<(ImmutableString, ImmutableString)>::new();
@@ -2712,13 +2728,7 @@ fn resolve_methods(
         };
         if let Some(item::TraitImpl::User { name, arguments }) = &item.trait_ {
             let Some((trait_source, declared)) = traits.get(&name.text) else {
-                return Err(LocatedError::primary(
-                    shell.source,
-                    Error::UnknownType {
-                        name: name.text.clone(),
-                        reference: name.span,
-                    },
-                ));
+                return Err(LocatedError::primary(shell.source, unknown_trait(name)));
             };
             // `impl Shape for i64`: a crate trait for a builtin type, as
             // Rust's orphan rule allows; a std trait is E0117.
@@ -2797,17 +2807,34 @@ fn resolve_methods(
                 .zip(arguments.iter().cloned())
                 .collect::<Vec<_>>();
             let mut associated = item.associated.to_vec();
-            if name.text == "IndexMut"
-                && declared.name.span == Span::NONE
-                && let Some(output) = index_outputs.get(&full_type_name(&item.owner))
-            {
-                associated.push((
-                    crate::item::Name {
-                        text: "Output".into(),
-                        span: Span::NONE,
-                    },
-                    output.clone(),
-                ));
+            let owner_spelling = full_type_name(&item.owner);
+            let mut supers = declared.supertraits.1.to_vec();
+            let mut seen = std::collections::BTreeSet::new();
+            while let Some(parent) = supers.pop() {
+                if !seen.insert(parent.text.clone()) {
+                    continue;
+                }
+                if let Some(inherited) =
+                    impl_associated.get(&(parent.text.clone(), owner_spelling.clone()))
+                {
+                    for (inherited_name, ty) in inherited {
+                        if !associated
+                            .iter()
+                            .any(|(name, _)| name.text == inherited_name.text)
+                        {
+                            associated.push((
+                                crate::item::Name {
+                                    text: inherited_name.text.clone(),
+                                    span: Span::NONE,
+                                },
+                                ty.clone(),
+                            ));
+                        }
+                    }
+                }
+                if let Some((_, parent_trait)) = traits.get(&parent.text) {
+                    supers.extend(parent_trait.supertraits.1.iter().cloned());
+                }
             }
             let implemented = trait_impl_functions(
                 declared,
@@ -3046,7 +3073,12 @@ fn resolve_methods(
         }
     }
 
-    Ok((methods, builtin_methods))
+    let std_traits = traits
+        .into_iter()
+        .filter(|(_, (_, declared))| declared.std.is_some())
+        .map(|(name, (_, declared))| (name, declared))
+        .collect();
+    Ok((methods, builtin_methods, std_traits))
 }
 
 /// The first id of the methods of impls for builtin types.
@@ -3203,6 +3235,7 @@ fn fill_trait_defaults(
 /// so a generic body can use them. Unknown supertraits and cycles (E0391)
 /// are errors.
 fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> {
+    let uses = std_trait::uses(items);
     let declared: BTreeMap<ImmutableString, (program::source::Id, item::Trait)> = items
         .iter()
         .filter_map(|shell| match &shell.kind {
@@ -3228,6 +3261,7 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
     fn close(
         name: &ImmutableString,
         declared: &BTreeMap<ImmutableString, (program::source::Id, item::Trait)>,
+        uses: &[(ImmutableString, ImmutableString)],
         path: &mut Vec<ImmutableString>,
         closed: &mut BTreeMap<ImmutableString, Supers>,
     ) -> Result<Supers, LocatedError> {
@@ -3258,17 +3292,16 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
                 ));
             }
             if !declared.contains_key(&parent.text)
-                && !BUILTIN_TRAITS.contains(&parent.text.as_str())
+                && std_trait::named(
+                    &parent.text,
+                    uses.iter()
+                        .map(|(binding, qualified)| (binding.as_str(), qualified.as_str())),
+                )
+                .is_none()
             {
-                return Err(LocatedError::primary(
-                    *source,
-                    Error::UnknownType {
-                        name: parent.text.clone(),
-                        reference: parent.span,
-                    },
-                ));
+                return Err(LocatedError::primary(*source, unknown_trait(parent)));
             }
-            let parent_closed = close(&parent.text, declared, path, closed)?;
+            let parent_closed = close(&parent.text, declared, uses, path, closed)?;
             all_bounds = crate::capability::Set::from_explicit(
                 all_bounds.iter().chain(parent_closed.0.iter()),
             );
@@ -3369,7 +3402,7 @@ fn elaborate_supertraits(items: &mut [item::Shell]) -> Result<(), LocatedError> 
     }
     let mut closed = BTreeMap::new();
     for name in declared.keys() {
-        close(name, &declared, &mut Vec::new(), &mut closed)?;
+        close(name, &declared, &uses, &mut Vec::new(), &mut closed)?;
     }
     // A bound `T: Both<i64>` implies `T: Convert<i64>`: the closure's
     // arguments with the trait's parameters replaced by the bound's and
@@ -3544,9 +3577,12 @@ fn declare_facade_traits(
     Ok(())
 }
 
-/// The crate's trait declarations by name, with their sources.
+/// The crate's trait declarations by name, with their sources, and the std
+/// traits it names (`std_trait::declarations`), unless it declares its own
+/// of that name.
 fn trait_table(
     items: &[item::Shell],
+    host: &host::Registry,
 ) -> Result<BTreeMap<ImmutableString, (program::source::Id, item::Trait)>, LocatedError> {
     let mut traits = BTreeMap::<ImmutableString, (program::source::Id, item::Trait)>::new();
     for shell in items {
@@ -3567,62 +3603,13 @@ fn trait_table(
             ));
         }
     }
-    // The std traits implemented by hand, unless the crate declares its own.
-    for name in BUILTIN_TRAITS {
-        if let Some(declared) = builtin_trait(name) {
-            traits
-                .entry(name.into())
-                .or_insert((program::source::Id::ROOT, declared));
-        }
+    for (name, declared) in std_trait::declarations(items, host) {
+        traits
+            .entry(name)
+            .or_insert((program::source::Id::ROOT, declared));
     }
     Ok(traits)
 }
-
-/// The std traits a crate may implement by hand: the derivable ones,
-/// `Display` for `{}`, the prelude's `From<T>` and `Into<T>`, and
-/// `PartialOrd` and `Ord`, which compare to a `std::cmp::Ordering`.
-pub(crate) const BUILTIN_TRAITS: [&str; 40] = [
-    "Clone",
-    "Hash",
-    "Copy",
-    "PartialEq",
-    "Eq",
-    "Default",
-    "Debug",
-    "Display",
-    "From",
-    "Into",
-    "PartialOrd",
-    "Ord",
-    "Iterator",
-    "Add",
-    "Sub",
-    "Mul",
-    "Div",
-    "Rem",
-    "Neg",
-    "Not",
-    "AddAssign",
-    "SubAssign",
-    "MulAssign",
-    "DivAssign",
-    "RemAssign",
-    "BitAnd",
-    "BitOr",
-    "BitXor",
-    "Shl",
-    "Shr",
-    "BitAndAssign",
-    "BitOrAssign",
-    "BitXorAssign",
-    "ShlAssign",
-    "ShrAssign",
-    "Index",
-    "IndexMut",
-    "FromIterator",
-    "Error",
-    "Drop",
-];
 
 /// `std::ops`' operator traits Rawr dispatches its operators through for a
 /// crate type: the operator, the trait and its method.
@@ -3651,343 +3638,6 @@ pub(crate) const OPERATOR_TRAITS: [(&str, &str, &str); 22] = [
     (">>=", "ShrAssign", "shr_assign"),
 ];
 
-/// The declaration of a std trait Rawr implements by hand. `Debug` and
-/// `Display` write into a `fmt::Formatter`, which is Rawr's `String`, and
-/// return `fmt::Result`, `Result<(), ()>`.
-pub(crate) fn builtin_trait(name: &str) -> Option<item::Trait> {
-    let path = |name: &str, target: type_ref::Target, arguments: Vec<type_ref::Argument>| {
-        type_ref::Type::Path(type_ref::Path {
-            name: name.into(),
-            target,
-            arguments: arguments.into_boxed_slice(),
-            span: Span::NONE,
-        })
-    };
-    let this = || path("Self", type_ref::Target::Parameter, Vec::new());
-    let reference = |mutable: bool, target: type_ref::Type| type_ref::Type::Reference {
-        mutable,
-        lifetime: None,
-        target: Box::new(target),
-        span: Span::NONE,
-    };
-    let function = |name: &str,
-                    receiver: bool,
-                    parameters: Vec<(&str, type_ref::Type)>,
-                    output: Option<type_ref::Type>| item::Function {
-        header: crate::item::Header {
-            attributes: Box::default(),
-            visibility: None,
-            span: Span::NONE,
-        },
-        name: crate::item::Name {
-            text: name.into(),
-            span: Span::NONE,
-        },
-        generics: Box::default(),
-        lifetimes: item::Lifetimes::default(),
-        receiver: receiver.then_some(crate::item::Receiver::Shared(Span::NONE)),
-        parameters: parameters
-            .into_iter()
-            .map(|(name, ty)| item::Parameter {
-                name: crate::item::Name {
-                    text: name.into(),
-                    span: Span::NONE,
-                },
-                ty,
-                span: Span::NONE,
-                pattern: None,
-            })
-            .collect(),
-        output,
-        body: item::Body {
-            span: Span::NONE,
-            lowering: item::Lowering::Unavailable,
-            syntax: crate::item::BodySyntax::new(Vec::new()),
-            constant: false,
-            asynchronous: false,
-            text: None,
-            elide: None,
-        },
-    };
-    let functions = match name {
-        "Clone" => vec![function("clone", true, Vec::new(), Some(this()))],
-        "PartialEq" => vec![function(
-            "eq",
-            true,
-            vec![("other", reference(false, this()))],
-            Some(path("bool", type_ref::Target::Builtin, Vec::new())),
-        )],
-        "Default" => vec![function("default", false, Vec::new(), Some(this()))],
-        "Debug" | "Display" => vec![function(
-            "fmt",
-            true,
-            vec![(
-                "f",
-                reference(true, path("String", type_ref::Target::Builtin, Vec::new())),
-            )],
-            Some(path(
-                "Result",
-                type_ref::Target::Builtin,
-                vec![
-                    type_ref::Argument::Type(type_ref::Type::Unit(Span::NONE)),
-                    type_ref::Argument::Type(type_ref::Type::Unit(Span::NONE)),
-                ],
-            )),
-        )],
-        // `fn partial_cmp(&self, other: &Self) -> Option<Ordering>`, and
-        // `Ord`'s `cmp` to an `Ordering`.
-        "PartialOrd" | "Ord" => {
-            let ordering = path("Ordering", type_ref::Target::Builtin, Vec::new());
-            let (member, output) = if name == "Ord" {
-                ("cmp", ordering)
-            } else {
-                (
-                    "partial_cmp",
-                    path(
-                        "Option",
-                        type_ref::Target::Builtin,
-                        vec![type_ref::Argument::Type(ordering)],
-                    ),
-                )
-            };
-            vec![function(
-                member,
-                true,
-                vec![("other", reference(false, this()))],
-                Some(output),
-            )]
-        }
-        // `std::error::Error`'s methods all have defaults.
-        "Copy" | "Eq" | "Hash" | "Error" => Vec::new(),
-        // `trait Drop { fn drop(&mut self); }`: the destructor, which Rawr
-        // runs where Rust drops a value (`lower_nominal::drops`).
-        "Drop" => {
-            let mut drop = function("drop", true, Vec::new(), None);
-            drop.receiver = Some(crate::item::Receiver::Mutable(Span::NONE));
-            vec![drop]
-        }
-        // `trait Index<Idx> { type Output; fn index(&self, index: Idx) ->
-        // &Self::Output; }` and `IndexMut<Idx>`'s `index_mut(&mut self, ..)
-        // -> &mut Self::Output`.
-        "Index" | "IndexMut" => {
-            let output = type_ref::Type::Path(type_ref::Path {
-                name: "Output".into(),
-                target: type_ref::Target::Projection(Box::new(this()), Some(name.into())),
-                arguments: Box::default(),
-                span: Span::NONE,
-            });
-            let mutable = name == "IndexMut";
-            let mut index = function(
-                if mutable { "index_mut" } else { "index" },
-                true,
-                vec![(
-                    "index",
-                    path("Idx", type_ref::Target::Parameter, Vec::new()),
-                )],
-                Some(reference(mutable, output)),
-            );
-            if mutable {
-                index.receiver = Some(crate::item::Receiver::Mutable(Span::NONE));
-            }
-            vec![index]
-        }
-        // `trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; }`:
-        // an impl's type gets the adaptors.
-        "Iterator" => {
-            let item = type_ref::Type::Path(type_ref::Path {
-                name: "Item".into(),
-                target: type_ref::Target::Projection(Box::new(this()), None),
-                arguments: Box::default(),
-                span: Span::NONE,
-            });
-            let mut next = function(
-                "next",
-                true,
-                Vec::new(),
-                Some(path(
-                    "Option",
-                    type_ref::Target::Builtin,
-                    vec![type_ref::Argument::Type(item)],
-                )),
-            );
-            next.receiver = Some(crate::item::Receiver::Mutable(Span::NONE));
-            vec![next]
-        }
-        // `trait From<T> { fn from(value: T) -> Self; }`, and `Into<T>`,
-        // which every `From` impl gives its source type.
-        "From" => vec![function(
-            "from",
-            false,
-            vec![("value", path("T", type_ref::Target::Parameter, Vec::new()))],
-            Some(this()),
-        )],
-        // `trait FromIterator<A> { fn from_iter<I: IntoIterator<Item = A>>(iter: I)
-        // -> Self; }`, which `collect()` into the type calls. Its `I` reads
-        // as `impl IntoIterator<Item = A>`, as an impl's does.
-        "FromIterator" => vec![function(
-            "from_iter",
-            false,
-            vec![(
-                "iter",
-                path(
-                    crate::item::type_ref::INTO_ITER_TYPE,
-                    type_ref::Target::Builtin,
-                    vec![type_ref::Argument::Type(path(
-                        "A",
-                        type_ref::Target::Parameter,
-                        Vec::new(),
-                    ))],
-                ),
-            )],
-            Some(this()),
-        )],
-        "Into" => {
-            let mut into = function(
-                "into",
-                false,
-                Vec::new(),
-                Some(path("T", type_ref::Target::Parameter, Vec::new())),
-            );
-            into.receiver = Some(crate::item::Receiver::Owned(Span::NONE));
-            vec![into]
-        }
-        // `trait Add<Rhs = Self> { type Output; fn add(self, rhs: Rhs) ->
-        // Self::Output; }` and its kin; `Neg` and `Not` take no `rhs`, and
-        // `AddAssign<Rhs = Self>`'s `add_assign(&mut self, rhs: Rhs)` none.
-        name if let Some((_, _, member)) = OPERATOR_TRAITS
-            .iter()
-            .find(|(_, trait_name, _)| *trait_name == name) =>
-        {
-            let rhs = path("Rhs", type_ref::Target::Parameter, Vec::new());
-            let output = type_ref::Type::Path(type_ref::Path {
-                name: "Output".into(),
-                target: type_ref::Target::Projection(Box::new(this()), Some(name.into())),
-                arguments: Box::default(),
-                span: Span::NONE,
-            });
-            let mut operator = match name {
-                "Neg" | "Not" => function(member, true, Vec::new(), Some(output)),
-                _ if name.ends_with("Assign") => function(member, true, vec![("rhs", rhs)], None),
-                _ => function(member, true, vec![("rhs", rhs)], Some(output)),
-            };
-            operator.receiver = Some(if name.ends_with("Assign") {
-                crate::item::Receiver::Mutable(Span::NONE)
-            } else {
-                crate::item::Receiver::Owned(Span::NONE)
-            });
-            vec![operator]
-        }
-        _ => return None,
-    };
-    let operator = OPERATOR_TRAITS
-        .iter()
-        .any(|(_, trait_name, _)| *trait_name == name);
-    let outputs = operator && !name.ends_with("Assign");
-    let generics: Box<[item::Generic]> = if matches!(name, "Index" | "IndexMut") {
-        Box::new([item::Generic {
-            name: crate::item::Name {
-                text: "Idx".into(),
-                span: Span::NONE,
-            },
-            bounds: crate::capability::Set::new(),
-            traits: Box::default(),
-            projections: Box::default(),
-            trait_arguments: Box::default(),
-            default: None,
-            host: false,
-            crate_bounds: Box::default(),
-        }])
-    } else if operator && !matches!(name, "Neg" | "Not") {
-        Box::new([item::Generic {
-            name: crate::item::Name {
-                text: "Rhs".into(),
-                span: Span::NONE,
-            },
-            bounds: crate::capability::Set::new(),
-            traits: Box::default(),
-            projections: Box::default(),
-            trait_arguments: Box::default(),
-            default: Some(this()),
-            host: false,
-            crate_bounds: Box::default(),
-        }])
-    } else if matches!(name, "From" | "Into" | "FromIterator") {
-        Box::new([item::Generic {
-            name: crate::item::Name {
-                text: if name == "FromIterator" { "A" } else { "T" }.into(),
-                span: Span::NONE,
-            },
-            bounds: crate::capability::Set::new(),
-            traits: Box::default(),
-            projections: Box::default(),
-            trait_arguments: Box::default(),
-            default: None,
-            host: false,
-            crate_bounds: Box::default(),
-        }])
-    } else {
-        Box::default()
-    };
-    let provided = vec![false; functions.len()].into_boxed_slice();
-    Some(item::Trait {
-        header: crate::item::Header {
-            attributes: Box::default(),
-            visibility: None,
-            span: Span::NONE,
-        },
-        name: crate::item::Name {
-            text: name.into(),
-            span: Span::NONE,
-        },
-        functions: functions.into_boxed_slice(),
-        provided,
-        associated: if name == "Iterator" || outputs || matches!(name, "Index" | "IndexMut") {
-            Box::new([crate::item::Name {
-                text: if name == "Iterator" { "Item" } else { "Output" }.into(),
-                span: Span::NONE,
-            }])
-        } else {
-            Box::default()
-        },
-        associated_bounds: if name == "Iterator" || outputs || matches!(name, "Index" | "IndexMut")
-        {
-            Box::new([(crate::capability::Set::new(), Box::default())])
-        } else {
-            Box::default()
-        },
-        associated_bound_arguments: if name == "Iterator"
-            || outputs
-            || matches!(name, "Index" | "IndexMut")
-        {
-            Box::new([Box::default()])
-        } else {
-            Box::default()
-        },
-        // No builtin trait's associated type has an equality.
-        associated_equalities: Box::default(),
-        // `trait Ord: Eq + PartialOrd`.
-        supertraits: if name == "Ord" {
-            (
-                crate::capability::Set::from_explicit([
-                    crate::capability::Kind::PartialEq,
-                    crate::capability::Kind::Eq,
-                ]),
-                Box::new([crate::item::Name {
-                    text: "PartialOrd".into(),
-                    span: Span::NONE,
-                }]),
-            )
-        } else {
-            (crate::capability::Set::new(), Box::default())
-        },
-        supertrait_arguments: Box::default(),
-        sized: false,
-        reference_forwards: Box::default(),
-        generics,
-        declaration: None,
-    })
-}
-
 /// Every user trait named in a generic bound is a trait the crate declares.
 fn check_trait_bounds(
     items: &[item::Shell],
@@ -4004,10 +3654,7 @@ fn check_trait_bounds(
             }
             for name in generic.traits.iter() {
                 let Some((_, declared)) = traits.get(&name.text) else {
-                    return Err(Error::UnknownType {
-                        name: name.text.clone(),
-                        reference: name.span,
-                    });
+                    return Err(unknown_trait(name));
                 };
                 // A generic trait takes one argument per parameter, its
                 // defaults filled in already (E0107).
@@ -4061,10 +3708,7 @@ fn check_trait_bounds(
                     let supers = item.supertraits.1.iter().map(|name| (name, true));
                     for (name, supertrait) in associated.chain(supers) {
                         let Some((_, declared)) = traits.get(&name.text) else {
-                            return Err(Error::UnknownType {
-                                name: name.text.clone(),
-                                reference: name.span,
-                            });
+                            return Err(unknown_trait(name));
                         };
                         let mut written = if supertrait {
                             item.supertrait_arguments
@@ -4423,6 +4067,19 @@ fn substitute_parameters(
             .iter()
             .find(|(name, _)| *name == path.name)
             .map_or_else(|| ty.clone(), |(_, argument)| argument.clone()),
+        // `&T` of `T = str` is `&str`, which `str` already is.
+        type_ref::Type::Reference {
+            mutable: false,
+            target,
+            ..
+        } if matches!(&**target, type_ref::Type::Path(path)
+            if path.target == type_ref::Target::Parameter
+                && parameters
+                    .iter()
+                    .any(|(name, argument)| *name == path.name && argument.is_str())) =>
+        {
+            substitute_parameters(target, parameters)
+        }
         type_ref::Type::Path(path) => type_ref::Type::Path(type_ref::Path {
             arguments: path
                 .arguments
@@ -4485,12 +4142,14 @@ fn trait_impl_functions(
             parameters,
         )
     };
-    // Each associated type the trait declares, and no other.
+    // Each associated type the trait declares, and no other; a
+    // supertrait's, which its impl gives (no span), is the owner's too.
     for (name, _) in associated {
-        if !declared
-            .associated
-            .iter()
-            .any(|declared| declared.text == name.text)
+        if name.span != Span::NONE
+            && !declared
+                .associated
+                .iter()
+                .any(|declared| declared.text == name.text)
         {
             return Err(Error::InvalidMethodSignature {
                 owner: owner_name.into(),
@@ -4539,6 +4198,15 @@ fn trait_impl_functions(
             .iter()
             .find(|required| required.name.text == function.name.text)
         else {
+            // A std trait's function whose signature rawr can't read yet:
+            // the impl's own signature is what its uses check.
+            if declared
+                .std
+                .is_some_and(|definition| std_trait::member(definition, &function.name.text))
+            {
+                implemented.push((function.clone(), false));
+                continue;
+            }
             return Err(Error::InvalidMethodSignature {
                 owner: owner_name.into(),
                 method: function.name.text.clone(),
@@ -4578,8 +4246,17 @@ fn trait_impl_functions(
         {
             continue;
         }
-        if !provided {
+        // std's `Hash::hash`: rawr hashes a value by its contents, so the
+        // parser keeps an impl's `hash` as the mark (`hashes_as_rust`).
+        if !provided && declared.std != Some("core::hash::Hash") {
             missing.push(format!("`{}`", required.name.text));
+            continue;
+        }
+        if !provided {
+            continue;
+        }
+        // A std trait's default is std's to run, never lowered here.
+        if declared.std.is_some() {
             continue;
         }
         // The default body, checked and lowered for this owner.
@@ -4591,11 +4268,13 @@ fn trait_impl_functions(
         implemented.push((function, true));
     }
     if !missing.is_empty() {
-        return Err(Error::InvalidMethodSignature {
-            owner: owner_name.into(),
-            method: declared.name.text.clone(),
-            reason: format!("is missing trait items: {}", missing.join(", ")).into(),
-            signature: span,
+        let missing = missing.join(", ");
+        return Err(Error::StdPath {
+            code: "E0046",
+            message: format!("not all trait items implemented, missing: {missing}").into(),
+            label: Some(format!("missing {missing} in implementation").into()),
+            note: None,
+            reference: span,
         });
     }
     Ok(implemented)
@@ -4826,7 +4505,9 @@ fn resolve_bounds_with_arguments(
                 ));
                 continue;
             }
-            if let Some(name) = std_path::trait_path(&bound.segments) {
+            if let Some(name) = std_path::trait_path(&bound.segments)
+                && name_arguments_empty(&bound.segments)
+            {
                 traits.push(name);
                 continue;
             }
@@ -4873,6 +4554,24 @@ fn resolve_bounds_with_arguments(
     ))
 }
 
+/// rustc's E0405 for a trait name nothing in scope declares.
+fn unknown_trait(name: &crate::item::Name) -> Error {
+    Error::StdPath {
+        code: "E0405",
+        message: format!("cannot find trait `{}` in this scope", name.text).into(),
+        label: Some("not found in this scope".into()),
+        note: None,
+        reference: name.span,
+    }
+}
+
+/// Whether a path's last segment writes no arguments.
+fn name_arguments_empty(segments: &[crate::item::type_ref::Segment]) -> bool {
+    segments
+        .last()
+        .is_some_and(|last| last.arguments.is_empty())
+}
+
 /// The trait of `impl Trait for Type`: Rawr recognises `From<T>`, the
 /// conversion `.into()` and `?` use.
 fn resolve_trait(
@@ -4912,24 +4611,10 @@ fn resolve_trait(
             arguments,
         });
     }
-    if let Some(name) = std_path::trait_path(&path.segments) {
-        return Ok(item::TraitImpl::User {
-            name,
-            arguments: Box::default(),
-        });
-    }
-    // `std::convert::From<T>` and `std::iter::FromIterator<A>`: the
-    // prelude's conversion traits by path.
-    if let [prefix @ .., last] = &path.segments[..]
-        && matches!(last.name.text.as_str(), "From" | "Into" | "FromIterator")
-        && !prefix.is_empty()
-        && prefix.iter().all(|module| {
-            module.arguments.is_empty()
-                && matches!(
-                    module.name.text.as_str(),
-                    "std" | "core" | "convert" | "iter"
-                )
-        })
+    // A std trait by its path: `std::fmt::Display`, `fmt::Write` after
+    // `use std::fmt;`, `std::convert::From<T>`.
+    if let Some(last) = path.segments.last()
+        && std_path::trait_path(&path.segments).is_some()
     {
         let arguments = last
             .arguments

@@ -473,6 +473,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(mut self) -> Result<Program, Failure> {
+        super::std_trait::begin();
         self.validate_exports()?;
         let qualified_calls = self.resolve_qualified_calls()?;
         let qualified_pattern_owners = self.resolve_qualified_pattern_owners()?;
@@ -575,7 +576,7 @@ impl<'a> Resolver<'a> {
 
         let definitions = finish_definitions(self.type_declarations, &shells, self.host)
             .map_err(Failure::from_located)?;
-        let (methods, builtin_methods) =
+        let (methods, builtin_methods, std_traits) =
             super::resolve_methods(&mut shells, &definitions, self.host)
                 .map_err(Failure::from_located)?;
         super::resolve_functions(&mut shells).map_err(Failure::from_located)?;
@@ -610,6 +611,7 @@ impl<'a> Resolver<'a> {
             types: definitions.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             builtin_methods: builtin_methods.into_boxed_slice(),
+            std_traits,
             qualified_functions: qualified_calls.functions,
             qualified_owners: qualified_calls.owners,
             qualified_pattern_owners,
