@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The ?play universe runner starts again: a generated runner installs each crate's bindings after those of the crates whose types they use, so iced no longer waits on iced_test's bindings.","issues":[738]}
+    ]
   },
   "releases": [
     {
