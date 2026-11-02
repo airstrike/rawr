@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"rawr's nightly check build, which reads your dependencies' APIs, is kept once per machine in rawr's home instead of in each project's `target/rawr`. A second project checks only its own crates there: a fresh copy of iced's download_progress compiles 2 units instead of 274. `rawr cache clean` is back and also removes these build directories once they have gone unused.","issues":[691]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.94",
@@ -1651,7 +1656,7 @@
     {"issue":688,"title":"Coerce `&String` to `&str` inside a tuple argument","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
-    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"open","category":"Divergences from rustc"},
     {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
@@ -1664,7 +1669,29 @@
     {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"open","category":"Divergences from rustc"},
     {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
-    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"}
+    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"},
+    {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"open","category":"Divergences from rustc"},
+    {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"open","category":"Divergences from rustc"},
+    {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"open","category":"Divergences from rustc"},
+    {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
+    {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
+    {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
+    {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"open","category":"Divergences from rustc"},
+    {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"open","category":"Divergences from rustc"},
+    {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"open","category":"Divergences from rustc"},
+    {"issue":714,"title":"An async fn input borrowing any type is leased: &[u8], &Path, &String, &Vec<T>, &u32, Result<&T, E>","state":"open","category":"Divergences from rustc"},
+    {"issue":715,"title":"A crate function taking a non-'static FnMut closure, as image's ImageBuffer::from_fn, is bound","state":"open","category":"No glue (D593)"},
+    {"issue":716,"title":"&mut String and &mut Vec<T> crate inputs lend the program's value in place instead of copying in and out","state":"open","category":"Divergences from rustc"},
+    {"issue":717,"title":"A trait impl for &str is bound at any lifetime, not pinned as &'static str for the runner's life","state":"open","category":"Divergences from rustc"},
+    {"issue":718,"title":"A missing trait reads as rustc's E0277 and suggests derive only for derivable traits","state":"open","category":"Divergences from rustc"},
+    {"issue":719,"title":"An unavailable crate path's error gives the Rust reason, not a rejection kind or 'retained' evidence","state":"open","category":"Divergences from rustc"},
+    {"issue":720,"title":"Reasons a crate item can't be called speak Rust, not 'importer', 'generated code' or 'rawr can't'","state":"open","category":"Divergences from rustc"},
+    {"issue":721,"title":"Generated-runtime invariant errors (TypeMismatch, StaleHandle, NotClone) panic as rawr bugs or read in Rust terms","state":"open","category":"Health"},
+    {"issue":722,"title":"A closure written |x: T| where Fn(&T) is expected is E0631, not accepted by dropping the reference","state":"open","category":"Divergences from rustc"},
+    {"issue":723,"title":"An .into() on a crate value with no target fixed is E0282, not the reflexive From","state":"open","category":"Divergences from rustc"},
+    {"issue":724,"title":"Close #285 and recheck #394: the iced path checks and the non-'static Fn refusal look gone","state":"open","category":"Health"},
+    {"issue":725,"title":"Units no project uses stay in the current pin's shared nightly directory until the whole directory goes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":726,"title":"websocket: rawr check stops at `operation::scrollable::snap_to_end`","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
