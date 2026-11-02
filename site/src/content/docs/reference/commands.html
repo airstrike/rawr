@@ -25,7 +25,7 @@
 <h2 id="extensions">Commands from extensions</h2>
 <p><code>rawr</code> runs <code>run</code>, <code>check</code>, <code>new</code>, <code>doctor</code>, <code>mcp</code> and <code>init</code> itself. It hands other commands to the installed extension that adds them. It looks for <code>rawr-&lt;name&gt;</code> binaries next to its own binary first and then on <code>PATH</code>.</p>
 <ul>
-  <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds no commands.</li>
+  <li><a href="/docs/imports">rawr-import</a> runs <code>rawr run</code> and <code>rawr check</code> for programs with Cargo dependencies or native modules. It adds <code>rawr cache clean</code>, which removes what rawr&rsquo;s home holds that no build has used lately: hosts, rawr&rsquo;s runtimes, shared bindings and the nightly&rsquo;s check build. It skips anything a running build holds and never waits for one.</li>
 </ul>
 <p><code>rawr preview</code> and <code>rawr snapshot</code> came with rawr-iced, which is gone. <code>rawr preview</code> comes back as open work. <a href="/docs/iced/previews">Previews</a> says more.</p>
 
@@ -40,5 +40,6 @@
 <ul>
   <li><code>target/&lt;host&gt;/debug/</code> holds the compiled crates. <code>rawr run</code> and <code>cargo build</code> share them.</li>
   <li><code>target/rawr/</code> holds rawr&rsquo;s cached data and the generated runner. <code>cargo clean</code> removes it.</li>
+  <li>rawr&rsquo;s home, <code>~/.cargo/rawr</code> unless <code>RAWR_HOME</code> says otherwise, holds what every project on the machine shares: rawr&rsquo;s runtime, the bindings and the nightly&rsquo;s check build. <code>rawr cache clean</code> removes what no build has used lately. It never removes what a running build is using.</li>
 </ul>
 </article>

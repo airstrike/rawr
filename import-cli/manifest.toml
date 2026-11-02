@@ -5,4 +5,4 @@
 format = 1
 name = "rawr-import"
 sections = ["rust"]
-commands = []
+commands = ["cache"]

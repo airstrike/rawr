@@ -1107,7 +1107,7 @@ pub fn clean(cargo_home: &Path) {
 /// build leases is skipped, and nothing here waits for a lock or reads free
 /// disk. Each goes by being renamed aside first, so a partial removal is
 /// never taken for an entry and is finished by a later cleanup.
-fn prune(runtimes: &Path, keep: &[&Path], idle: Duration, kept: usize) {
+pub(crate) fn prune(runtimes: &Path, keep: &[&Path], idle: Duration, kept: usize) {
     let Ok(entries) = fs::read_dir(runtimes) else {
         return;
     };

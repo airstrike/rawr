@@ -39,7 +39,7 @@
 <h2 id="first-run-slow">The first run takes minutes</h2>
 <p>With dependencies or iced, the first <code>rawr run</code> compiles them and a runner. Later runs reuse that build. An edit to a marked file needs no native build.</p>
 <p>The first project on a new toolchain or a new rawr also compiles rawr&rsquo;s runtime, once for every project. rawr says so while it compiles. <code>RAWR_RUNTIME_OPT_LEVEL=0</code> makes that compile faster, and scripts slower. <a href="/docs/imports#runtime">Imports</a> explains the runtime.</p>
-<p>The first program on a machine that uses a crate also reads the crate&rsquo;s API with rawr&rsquo;s nightly, which builds the crate&rsquo;s dependencies once more in check mode. Later projects read the crate from rawr&rsquo;s home instead, including items no earlier program used. <a href="/docs/imports#bindings">Imports</a> explains shared bindings.</p>
+<p>The first program on a machine that uses a crate also reads the crate&rsquo;s API with rawr&rsquo;s nightly, which builds the crate&rsquo;s dependencies once more in check mode. That check build is kept once per machine in rawr&rsquo;s home, so a later project checks only its own crates there. Later projects read the crate&rsquo;s API from rawr&rsquo;s home too, including items no earlier program used. <a href="/docs/imports#bindings">Imports</a> explains shared bindings.</p>
 
 <h2 id="reload">An iced app doesn&rsquo;t pick up a save</h2>
 <p>A save that fails the check prints its error and leaves the last good version running. A save that passes shows at the app&rsquo;s next message, because iced builds the view again only when a message arrives. <a href="/docs/iced/reload">Reload</a> says what a reload keeps.</p>
