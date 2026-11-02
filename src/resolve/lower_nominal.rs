@@ -18239,18 +18239,22 @@ impl<'a> Parser<'a> {
         if items.iter().any(|item| item.imported_identity().is_some()) {
             return Ok(());
         }
-        let slice = |index: usize| {
-            items.iter().any(|item| {
-                item.signature()
-                    .parameters()
-                    .get(index)
-                    .is_some_and(|parameter| {
-                        matches!(
-                            parameter.shape(),
-                            crate::host::type_ref::Shape::Array { length: None, .. }
-                        )
-                    })
-            })
+        // The sequence a facade's parameter at `index` takes, other than
+        // an array of a length.
+        let sequence = |index: usize| {
+            items.iter().find_map(
+                |item| match item.signature().parameters().get(index)?.shape() {
+                    crate::host::type_ref::Shape::Array {
+                        sequence: crate::host::type_ref::Sequence::Vec,
+                        ..
+                    } => Some(sequence::Kind::Vec),
+                    crate::host::type_ref::Shape::Array {
+                        sequence: crate::host::type_ref::Sequence::Slice,
+                        ..
+                    } => Some(sequence::Kind::Slice),
+                    _ => None,
+                },
+            )
         };
         // A number passed as an item's type parameter, as `Task::done`'s,
         // keeps its type, as a function passed to it does.
@@ -18283,15 +18287,14 @@ impl<'a> Parser<'a> {
                 ) =>
                 {
                     argument.ty = match *target {
-                        // `&[T; N]`, as `b"…"`, or `&[T]` where the facade
-                        // takes a slice, which crosses as a `Vec`.
+                        // `&[T; N]`, as `b"…"`, `&Vec<T>` or `&[T]` where
+                        // the facade takes the sequence its elements copy
+                        // to.
                         Ty::Array {
                             element,
-                            kind: sequence::Kind::Array(_) | sequence::Kind::Slice,
-                        } if slice(index) => Ty::Array {
-                            element,
-                            kind: sequence::Kind::Vec,
-                        },
+                            kind:
+                                sequence::Kind::Array(_) | sequence::Kind::Vec | sequence::Kind::Slice,
+                        } if let Some(kind) = sequence(index) => Ty::Array { element, kind },
                         target => target,
                     };
                 }
@@ -18446,103 +18449,105 @@ impl<'a> Parser<'a> {
                 });
             }
         }
-        let inputs = item
-            .signature()
-            .parameters()
-            .iter()
-            .enumerate()
-            .map(|(index, ty)| {
-                let originating = argument_origins
-                    .get(index)
-                    .and_then(Option::as_ref)
-                    .or(associated_origin.as_ref());
-                // A crate's `RangeInclusive<T>` takes the argument's range,
-                // of floats or of integers, and `T` that kind of number, as
-                // rustc infers `T` from `1.0..=30.0`.
-                if let Some(element) = range_inclusive_element(ty)
-                    && let Some(float) = arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .and_then(|argument| match self.inference.resolve(&argument.ty) {
-                            Ty::FloatRange => Some(true),
-                            Ty::InclusiveRange => Some(false),
-                            _ => None,
-                        })
-                {
-                    let element = self.instantiate_host_type(
-                        element,
-                        &mut parameters,
-                        &item_path,
-                        operation,
-                        item_owner.as_ref(),
-                        originating,
-                    )?;
-                    return Ok(self.inclusive_range_of(&element, Some(float)));
-                }
-                // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
-                // as an array of `T`, takes a shared borrow of an array too,
-                // as `table(columns, &self.events)` passes `&Vec<Event>`,
-                // whose items the columns' `|event: &Event|` read.
-                #[cfg(feature = "rust-import")]
-                if let crate::host::type_ref::Shape::Array {
-                    element,
-                    length: None,
-                } = ty.shape()
-                    && matches!(element.shape(), crate::host::type_ref::Shape::Parameter(_))
-                    && item.imported_identity().is_some()
-                    && arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .is_some_and(|argument| {
-                            matches!(
-                                self.inference.resolve(&argument.ty),
-                                Ty::Reference { mutable: false, target }
-                                    if matches!(
-                                        *target,
-                                        Ty::Array {
-                                            kind: sequence::Kind::Vec | sequence::Kind::Slice,
-                                            ..
-                                        }
-                                    )
-                            )
-                        })
-                {
-                    let item = self.instantiate_host_type(
-                        element,
-                        &mut parameters,
-                        &item_path,
-                        operation,
-                        item_owner.as_ref(),
-                        originating,
-                    )?;
-                    let borrowed = arguments
-                        .and_then(|arguments| arguments.get(index))
-                        .map(|argument| self.inference.resolve(&argument.ty))
-                        .unwrap_or(Ty::Unknown);
-                    // Its items are borrows of the array's elements; one
-                    // that can't be `T` is the mismatch rustc reports.
-                    if let Ty::Reference { target, .. } = &borrowed
-                        && let Ty::Array { element, .. } = target.as_ref()
-                        && self.unify_type(
-                            &item,
-                            &Ty::Reference {
-                                mutable: false,
-                                target: element.clone(),
-                            },
-                        )
+        let inputs =
+            item.signature()
+                .parameters()
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    let originating = argument_origins
+                        .get(index)
+                        .and_then(Option::as_ref)
+                        .or(associated_origin.as_ref());
+                    // A crate's `RangeInclusive<T>` takes the argument's range,
+                    // of floats or of integers, and `T` that kind of number, as
+                    // rustc infers `T` from `1.0..=30.0`.
+                    if let Some(element) = range_inclusive_element(ty)
+                        && let Some(float) = arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .and_then(|argument| match self.inference.resolve(&argument.ty) {
+                                Ty::FloatRange => Some(true),
+                                Ty::InclusiveRange => Some(false),
+                                _ => None,
+                            })
                     {
-                        return Ok(borrowed);
+                        let element = self.instantiate_host_type(
+                            element,
+                            &mut parameters,
+                            &item_path,
+                            operation,
+                            item_owner.as_ref(),
+                            originating,
+                        )?;
+                        return Ok(self.inclusive_range_of(&element, Some(float)));
                     }
-                    return Ok(Ty::sequence(sequence::Kind::Vec, item));
-                }
-                self.instantiate_host_type(
-                    ty,
-                    &mut parameters,
-                    &item_path,
-                    operation,
-                    item_owner.as_ref(),
-                    originating,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
+                    // as an array of `T`, takes a shared borrow of an array too,
+                    // as `table(columns, &self.events)` passes `&Vec<Event>`,
+                    // whose items the columns' `|event: &Event|` read.
+                    #[cfg(feature = "rust-import")]
+                    if let crate::host::type_ref::Shape::Array {
+                        element,
+                        sequence:
+                            crate::host::type_ref::Sequence::Vec
+                            | crate::host::type_ref::Sequence::Slice,
+                    } = ty.shape()
+                        && matches!(element.shape(), crate::host::type_ref::Shape::Parameter(_))
+                        && item.imported_identity().is_some()
+                        && arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .is_some_and(|argument| {
+                                matches!(
+                                    self.inference.resolve(&argument.ty),
+                                    Ty::Reference { mutable: false, target }
+                                        if matches!(
+                                            *target,
+                                            Ty::Array {
+                                                kind: sequence::Kind::Vec | sequence::Kind::Slice,
+                                                ..
+                                            }
+                                        )
+                                )
+                            })
+                    {
+                        let item = self.instantiate_host_type(
+                            element,
+                            &mut parameters,
+                            &item_path,
+                            operation,
+                            item_owner.as_ref(),
+                            originating,
+                        )?;
+                        let borrowed = arguments
+                            .and_then(|arguments| arguments.get(index))
+                            .map(|argument| self.inference.resolve(&argument.ty))
+                            .unwrap_or(Ty::Unknown);
+                        // Its items are borrows of the array's elements; one
+                        // that can't be `T` is the mismatch rustc reports.
+                        if let Ty::Reference { target, .. } = &borrowed
+                            && let Ty::Array { element, .. } = target.as_ref()
+                            && self.unify_type(
+                                &item,
+                                &Ty::Reference {
+                                    mutable: false,
+                                    target: element.clone(),
+                                },
+                            )
+                        {
+                            return Ok(borrowed);
+                        }
+                        return Ok(Ty::sequence(sequence::Kind::Vec, item));
+                    }
+                    self.instantiate_host_type(
+                        ty,
+                        &mut parameters,
+                        &item_path,
+                        operation,
+                        item_owner.as_ref(),
+                        originating,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         #[cfg(feature = "rust-import")]
         let output_origin = match item.signature().output().shape() {
             crate::host::type_ref::Shape::Imported { identity, .. } => receiver_origin
@@ -18631,7 +18636,7 @@ impl<'a> Parser<'a> {
                         if matches!(
                             this.shape(),
                             crate::host::type_ref::Shape::Array {
-                                length: Some(case_length),
+                                sequence: crate::host::type_ref::Sequence::Array(case_length),
                                 ..
                             } if case_length == length
                         )
@@ -19347,7 +19352,7 @@ impl<'a> Parser<'a> {
                     originating,
                 )?),
             ),
-            Shape::Array { element, length } => Ty::Array {
+            Shape::Array { element, sequence } => Ty::Array {
                 element: Box::new(self.instantiate_host_type(
                     element,
                     parameters,
@@ -19356,8 +19361,13 @@ impl<'a> Parser<'a> {
                     owner,
                     originating,
                 )?),
-                // A host's slice crosses as a `Vec`, which it copies.
-                kind: length.map_or(sequence::Kind::Vec, sequence::Kind::Array),
+                kind: match sequence {
+                    crate::host::type_ref::Sequence::Array(length) => {
+                        sequence::Kind::Array(*length)
+                    }
+                    crate::host::type_ref::Sequence::Vec => sequence::Kind::Vec,
+                    crate::host::type_ref::Sequence::Slice => sequence::Kind::Slice,
+                },
             },
             // A tuple is an array at runtime, as `event::listen_with`'s
             // `(Event, Status, window::Id)`.

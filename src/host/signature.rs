@@ -687,14 +687,14 @@ fn same_input_type(
         (
             Shape::Array {
                 element: left,
-                length: left_length,
+                sequence: left_sequence,
             },
             Shape::Array {
                 element: right,
-                length: right_length,
+                sequence: right_sequence,
             },
         ) => {
-            left_length == right_length
+            left_sequence == right_sequence
                 && same_input_type(left, right, left_parameters, right_parameters, mappings)?
         }
         (

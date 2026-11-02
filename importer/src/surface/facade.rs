@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 37;
+const SCHEMA: u32 = 38;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -783,8 +783,10 @@ pub enum Type {
     Option(Box<Type>),
     /// Rust's `Result<T, E>`, a Rawr `Result`.
     Result(Box<Type>, Box<Type>),
-    /// An output `Vec<T>` or slice, a Rawr array.
+    /// An output `Vec<T>`, a Rawr `Vec`.
     Array(Box<Type>),
+    /// A slice `[T]`, whose elements a call copies: a Rawr `[T]`.
+    Slice(Box<Type>),
     /// Rust's array `[T; length]`, a Rawr array of that length, as a
     /// relation's case `From<[u16; 2]>` takes.
     FixedArray { element: Box<Type>, length: u32 },
@@ -861,6 +863,7 @@ impl Type {
             }
             Self::Option(element)
             | Self::Array(element)
+            | Self::Slice(element)
             | Self::FixedArray { element, .. }
             | Self::Range(element) => {
                 element.opaque(opaque, found);
@@ -897,6 +900,7 @@ impl Type {
             }
             Self::Option(element)
             | Self::Array(element)
+            | Self::Slice(element)
             | Self::FixedArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
@@ -930,6 +934,7 @@ impl Type {
             | Self::Result(input, output) => input.declared(declared) && output.declared(declared),
             Self::Option(element)
             | Self::Array(element)
+            | Self::Slice(element)
             | Self::FixedArray { element, .. }
             | Self::Range(element)
             | Self::Reference {
@@ -3925,6 +3930,11 @@ fn ty(
             element: Box::new(ty(element, parameters)?),
             length: *length,
         },
+        Source::Sequence {
+            element,
+            owned: false,
+            ..
+        } => Type::Slice(Box::new(ty(element, parameters)?)),
         Source::Sequence { element, .. } => Type::Array(Box::new(ty(element, parameters)?)),
         Source::Tuple(members) => {
             let mut converted = Vec::new();

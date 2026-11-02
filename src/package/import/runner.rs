@@ -533,7 +533,7 @@ fn copy_scalar(ty: &host::type_ref::Type, facade: &host::facade::Definition) -> 
         // An array of a length of Copy values, as `position: [f32; 2]`.
         host::type_ref::Shape::Array {
             element,
-            length: Some(_),
+            sequence: host::type_ref::Sequence::Array(_),
         } => {
             !matches!(element.shape(), host::type_ref::Shape::Reference { .. })
                 && copy_scalar(element, facade)
@@ -1232,7 +1232,8 @@ fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             host::type_ref::Type::parameter(host::signature::case_variable(*index))?
         }
         facade::Type::Result(ok, err) => host::type_ref::Type::result(ty(ok)?, ty(err)?),
-        facade::Type::Array(element) => host::type_ref::Type::slice(ty(element)?),
+        facade::Type::Array(element) => host::type_ref::Type::vec(ty(element)?),
+        facade::Type::Slice(element) => host::type_ref::Type::slice(ty(element)?),
         facade::Type::FixedArray { element, length } => host::type_ref::Type::array(
             ty(element)?,
             usize::try_from(*length).expect("an array length fits in usize"),
