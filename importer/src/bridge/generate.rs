@@ -16069,10 +16069,13 @@ fn render_execution_tests<'a>(
                   for producer in PRODUCERS.iter().flat_map(|producers| producers.iter()) {\n\
                       let mut arena = Arena::new([11; 32]);\n\
                       let handle = producer(&mut arena).expect(\"nominal producer\");\n\
-                      match invoke_one(identity, handle.clone(), &mut arena) {\n\
+                      let slot = handle.slot as usize;\n\
+                      // The only copy of the handle: a consuming call moves the\n\
+                      // value out of its slot, where another copy would clone it.\n\
+                      match invoke_one(identity, handle, &mut arena) {\n\
                           Ok(_) => {\n\
                               if consumes {\n\
-                                  assert!(matches!(invoke_one(identity, handle, &mut arena), Err(Error::StaleHandle)));\n\
+                                  assert!(arena.slots[slot].value.is_none());\n\
                               }\n\
                               return;\n\
                           }\n\
@@ -16134,13 +16137,27 @@ fn render_module_execution_tests(
                 .map_err(request::unwritable)?;
         }
     }
+    // A struct the tests can build from primitives alone. One whose
+    // constructor takes another crate value, as `FieldSurface { leaf }`
+    // does, has no producer, so its fields have no value to read.
+    let producible = plans
+        .iter()
+        .filter(|plan| {
+            matches!(plan.operation(), Operation::StructConstructor { .. })
+                && producer_inputs(plan.operation()).is_some()
+        })
+        .map(structural_type)
+        .collect::<std::collections::BTreeSet<_>>();
     output
         .write_all(b"];\n\n#[cfg(test)]\npub(super) const ACCEPTS: &[([u8; 32], bool)] = &[\n")
         .map_err(request::unwritable)?;
     for index in indices {
         let plan = &plans[*index];
         let consumes = match plan.operation() {
-            Operation::StructField { field, .. } => !shared_field(field.ty()),
+            Operation::StructField { field, .. } if producible.contains(&structural_type(plan)) => {
+                !shared_field(field.ty())
+            }
+            Operation::StructField { .. } => continue,
             Operation::Method {
                 receiver,
                 signature,

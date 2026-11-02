@@ -943,29 +943,38 @@ impl Proof {
         })
     }
 
-    /// Each path package's name and directory, from its Cargo package id
-    /// (`path+file:///dir#name@version`, or `#version` when the directory
-    /// is named as the package).
+    /// Each path package's name and directory, from the Cargo package ids
+    /// the proof's entries carry: `path+file:///dir#name@version`, or
+    /// `path+file:///dir#version` when the directory is named as the
+    /// package.
     pub(crate) fn path_packages(&self) -> Vec<(String, String)> {
-        self.entries
+        let mut packages = self
+            .entries
             .iter()
-            .filter_map(|entry| {
-                let Entry::Directory {
-                    package_id: Some(id),
-                    path,
-                    ..
-                } = entry
-                else {
-                    return None;
-                };
-                let (url, fragment) = id.strip_prefix("path+file://")?.split_once('#')?;
+            .filter_map(|entry| match entry {
+                Entry::File { package_id, .. }
+                | Entry::Directory { package_id, .. }
+                | Entry::Missing { package_id, .. }
+                | Entry::Fact { package_id, .. } => package_id.as_deref(),
+                Entry::Registry { package_id, .. }
+                | Entry::Git { package_id, .. }
+                | Entry::Environment { package_id, .. }
+                | Entry::BuildMessage { package_id, .. }
+                | Entry::Directive { package_id, .. } => Some(package_id.as_ref()),
+                Entry::Workspace { .. } | Entry::EnvironmentProjection { .. } => None,
+            })
+            .filter_map(|id| {
+                let (directory, fragment) = id.strip_prefix("path+file://")?.split_once('#')?;
                 let name = match fragment.split_once('@') {
                     Some((name, _)) => name,
-                    None => url.rsplit('/').next()?,
+                    None => directory.rsplit('/').next()?,
                 };
-                Some((name.to_owned(), path.as_ref().to_owned()))
+                Some((name.to_owned(), directory.to_owned()))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        packages.sort_unstable();
+        packages.dedup();
+        packages
     }
 
     pub(crate) fn runner_harness(&self, limit: usize) -> Result<Harness> {

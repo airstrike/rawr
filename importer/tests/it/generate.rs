@@ -38,7 +38,7 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
     assert!(source.contains("facade_a::Forms::Tuple { 0: "));
     assert!(source.contains("struct Arena"));
     // The adapters hold native values in the arena, never behind a lock or
-    // a count. The runtime's own handles count their releases (D513.7).
+    // a count. The runtime counts and queues its handles' releases (D513.7).
     let adapters = manifest
         .files()
         .filter(|file| file.path().starts_with("src/rawr_adapters_"))
@@ -46,7 +46,7 @@ fn exact_operation_forms_emit_rooted_normalized_thunks() {
         .collect::<String>();
     assert!(!adapters.is_empty());
     assert!(!adapters.contains("Arc<"));
-    assert!(!source.contains("Mutex<"));
+    assert!(!adapters.contains("Mutex<"));
     assert!(!source.as_bytes().contains(&b'\r'));
 }
 

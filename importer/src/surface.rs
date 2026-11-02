@@ -39,16 +39,17 @@ fn has_unresolved_structural_parameters(
     }
 }
 
-/// Whether a use with no instance leaves one of the plan's parameters
-/// unknown: a trait's member through its `Self`, or an associated function
-/// of a generic impl, has its types only from an instance, as rustc needs
-/// them to name the call (E0282).
-fn needs_instance(representability: &crate::classify::representability::Representability) -> bool {
-    matches!(
-        representability,
-        crate::classify::representability::Representability::Invocation(plan)
-            if !plan.signature().parameters().is_empty()
-    )
+/// Whether `identity` is a trait's member through its `Self`
+/// (`surface::member`), which has its types only from an instance: with
+/// none, rustc can't name the call or its output (E0282).
+fn needs_instance(contract: &Contract<Classified>, identity: &identity::Identity) -> bool {
+    identity.implementation().is_some_and(|implementation| {
+        contract.outcomes().any(|outcome| {
+            outcome.identity().definition().is_some_and(|definition| {
+                identity::Implementation::self_members(&definition) == implementation
+            })
+        })
+    })
 }
 
 /// Uninhabited marker proving canonical demand sealing completed.
@@ -578,7 +579,7 @@ impl<B> Compiler<'_, B> {
             .outcome(&identity)
             .ok_or(Error::ForeignIdentity)?;
         if has_unresolved_structural_parameters(outcome.representability())
-            || needs_instance(outcome.representability())
+            || needs_instance(self.contract, &identity)
         {
             return Err(Error::UnconstrainedGeneric);
         }
@@ -632,7 +633,7 @@ impl<B> Compiler<'_, B> {
         }
         let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
         if has_unresolved_structural_parameters(outcome.representability())
-            || needs_instance(outcome.representability())
+            || needs_instance(self.contract, base)
         {
             return Err(Error::UnconstrainedGeneric);
         }
