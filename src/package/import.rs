@@ -2362,7 +2362,9 @@ fn build(
         let instance = plan.signature().instance().cloned().unwrap_or(
             representability::convert::Type::Builtin(representability::convert::Builtin::Str),
         );
-        let receiver = types.convert(&instance, &[], allocation)?;
+        // A `&str` receiver, as rustc's `<&str as Trait>::method(text)`
+        // takes it, not a `String` (#706).
+        let receiver = types.convert_input(&instance, &[], allocation)?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
         let lent = (lent_static(plan.signature()) << 1)
             | u64::from(

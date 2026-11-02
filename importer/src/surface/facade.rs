@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 36;
+const SCHEMA: u32 = 37;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1045,7 +1045,12 @@ impl Plan {
                     inputs
                         .try_reserve_exact(item.signature.inputs.len() + 1)
                         .map_err(|_| super::Error::Allocation)?;
-                    inputs.push(Type::String);
+                    // The impl's `&str`, as rustc's `<&str as Trait>::
+                    // method(text)` takes it, apart from a `String` (#706).
+                    inputs.push(Type::Reference {
+                        mutable: false,
+                        target: Box::new(Type::String),
+                    });
                     inputs.extend(std::mem::take(&mut item.signature.inputs).into_vec());
                     item.signature.inputs = inputs.into_boxed_slice();
                     let mut items = std::mem::take(&mut facade.items).into_vec();
