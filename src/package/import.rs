@@ -735,9 +735,10 @@ fn imported_resolution_report(
             && let Some(origin) = outcome.origin()
         {
             evidence.push(UnavailableEvidence {
-                reason: "its signature names a Rust type that Rawr can't name yet".into(),
+                reason: UNDECLARED.into(),
                 source: origin.source(),
                 declaration: origin.declaration(),
+                declared: DEFINED,
             });
         }
     }
@@ -761,13 +762,9 @@ fn imported_resolution_report(
         .ok_or(diagnostic::Error::EmptySourceIdentity)?;
     let mut builder = diagnostic::Report::error(
         diagnostic::code::RESOLVE_UNKNOWN_IMPORT,
-        format!("imported Rust path `{path}` is unavailable: {reason}"),
+        format!("`{path}` can't be used yet: {reason}"),
     )
-    .primary(
-        source.clone(),
-        *reference,
-        Some("Rawr use requires this imported Rust path".into()),
-    )?;
+    .primary(source.clone(), *reference, None)?;
     let mut external = Vec::new();
     let external_capacity = evidence
         .len()
@@ -776,13 +773,10 @@ fn imported_resolution_report(
     external
         .try_reserve_exact(external_capacity)
         .map_err(|_| diagnostic::Error::Allocation)?;
-    for retained in &evidence {
-        external.push((retained.source, "Rust export is retained here"));
-        if retained.declaration != retained.source {
-            external.push((
-                retained.declaration,
-                "Rust declaration or policy evidence is retained here",
-            ));
+    for unavailable in &evidence {
+        external.push((unavailable.declaration, unavailable.declared));
+        if unavailable.declaration != unavailable.source {
+            external.push((unavailable.source, "exported here"));
         }
     }
     external.sort_unstable();
@@ -825,10 +819,21 @@ fn joined_reasons(evidence: &[UnavailableEvidence<'_>]) -> Result<Box<str>, diag
     Ok(joined.into_boxed_str())
 }
 
+/// Why an item whose signature names a type no facade declares can't be
+/// used.
+const UNDECLARED: &str = "its signature names a type that isn't supported yet";
+
+/// The label at an unavailable item's definition.
+const DEFINED: &str = "defined here";
+
 struct UnavailableEvidence<'a> {
     reason: Box<str>,
+    /// Where the path is made public.
     source: &'a rawr_import::api::model::Span,
+    /// Where the item is defined, or where it was excluded.
     declaration: &'a rawr_import::api::model::Span,
+    /// The label at `declaration`.
+    declared: &'static str,
 }
 
 fn unavailable_evidence<'contract>(
@@ -841,24 +846,26 @@ fn unavailable_evidence<'contract>(
             reason: reason.reason().into(),
             source: reason.source_span(),
             declaration: reason.policy_span(),
+            declared: "excluded here",
         },
         R::Rejected(reason) => UnavailableEvidence {
-            reason: format!("unsupported Rust declaration ({:?})", reason.kind()).into_boxed_str(),
+            reason: reason.describe().into(),
             source: reason.span(),
             declaration: reason.span(),
+            declared: DEFINED,
         },
         R::Value(_) => UnavailableEvidence {
-            reason: "type aliases are deferred until concrete substitution proof exists".into(),
+            reason: "it is a type alias, which isn't supported as a path yet".into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
+            declared: DEFINED,
         },
         R::FunctionItem(plan) if callable_generic(plan) => return None,
         R::FunctionItem(_) => UnavailableEvidence {
-            reason:
-                "a generic function with a const or closure parameter is not supported in Rawr yet"
-                    .into(),
+            reason: "it is a generic function with a const or closure parameter".into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
+            declared: DEFINED,
         },
         R::Invocation(plan)
             if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
@@ -869,22 +876,21 @@ fn unavailable_evidence<'contract>(
                     .into(),
                 source: outcome.origin()?.source(),
                 declaration: outcome.origin()?.declaration(),
+                declared: DEFINED,
             }
         }
         R::Invocation(_) => return None,
         R::Struct(plan) if plan.declaration_only() => UnavailableEvidence {
-            reason:
-                "generic struct construction is deferred until concrete substitution proof exists"
-                    .into(),
+            reason: "it is a generic struct, which can't be constructed yet".into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
+            declared: DEFINED,
         },
         R::Enum(plan) if plan.declaration_only() => UnavailableEvidence {
-            reason:
-                "generic enum construction is deferred until concrete substitution proof exists"
-                    .into(),
+            reason: "it is a generic enum, which can't be constructed yet".into(),
             source: outcome.origin()?.source(),
             declaration: outcome.origin()?.declaration(),
+            declared: DEFINED,
         },
         R::Struct(_) | R::Enum(_) | R::Function(_) | R::Method(_) | R::Constant(_) => return None,
     };
@@ -1113,7 +1119,7 @@ fn augment_external(
             ));
         }
         let reason = match outcome.representability() {
-            Representability::Rejected(reason) => Some(reason.kind().describe()),
+            Representability::Rejected(reason) => Some(reason.describe()),
             Representability::Invocation(plan)
                 if !writes_declared(plan.signature(), plan.call(), plan.crossings()) =>
             {
@@ -1121,16 +1127,11 @@ fn augment_external(
             }
             // An item whose signature names a type no facade declares is
             // left out of the facade (`names_declared`).
-            _ if !names_declared(outcome, &paths.declared()) => {
-                Some("its signature names a Rust type that Rawr can't name yet")
-            }
+            _ if !names_declared(outcome, &paths.declared()) => Some(UNDECLARED),
             _ => None,
         };
         if let Some(reason) = reason {
-            reasons.push(format!(
-                "rawr has no binding for `{}`: {reason}",
-                outcome.name(),
-            ));
+            reasons.push(format!("`{}` can't be used yet: {reason}", outcome.name()));
         }
     }
     spans.sort_unstable();

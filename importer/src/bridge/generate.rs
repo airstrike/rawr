@@ -726,15 +726,18 @@ enum Error {
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(bug) = self.bug() {
+            return write!(f, "rawr bug: {bug}");
+        }
         match self {
-            Self::MissingArgument => f.write_str("MissingArgument"),
-            Self::TypeMismatch => f.write_str("TypeMismatch"),
-            Self::StaleHandle => f.write_str("StaleHandle"),
-            Self::ArenaFull => f.write_str("ArenaFull"),
-            Self::Allocation => f.write_str("Allocation"),
-            Self::Malformed => f.write_str("Malformed"),
-            Self::Cardinality => f.write_str("Cardinality"),
-            Self::MissingAdapter => f.write_str("MissingAdapter"),
+            Self::MissingArgument
+            | Self::TypeMismatch
+            | Self::StaleHandle
+            | Self::Malformed
+            | Self::Cardinality
+            | Self::MissingAdapter => unreachable!("a rawr bug is written above"),
+            Self::ArenaFull => f.write_str("more than 1000000 values of crate types are alive at once"),
+            Self::Allocation => f.write_str("memory allocation failed"),
             Self::Stale => f.write_str("Stale"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
             Self::Leased => f.write_str(
@@ -743,7 +746,7 @@ impl std::fmt::Debug for Error {
             Self::Value(reason) => write!(f, "a value native code gave back is not its type: {reason}"),
             Self::NotClone(ty) => write!(
                 f,
-                "`{ty}` is read through a borrow guard, so Rawr copies it, and it does not implement `Clone`"
+                "reading a `{ty}` through a borrow guard is not supported yet: `{ty}` doesn't implement `Clone`"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
             Self::Home(reason) => f.write_str(reason),
@@ -752,6 +755,29 @@ impl std::fmt::Debug for Error {
 }
 
 impl Error {
+    /// What only a rawr bug causes: the program's types, argument counts
+    /// and moves are checked before any adapter runs (D664.1).
+    fn bug(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::MissingArgument => "an adapter ran without one of its arguments",
+            Self::TypeMismatch => "a value reached an adapter as a type its signature doesn't take",
+            Self::StaleHandle => "a crate value's handle was used after its value was released",
+            Self::Malformed => "an adapter invocation's payload is malformed",
+            Self::Cardinality => "an adapter ran with a number of arguments it doesn't take",
+            Self::MissingAdapter => "a call names an adapter the generated table doesn't have",
+            _ => return None,
+        })
+    }
+
+    /// The error as the program sees it. One that only a rawr bug causes
+    /// panics, naming the bug.
+    fn reported(self) -> Self {
+        if let Some(bug) = self.bug() {
+            panic!("rawr bug: {bug}");
+        }
+        self
+    }
+
     fn code(&self) -> u8 {
         match self {
             Self::MissingArgument => 1,
@@ -1529,7 +1555,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceLocal {
 }
 
 fn place_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
-    __rawr_internal::EvalAltResult::ErrorRuntime(format!("native place: {error:?}").into(), __rawr_internal::Position::NONE).into()
+    runtime_error(error)
 }
 
 impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
@@ -1643,7 +1669,7 @@ fn materialize(
         }
         Ok(output)
     })
-    .map_err(|error| format!("{error:?}"))
+    .map_err(|error| format!("{:?}", error.reported()))
 }
 
 /// [`materialize`] of an output that holds script values an erased generic
@@ -1654,7 +1680,7 @@ fn materialize_checked(
     convert: impl FnOnce(&mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error>,
 ) -> Result<Dynamic, String> {
     let output = materialize(witness, convert)?;
-    check_values(witness, &output).map_err(|error| format!("{error:?}"))?;
+    check_values(witness, &output).map_err(|error| format!("{:?}", error.reported()))?;
     Ok(output)
 }
 
@@ -2230,9 +2256,9 @@ fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> 
     Ok(output)
 }
 
-fn runtime_error(error: impl std::fmt::Debug) -> Box<__rawr_internal::EvalAltResult> {
+fn runtime_error(error: Error) -> Box<__rawr_internal::EvalAltResult> {
     __rawr_internal::EvalAltResult::ErrorRuntime(
-        format!("{error:?}").into(),
+        format!("{:?}", error.reported()).into(),
         __rawr_internal::Position::NONE,
     )
     .into()

@@ -13132,6 +13132,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: kind.name().into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
         }
@@ -13145,6 +13147,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: trait_name,
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
         }
@@ -13373,6 +13377,8 @@ impl<'a> Parser<'a> {
                             owner: name.clone(),
                             capability: "Default".into(),
                             operation: span,
+                            derive: false,
+                            required_by: None,
                         });
                     }
                     format!("{DEFAULT_DISPATCHER}({})", witness_variable(name))
@@ -14172,6 +14178,8 @@ impl<'a> Parser<'a> {
                     owner: owner.name(&self.models),
                     capability,
                     operation: trait_name.span,
+                    derive: matches!(owner, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             // `impl Both<i64> for C` needs `C: Convert<i64>` for `trait
@@ -14199,6 +14207,8 @@ impl<'a> Parser<'a> {
                         owner: owner.name(&self.models),
                         capability: format!("{parent}<{names}>").into(),
                         operation: trait_name.span,
+                        derive: matches!(owner, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
             }
@@ -14242,15 +14252,11 @@ impl<'a> Parser<'a> {
                 });
             if let Some(capability) = missing {
                 return Err(Error::MissingCapability {
-                    owner: format!(
-                        "{} (`{}::{}`)",
-                        ty.name(&self.models),
-                        trait_name.text,
-                        name.text
-                    )
-                    .into(),
+                    owner: ty.name(&self.models),
                     capability,
                     operation: name.span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: Some(format!("{}::{}", trait_name.text, name.text).into()),
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;
@@ -15170,14 +15176,16 @@ impl<'a> Parser<'a> {
         let least = if name == "select" { 1 } else { 2 };
         if count < least || count > MOST {
             return Err(unsupported(
-                format!("`{name}!` of {count} futures; Rawr takes {least} to {MOST}"),
+                format!(
+                    "`{name}!` of {count} futures is not supported yet; it takes {least} to {MOST}"
+                ),
                 end,
             ));
         }
         // The core has `join!` only, so far (D513.7).
         if count > 1 && name != "join" {
             return Err(unsupported(
-                format!("`{name}!`; Rawr runs `join!` here so far"),
+                format!("`{name}!` of more than one future is not supported yet; `join!` is"),
                 end,
             ));
         }
@@ -15722,6 +15730,8 @@ impl<'a> Parser<'a> {
             owner: ty.name(&this.models),
             capability: trait_name.clone(),
             operation: call,
+            derive: matches!(ty, Ty::Script(..)),
+            required_by: None,
         };
         let generic_trait = self
             .models
@@ -16425,6 +16435,8 @@ impl<'a> Parser<'a> {
                     owner: target.name(&self.models),
                     capability: format!("From<{}>", conversion.source.name(&self.models)).into(),
                     operation: conversion.span,
+                    derive: matches!(target, Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let helper = if helper.ends_with(", ") {
@@ -16702,7 +16714,7 @@ impl<'a> Parser<'a> {
                     output,
                     span,
                 } = *operation;
-                for (parameter, ty, required) in requirements.iter() {
+                for (_, ty, required) in requirements.iter() {
                     let ty = self.inference.resolve(ty);
                     // A parameter no script value fixes is rustc's to infer
                     // and to check (D594). So is one a crate's own type
@@ -16724,14 +16736,13 @@ impl<'a> Parser<'a> {
                     for capability in required.iter() {
                         if !self.type_provides(&ty, capability) {
                             return Err(Error::MissingCapability {
-                                owner: format!(
-                                    "{} parameter `{parameter}` instantiated as {}",
-                                    item.path(),
-                                    ty.name(&self.models)
-                                )
-                                .into(),
+                                owner: ty.name(&self.models),
                                 capability: capability.name().into(),
                                 operation: span,
+                                derive: matches!(ty, Ty::Script(..)),
+                                required_by: Some(
+                                    crate::host::path::public(&item.path()).as_ref().into(),
+                                ),
                             });
                         }
                     }
@@ -19561,6 +19572,8 @@ impl<'a> Parser<'a> {
                 owner: value.ty.name(&self.models),
                 capability: "Default".into(),
                 operation: expression,
+                derive: matches!(value.ty, Ty::Script(..)),
+                required_by: None,
             });
         }
         Ok(value)
@@ -31257,6 +31270,8 @@ impl<'a> Parser<'a> {
                 owner: owner_ty.name(&self.models),
                 capability: format!("Index<{}>", index_ty.name(&self.models)).into(),
                 operation: expression,
+                derive: matches!(owner_ty, Ty::Script(..)),
+                required_by: None,
             });
         };
         let substitution = self.method_substitution(&definition, Some(&owner_ty), expression)?;
@@ -31638,6 +31653,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "PartialEq".into(),
                     operation: expression,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             let equal = self.equal_source(
@@ -31692,6 +31709,8 @@ impl<'a> Parser<'a> {
                 owner: peeled.name(&self.models),
                 capability: "PartialEq".into(),
                 operation: lhs.span,
+                derive: matches!(peeled, Ty::Script(..)),
+                required_by: None,
             }),
             // Tuples and arrays of crate types: element by element, each by
             // its type's own `eq` where it has one.
@@ -31702,6 +31721,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: expression,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 let equal = self.prelude_op(
@@ -32524,6 +32545,8 @@ impl<'a> Parser<'a> {
                 owner: ty.name(&self.models),
                 capability: "Ord".into(),
                 operation: member_span,
+                derive: matches!(ty, Ty::Script(..)),
+                required_by: None,
             });
         };
         let [first, second, third] = names;
@@ -33338,6 +33361,8 @@ impl<'a> Parser<'a> {
                 owner: other.name(&self.models),
                 capability: "FromStr".into(),
                 operation: span,
+                derive: matches!(other, Ty::Script(..)),
+                required_by: None,
             }),
         }
     }
@@ -34474,6 +34499,8 @@ impl<'a> Parser<'a> {
                         owner: name,
                         capability: "Clone".into(),
                         operation: member_span,
+                        derive: false,
+                        required_by: None,
                     });
                 }
                 // A hand-written `Clone` runs for the value's type.
@@ -36146,6 +36173,8 @@ impl<'a> Parser<'a> {
                             owner: "Vec<T>".into(),
                             capability: format!("From<{}>", ty.name(&self.models)).into(),
                             operation: call,
+                            derive: false,
+                            required_by: None,
                         });
                     }
                 };
@@ -36687,6 +36716,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Default".into(),
                         operation: call,
+                        derive: matches!(target, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.default_source(&target, call)?
@@ -36750,6 +36781,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Default".into(),
                         operation: call,
+                        derive: matches!(target, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 let new = self.temporary("new");
@@ -37161,6 +37194,8 @@ impl<'a> Parser<'a> {
                     owner: name,
                     capability: "Default".into(),
                     operation: member_span,
+                    derive: false,
+                    required_by: None,
                 });
             }
             self.capture_witnesses();
@@ -39052,6 +39087,8 @@ impl<'a> Parser<'a> {
                     owner: error.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(error.as_ref(), Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
@@ -39621,6 +39658,8 @@ impl<'a> Parser<'a> {
                         owner: target.name(&self.models),
                         capability: "Copy".into(),
                         operation: member_span,
+                        derive: matches!(target.as_ref(), Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 source.push_text(o.as_str());
@@ -39805,6 +39844,8 @@ impl<'a> Parser<'a> {
                     owner: this.inference.resolve(ty).name(&this.models),
                     capability: "Debug".into(),
                     operation: member_span,
+                    derive: matches!(this.inference.resolve(ty), Ty::Script(..)),
+                    required_by: None,
                 })
             }
         };
@@ -40178,6 +40219,8 @@ impl<'a> Parser<'a> {
                             owner: model.name().into(),
                             capability: "Default".into(),
                             operation: span,
+                            derive: true,
+                            required_by: None,
                         }
                     })?;
                 let helper = self.push_op(Op::Default {
@@ -40222,6 +40265,8 @@ impl<'a> Parser<'a> {
                             owner: ty.name(&self.models),
                             capability: "Default".into(),
                             operation: span,
+                            derive: matches!(ty, Ty::Script(..)),
+                            required_by: None,
                         });
                     }
                     // An imported type's `default` comes from its crate's
@@ -40244,6 +40289,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "Default".into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 })
             }
         })
@@ -40336,6 +40383,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
@@ -40347,6 +40396,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 if self.models.std_traits.contains("PartialEq") {
@@ -40367,6 +40418,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "PartialEq".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
@@ -40449,6 +40502,8 @@ impl<'a> Parser<'a> {
                         owner: ty.name(&self.models),
                         capability: "Debug".into(),
                         operation: span,
+                        derive: matches!(ty, Ty::Script(..)),
+                        required_by: None,
                     });
                 }
                 if self.models.std_traits.contains("Debug") {
@@ -40648,6 +40703,8 @@ impl<'a> Parser<'a> {
                     owner: ty.name(&self.models),
                     capability: "Debug".into(),
                     operation: span,
+                    derive: matches!(ty, Ty::Script(..)),
+                    required_by: None,
                 })
             }
         })
@@ -41415,6 +41472,8 @@ impl<'a> Parser<'a> {
             owner: ty.name(&this.models),
             capability: "Ord".into(),
             operation: value.span,
+            derive: matches!(ty, Ty::Script(..)),
+            required_by: None,
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
         let pair = (
@@ -41583,6 +41642,8 @@ impl<'a> Parser<'a> {
                     owner: output.name(&self.models),
                     capability: "Ord".into(),
                     operation: member_span,
+                    derive: matches!(output, Ty::Script(..)),
+                    required_by: None,
                 })?
             } else {
                 origin::Fragment::plain(format!("{function}.call({best}, {current})"))
@@ -41597,6 +41658,8 @@ impl<'a> Parser<'a> {
                 owner: element.name(&self.models),
                 capability: "Ord".into(),
                 operation: member_span,
+                derive: matches!(element, Ty::Script(..)),
+                required_by: None,
             })?
         };
         let key_value = if keyed {
@@ -44563,6 +44626,8 @@ impl<'a> Parser<'a> {
                 owner: name,
                 capability: format!("From<{}>", source.name(&self.models)).into(),
                 operation: expression,
+                derive: false,
+                required_by: None,
             });
         }
         // A crate trait's function without `self` for this type.
@@ -44975,6 +45040,8 @@ impl<'a> Parser<'a> {
                             owner: full.into(),
                             capability: format!("From<{}>", source.name(&self.models)).into(),
                             operation: call,
+                            derive: false,
+                            required_by: None,
                         });
                     };
                     self.coerce_expr(&from, argument)?;
@@ -45476,6 +45543,8 @@ impl<'a> Parser<'a> {
                     owner: model.name().into(),
                     capability: format!("From<{}>", source.name(&self.models)).into(),
                     operation: call,
+                    derive: true,
+                    required_by: None,
                 });
             };
             self.coerce_expr(&from, argument)?;
@@ -47273,6 +47342,8 @@ impl<'a> Parser<'a> {
                     owner: from_error.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(from_error.as_ref(), Ty::Script(..)),
+                    required_by: None,
                 });
             };
             let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
@@ -47299,6 +47370,8 @@ impl<'a> Parser<'a> {
                     owner: source.name(&self.models),
                     capability: "std::error::Error".into(),
                     operation: value.span,
+                    derive: matches!(source, Ty::Script(..)),
+                    required_by: None,
                 });
             };
             *value = self.operator_expr(object, target, value.span);
@@ -47348,6 +47421,8 @@ impl<'a> Parser<'a> {
                     owner: concrete.name(&self.models),
                     capability: trait_name,
                     operation: value.span,
+                    derive: matches!(concrete, Ty::Script(..)),
+                    required_by: None,
                 });
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.
@@ -47718,9 +47793,8 @@ impl<'a> Parser<'a> {
             },
             method: method.into(),
             reason: format!(
-                "`{source}` has no `From` conversion into `{target}`. iced master has no `From` \
-                 conversion from a widget into `Element`, unlike iced 0.13 and 0.14, so pass the \
-                 widget as it is or call `.boxed()`"
+                "the trait bound `{target}: From<{source}>` is not satisfied; pass the widget \
+                 as it is, or call `.boxed()`"
             )
             .into(),
             call,
@@ -47803,6 +47877,8 @@ impl<'a> Parser<'a> {
                         owner: owner.name().into(),
                         capability: trait_name,
                         operation: call,
+                        derive: true,
+                        required_by: None,
                     });
                 };
                 let item = crate::item::Value::new(
@@ -48655,6 +48731,8 @@ impl<'a> Parser<'a> {
             owner: model.name().into(),
             capability: capability.name().into(),
             operation: span,
+            derive: true,
+            required_by: None,
         })
     }
 
