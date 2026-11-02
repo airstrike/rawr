@@ -1,11 +1,13 @@
 //! D711 step 1: the std table rawr embeds (`src/std_table/`). One walk of
-//! the sysroot's `core`, `alloc` and `std` writes two sorted, tab-separated
+//! the sysroot's `core`, `alloc` and `std` writes three sorted, tab-separated
 //! files:
 //!
 //! - `paths.tsv`: every public path a program can write, with its
 //!   namespace (`t`, `v` or `m`), its kind, the stability of the path (its
 //!   modules' and its item's: `s`, or `u feature issue reason`), and the
 //!   definition it names (`=` when it is that path);
+//! - `impls.tsv` (step 3): each impl of a stable trait in std's crates that
+//!   stable Rust can name, with its header (`Table::impl_line`);
 //! - `items.tsv`: each definition, with its own stability and generics,
 //!   and its members (a trait's items, a type's inherent items, an enum's
 //!   variants) under its path. A trait's line ends with its supertraits,
@@ -188,6 +190,8 @@ struct Table<'tcx> {
     /// The stable traits, with their paths, whose members' signatures are
     /// written once every public path is known.
     traits: Vec<(DefId, String)>,
+    /// `impls.tsv`'s lines (D711 step 3).
+    impls: BTreeSet<String>,
 }
 
 fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
@@ -211,6 +215,7 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         public: HashMap::new(),
         prelude: HashSet::new(),
         traits: Vec::new(),
+        impls: BTreeSet::new(),
     };
     for (krate, name) in &roots {
         let root = krate.as_def_id();
@@ -285,8 +290,14 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
     }
     // Each trait's supertraits and its members' signatures, in the public
     // paths a program writes.
-    for (def_id, canonical) in std::mem::take(&mut table.traits) {
-        table.trait_signatures(def_id, &canonical);
+    let traits = std::mem::take(&mut table.traits);
+    for (def_id, canonical) in &traits {
+        table.trait_signatures(*def_id, canonical);
+    }
+    // Each stable trait's impls in std's crates (D711 step 3).
+    let crates = roots.iter().map(|(krate, _)| *krate).collect::<Vec<_>>();
+    for (def_id, canonical) in &traits {
+        table.trait_impls(*def_id, canonical, &crates);
     }
     // Every primitive's inherent items, under its name: `i64::pow`.
     for (name, simplified) in primitives() {
@@ -300,6 +311,14 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
     }
     write_sorted(out.join("paths.tsv"), &table.paths)?;
     write_sorted(out.join("items.tsv"), &table.items)?;
+    let mut text = String::new();
+    for line in &table.impls {
+        text.push_str(line);
+        text.push('\n');
+    }
+    let path = out.join("impls.tsv");
+    fs::write(&path, text)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
     Ok(())
 }
 
@@ -889,4 +908,185 @@ impl<'tcx> Table<'tcx> {
         }
         text
     }
+}
+
+/// std's trait impls (D711 step 3): `impls.tsv` has one line per impl of a
+/// stable trait in `core`, `alloc` or `std` that stable Rust can name,
+///
+/// `trait  key  self  arguments  generics  where  associated`
+///
+/// with the trait's definition, the self type's simplified key (`key`),
+/// the self type and the trait's arguments after `Self` as a program
+/// writes them, the impl's type and const parameters (`T U const:N`), its
+/// where-clauses (`T: PartialEq<U>`) and its associated types (`Target =
+/// str`), each list split by `, ` outside brackets. Sorted, so the impls of
+/// a trait for one key are adjacent.
+impl<'tcx> Table<'tcx> {
+    fn trait_impls(&mut self, def_id: DefId, canonical: &str, crates: &[CrateNum]) {
+        let tcx = self.tcx;
+        if stability(tcx, def_id).is_some() || tcx.trait_is_auto(def_id) {
+            return;
+        }
+        let mut impls = tcx.all_impls(def_id).collect::<Vec<_>>();
+        impls.sort_by_key(|implementation| definition_path(tcx, *implementation));
+        for implementation in impls {
+            if !crates.contains(&implementation.krate)
+                || tcx.impl_polarity(implementation) != ty::ImplPolarity::Positive
+                || stability(tcx, implementation).is_some()
+            {
+                continue;
+            }
+            if let Some(line) = self.impl_line(implementation, canonical) {
+                self.impls.insert(line);
+            }
+        }
+    }
+
+    fn impl_line(&self, implementation: DefId, canonical: &str) -> Option<String> {
+        let tcx = self.tcx;
+        let trait_ref = tcx
+            .impl_trait_ref(implementation)
+            .instantiate_identity()
+            .skip_norm_wip();
+        let self_ty = trait_ref.self_ty();
+        let key = simplified(tcx, self_ty)?;
+        let arguments = trait_ref.args[1..]
+            .iter()
+            .filter_map(|argument| match argument.kind() {
+                ty::GenericArgKind::Type(ty) => Some(ty),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !self.nameable(self_ty) || !arguments.iter().all(|ty| self.nameable(*ty)) {
+            return None;
+        }
+        let generics = tcx
+            .generics_of(implementation)
+            .own_params
+            .iter()
+            .filter_map(|parameter| match parameter.kind {
+                GenericParamDefKind::Type { .. } => Some(parameter.name.to_string()),
+                GenericParamDefKind::Const { .. } => Some(format!("const:{}", parameter.name)),
+                GenericParamDefKind::Lifetime => None,
+            })
+            .collect::<Vec<_>>();
+        let clauses = tcx
+            .predicates_of(implementation)
+            .predicates
+            .iter()
+            .map(|(clause, _)| *clause)
+            .collect::<Vec<_>>();
+        // An impl that needs an unstable trait (`F: FnPtr`) is none stable
+        // Rust can use, except through `A: Allocator`, which the default
+        // `Global` satisfies.
+        let allocator = |def_id: DefId| tcx.item_name(def_id).as_str() == "Allocator";
+        if clauses.iter().any(|clause| {
+            matches!(clause.kind().skip_binder(), ty::ClauseKind::Trait(predicate)
+                if stability(tcx, predicate.def_id()).is_some()
+                    && !allocator(predicate.def_id())
+                    && Some(predicate.def_id()) != tcx.lang_items().meta_sized_trait()
+                    && Some(predicate.def_id()) != tcx.lang_items().pointee_sized_trait())
+        }) {
+            return None;
+        }
+        // Each subject's bounds, in the order its clauses first name it.
+        let mut subjects = Vec::new();
+        for clause in &clauses {
+            let subject = match clause.kind().skip_binder() {
+                ty::ClauseKind::Trait(predicate) => predicate.self_ty(),
+                ty::ClauseKind::Projection(predicate) => predicate.projection_term.args.type_at(0),
+                _ => continue,
+            };
+            if !subjects.contains(&subject) {
+                subjects.push(subject);
+            }
+        }
+        let mut wheres = Vec::new();
+        for subject in subjects {
+            let bounds = self
+                .bounds(subject, &clauses)
+                .into_iter()
+                .filter(|bound| bound != "?Sized")
+                .collect::<Vec<_>>();
+            if !bounds.is_empty() {
+                wheres.push(format!("{}: {}", self.ty(subject), bounds.join(" + ")));
+            }
+        }
+        let mut associated = Vec::new();
+        for member in tcx.associated_item_def_ids(implementation) {
+            if tcx.def_kind(*member) != DefKind::AssocTy {
+                continue;
+            }
+            let Some(name) = tcx.opt_item_name(*member) else {
+                continue;
+            };
+            let ty = tcx.type_of(*member).instantiate_identity().skip_norm_wip();
+            associated.push(format!("{name} = {}", self.ty(ty)));
+        }
+        Some(format!(
+            "{canonical}\t{key}\t{}\t{}\t{}\t{}\t{}",
+            self.ty(self_ty),
+            arguments
+                .iter()
+                .map(|ty| self.ty(*ty))
+                .collect::<Vec<_>>()
+                .join(", "),
+            generics.join(" "),
+            wheres.join(", "),
+            associated.join(", "),
+        ))
+    }
+
+    /// Whether a program can name `ty` on stable Rust: every type it holds
+    /// has a stable public path, and it holds no closure or opaque type.
+    fn nameable(&self, ty: ty::Ty<'tcx>) -> bool {
+        ty.walk().all(|argument| {
+            let Some(ty) = argument.as_type() else {
+                return true;
+            };
+            match ty.kind() {
+                // `Global`, unstable, is the allocator a type's default
+                // names, which its path leaves out: `Vec<T>`.
+                ty::Adt(definition, _) => {
+                    definition_path(self.tcx, definition.did()) == "alloc::alloc::Global"
+                        || self
+                            .public
+                            .get(&definition.did())
+                            .is_some_and(|(stable, _)| *stable)
+                }
+                ty::Foreign(def_id) => self.public.get(def_id).is_some_and(|(stable, _)| *stable),
+                ty::Closure(..)
+                | ty::CoroutineClosure(..)
+                | ty::Coroutine(..)
+                | ty::CoroutineWitness(..)
+                | ty::FnDef(..)
+                | ty::Pat(..)
+                | ty::UnsafeBinder(..) => false,
+                ty::Alias(_, alias) => matches!(alias.kind, ty::AliasTyKind::Projection { .. }),
+                _ => true,
+            }
+        })
+    }
+}
+
+/// The key `impls.tsv` files an impl's self type under, as rustc's
+/// simplified type: a primitive's name, an ADT's definition, `&`, `&mut`,
+/// `[]`, `[;]`, `()`, `fn`, `dyn`, `*`, `!`, or `_` for a type parameter
+/// (a blanket impl).
+fn simplified<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> Option<String> {
+    Some(match ty.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => ty.to_string(),
+        ty::Adt(definition, _) => definition_path(tcx, definition.did()),
+        ty::Foreign(def_id) => definition_path(tcx, *def_id),
+        ty::Array(..) => "[;]".to_owned(),
+        ty::Slice(_) => "[]".to_owned(),
+        ty::Ref(_, _, mutability) => if mutability.is_mut() { "&mut" } else { "&" }.to_owned(),
+        ty::RawPtr(..) => "*".to_owned(),
+        ty::Tuple(_) => "()".to_owned(),
+        ty::FnPtr(..) => "fn".to_owned(),
+        ty::Dynamic(..) => "dyn".to_owned(),
+        ty::Never => "!".to_owned(),
+        ty::Param(_) => "_".to_owned(),
+        _ => return None,
+    })
 }

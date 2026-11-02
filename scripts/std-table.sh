@@ -40,7 +40,7 @@ printf '%s %s\n' "$channel" "$target" > "$out/TOOLCHAIN"
 
 table="$root/src/std_table"
 if [[ "${1:-}" == "--check" ]]; then
-    for file in paths.tsv items.tsv TOOLCHAIN; do
+    for file in paths.tsv items.tsv impls.tsv TOOLCHAIN; do
         if ! cmp -s "$out/$file" "$table/$file"; then
             echo "std-table: src/std_table/$file is not current for $channel;" \
                 "run scripts/std-table.sh" >&2
@@ -50,6 +50,6 @@ if [[ "${1:-}" == "--check" ]]; then
     echo "std-table: current for $channel"
 else
     mkdir -p "$table"
-    cp "$out/paths.tsv" "$out/items.tsv" "$out/TOOLCHAIN" "$table/"
+    cp "$out/paths.tsv" "$out/items.tsv" "$out/impls.tsv" "$out/TOOLCHAIN" "$table/"
     echo "std-table: wrote src/std_table for $channel"
 fi

@@ -380,7 +380,8 @@ fn std_catalog(arguments: &[String]) -> Result<ExitCode, String> {
 }
 
 /// D711 step 1: `--std-table RUSTC OUT TARGET` writes the std table rawr
-/// embeds, `OUT/paths.tsv` and `OUT/items.tsv` (`scripts/std-table.sh`).
+/// embeds, `OUT/paths.tsv`, `OUT/items.tsv` and (step 3) `OUT/impls.tsv`
+/// (`scripts/std-table.sh`).
 fn std_table(arguments: &[String]) -> Result<ExitCode, String> {
     let [_, _, rustc, out, target] = arguments else {
         return Err("usage: rawr-import-driver --std-table RUSTC OUT TARGET".to_owned());
