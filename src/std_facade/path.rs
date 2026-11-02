@@ -41,6 +41,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     builder.alias("ffi::OsStr", OS)?;
 
     let string = || Type::builtin(Builtin::String);
+    let text = || Type::reference(false, string());
     let path = || Type::registered(PATH);
     let os = || Type::registered(OS);
     let signature = |inputs: Vec<Type>, output: Type| {
@@ -63,12 +64,14 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
     // of `PathBuf::new` that takes the text.
     function(
         format!("{PATH}::new"),
-        vec![string()],
+        vec![text()],
         Type::reference(false, path()?),
     )?;
     for (owner, made) in [(PATH, path()?), (OS, os()?)] {
         function(format!("{owner}::new"), vec![], made.clone())?;
         function(format!("{owner}::default"), vec![], made.clone())?;
+        // `From<&str>` and `From<String>`.
+        function(format!("{owner}::from"), vec![text()], made.clone())?;
         function(format!("{owner}::from"), vec![string()], made)?;
     }
     let mut method = |path: String, mode: receiver::Mode, inputs: Vec<Type>, output: Type| {
@@ -80,7 +83,8 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
         Ok::<_, host::Error>(())
     };
     use receiver::Mode::{Mutable, Shared};
-    for input in [string(), path()?] {
+    // `AsRef<Path>`: a `&str`, a `String` or a path.
+    for input in [text(), string(), path()?] {
         method(
             format!("{PATH}::push"),
             Mutable,
@@ -114,7 +118,7 @@ pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> 
             format!("{owner}::to_str"),
             Shared,
             vec![],
-            Type::option(string()),
+            Type::option(text()),
         )?;
         method(
             format!("{owner}::to_string_lossy"),

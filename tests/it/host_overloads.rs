@@ -188,7 +188,7 @@ fn keyed_facade(root: &str, ambiguous: bool) -> facade::Definition {
     let mut builder = facade::Builder::new(root, facade::Abi::new(1).unwrap()).unwrap();
     builder.type_::<Value>("Value", &["Message"], &[]).unwrap();
     builder.item(key_method(type_ref::Type::builtin(type_ref::Builtin::I64))).unwrap();
-    builder.item(key_method(type_ref::Type::builtin(type_ref::Builtin::String))).unwrap();
+    builder.item(key_method(type_ref::Type::reference(false, type_ref::Type::builtin(type_ref::Builtin::String)))).unwrap();
     if ambiguous {
         let mut signature = signature::Builder::new();
         signature.type_parameter("Message", &[]).unwrap();
