@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"std's trait impls on rawr's own types come from std's own declarations: `==`, `<`, Deref coercion and `From`/`Into` select the impl rustc would, and refuse the rest with rustc's errors.","issues":[744]},
+        {"text":"A program's own `impl Deref` works: methods and fields are found through it, `&Wrapper` coerces to `&Target`, and `Option::as_deref` gives the target's reference (`Option<Vec<u8>>` gives `Option<&[u8]>`).","issues":[710]},
+        {"text":"`BTreeMap`, `BTreeSet`, `Cell`, `RefCell` and `Result` compare with `<` as std orders them, and `==` follows std's `PartialEq` impls.","issues":[704]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.106",
@@ -1760,13 +1767,13 @@
     {"issue":701,"title":"`std::borrow::Cow` imports, and `*` works on `&str` and `String` (rustc's `str`)","state":"open","category":"Divergences from rustc"},
     {"issue":702,"title":"A crate type's `PartialEq<Rhs>` with a non-number Rhs is chosen by `==`","state":"open","category":"No glue (D593)"},
     {"issue":703,"title":"`String < &str` and `[T; N] == Vec<U>` are refused as rustc refuses them","state":"open","category":"Divergences from rustc"},
-    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"open","category":"Divergences from rustc"},
+    {"issue":704,"title":"std's PartialEq impls for String, str, Vec, slices and arrays live in rawr's std, not the resolver","state":"closed","category":"Divergences from rustc"},
     {"issue":705,"title":"A program implements any std trait (FromStr, AsRef, Deref, TryFrom, IntoIterator, Borrow…), and parse() uses FromStr","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":706,"title":"String and &str stay distinct in inference: a String for &str is E0308, and impls are chosen by exact type","state":"closed","category":"Divergences from rustc","release":"0.3.97"},
     {"issue":707,"title":"A crate signature's types are admitted alike in every position: tuples, &String, &Vec<T>, Range<usize>","state":"open","category":"Divergences from rustc"},
     {"issue":708,"title":"std's Box, Rc, Arc, HashMap, HashSet, BTreeMap and Mutex cross in crate signatures as std's own types","state":"open","category":"No glue (D593)"},
     {"issue":709,"title":"A crate type's std trait members (Index, FromStr, IntoIterator, FromIterator, Hash, Default) are demanded like its own","state":"open","category":"Divergences from rustc"},
-    {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"open","category":"Divergences from rustc"},
+    {"issue":710,"title":"One Deref rule drives coercion, method lookup and as_deref, including a program's own impl Deref","state":"closed","category":"Divergences from rustc"},
     {"issue":711,"title":"Trait-path calls (Iterator::next(&mut it), FromStr::from_str, str::len) resolve through method lookup, not a list","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
     {"issue":712,"title":"std paths such as std::sync::Mutex and std::ops::Deref resolve without a per-path allow-list","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":713,"title":"String-like generics follow the bound, not the syntax: S: Into<String>, impl AsRef<Path>, AsRef<[u8]>","state":"closed","category":"Divergences from rustc","release":"0.3.101"},
@@ -1800,7 +1807,7 @@
     {"issue":741,"title":"&String, &Vec<T>, &[u8] and &u32 a crate call or future borrows are lent without building a copy","state":"open","category":"Divergences from rustc"},
     {"issue":742,"title":"std paths and type arities come from the shipped std table (D711 step 1)","state":"closed","category":"Divergences from rustc","release":"0.3.104"},
     {"issue":743,"title":"std traits come from the std table, and parse goes through FromStr (D711 step 2)","state":"closed","category":"Divergences from rustc","release":"0.3.106"},
-    {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"open","category":"Divergences from rustc"},
+    {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"closed","category":"Divergences from rustc"},
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"open","category":"Divergences from rustc"},
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"open","category":"Divergences from rustc"},
     {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
@@ -1817,7 +1824,11 @@
     {"issue":758,"title":"std traits are keyed by their definition, not their short name","state":"open","category":"Divergences from rustc"},
     {"issue":759,"title":"Provided std trait members run without a hand mapping: clone_from as a method, TryFrom::try_from by path","state":"open","category":"Divergences from rustc"},
     {"issue":760,"title":"std::vec::IntoIter as an IntoIterator impl's IntoIter","state":"open","category":"No glue (D593)"},
-    {"issue":761,"title":"The importer's operator-trait imports come from std's table, not a name list","state":"open","category":"No glue (D593)"}
+    {"issue":761,"title":"The importer's operator-trait imports come from std's table, not a name list","state":"open","category":"No glue (D593)"},
+    {"issue":762,"title":"Deref through a crate type's own impl Deref","state":"open","category":"Divergences from rustc"},
+    {"issue":763,"title":"From conversions std has run in rawr: integer to float, T to Option<T>, &str to Vec<u8>, char to u32","state":"open","category":"Divergences from rustc"},
+    {"issue":764,"title":"A program's &mut self method through its impl DerefMut in the method probe","state":"open","category":"Divergences from rustc"},
+    {"issue":765,"title":"type_provides' capability table for natives moves onto the std impl lookup","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
