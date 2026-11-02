@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.98 (2026-11-01)
+
 - A type missing a trait reads as rustc's E0277 ("the trait bound `T: X` is not satisfied", or "`T` doesn't implement `Debug`"), with a "required by a bound in" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type. (#718)
 - A crate path that can't be used yet gives the Rust reason ("`x` can't be used yet: it takes a closure that isn't `'static`"), labelled where it is defined and exported, instead of an internal rejection name or "retained" evidence. (#719, #720)
 - A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name. (#721)

@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"A type missing a trait reads as rustc's E0277 (\"the trait bound `T: X` is not satisfied\", or \"`T` doesn't implement `Debug`\"), with a \"required by a bound in\" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type.","issues":[718]},
-      {"text":"A crate path that can't be used yet gives the Rust reason (\"`x` can't be used yet: it takes a closure that isn't `'static`\"), labelled where it is defined and exported, instead of an internal rejection name or \"retained\" evidence.","issues":[719,720]},
-      {"text":"A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name.","issues":[721]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.98",
+      "date": "2026-11-01",
+      "entries": [
+        {"text":"A type missing a trait reads as rustc's E0277 (\"the trait bound `T: X` is not satisfied\", or \"`T` doesn't implement `Debug`\"), with a \"required by a bound in\" note, and suggests `#[derive(X)]` only for a derivable trait on the program's own type.","issues":[718]},
+        {"text":"A crate path that can't be used yet gives the Rust reason (\"`x` can't be used yet: it takes a closure that isn't `'static`\"), labelled where it is defined and exported, instead of an internal rejection name or \"retained\" evidence.","issues":[719,720]},
+        {"text":"A failure in a crate call that only a rawr bug can cause panics as a rawr bug instead of printing a bare internal name.","issues":[721]}
+      ]
+    },
     {
       "version": "0.3.97",
       "date": "2026-11-01",
