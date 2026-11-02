@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"`Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters.","issues":[597]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.108",
@@ -1670,7 +1675,7 @@
     {"issue":594,"title":"color_palette: Hsl::from_color from a blanket impl is E0599","state":"closed","category":"No glue (D593)","release":"0.3.67"},
     {"issue":595,"title":"solar_system: canvas::LineDash { .. } is refused as having private fields","state":"closed","category":"Divergences from rustc","release":"0.3.67"},
     {"issue":596,"title":"A crate value borrowed by a call outside any view stays shared for the rest of the run","state":"open","category":"No glue (D593)"},
-    {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"open","category":"No glue (D593)"},
+    {"issue":597,"title":"Move Message::X.with(id) off the literal iced::Function check","state":"closed","category":"No glue (D593)"},
     {"issue":598,"title":"Replace the classifier's iced Renderer view-lifetime rule","state":"open","category":"No glue (D593)"},
     {"issue":599,"title":"geometry: an impl Widget whose body is nested containers can't be named","state":"closed","category":"No glue (D593)","release":"0.3.70"},
     {"issue":600,"title":"loading_spinners: a crate module's constant through a module path","state":"open","category":"No glue (D593)"},
@@ -1838,7 +1843,9 @@
     {"issue":762,"title":"Deref through a crate type's own impl Deref","state":"open","category":"Divergences from rustc"},
     {"issue":763,"title":"From conversions std has run in rawr: integer to float, T to Option<T>, &str to Vec<u8>, char to u32","state":"open","category":"Divergences from rustc"},
     {"issue":764,"title":"A program's &mut self method through its impl DerefMut in the method probe","state":"open","category":"Divergences from rustc"},
-    {"issue":765,"title":"type_provides' capability table for natives moves onto the std impl lookup","state":"open","category":"Divergences from rustc"}
+    {"issue":765,"title":"type_provides' capability table for natives moves onto the std impl lookup","state":"open","category":"Divergences from rustc"},
+    {"issue":766,"title":"Hold an opaque impl FnMut, impl FnOnce, higher-ranked or non-Send impl Fn a crate returns","state":"open","category":"No glue (D593)"},
+    {"issue":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

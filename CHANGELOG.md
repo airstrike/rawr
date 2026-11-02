@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `Message::Loaded.with(id)`, and any method a crate trait's blanket impl gives every `Fn`, run the crate's own code on your functions, variant constructors and closures, and the `impl Fn` it returns passes to `Task::map`, `Task::sip` and other callable parameters. (#597)
 
 ## 0.3.108 (2026-11-02)
 
