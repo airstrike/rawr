@@ -1320,6 +1320,23 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     );
 }
 
+/// A match binds a crate variant's fields without `Clone` as rustc does
+/// (#678): by value it moves a `Door` and an `io::Error` out, so a
+/// consuming method and a by-value call take them, and a guard reads them
+/// by reference first; through a reference it lends them, so `&self`
+/// methods and `&T` parameters reach them while the arm reads the matched
+/// value too. The output is `cargo run`'s.
+#[test]
+fn a_match_moves_or_lends_variant_fields_without_clone() {
+    let (rawr, cargo) = both_printed("crossing-matched", "matched.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "door door door open\nclosed door\n3 refused\n3 consumed refused\n\
+         gate closed gate\nclosed hatch\nrefused\nidle"
+    );
+}
+
 /// String-like generics follow their bound, not their spelling (#713): `S:
 /// Into<String>` takes what `impl Into<String>` takes, and `AsRef<str>`,
 /// `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` and `ToString` take a

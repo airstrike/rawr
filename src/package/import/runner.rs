@@ -96,6 +96,12 @@ pub enum StructuralKind {
     },
     Variant,
     Match,
+    /// A variant's test, which shares the variant's selector.
+    Test,
+    /// A variant's fields moved out, which shares the variant's selector.
+    Take,
+    /// A variant's fields lent, which shares the variant's selector.
+    Lend,
     /// A field set in place, which shares the field's selector.
     Store,
 }
@@ -454,6 +460,9 @@ fn authenticate_structural(
                 StructuralKind::Field { copy } => host::structural::Kind::Field { copy },
                 StructuralKind::Variant => host::structural::Kind::Variant,
                 StructuralKind::Match => host::structural::Kind::Match,
+                StructuralKind::Test => host::structural::Kind::Test,
+                StructuralKind::Take => host::structural::Kind::Take,
+                StructuralKind::Lend => host::structural::Kind::Lend,
                 StructuralKind::Store => host::structural::Kind::Store,
             },
         )
@@ -591,13 +600,15 @@ fn structural_path<'facade>(
                     )
                 }))
                 .next(),
-            // A variant's selector names its constructor and its matcher.
+            // A variant's selector names its constructor and its matchers.
             host::type_def::Shape::Enum(variants) => variants.iter().find_map(|variant| {
                 (variant.imported_identity().fingerprint() == row.selector).then_some(
-                    if row.kind == StructuralKind::Match {
+                    match row.kind {
                         StructuralKind::Match
-                    } else {
-                        StructuralKind::Variant
+                        | StructuralKind::Test
+                        | StructuralKind::Take
+                        | StructuralKind::Lend => row.kind,
+                        _ => StructuralKind::Variant,
                     },
                 )
             }),
