@@ -10695,6 +10695,77 @@ main();
     );
 }
 
+/// `VecDeque`'s own `remove` (an `Option`), `swap_remove_back`,
+/// `swap_remove_front`, `rotate_left`, `rotate_right`, `range`,
+/// `as_slices` and `make_contiguous` run on rawr's array, with std's
+/// panic and borrows: `make_contiguous`'s slice holds the deque mutably.
+#[test]
+fn language_vec_deque_runs_its_own_methods() {
+    assert_eq!(
+        printed(
+            r#"
+use std::collections::VecDeque;
+fn main() {
+    let mut d: VecDeque<i32> = (1..=6).collect();
+    println!("{:?} {:?}", d.remove(1), d.remove(10));
+    d.rotate_left(2);
+    println!("{d:?}");
+    d.rotate_right(1);
+    println!("{d:?}");
+    println!("{:?}", d.swap_remove_back(0));
+    println!("{d:?}");
+    println!("{:?} {:?}", d.swap_remove_front(2), d.swap_remove_front(9));
+    println!("{d:?}");
+    let total: i32 = d.range(1..).sum();
+    println!("{total} {:?}", d.range(..2).collect::<Vec<_>>());
+    let (front, back) = d.as_slices();
+    println!("{} {}", front.len() + back.len(), front.iter().chain(back).count());
+    d.push_front(9);
+    d.make_contiguous().sort();
+    let all = d.make_contiguous();
+    println!("{all:?}");
+    println!("{d:?}");
+    let mut names: VecDeque<String> = VecDeque::new();
+    names.push_back("a".to_string());
+    names.push_back("b".to_string());
+    names.rotate_left(1);
+    let first = names.remove(0);
+    println!("{first:?} {names:?}");
+}
+main();
+"#
+        ),
+        "Some(2) None\n[4, 5, 6, 1, 3]\n[3, 4, 5, 6, 1]\nSome(3)\n[1, 4, 5, 6]\nSome(5) None\n\
+         [4, 1, 6]\n7 [4, 1]\n3 3\n[1, 4, 6, 9]\n[1, 4, 6, 9]\nSome(\"b\") [\"a\"]\n"
+    );
+    let error = rejected(
+        "use std::collections::VecDeque;\n\
+         pub fn run() -> i64 { let mut d: VecDeque<i64> = VecDeque::new(); d.rotate_right(1); 0 }\n\
+         run()",
+    );
+    assert!(
+        error.contains("assertion failed: n <= self.len()"),
+        "{error}"
+    );
+    // The slice `make_contiguous` lends, the iterators `range` and
+    // `drain` make, each held past a change of the deque.
+    for (held, code) in [
+        (
+            "let all = d.make_contiguous(); d.push_back(1); all.len()",
+            "E0499",
+        ),
+        ("let r = d.range(..); d.push_back(1); r.count()", "E0502"),
+        ("let r = d.drain(..); d.push_back(1); r.count()", "E0499"),
+    ] {
+        let error = rejected(&format!(
+            "use std::collections::VecDeque;\n\
+             pub fn run() -> i64 {{ let mut d: VecDeque<i64> = VecDeque::new(); {held} as i64 }}\n\
+             run()"
+        ));
+        assert!(error.contains(code), "{held}: {error}");
+    }
+}
+
 #[test]
 fn language_mut_ref_outputs_borrow_their_receiver() {
     let value = run_string(

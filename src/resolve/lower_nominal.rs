@@ -41794,6 +41794,18 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The range operand of `drain(r)` or `range(r)`, between `open` and
+    /// `end`: a value of `usize`s, which holds no borrow, for the call's
+    /// summary to read.
+    fn range_operand(&mut self, open: Position, end: Position) {
+        let range = super::borrowck::record::Argument {
+            span: span(open, end),
+            holds: false,
+            returns: false,
+        };
+        self.flow().call_operands(&[range], end);
+    }
+
     /// The `Vec`, array and slice methods Rust code reaches for.
     fn parse_array_method(
         &mut self,
@@ -41908,9 +41920,10 @@ impl<'a> Parser<'a> {
         }
         // `v.drain(range)`: the removed elements, as an iterator.
         if member.as_str() == "drain" {
-            self.expect(Token::LeftParen, "'(' after `drain`")?;
+            let open = self.expect(Token::LeftParen, "'(' after `drain`")?;
             let bounds = self.parse_range_or_expr()?;
             let end = self.expect(Token::RightParen, "')' after `drain`'s range")?;
+            self.range_operand(open, end);
             let Err((low, high, inclusive)) = bounds else {
                 return Err(self.unsupported("`drain` of something other than a range"));
             };
@@ -41929,6 +41942,39 @@ impl<'a> Parser<'a> {
             let source = self.mutation_call(&value, &helper, operands)?;
             let ty = Ty::Iter(Box::new(element));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+        }
+        // A deque's `range(r)`: an iterator over references to the
+        // elements of `r`, which is the array's own range.
+        if kind == sequence::Kind::Deque && member.as_str() == "range" {
+            let open = self.expect(Token::LeftParen, "'(' after `range`")?;
+            let bounds = self.parse_range_or_expr()?;
+            let end = self.expect(Token::RightParen, "')' after `range`'s range")?;
+            self.range_operand(open, end);
+            let Err((low, high, inclusive)) = bounds else {
+                return Err(self.unsupported("`range` of something other than a range"));
+            };
+            let mut operands = vec![value.rendered_source().surrounded("(", ")")];
+            for (bound, open) in [(low, "0"), (high, "-1")] {
+                operands.push(match bound {
+                    Some(bound) => {
+                        self.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                        bound.rendered_source()
+                    }
+                    None => open.into(),
+                });
+            }
+            operands.push(inclusive.to_string().into());
+            let slice = self.prelude_op(PreludeOp::Slice, operands);
+            let slice = self.operator_expr(
+                slice,
+                Ty::sequence(sequence::Kind::Slice, element.clone()),
+                span(value.span.start(), end),
+            );
+            let item = Ty::Reference {
+                mutable: false,
+                target: Box::new(element),
+            };
+            return Ok(self.array_iterator(&slice, item, end));
         }
         // `[T; N]::map(f)`: `[U; N]`, each element passed by value.
         if member.as_str() == "map"
@@ -42256,6 +42302,31 @@ impl<'a> Parser<'a> {
                 };
                 (source, ty)
             }
+            // A deque's `remove(i)`, `swap_remove_back(i)` and
+            // `swap_remove_front(i)`, `None` past its end, and its
+            // `rotate_left(n)` and `rotate_right(n)`.
+            (
+                "deque_remove" | "swap_remove_back" | "swap_remove_front" | "rotate_left"
+                | "rotate_right",
+                [index],
+            ) if kind == sequence::Kind::Deque => {
+                self.coerce_expr(&Ty::Int(Int::Usize), index)?;
+                let code = vec_method_code(member.as_str()).to_string();
+                let operands = vec![
+                    code.into(),
+                    index.rendered_source(),
+                    "()".into(),
+                    "()".into(),
+                ];
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = if member.starts_with("rotate") {
+                    Ty::Unit
+                } else {
+                    Ty::Option(Box::new(element))
+                };
+                (source, ty)
+            }
             ("truncate", [_]) | ("reverse" | "clear", []) | ("retain", [_]) => {
                 let mut operands = Vec::new();
                 if let [argument] = arguments.as_mut_slice() {
@@ -42426,6 +42497,17 @@ impl<'a> Parser<'a> {
                     ],
                 )?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
+            }
+            // A deque's `as_slices()`: the whole, which is contiguous at
+            // runtime and a slice of it as `as_slice` is, then an empty
+            // slice.
+            ("as_slices", []) if kind == sequence::Kind::Deque => {
+                let source = receiver.surrounded("[", ", []]");
+                let half = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                (source, Ty::Tuple(Box::new([half.clone(), half])))
             }
             // `split_at(mid)`: the two halves, `(&[T], &[T])`.
             ("split_at", [mid]) => {
@@ -52926,10 +53008,16 @@ const VEC_METHODS: &[&str] = &[
     "extend_move",
     "extend_copy",
     "extend_clone",
+    "deque_remove",
+    "swap_remove_back",
+    "swap_remove_front",
+    "rotate_left",
+    "rotate_right",
 ];
 
 /// The `VecDeque` methods rawr runs, each as the `Vec` method of an array
-/// whose back is its end. std's others are not run yet (D712.1).
+/// whose back is its end, or as an operation of the deque's own (`remove`'s
+/// `Option`, `range`, `as_slices`). std's others are not run yet (D712.1).
 const DEQUE_METHODS: &[(&str, &str)] = &[
     ("push_back", "push"),
     ("pop_back", "pop"),
@@ -52959,6 +53047,14 @@ const DEQUE_METHODS: &[(&str, &str)] = &[
     ("resize", "resize"),
     ("resize_with", "resize_with"),
     ("clone", "clone"),
+    ("remove", "deque_remove"),
+    ("swap_remove_back", "swap_remove_back"),
+    ("swap_remove_front", "swap_remove_front"),
+    ("rotate_left", "rotate_left"),
+    ("rotate_right", "rotate_right"),
+    ("range", "range"),
+    ("as_slices", "as_slices"),
+    ("make_contiguous", "as_mut_slice"),
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -53314,6 +53410,27 @@ fn vec_method(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) ->
             Some(last) => crate::option::some(last),
             None => crate::option::none(),
         }),
+        // A deque's removals, `None` past its end.
+        Some("deque_remove" | "swap_remove_back" | "swap_remove_front") if a >= len => {
+            Ok(crate::option::none())
+        }
+        Some("deque_remove") => Ok(crate::option::some(array.remove(a))),
+        Some("swap_remove_back") => Ok(crate::option::some(array.swap_remove(a))),
+        Some("swap_remove_front") => {
+            array.swap(0, a);
+            Ok(crate::option::some(array.remove(0)))
+        }
+        Some("rotate_left" | "rotate_right") if a > len => {
+            fail("assertion failed: n <= self.len()".into())
+        }
+        Some("rotate_left") => {
+            array.rotate_left(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("rotate_right") => {
+            array.rotate_right(a);
+            Ok(Dynamic::UNIT)
+        }
         Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
         Some("pop_front") => Ok(crate::option::some(array.remove(0))),
         // A changed copy of `array[a..]` stored back over it.
