@@ -47439,6 +47439,20 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Whether `owner` is a path through a crate's module a `use`
+        // binds: what it names, or misses, is the crate's by that path.
+        #[cfg(feature = "rust-import")]
+        let through_module = qualified_model.is_none()
+            && segments.len() > 1
+            && self.models.import(&segments[0].0).is_some_and(|binding| {
+                matches!(
+                    binding.target,
+                    item::Import::Module | item::Import::ModuleItem { .. }
+                ) && matches!(
+                    self.models.host.entry(&binding.qualified),
+                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                )
+            });
         // An imported type named through an imported module, as
         // `pane_grid::Axis` after `use iced::widget::pane_grid;`, is the
         // type at the module's path.
@@ -47470,6 +47484,12 @@ impl<'a> Parser<'a> {
                     // as the_matrix's `canvas::Cache::with_group`: that
                     // type's, as `Cache::with_group` is after `use` (T327).
                     definition.path().as_str().into()
+                } else if through_module {
+                    // A module nested under the imported one, at any depth,
+                    // as `operation::scrollable::snap_to` after `use
+                    // iced::widget::operation;` (#851): the path through
+                    // the module, as rustc resolves it.
+                    through.into()
                 } else {
                     owner
                 }
@@ -47604,7 +47624,7 @@ impl<'a> Parser<'a> {
             let native = segments.first().is_some_and(|(root, _)| {
                 self.native_site().is_some_and(|site| {
                     site.missing_binding(&self.models.host, &format!("{owner}::{member}"))
-                }) && self.models.import(root).is_none()
+                }) && (through_module || self.models.import(root).is_none())
                     && self.models.get(root).is_none()
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
@@ -47668,15 +47688,16 @@ impl<'a> Parser<'a> {
             // `$crate::module::function` is: the whole path is unresolved,
             // so the importer is asked for all of it.
             #[cfg(feature = "rust-import")]
-            let crate_path = segments.first().is_some_and(|(root, _)| {
-                matches!(
-                    self.models.host.entry(root),
-                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
-                ) && self.models.import(root).is_none()
-                    && self.models.get(root).is_none()
-                    && self.models.function(root).is_none()
-                    && !self.bindings.contains_key(root)
-            });
+            let crate_path = through_module
+                || segments.first().is_some_and(|(root, _)| {
+                    matches!(
+                        self.models.host.entry(root),
+                        Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                    ) && self.models.import(root).is_none()
+                        && self.models.get(root).is_none()
+                        && self.models.function(root).is_none()
+                        && !self.bindings.contains_key(root)
+                });
             #[cfg(feature = "rust-import")]
             let error = match error {
                 Error::UnknownType { name, .. }

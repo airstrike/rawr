@@ -1434,6 +1434,49 @@ fn a_result_a_method_gives_as_self_keeps_the_items_borrowed() {
     );
 }
 
+/// #856: a crate function that takes a borrowing result by value,
+/// `wrap(shown: impl Show) -> impl Show`, gives a result that keeps the
+/// items borrowed for as long as it lives, as rustc has it: wrapped once,
+/// wrapped again, moved out of a binding, and in a block. The counts show
+/// every show read the one value of each item. The output is `cargo run`'s.
+#[test]
+fn a_crate_call_takes_a_borrowing_result_by_value() {
+    let (rawr, cargo) = both_printed("crossing-shelf-wrap", "shelf_wrap.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("twice (([first second]))")
+            && rawr.contains("scoped (<first>) (<second>)")
+            && rawr.ends_with("counted first:4,second:4,third:1,fourth:0,fifth:0"),
+        "{rawr}"
+    );
+}
+
+/// #856: pushing to the items while a wrapped result that borrows them
+/// lives is rustc's E0502, which rawr's checker reports before anything
+/// runs.
+#[test]
+fn using_what_a_wrapped_result_borrows_while_it_lives_is_rustcs_error() {
+    let stderr = checked("crossing-shelf-wrap-error", "shelf_wrap_push.rs");
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains(
+            "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
+        ) && own.contains("main.rs:7:5"),
+        "{stderr}"
+    );
+}
+
+/// #851: a function in a module nested under a module the program imports,
+/// `b::c::f` after `use events::nested::b`, at any depth and through a
+/// re-export of the module, as iced's `operation::scrollable::snap_to` is
+/// reached. The output is `cargo run`'s.
+#[test]
+fn a_function_in_a_module_nested_under_an_imported_module_runs() {
+    let (rawr, cargo) = both_printed("crossing-nested", "nested.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "f 2\ng deep\nthrough 42\ndeeper deep\ncount 10 11");
+}
+
 /// `rawr-import check` of the fixture copied to `name` with `variant` as
 /// its `main.rs`, which fails: its stderr.
 fn checked(name: &str, variant: &str) -> String {

@@ -136,6 +136,61 @@ pub struct Opaque {
     /// #849).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     traits: Box<[super::convert::Type]>,
+    /// Each method of its one trait, when the value held through the proxy
+    /// implements the trait by calling the method of the value inside
+    /// (#856), as a crate call that takes the value by value needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forwards: Option<Box<[Forward]>>,
+}
+
+/// One method of an opaque type's trait, which the value held through the
+/// proxy forwards to the value inside (`Opaque::forwards`).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Forward {
+    name: Box<str>,
+    mutable: bool,
+    inputs: Box<[super::convert::Type]>,
+    output: super::convert::Type,
+}
+
+impl Forward {
+    pub(crate) const fn new(
+        name: Box<str>,
+        mutable: bool,
+        inputs: Box<[super::convert::Type]>,
+        output: super::convert::Type,
+    ) -> Self {
+        Self {
+            name,
+            mutable,
+            inputs,
+            output,
+        }
+    }
+
+    /// The method's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether it takes `&mut self`, else `&self`.
+    #[must_use]
+    pub const fn mutable(&self) -> bool {
+        self.mutable
+    }
+
+    /// The types it takes after its receiver.
+    #[must_use]
+    pub const fn inputs(&self) -> &[super::convert::Type] {
+        &self.inputs
+    }
+
+    /// The type it gives.
+    #[must_use]
+    pub const fn output(&self) -> &super::convert::Type {
+        &self.output
+    }
 }
 
 impl Opaque {
@@ -143,12 +198,21 @@ impl Opaque {
         definition: [u8; 32],
         associated: Box<[(Associated, u32)]>,
         traits: Box<[super::convert::Type]>,
+        forwards: Option<Box<[Forward]>>,
     ) -> Self {
         Self {
             definition,
             associated,
             traits,
+            forwards,
         }
+    }
+
+    /// Each method of its one trait the value held through the proxy
+    /// forwards, when it can implement the trait so.
+    #[must_use]
+    pub fn forwards(&self) -> Option<&[Forward]> {
+        self.forwards.as_deref()
     }
 
     /// Its traits besides auto traits, at the bound's arguments after

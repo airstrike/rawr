@@ -8788,22 +8788,23 @@ impl Drop for OpaqueCell {
     }
 }
 
-/// Whether the value `plan` gives lives beside the crate values it borrows
-/// (`lent_cell`), as its adapter makes it.
-fn lends_cell(plan: &Plan) -> Result<bool, request::Error> {
+/// How the value `plan` gives lives beside the crate values it borrows
+/// (`lent_cell`), as its adapter makes it, when it does.
+fn lends_cell(plan: &Plan) -> Result<Option<Owned>, request::Error> {
     let Operation::Function {
         signature,
         substitutions,
         ..
     } = plan.operation()
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let pinned = opaque_pinned_strings(signature, substitutions);
     let substitutions: &[convert::Type] = pinned.as_deref().unwrap_or(substitutions);
-    Ok(!instance_opens(signature, substitutions)
-        && views_natives(signature, substitutions)?
-        && lent_cell(signature, substitutions)?.is_some())
+    if instance_opens(signature, substitutions) || !views_natives(signature, substitutions)? {
+        return Ok(None);
+    }
+    lent_cell(signature, substitutions)
 }
 
 /// Sets `OPAQUE_WITNESSED` for as long as it lives.
@@ -9042,8 +9043,12 @@ fn opaque_table_source(
         return Ok(None);
     };
     // A value that lives beside what it borrows (`lent_cell`) is reached
-    // through the trait object it is held as.
-    let cell = lends_cell(plan)?;
+    // through its proxy. Where it implements its trait through the proxy
+    // (`Owned::forwards`), a call takes it by value, and what it borrows
+    // moves with it (#856).
+    let owned = lends_cell(plan)?;
+    let cell = owned.is_some();
+    let forwarded = owned.is_some_and(|owned| owned.forwards.is_some());
     let mut entries = Vec::new();
     for (index, consumer) in opaque_consumers(cohort, &key)?.into_iter().enumerate() {
         let Some((position, _, operand)) = opaque_operand(consumer)? else {
@@ -9120,9 +9125,13 @@ fn opaque_table_source(
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
         };
-        // A call that takes the value itself can't take it from beside
-        // what it borrows.
-        let body = if cell && body.contains(&format!("take_native(arguments, {position})")) {
+        // A call that takes the value itself, where it doesn't implement
+        // its trait through its proxy, can't take it from beside what it
+        // borrows.
+        let body = if cell
+            && !forwarded
+            && body.contains(&format!("take_native(arguments, {position})"))
+        {
             "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
         } else {
             body
@@ -11055,6 +11064,16 @@ fn render_borrowed_receiver(
             output,
             "    let receiver = native_handle(arguments, 0, false)?;
     let output = {access}_like(arguments.arena, receiver, _w, |receiver| {reach})?;"
+        )
+        .map_err(encoding);
+    }
+    // Any other value of an opaque type in its table, as `wrap(view(
+    // &items))` gives (#856), is reached at that type itself.
+    if container == "_" && OPAQUE_WITNESSED.with_borrow(Option::is_some) {
+        return writeln!(
+            output,
+            "    let receiver = native_handle(arguments, 0, false)?;
+    let output = {access}_like(arguments.arena, receiver, _w, |receiver| {call})?;"
         )
         .map_err(encoding);
     }
@@ -16262,6 +16281,12 @@ struct Owned {
     bounds: String,
     /// The type of each lent argument the value owns, and its name.
     owners: Vec<(String, String)>,
+    /// The value's impl of its one trait through the proxy (#856), so a
+    /// crate call that takes an `impl Trait` takes the value, and what it
+    /// borrows moves with it, as rustc moves the borrow with the result.
+    /// `None` when the type has more traits, or a method has no Rust
+    /// spelling Rawr writes (`Opaque::forwards`).
+    forwards: Option<Forwards>,
 }
 
 /// The value an opaque output that borrows its call's crate values lives
@@ -16380,7 +16405,78 @@ fn lent_cell(
         };
         owners.push((owner, name));
     }
-    Ok((!owners.is_empty()).then_some(Owned { bounds, owners }))
+    // The one trait, without arguments, the value implements through the
+    // proxy (#856).
+    let forwards = match (&traits[..], opaque.forwards()) {
+        ([(_, path, written)], Some(forwards)) if written.is_empty() => {
+            render_forwards(path, forwards)
+        }
+        _ => None,
+    };
+    Ok((!owners.is_empty()).then_some(Owned {
+        bounds,
+        owners,
+        forwards,
+    }))
+}
+
+/// How a value that lives beside what it borrows implements its opaque
+/// type's one trait (#856): a method of the proxy for each of the trait's,
+/// which calls the method of the value inside, and the impl of the trait
+/// for `LentValue`, whose methods call the proxy's.
+struct Forwards {
+    /// The proxy trait's methods.
+    methods: String,
+    /// Their bodies in the proxy's impl for each type of the traits.
+    bodies: String,
+    /// `impl {path} for LentValue`.
+    implementation: String,
+}
+
+/// The parts of `Forwards` for the trait at `path`, or `None` when a type
+/// of one of `forwards` has no Rust spelling.
+fn render_forwards(
+    path: &str,
+    forwards: &[crate::classify::representability::signature::Forward],
+) -> Option<Forwards> {
+    let mut methods = String::new();
+    let mut bodies = String::new();
+    let mut implementation = String::new();
+    for forward in forwards {
+        let name = forward.name();
+        let mut parameters = String::new();
+        let mut names = Vec::new();
+        for (position, input) in forward.inputs().iter().enumerate() {
+            parameters.push_str(&format!(", input_{position}: {}", impl_type(input, &[])?));
+            names.push(format!("input_{position}"));
+        }
+        let names = names.join(", ");
+        let output = match forward.output() {
+            convert::Type::Unit => "()".to_owned(),
+            ty => impl_type(ty, &[])?,
+        };
+        let (receiver, reach) = if forward.mutable() {
+            ("&mut self", "mutable")
+        } else {
+            ("&self", "shared")
+        };
+        let head = format!("fn __rawr_forward_{name}({receiver}{parameters}) -> {output}");
+        let separator = if names.is_empty() { "" } else { ", " };
+        methods.push_str(&format!("        {head};\n"));
+        bodies.push_str(&format!(
+            "        {head} {{\n            {path}::{name}(self{separator}{names})\n        }}\n"
+        ));
+        implementation.push_str(&format!(
+            "        fn {name}({receiver}{parameters}) -> {output} {{\n            self.{reach}(|value| value.__rawr_forward_{name}({names}))\n        }}\n"
+        ));
+    }
+    Some(Forwards {
+        methods,
+        bodies,
+        implementation: format!(
+            "    #[allow(clippy::all)]\n    impl {path} for LentValue {{\n{implementation}    }}\n"
+        ),
+    })
 }
 
 /// One method of a proxy (`render_lent_cell`): a call of the program's on
@@ -16565,6 +16661,15 @@ fn render_lent_cell(
         ));
     }
     let bounds = &owned.bounds;
+    // The value's impl of its trait, through the proxy (#856).
+    let forwards = match &owned.forwards {
+        Some(forwards) => {
+            methods.push_str(&forwards.methods);
+            bodies.push_str(&forwards.bodies);
+            forwards.implementation.as_str()
+        }
+        None => "",
+    };
     writeln!(
         output,
         "    trait Proxy<'a> {{
@@ -16625,7 +16730,7 @@ fn render_lent_cell(
     fn slots<'a>(value: LentOutput<'a>) -> Slots<'a> {{
         Slots(std::cell::RefCell::new(vec![Some(std::rc::Rc::new(std::cell::RefCell::new(value)))]))
     }}
-    let output = lend(arguments.arena, || LentValue {{ cell: std::rc::Rc::new(Lent::new(({names}), |({names})| slots(Box::new({call})))), slot: 0 }});"
+{forwards}    let output = lend(arguments.arena, || LentValue {{ cell: std::rc::Rc::new(Lent::new(({names}), |({names})| slots(Box::new({call})))), slot: 0 }});"
     )
 }
 
