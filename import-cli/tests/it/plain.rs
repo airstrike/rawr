@@ -28,7 +28,7 @@ fn copy(from: &Path, to: &Path) {
 }
 
 fn rawr_import(root: &Path, arguments: &[&str]) -> Output {
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     rawr_import_with_home(root, arguments, &home)
 }
 
@@ -135,7 +135,7 @@ fn rawr_import_within(
     limit: std::time::Duration,
 ) -> Output {
     use std::process::Stdio;
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let name = root.file_name().unwrap().to_string_lossy().into_owned();
     let stdout = directory.join(format!("{name}.stdout"));
     let stderr = directory.join(format!("{name}.stderr"));
@@ -184,7 +184,7 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-dependency");
+    let root = crate::support::scratch().join("plain-dependency");
     copy(Path::new(FIXTURE), &root);
 
     let run = rawr_import(&root, &["run"]);
@@ -236,8 +236,8 @@ fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
 
 #[test]
 fn a_concrete_blanket_application_keeps_its_trait_arguments() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("concrete-trait-arguments");
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let root = crate::support::scratch().join("concrete-trait-arguments");
+    let home = crate::support::scratch().join("rawr-home");
     for (path, source) in [
         (
             "Cargo.toml",
@@ -358,7 +358,7 @@ fn main() {
 /// and a changed crate gets a new entry alone.
 #[test]
 fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lexical-applications");
+    let base = crate::support::scratch().join("lexical-applications");
     let home = base.join("home");
     let crates = base.join("crates");
     let _ = fs::remove_dir_all(&base);
@@ -495,7 +495,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
 /// proved from the crates' intrinsic facts, read back by the API's inputs.
 #[test]
 fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("new-member-no-nightly");
+    let base = crate::support::scratch().join("new-member-no-nightly");
     let home = base.join("home");
     let crates = base.join("crates");
     let root = base.join("app");
@@ -616,7 +616,7 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
 /// nightly's did (#403). Path crates keep theirs per project.
 #[test]
 fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-inventories");
+    let base = crate::support::scratch().join("shared-inventories");
     let home = base.join("home");
     let crates = base.join("crates");
     let _ = fs::remove_dir_all(&base);
@@ -721,11 +721,11 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
     // This test owns its binding namespace. Old protocol generations in the
     // suite's general home are valid retained entries, not extra publications
     // by this run. Preserve the runtime while starting with cold bindings.
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("semver-sharing-home");
+    let home = crate::support::scratch().join("semver-sharing-home");
     let bindings = home.join("bindings");
     let _ = fs::remove_dir_all(&bindings);
     let projects = ["first", "second", "other", "other-again"]
-        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shared-{name}")));
+        .map(|name| crate::support::scratch().join(format!("shared-{name}")));
     for root in &projects {
         let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
@@ -811,10 +811,10 @@ fn a_second_project_reads_the_first_ones_bindings_with_no_nightly_build() {
 /// with no nightly build and no probe (D609.4, #661).
 #[test]
 fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() {
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("checked-sharing-home");
+    let home = crate::support::scratch().join("checked-sharing-home");
     let _ = fs::remove_dir_all(home.join("bindings"));
-    let projects = ["first", "second"]
-        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("checked-{name}")));
+    let projects =
+        ["first", "second"].map(|name| crate::support::scratch().join(format!("checked-{name}")));
     for root in &projects {
         let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
@@ -865,11 +865,11 @@ fn a_second_project_checks_on_the_first_checks_bindings_with_no_nightly_build() 
 /// as it is, though the program's own crate is selected beside it (#672).
 #[test]
 fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the_home() {
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("module-sharing-home");
+    let home = crate::support::scratch().join("module-sharing-home");
     let bindings = home.join("bindings");
     let _ = fs::remove_dir_all(&bindings);
-    let projects = ["first", "second"]
-        .map(|name| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("module-{name}")));
+    let projects =
+        ["first", "second"].map(|name| crate::support::scratch().join(format!("module-{name}")));
     for root in &projects {
         let _ = fs::remove_dir_all(root);
         copy(Path::new(FIXTURE), root);
@@ -952,7 +952,7 @@ fn a_second_project_whose_program_has_a_module_replays_its_dependencies_from_the
 /// shares across projects without a nightly build.
 #[test]
 fn shared_git_bindings_validate_declared_file_and_environment_before_replay() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-script-inputs");
+    let root = crate::support::scratch().join("shared-script-inputs");
     let _ = fs::remove_dir_all(&root);
     let dependency = root.join("dependency");
     fs::create_dir_all(dependency.join("src")).unwrap();
@@ -1025,10 +1025,7 @@ fn main() {
         Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .args([action])
             .arg(project)
-            .env(
-                "RAWR_HOME",
-                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home"),
-            )
+            .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))
             .env("BINDING_INPUT_FILE", &input)
             .env("BINDING_INPUT_MODE", mode)
             .env_remove("CARGO_TARGET_DIR")
@@ -1147,7 +1144,7 @@ fn main() {
 /// differs from the API that the project's stable compiler provides.
 #[test]
 fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shared-adapter-drift");
+    let root = crate::support::scratch().join("shared-adapter-drift");
     let _ = fs::remove_dir_all(&root);
     let dependency = root.join("dependency");
     fs::create_dir_all(dependency.join("src")).unwrap();
@@ -1214,7 +1211,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         "// rawr\nuse adapter_drift_fixture::value;\nfn main() { let result: u32 = value(); println!(\"{result}\"); }\n",
     )
     .unwrap();
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     let output = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&project)
@@ -1258,7 +1255,7 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-arguments"
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-arguments");
+    let root = crate::support::scratch().join("plain-arguments");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(ARGUMENTS), &root);
     let main = root.join("src/main.rs");
@@ -1312,7 +1309,7 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
 #[test]
 fn a_dependencys_macro_rules_expand_from_its_source() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-macros");
+    let root = crate::support::scratch().join("plain-macros");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(MACROS), &root);
 
@@ -1336,10 +1333,10 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
 #[test]
 fn a_whole_table_answers_a_later_macros_crate_root() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("whole-macro-roots");
+    let root = crate::support::scratch().join("whole-macro-roots");
     let _ = fs::remove_dir_all(&root);
     copy(Path::new(MACROS), &root);
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
@@ -1369,7 +1366,7 @@ fn a_whole_table_answers_a_later_macros_crate_root() {
 #[test]
 fn a_whole_table_answers_the_selected_crates_own_macro() {
     const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("whole-own-macro");
+    let base = crate::support::scratch().join("whole-own-macro");
     let crates = base.join("crates");
     let root = base.join("app");
     let _ = fs::remove_dir_all(&base);
@@ -1390,7 +1387,7 @@ fn a_whole_table_answers_the_selected_crates_own_macro() {
         root.join("rust-toolchain.toml"),
     )
     .unwrap();
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
@@ -1448,7 +1445,7 @@ fn a_whole_table_answers_the_selected_crates_own_macro() {
 /// one name per package, so the runner reaches the project's crate by both.
 #[test]
 fn a_project_dependency_the_runner_also_needs_coexists() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runner-shared-dependency");
+    let root = crate::support::scratch().join("runner-shared-dependency");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(
@@ -1466,7 +1463,7 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
         "// rawr\nfn main() {\n    println!(\"{}\", semver::Version::new(1, 2, 3));\n}\n",
     )
     .unwrap();
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
     assert!(
         run.status.success(),
@@ -1489,7 +1486,7 @@ fn a_project_dependency_the_runner_also_needs_coexists() {
 /// extracted again.
 #[test]
 fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("path-tables");
+    let base = crate::support::scratch().join("path-tables");
     let crates = base.join("crates");
     let root = base.join("app");
     let _ = fs::remove_dir_all(&base);
@@ -1515,7 +1512,7 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
         root.join("rust-toolchain.toml"),
     )
     .unwrap();
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     let run = |source: &str, expected: &str| {
         fs::write(root.join("src/main.rs"), source).unwrap();
         let run = rawr_import_within(&root, &["run"], &home, std::time::Duration::from_secs(600));
@@ -1588,7 +1585,7 @@ fn a_new_path_of_a_path_dependency_replays_the_projects_tables() {
 /// with the same dependency reuses the crate cargo compiled for the first.
 #[test]
 fn a_script_with_a_dependency_runs_from_its_frontmatter() {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-scripts");
+    let directory = crate::support::scratch().join("plain-scripts");
     let _ = fs::remove_dir_all(&directory);
     fs::create_dir_all(&directory).unwrap();
     let script = |name: &str, line: &str| {
@@ -1625,7 +1622,7 @@ fn a_script_with_a_dependency_runs_from_its_frontmatter() {
         .collect::<Vec<_>>();
     beside.sort();
     assert_eq!(beside, ["major.rs", "parse.rs"]);
-    let area = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home/scripts");
+    let area = crate::support::scratch().join("rawr-home/scripts");
     for stem in ["parse", "major"] {
         let own = fs::read_dir(&area)
             .unwrap()
@@ -1662,7 +1659,7 @@ fn a_dependency_rawr_takes_with_more_features_keeps_the_locked_runner_build() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/plain-shared-feature"
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plain-shared-feature");
+    let root = crate::support::scratch().join("plain-shared-feature");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(SHARED), &root);
 
@@ -1740,7 +1737,7 @@ fn assert_runs_and_checks(program: &Path, home: &Path) {
 /// replaces with a path crate resolves to the patch, as under Cargo (#668).
 #[test]
 fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("patched-dependency");
+    let root = crate::support::scratch().join("patched-dependency");
     let mut files = PATCHED_GAUGE.to_vec();
     files.extend([
         (
@@ -1752,7 +1749,7 @@ fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
         ("src/main.rs", PATCHED_MAIN),
     ]);
     project(&root, &files);
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     assert_runs_and_checks(&root, &home);
 }
 
@@ -1762,7 +1759,7 @@ fn a_registry_dependency_patched_to_a_path_resolves_to_the_patch() {
 /// `From<i64>`.
 #[test]
 fn a_crate_types_from_of_itself_gives_the_value_back() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("reflexive-from");
+    let root = crate::support::scratch().join("reflexive-from");
     project(
         &root,
         &[
@@ -1789,7 +1786,7 @@ fn a_crate_types_from_of_itself_gives_the_value_back() {
             ),
         ],
     );
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     assert_runs_and_checks(&root, &home);
 }
 
@@ -1797,7 +1794,7 @@ fn a_crate_types_from_of_itself_gives_the_value_back() {
 /// Cargo resolves every member (#664).
 #[test]
 fn a_workspace_member_resolves_with_the_roots_patch() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("patched-workspace");
+    let root = crate::support::scratch().join("patched-workspace");
     let mut files = PATCHED_GAUGE.to_vec();
     files.extend([
         (
@@ -1813,7 +1810,7 @@ fn a_workspace_member_resolves_with_the_roots_patch() {
         ("app/src/main.rs", PATCHED_MAIN),
     ]);
     project(&root, &files);
-    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rawr-home");
+    let home = crate::support::scratch().join("rawr-home");
     assert_runs_and_checks(&root.join("app"), &home);
 }
 
@@ -1865,7 +1862,7 @@ fn run_ok(root: &Path, home: &Path) -> String {
 /// units (D699.2 a and c, D700).
 #[test]
 fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nightly-path-crates");
+    let base = crate::support::scratch().join("nightly-path-crates");
     let _ = fs::remove_dir_all(&base);
     let home = base.join("home");
     let nightly = nightly_directory(&home);
@@ -1927,7 +1924,7 @@ fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
 /// beside the first's (D699.2 b, D700).
 #[test]
 fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nightly-identical");
+    let base = crate::support::scratch().join("nightly-identical");
     let _ = fs::remove_dir_all(&base);
     let home = base.join("home");
     let nightly = nightly_directory(&home);

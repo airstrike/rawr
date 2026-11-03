@@ -60,6 +60,14 @@ impl Drop for Run {
     }
 }
 
+/// The directory a test's projects and `RAWR_HOME` live in: `RAWR_TEST_TMPDIR`
+/// when set, so concurrent runs from different checkouts keep apart, and
+/// cargo's target tmp directory otherwise.
+pub fn scratch() -> PathBuf {
+    std::env::var_os("RAWR_TEST_TMPDIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
+}
+
 /// `rawr-import run root`, with `variables` in its environment.
 pub fn start(root: &Path, variables: &[(&str, PathBuf)]) -> Run {
     start_with(root, variables, &[], Stdio::null())
@@ -73,7 +81,7 @@ pub fn start_with(
     arguments: &[&str],
     stdin: Stdio,
 ) -> Run {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = scratch();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     child
         .arg("run")

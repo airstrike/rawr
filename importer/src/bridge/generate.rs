@@ -1680,6 +1680,43 @@ impl<T: Send + 'static> HoldLease<T> for &HoldProbe<T> {
     }
 }
 
+/// Gives a concrete `T`'s `Default` where rustc proves `T: Default`, and
+/// none otherwise, by method resolution: an alias that names one instance
+/// of a generic type, as ratatui's `DefaultTerminal` names
+/// `Terminal<CrosstermBackend<Stdout>>`, has its target's `Default` only
+/// where the impl's bounds hold for its arguments.
+#[allow(dead_code)]
+struct DefaultProbe<T>(std::marker::PhantomData<T>);
+
+#[allow(dead_code)]
+impl<T> DefaultProbe<T> {
+    fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+#[allow(dead_code)]
+trait DefaultGiven<T> {
+    fn made(&self) -> Option<fn() -> T>;
+}
+
+impl<T: Default> DefaultGiven<T> for DefaultProbe<T> {
+    fn made(&self) -> Option<fn() -> T> {
+        Some(T::default)
+    }
+}
+
+#[allow(dead_code)]
+trait DefaultAbsent<T> {
+    fn made(&self) -> Option<fn() -> T>;
+}
+
+impl<T> DefaultAbsent<T> for &DefaultProbe<T> {
+    fn made(&self) -> Option<fn() -> T> {
+        None
+    }
+}
+
 /// Turn one value a Rust task or future yielded into a Rawr value, on the
 /// thread that owns the arena. An imported value takes the witness of the
 /// task's output type.
@@ -8530,23 +8567,22 @@ fn render_adapter_body(
                             output,
                         )?;
                         // A `&str` lent to a receiver out of any region,
-                        // whose output keeps it, has no lifetime to borrow
-                        // at but `'static`: such a call needs the region a
-                        // view's widgets are made in.
+                        // whose output keeps it, as ratatui's `Block::
+                        // title("list")` keeps its title, is pinned for the
+                        // runner's life, as a function's is
+                        // (`lends_str_to_output`): the output the arena
+                        // keeps borrows it at `'static`.
                         let returned = substituted(signature.output(), signature, substitutions)?;
-                        if carries_lifetime(&returned)
-                            && signature
-                                .inputs()
-                                .iter()
-                                .any(|input| lends_str(input, signature, substitutions))
-                        {
-                            writeln!(
-                                output,
-                                "    Err(Error::Lent({:?}, __rawr_internal::scope::Error::Mismatch))",
-                                format!("{}::{}", rust_path(plan), plan.name())
-                            )
-                            .map_err(request::unwritable)?;
-                            return Ok(());
+                        if carries_lifetime(&returned) {
+                            for (position, input) in signature.inputs().iter().enumerate() {
+                                if lends_str(input, signature, substitutions) {
+                                    writeln!(
+                                        output,
+                                        "    let argument_{position} = static_pins().pin(argument_{position}_owned);"
+                                    )
+                                    .map_err(request::unwritable)?;
+                                }
+                            }
                         }
                         output
                             .write_all(b"    let receiver: ")
@@ -9068,14 +9104,17 @@ fn render_anchored_opening(
 /// `Default`, so a script type's derived `Default` builds a field of that
 /// type as Rust's derive does: `Tooltip { position: Position::default(),
 /// .. }`. Only types with no parameters or lifetimes, whose `Default` the
-/// crate implements for the type itself.
+/// crate implements for the type itself, where rustc proves it for that
+/// type (`DefaultProbe`).
 fn render_imported_defaults(
     facade: Option<&crate::surface::facade::Plan>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
     output
-        .write_all(b"fn register_defaults() {\n")
+        .write_all(
+            b"fn register_defaults() {\n    #[allow(unused_imports)]\n    use {DefaultAbsent as _, DefaultGiven as _};\n",
+        )
         .map_err(encoding)?;
     let mut seen = std::collections::BTreeSet::new();
     for owner in facade
@@ -9108,18 +9147,22 @@ fn render_imported_defaults(
                     String::from_utf8(identity).map_err(request::unwritable)?
                 )
             };
-            output
-                .write_all(b"    __rawr_internal::host::value::register_imported_default(")
-                .map_err(encoding)?;
+            write!(
+                output,
+                "    if let Some(made) = (&DefaultProbe::<{path}>::new()).made() {{
+        __rawr_internal::host::value::register_imported_default("
+            )
+            .map_err(encoding)?;
             byte_array(output, ty.identity())?;
             writeln!(
                 output,
-                ", || with_arena(|arena| {{
-        let mut values: [&mut Dynamic; 0] = [];
-        let arguments = &mut Arguments {{ values: &mut values, arena }};
-        let output = <{path} as Default>::default();
-        {give}
-    }}).unwrap_or_else(|error| panic!(\"rawr: `{path}`'s `Default`: {{error:?}}\")));"
+                ", move || with_arena(|arena| {{
+            let mut values: [&mut Dynamic; 0] = [];
+            let arguments = &mut Arguments {{ values: &mut values, arena }};
+            let output = made();
+            {give}
+        }}).unwrap_or_else(|error| panic!(\"rawr: `{path}`'s `Default`: {{error:?}}\")));
+    }}"
             )
             .map_err(encoding)?;
         }

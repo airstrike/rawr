@@ -21,7 +21,7 @@ fn fixture(name: &str) -> PathBuf {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +43,7 @@ fn job(line: &str) -> Option<(u64, u64)> {
 #[test]
 fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocking() {
     let root = fixture("tokio-async");
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -92,7 +92,7 @@ fn an_async_main_runs_on_the_projects_tokio_with_a_channel_join_and_spawn_blocki
 #[test]
 fn an_async_fn_borrowing_its_argument_leases_it_to_its_future() {
     let root = fixture("tokio-borrowed");
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -129,7 +129,7 @@ fn a_module_function_names_another_crates_type() {
         "// rawr\nmod label;\n\nfn main() {\n    let font = shelf::font(String::from(\"Georgia\"), 3);\n    println!(\"{}\", label::describe(&font));\n    let made = label::make(\"Inter\");\n    println!(\"{}\", label::describe(&made));\n    println!(\"{}\", label::owned(made));\n}\n",
     )
     .unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -154,7 +154,7 @@ fn a_module_function_names_another_crates_type() {
 fn an_async_fn_leases_every_borrow_its_inputs_hold() {
     let root = fixture("tokio-borrowed");
     fs::copy(root.join("variants/store.rs"), root.join("src/main.rs")).unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let output = |command: &mut Command| {
         let run = command
             .current_dir(&root)
@@ -220,13 +220,13 @@ fn a_save_restarts_an_async_main_on_its_runtime_as_its_attribute_says() {
 /// of its `#[tokio::main]`: its whole output.
 fn spawned(name: &str, attribute: &str) -> String {
     let root = fixture("tokio-spawn");
-    let copy_root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let copy_root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(copy_root.join("src"));
     copy(&root, &copy_root);
     let main = copy_root.join("src/main.rs");
     let text = fs::read_to_string(&main).unwrap();
     fs::write(&main, text.replace("#[tokio::main]", attribute)).unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&copy_root)

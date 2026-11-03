@@ -5,7 +5,7 @@
 //! for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::support::{copy, start};
@@ -35,7 +35,7 @@ fn a_native_main_sees_a_body_edit_at_its_next_call_and_restarts_on_a_new_field()
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("islands");
+    let root = crate::support::scratch().join("islands");
     let _ = fs::remove_file(root.join("stop"));
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
@@ -99,7 +99,7 @@ fn a_native_main_runs_on_the_process_main_thread() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-main-thread"
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("islands-main-thread");
+    let root = crate::support::scratch().join("islands-main-thread");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(MAIN_THREAD), &root);
     let mut run = start(&root, &[]);
@@ -124,7 +124,7 @@ fn a_native_main_gets_its_arguments_and_stdin_and_swaps_while_it_waits_on_stdin(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/islands-arguments"
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("islands-arguments");
+    let root = crate::support::scratch().join("islands-arguments");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(ARGUMENTS), &root);
     let words = root.join("src/words.rs");
