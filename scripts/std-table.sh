@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Regenerate rawr's std table (src/std_table/) for the pinned toolchain
 # (D711 step 1). Run it after moving CHANNEL in
-# importer/src/cargo/toolchain.rs and commit what changes.
+# importer/src/cargo/toolchain.rs and commit what changes. A project on
+# another nightly gets that nightly's table from the driver rawr-import
+# builds for it (importer/src/cargo/toolchain/driver.rs).
 #
 #     scripts/std-table.sh          # rewrite src/std_table/
 #     scripts/std-table.sh --check  # fail when it isn't current
