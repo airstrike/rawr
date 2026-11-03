@@ -6,6 +6,28 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.116 (2026-11-03)
+
+- `v.get(a..b)` on a Vec, array or slice gives `Option<&[T]>`, as std does. (#772)
+- A `&mut self` method of a program type on a local not declared `mut` reports rustc's E0596. (#774)
+- `"a" + "b"` and other operators a type has no impl of report rustc's E0369 in its words. (#733)
+- `.into()` on text with nothing to give its target reports rustc's E0283. (#736)
+- A std type written with too few or too many type arguments reports rustc's E0107. (#752)
+- An unstable std method reports rustc's E0658 with its feature and tracking issue. (#771)
+- A `VecDeque`'s own `remove`, `swap_remove_back`, `swap_remove_front`, `rotate_left`, `rotate_right`, `range`, `as_slices` and `make_contiguous` run, with std's panics and borrow checks. Holding a `range` or `drain` iterator across a change of its collection is rustc's E0502 or E0499. (#779)
+- A program can implement one trait for both `[T]` and `Vec<T>`: a `Vec` uses its own impl or the slice's through `Deref`, and a slice never uses the `Vec`'s (rustc's E0599). (#781)
+- A closure passed to a std method has the parameter types std declares for it, so `v.sort_by_key(|x| -*x)` needs no annotation, and a std method rawr doesn't run yet gives the not-yet error rather than an error inside the closure. (#795, #770)
+- A pattern matched through a reference binds one more reference to a member that is already one, as rustc does: in `let (_, x) = &(1, &n);`, `x` is `&&i64`, so closures like `filter(|(_, x)| **x > 1)` work. (#794)
+- An `iter_mut()` kept in a local can be stepped with `next()`, as in a `while let Some(x) = it.next()` loop. (#693)
+- A std type outside the prelude, such as `HashMap`, `RefCell` or `Duration`, written with no `use` is refused with rustc's error (E0425 in a type, E0433 at the head of a path). (#751)
+- A match on a crate enum reads each field it needs on its own: nested patterns such as `A(B(x))` work, and so does binding only a `Copy` field beside a field without `Clone`. A match covering a variant through the patterns below it is accepted as exhaustive. (#785)
+- `ref mut` bindings and matches through `&mut T` lend a crate enum's crate-value fields mutably, so a change through the binding stays in the matched value. (#786)
+- An `Rc<T>` or `Arc<T>` of a crate's type crosses as the crate's own pointer, keeping its count and identity, with nothing copied. (#775)
+- `HashMap`, `HashSet`, `BTreeMap` and `BTreeSet` keyed by strings, numbers, chars or bools cross to and from crates; a `&HashMap` of crate values lends each value without a copy. (#777; part of #708)
+- Method calls, fields and `&T` coercions go through a crate type's own `Deref`, and `&mut self` methods through `DerefMut`, for crate and program types alike; without a `DerefMut` it is rustc's E0596. (#762, #764)
+- `use std::borrow::Cow` works: `Cow<'_, str>` and `Cow<'_, [T]>` are std's, with `Borrowed`/`Owned`, `into_owned`, `to_mut` and every method of their target. `*` of a `&str` or `String` is rustc's `str`. (#701)
+- rawr can be installed with one command, `curl -LsSf https://rawr.airstrike.fyi/install.sh | sh`, from prebuilt macOS and Linux binaries, and rawr-import installs the Rust nightly it reads crate APIs with through rustup the first time it needs it. Windows gets `rawr` through install.ps1, best effort. (#797)
+
 ## 0.3.115 (2026-11-03)
 
 - An iterator's methods and what each call borrows come from std's own declarations of Iterator, DoubleEndedIterator, Peekable and IntoIterator, and of std's adapter and FromIterator impls. A method std declares that rawr doesn't run yet, such as `rposition` or `next_back`, says so instead of being an unknown method, and calling `next` on an iterator not declared `mut` is rustc's E0596. (#768)

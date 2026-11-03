@@ -397,3 +397,37 @@ impl<Theme> Note<'_, Theme> {
         self.text.clone()
     }
 }
+
+pub mod widget {
+    use super::PhantomData;
+
+    /// A widget whose messages `F` turns, as iced_core's `widget::Map`,
+    /// which iced's `Widget::map` gives and iced doesn't re-export: a
+    /// program uses it without naming it.
+    pub struct Map<W, F, A> {
+        widget: W,
+        mapper: F,
+        input: PhantomData<A>,
+    }
+
+    impl<W, F, A> Map<W, F, A> {
+        /// `widget`, its messages turned by `mapper`.
+        pub fn new(widget: W, mapper: F) -> Self {
+            Map {
+                widget,
+                mapper,
+                input: PhantomData,
+            }
+        }
+
+        /// The widget it wraps.
+        pub fn widget(&self) -> &W {
+            &self.widget
+        }
+
+        /// What turns its messages.
+        pub fn mapper(&self) -> &F {
+            &self.mapper
+        }
+    }
+}

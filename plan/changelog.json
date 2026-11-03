@@ -8,6 +8,31 @@
   },
   "releases": [
     {
+      "version": "0.3.116",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"`v.get(a..b)` on a Vec, array or slice gives `Option<&[T]>`, as std does.","issues":[772]},
+        {"text":"A `&mut self` method of a program type on a local not declared `mut` reports rustc's E0596.","issues":[774]},
+        {"text":"`\"a\" + \"b\"` and other operators a type has no impl of report rustc's E0369 in its words.","issues":[733]},
+        {"text":"`.into()` on text with nothing to give its target reports rustc's E0283.","issues":[736]},
+        {"text":"A std type written with too few or too many type arguments reports rustc's E0107.","issues":[752]},
+        {"text":"An unstable std method reports rustc's E0658 with its feature and tracking issue.","issues":[771]},
+        {"text":"A `VecDeque`'s own `remove`, `swap_remove_back`, `swap_remove_front`, `rotate_left`, `rotate_right`, `range`, `as_slices` and `make_contiguous` run, with std's panics and borrow checks. Holding a `range` or `drain` iterator across a change of its collection is rustc's E0502 or E0499.","issues":[779]},
+        {"text":"A program can implement one trait for both `[T]` and `Vec<T>`: a `Vec` uses its own impl or the slice's through `Deref`, and a slice never uses the `Vec`'s (rustc's E0599).","issues":[781]},
+        {"text":"A closure passed to a std method has the parameter types std declares for it, so `v.sort_by_key(|x| -*x)` needs no annotation, and a std method rawr doesn't run yet gives the not-yet error rather than an error inside the closure.","issues":[795,770]},
+        {"text":"A pattern matched through a reference binds one more reference to a member that is already one, as rustc does: in `let (_, x) = &(1, &n);`, `x` is `&&i64`, so closures like `filter(|(_, x)| **x > 1)` work.","issues":[794]},
+        {"text":"An `iter_mut()` kept in a local can be stepped with `next()`, as in a `while let Some(x) = it.next()` loop.","issues":[693]},
+        {"text":"A std type outside the prelude, such as `HashMap`, `RefCell` or `Duration`, written with no `use` is refused with rustc's error (E0425 in a type, E0433 at the head of a path).","issues":[751]},
+        {"text":"A match on a crate enum reads each field it needs on its own: nested patterns such as `A(B(x))` work, and so does binding only a `Copy` field beside a field without `Clone`. A match covering a variant through the patterns below it is accepted as exhaustive.","issues":[785]},
+        {"text":"`ref mut` bindings and matches through `&mut T` lend a crate enum's crate-value fields mutably, so a change through the binding stays in the matched value.","issues":[786]},
+        {"text":"An `Rc<T>` or `Arc<T>` of a crate's type crosses as the crate's own pointer, keeping its count and identity, with nothing copied.","issues":[775]},
+        {"text":"`HashMap`, `HashSet`, `BTreeMap` and `BTreeSet` keyed by strings, numbers, chars or bools cross to and from crates; a `&HashMap` of crate values lends each value without a copy.","issues":[777],"refs":[708]},
+        {"text":"Method calls, fields and `&T` coercions go through a crate type's own `Deref`, and `&mut self` methods through `DerefMut`, for crate and program types alike; without a `DerefMut` it is rustc's E0596.","issues":[762,764]},
+        {"text":"`use std::borrow::Cow` works: `Cow<'_, str>` and `Cow<'_, [T]>` are std's, with `Borrowed`/`Owned`, `into_owned`, `to_mut` and every method of their target. `*` of a `&str` or `String` is rustc's `str`.","issues":[701]},
+        {"text":"rawr can be installed with one command, `curl -LsSf https://rawr.airstrike.fyi/install.sh | sh`, from prebuilt macOS and Linux binaries, and rawr-import installs the Rust nightly it reads crate APIs with through rustup the first time it needs it. Windows gets `rawr` through install.ps1, best effort.","issues":[797]}
+      ]
+    },
+    {
       "version": "0.3.115",
       "date": "2026-11-03",
       "entries": [

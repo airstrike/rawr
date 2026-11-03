@@ -1095,8 +1095,11 @@ impl Registry {
         // type each access checks.
         // So has a value in a scope frame's region (D558 tier 1), reached
         // through its region by its family, which each access checks, and
-        // a frame a call made and no `let` has opened yet.
+        // a frame a call made and no `let` has opened yet, and a field a
+        // pattern borrows, reached through its value by its generated
+        // projection.
         if value.is::<crate::scope::Lent>()
+            || value.is::<crate::scope::Projected>()
             || value.is::<crate::scope::Scoped>()
             || crate::scope::is_opening(value)
         {

@@ -33,6 +33,9 @@ pub(crate) struct Value {
     /// `Stdin`, which reads the same stdin.
     pub also: &'static [&'static str],
     pub register: Register,
+    /// Whether a crate takes, gives and borrows the value as std's own
+    /// (`crossing::Std`), as it does a `PathBuf` or an `io::Error`.
+    pub crosses: bool,
     /// The capabilities rawr runs for the value. Each is declared when std
     /// implements its trait for the type too.
     pub runs: &'static [capability::Kind],

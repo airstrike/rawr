@@ -607,10 +607,14 @@ fn structural_path<'facade>(
                 .filter(|selector| selector.fingerprint() == row.selector)
                 .map(|_| StructuralKind::Constructor)
                 .chain(fields.iter().filter_map(|field| {
-                    // A field's selector names its reader and its store.
+                    // A field's selector names its reader, its store and
+                    // its lender.
                     (field.imported_identity().fingerprint() == row.selector).then_some(
-                        if row.kind == StructuralKind::Store {
-                            StructuralKind::Store
+                        if matches!(
+                            row.kind,
+                            StructuralKind::Store | StructuralKind::Borrow { .. }
+                        ) {
+                            row.kind
                         } else if row.instance.is_some() && !definition.parameters().is_empty() {
                             // The authenticated adapter's signature is at
                             // the selected instance, not the type's defaults.

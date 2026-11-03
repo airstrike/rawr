@@ -30,6 +30,7 @@ pub(super) const HELD: [Held; 3] = [
                 .default_value_type::<PathBuf>(path, &[], capabilities)
                 .map(drop)
         },
+        crosses: true,
         runs: RUNS,
     }),
     Held::Value(held::Value {
@@ -41,6 +42,7 @@ pub(super) const HELD: [Held; 3] = [
                 .default_value_type::<OsString>(path, &[], capabilities)
                 .map(drop)
         },
+        crosses: true,
         runs: RUNS,
     }),
     Held::Text("std::path::Display"),

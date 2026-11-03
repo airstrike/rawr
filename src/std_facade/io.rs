@@ -31,6 +31,7 @@ pub(super) const HELD: [Held; 4] = [
         register: |builder, path, capabilities| {
             builder.type_::<Error>(path, &[], capabilities).map(drop)
         },
+        crosses: true,
         runs: &[
             capability::Kind::Debug,
             capability::Kind::Send,
@@ -46,6 +47,7 @@ pub(super) const HELD: [Held; 4] = [
                 .value_type::<ErrorKind>(path, &[], capabilities)
                 .map(drop)
         },
+        crosses: true,
         runs: &[
             capability::Kind::Debug,
             capability::Kind::Clone,
@@ -66,6 +68,7 @@ pub(super) const HELD: [Held; 4] = [
                 .default_value_type::<Stdin>(path, &[], capabilities)
                 .map(drop)
         },
+        crosses: false,
         runs: STREAM,
     }),
     Held::Value(held::Value {
@@ -77,6 +80,7 @@ pub(super) const HELD: [Held; 4] = [
                 .default_value_type::<Stdout>(path, &[], capabilities)
                 .map(drop)
         },
+        crosses: false,
         runs: STREAM,
     }),
 ];
@@ -93,39 +97,60 @@ pub(crate) struct Stdout;
 /// Rust's `std::io::Error`, which is not `Clone`. A Rawr value is a handle
 /// to the error's one place, so copies of the value share it. Native code
 /// borrows the error itself, and takes it out of its place when the program
-/// moves it, which leaves no handle that is read again.
+/// moves it, which leaves no handle that is read again. Or a borrow of an
+/// error a crate's value holds (#680), read where that value holds it.
 #[derive(Clone)]
-pub(crate) struct Error(Arc<Mutex<Option<Arc<std::io::Error>>>>);
+pub(crate) struct Error(Place);
+
+#[derive(Clone)]
+enum Place {
+    Owned(Arc<Mutex<Option<Arc<std::io::Error>>>>),
+    #[cfg(feature = "sync")]
+    Borrowed(crate::crossing::Borrow<std::io::Error>),
+}
 
 impl Error {
     fn new(error: std::io::Error) -> Self {
-        Self(Arc::new(Mutex::new(Some(Arc::new(error)))))
+        Self(Place::Owned(Arc::new(Mutex::new(Some(Arc::new(error))))))
     }
 
-    /// The error, lent: the program never reads a value it moved.
-    fn get(&self) -> Arc<std::io::Error> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .unwrap_or_else(|| panic!("rawr: a moved `std::io::Error` was read"))
+    /// The error, lent to `visit`: the program never reads a value it
+    /// moved, nor a borrow past its owner.
+    fn with<R>(&self, visit: impl FnOnce(&std::io::Error) -> R) -> R {
+        match &self.0 {
+            Place::Owned(place) => visit(&owned(place)),
+            #[cfg(feature = "sync")]
+            Place::Borrowed(borrow) => visit(&borrow(None).unwrap_or_else(|reason| {
+                panic!("rawr: a borrowed `std::io::Error` can't be read: {reason}")
+            })),
+        }
     }
+}
+
+/// The error in `place`, shared.
+fn owned(place: &Mutex<Option<Arc<std::io::Error>>>) -> Arc<std::io::Error> {
+    place
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .unwrap_or_else(|| panic!("rawr: a moved `std::io::Error` was read"))
 }
 
 #[cfg(feature = "sync")]
 impl crate::crossing::Std for std::io::Error {
-    type Lent = Arc<Self>;
+    type Lent = crate::crossing::Shared<Self>;
 
     fn give(self) -> Dynamic {
         made(self)
     }
 
     /// The error, moved out of its place. No borrow of it outlives the
-    /// move, so it is the only one.
+    /// move, so it is the only one. A borrowed error moves nowhere.
     fn take(value: Dynamic) -> Option<Self> {
-        let error = value
-            .try_cast::<Error>()?
-            .0
+        let Place::Owned(place) = value.try_cast::<Error>()?.0 else {
+            return None;
+        };
+        let error = place
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()?;
@@ -136,20 +161,31 @@ impl crate::crossing::Std for std::io::Error {
         )
     }
 
-    fn lend(value: Dynamic) -> Option<Arc<Self>> {
-        value.try_cast::<Error>().map(|error| error.get())
+    fn lend(value: Dynamic, arena: &mut dyn std::any::Any) -> Option<Self::Lent> {
+        Some(match value.try_cast::<Error>()?.0 {
+            Place::Owned(place) => crate::crossing::Shared::Held(owned(&place)),
+            Place::Borrowed(borrow) => {
+                crate::crossing::Shared::Borrowed(borrow(Some(arena)).unwrap_or_else(|reason| {
+                    panic!("rawr: a borrowed `std::io::Error` can't be lent: {reason}")
+                }))
+            }
+        })
+    }
+
+    fn borrowed(borrow: crate::crossing::Borrow<Self>) -> Option<Dynamic> {
+        Some(Dynamic::from(Error(Place::Borrowed(borrow))))
     }
 }
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&*self.get(), formatter)
+        self.with(|error| std::fmt::Debug::fmt(error, formatter))
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&*self.get(), formatter)
+        self.with(|error| std::fmt::Display::fmt(error, formatter))
     }
 }
 
@@ -277,7 +313,7 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
     });
     bind("io::Error::kind", |args| {
         Ok(Dynamic::from(
-            read_value::<Error>(args[0], "io::Error")?.get().kind(),
+            read_value::<Error>(args[0], "io::Error")?.with(std::io::Error::kind),
         ))
     });
     bind("io::Error::to_string", |args| {

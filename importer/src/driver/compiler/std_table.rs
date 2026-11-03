@@ -1205,14 +1205,19 @@ impl<'tcx> Table<'tcx> {
             .collect::<Vec<_>>();
         // An impl that needs an unstable trait (`F: FnPtr`) is none stable
         // Rust can use, except through `A: Allocator`, which the default
-        // `Global` satisfies.
+        // `Global` satisfies, and `T: [const] Destruct`, which every type
+        // satisfies (`const impl<T> Clone for Option<T>`).
         let allocator = |def_id: DefId| tcx.item_name(def_id).as_str() == "Allocator";
+        let implied = [
+            tcx.lang_items().meta_sized_trait(),
+            tcx.lang_items().pointee_sized_trait(),
+            tcx.lang_items().destruct_trait(),
+        ];
         if clauses.iter().any(|clause| {
             matches!(clause.kind().skip_binder(), ty::ClauseKind::Trait(predicate)
                 if stability(tcx, predicate.def_id()).is_some()
                     && !allocator(predicate.def_id())
-                    && Some(predicate.def_id()) != tcx.lang_items().meta_sized_trait()
-                    && Some(predicate.def_id()) != tcx.lang_items().pointee_sized_trait())
+                    && !implied.contains(&Some(predicate.def_id())))
         }) {
             return None;
         }

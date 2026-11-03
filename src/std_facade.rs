@@ -89,6 +89,16 @@ impl Bind for host::runtime::Builder {
     }
 }
 
+/// Whether the type at `path` under the root is one Rawr's std holds as
+/// std's own Rust value, which a crate takes, gives and borrows as itself
+/// (`crossing::Std`).
+pub(crate) fn crosses(path: &str) -> bool {
+    [path::HELD.as_slice(), io::HELD.as_slice()]
+        .concat()
+        .iter()
+        .any(|held| matches!(held, held::Held::Value(value) if value.crosses && held::Value::facade(value.std) == path))
+}
+
 /// The facade's compile-time definition, built once per thread.
 pub(crate) fn definition() -> facade::Definition {
     thread_local! {

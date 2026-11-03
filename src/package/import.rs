@@ -298,7 +298,7 @@ impl crate::Engine {
                             Some((path, through_alias, member)) => error
                                 .with_rust_demand(&path, through_alias, member)
                                 .with_rust_misses(misses),
-                            None => error,
+                            None => error.with_rust_misses(misses),
                         }));
                     }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
@@ -306,7 +306,7 @@ impl crate::Engine {
                         Some((path, through_alias, member)) => error
                             .with_rust_demand(&path, through_alias, member)
                             .with_rust_misses(misses),
-                        None => error,
+                        None => error.with_rust_misses(misses),
                     }));
                 }
             };
