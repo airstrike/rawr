@@ -24,6 +24,20 @@ pub(crate) enum Kind {
     /// The fields of a value of the variant, lent for the rest of the
     /// scope that binds them, as a pattern through `&T` binds them.
     Lend,
+    /// The fields of a value of the variant, lent mutably for the rest of
+    /// the scope that binds them, as a pattern through `&mut T` or a `ref
+    /// mut` binding binds them.
+    LendMut,
+    /// One field of a value of the variant, copied, as a binding of a
+    /// `Copy` field reads it.
+    Read {
+        field: u32,
+    },
+    /// One field of a value of the variant, lent for the rest of the scope
+    /// that reads it, as a pattern below the variant's reads it.
+    Borrow {
+        field: u32,
+    },
     /// A field set in place to a value, through the place's handle or a
     /// value native code lends `&mut`.
     Store,
@@ -36,8 +50,22 @@ impl Kind {
     pub(crate) const fn shares_selector(self) -> bool {
         matches!(
             self,
-            Self::Match | Self::Test | Self::Take | Self::Lend | Self::Store
+            Self::Match
+                | Self::Test
+                | Self::Take
+                | Self::Lend
+                | Self::LendMut
+                | Self::Read { .. }
+                | Self::Borrow { .. }
+                | Self::Store
         )
+    }
+
+    /// Whether the adapter lends what it reads: it gives a scope frame,
+    /// whose lent values are reached only through their own types'
+    /// accessors and whose copies are Rawr's own values.
+    pub(crate) const fn lends(self) -> bool {
+        matches!(self, Self::Lend | Self::LendMut | Self::Borrow { .. })
     }
 }
 
@@ -243,7 +271,7 @@ impl Proof {
         // A scope frame a variant's lender made: the fields it lends are
         // reached only through their own types' accessors, and the copies
         // it makes are Rawr's own values.
-        if self.definition.kind() == Kind::Lend && crate::scope::is_opening(&result) {
+        if self.definition.kind().lends() && crate::scope::is_opening(&result) {
             return Ok(result);
         }
         if let Err(error) = self.output.validate(&result, model, runtime) {
