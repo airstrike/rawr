@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 98;
+const CLASSIFIER_VERSION: u32 = 99;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6377,7 +6377,10 @@ impl<P: api::Phase> Context<'_, P> {
     /// shared reference to a crate type that declares none, as iced's
     /// `qr_code<'a, Theme>(data: &'a Data) -> QRCode<'a, Theme>`: its output
     /// borrows those values, which a view's region holds for as long as the
-    /// output lives.
+    /// output lives. The output may also be opaque and capture an early
+    /// lifetime, and an input may be a shared slice of such crate values, as
+    /// in iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
+    /// Widget<..> + 'a`.
     fn lends_values(&self, signature: &model::Signature) -> bool {
         let lifetimes = |id: &api::identity::Definition| {
             self.graph
@@ -6390,9 +6393,26 @@ impl<P: api::Phase> Context<'_, P> {
                     _ => None,
                 })
         };
+        let output = match signature.output() {
+            model::Type::Definition { id, .. } => {
+                matches!(lifetimes(id), Some(count) if count != 0)
+            }
+            model::Type::ImplTrait { captures, .. } => captures.iter().any(|argument| {
+                matches!(
+                    argument,
+                    model::Argument::Lifetime(model::Lifetime::Early { .. })
+                )
+            }),
+            _ => false,
+        };
+        let crate_value = |ty: &model::Type| {
+            matches!(ty, model::Type::Definition { id, arguments }
+                if lifetimes(id) == Some(0)
+                    && !arguments.iter().any(|argument| matches!(argument,
+                        model::Argument::Type(ty) if borrows_at_early_lifetime(ty))))
+        };
         matches!(signature.receiver(), model::Receiver::None)
-            && matches!(signature.output(), model::Type::Definition { id, .. }
-                if matches!(lifetimes(id), Some(count) if count != 0))
+            && output
             && signature
                 .inputs()
                 .filter(|input| borrows_at_early_lifetime(input))
@@ -6401,10 +6421,10 @@ impl<P: api::Phase> Context<'_, P> {
                         mutability: model::Mutability::Shared,
                         lifetime: model::Lifetime::Early { .. },
                         ty,
-                    } if matches!(&**ty, model::Type::Definition { id, arguments }
-                        if lifetimes(id) == Some(0)
-                            && !arguments.iter().any(|argument| matches!(argument,
-                                model::Argument::Type(ty) if borrows_at_early_lifetime(ty)))))
+                    } if match &**ty {
+                        model::Type::Slice(element) => crate_value(element),
+                        ty => crate_value(ty),
+                    })
                 })
     }
 

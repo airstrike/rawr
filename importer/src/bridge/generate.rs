@@ -631,6 +631,67 @@ impl<M: LentMap> Drop for MapLent<M> {
     }
 }
 
+/// A slice a call borrows whose elements are crate values, as iced's
+/// `markdown::view(&items, ..)` takes: each value moved out of its slot
+/// into it, and back once nothing borrows it, so none is copied. The slots
+/// refuse every use meanwhile.
+#[allow(dead_code)]
+struct SliceLent<T: 'static> { items: Vec<T>, handles: Vec<NativeHandle> }
+
+impl<T: 'static> Drop for SliceLent<T> {
+    fn drop(&mut self) {
+        let handles = std::mem::take(&mut self.handles);
+        let items = std::mem::take(&mut self.items);
+        // The call that borrowed it may still hold the arena: the values
+        // wait for its next use.
+        RELENDS.with_borrow_mut(|relends| {
+            for (handle, item) in handles.into_iter().zip(items) {
+                relends.push((handle, Box::new(item) as Box<dyn Any>));
+            }
+        });
+        let _ = with_arena(|_| Ok(()));
+    }
+}
+
+thread_local! {
+    /// The slices outputs borrow now (`SliceLent`), by their slots in
+    /// order: a view made again while the last one's pins hold them borrows
+    /// the same slice.
+    #[allow(clippy::type_complexity)]
+    static LENT_SLICES: RefCell<Vec<(Box<[([u8; 32], u32, u64)]>, std::rc::Weak<dyn Any>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The values of `handles`, moved out of their slots into one slice, or
+/// the slice they are in already.
+#[allow(dead_code)]
+fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Result<std::rc::Rc<SliceLent<T>>, Error> {
+    let keys: Box<[([u8; 32], u32, u64)]> = handles
+        .iter()
+        .map(|handle| (handle.epoch, handle.slot, handle.generation))
+        .collect();
+    let lent = LENT_SLICES.with_borrow_mut(|slices| {
+        slices.retain(|(_, slice)| slice.strong_count() > 0);
+        slices
+            .iter()
+            .find(|(lent, _)| !keys.is_empty() && **lent == *keys)
+            .and_then(|(_, slice)| slice.upgrade())
+    });
+    if let Some(lent) = lent {
+        return lent.downcast::<SliceLent<T>>().map_err(|_| Error::Leased);
+    }
+    let mut lent = SliceLent { items: Vec::new(), handles: Vec::new() };
+    lent.items.try_reserve_exact(handles.len()).map_err(|_| Error::Allocation)?;
+    lent.handles.try_reserve_exact(handles.len()).map_err(|_| Error::Allocation)?;
+    for handle in handles {
+        lent.items.push(arena.lend_out::<T>(handle.clone())?);
+        lent.handles.push(handle);
+    }
+    let lent = std::rc::Rc::new(lent);
+    let erased: std::rc::Rc<dyn Any> = lent.clone();
+    LENT_SLICES.with_borrow_mut(|slices| slices.push((keys, std::rc::Rc::downgrade(&erased))));
+    Ok(lent)
+}
+
 /// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
 /// it points to, which a rawr `Rc` or `Arc` holds the handle of. The
 /// value is read through it, as `Deref` reads it, and never copied out.
@@ -8673,9 +8734,13 @@ fn opaque_table_source(
     };
     let mut entries = Vec::new();
     for consumer in opaque_consumers(cohort, &key)? {
-        let Some((position, _, _)) = opaque_operand(consumer)? else {
+        let Some((position, _, operand)) = opaque_operand(consumer)? else {
             continue;
         };
+        // An operand that holds the table's opaque type, where the table's
+        // type is that opaque type itself, is taken at the type that holds
+        // it (`shape_witnesses`).
+        let holding = same_opaque(&returned, &key) && !same_opaque(&operand, &key);
         // A call that gives a value of another opaque type, as iced's
         // `Application::subscription` gives another `impl Program`, makes
         // that value's own table here, where rustc knows its type. One that
@@ -8738,6 +8803,11 @@ fn opaque_table_source(
             &format!("take_native(arguments, {position})"),
             &format!("take_like(arguments, {position}, _w)"),
         );
+        let body = if holding {
+            shape_witnesses(&body, position)
+        } else {
+            body
+        };
         entries.push(format!(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
         ));
@@ -8775,6 +8845,56 @@ fn opaque_table_source(
     }}",
         entries.join(",\n")
     )))
+}
+
+/// `body` with each operand at `position` taken at a type that holds the
+/// table's opaque type, as `boxed` takes the `Map<impl Widget, ..>` that
+/// `map` gave, taken at that type: the witness of the opaque type, made
+/// the witness of the type that holds it where `_` spells the opaque type.
+fn shape_witnesses(body: &str, position: usize) -> String {
+    let take = format!(" = take_like(arguments, {position}, _w)?;");
+    let mut shaped = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        let held = line
+            .trim_start()
+            .strip_prefix("let ")
+            .and_then(|rest| rest.split_once(": "))
+            .and_then(|(_, rest)| rest.split_once(&take))
+            .map(|(ty, _)| ty)
+            .filter(|ty| *ty != "_");
+        let Some(ty) = held else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holes = opaque_holes(ty);
+        let [hole] = holes[..] else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holding = format!("{}T{}", &ty[..hole], &ty[hole + 1..]);
+        shaped.push_str(&line.replacen(
+            &take,
+            &format!(
+                " = take_like(arguments, {position}, {{ fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+            ),
+            1,
+        ));
+    }
+    shaped
+}
+
+/// The offsets of each `_` in the Rust type `ty` that stands for a whole
+/// type, as in `Map<_, F, M>`, and not inside a name.
+fn opaque_holes(ty: &str) -> Vec<usize> {
+    let bytes = ty.as_bytes();
+    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (0..bytes.len())
+        .filter(|&at| {
+            bytes[at] == b'_'
+                && (at == 0 || !name(bytes[at - 1]))
+                && bytes.get(at + 1).is_none_or(|&next| !name(next))
+        })
+        .collect()
 }
 
 /// The signature, substitutions and argument offset of a call: a
@@ -12863,6 +12983,12 @@ fn function_argument_list(
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
             _ if VIEWED_ARGUMENTS.get()
+                && lent_slice_element(&substituted(ty, signature, substitutions)?).is_some() =>
+            {
+                write!(output, "pins.hold(argument_{position}).items.as_slice()")
+                    .map_err(request::unwritable)?;
+            }
+            _ if VIEWED_ARGUMENTS.get()
                 && viewed_native(&substituted(ty, signature, substitutions)?).is_some() =>
             {
                 if matches!(
@@ -13048,6 +13174,30 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
+    // each value moved out of its slot into one slice, and back once nothing
+    // borrows it (`SliceLent`). An output that may borrow it has the call's
+    // pins hold it (`views_natives`); else it goes back after the call.
+    let lent = substituted(ty, signature, substitutions)?;
+    if let Some(element) = lent_slice_element(&lent)
+        && !LENT_ARGUMENTS.get()
+    {
+        let item = concrete_type(element)
+            .ok_or_else(|| request::drift("a lent slice's element type"))?;
+        let (name, borrow) = if VIEWED_ARGUMENTS.get() {
+            (format!("argument_{local}"), String::new())
+        } else {
+            (
+                format!("argument_{local}_lent"),
+                format!("\n    let argument_{local}: &[{item}] = &argument_{local}_lent.items;"),
+            )
+        };
+        return writeln!(
+            output,
+            "    let {name} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }};{borrow}"
+        )
+        .map_err(request::unwritable);
+    }
     // A crate value the output borrows past the call: the value moved into
     // an `Rc` its slot shares, which the call's pins hold (`views_natives`).
     if VIEWED_ARGUMENTS.get() {
@@ -15701,8 +15851,9 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// Whether the call's output carries a lifetime and an input is a `&T` of
-/// a crate value, or an `Option` of one (`viewed_native`): the output may
+/// Whether the call's output carries a lifetime, or is opaque, and an input
+/// is a `&T` of a crate value, or an `Option` of one (`viewed_native`), or
+/// a `&[T]` of them (`lent_slice_element`): the output may
 /// borrow the value for as long as it lives, so the adapter shares it with
 /// the pins of the view's region, or of the runner out of any region,
 /// instead of lending it for the call alone (D568).
@@ -15711,15 +15862,39 @@ fn views_natives(
     substitutions: &[convert::Type],
 ) -> Result<bool, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
-    if !matches!(returned, convert::Type::Nominal { .. }) || !carries_lifetime(&returned) {
+    let borrows = match &returned {
+        convert::Type::Nominal { definition, .. } => {
+            carries_lifetime(&returned) || is_opaque(definition)
+        }
+        _ => false,
+    };
+    if !borrows {
         return Ok(false);
     }
     for input in signature.inputs() {
-        if viewed_native(&substituted(input, signature, substitutions)?).is_some() {
+        let input = substituted(input, signature, substitutions)?;
+        if viewed_native(&input).is_some() || lent_slice_element(&input).is_some() {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// The crate type of the elements of a `&[T]` a call takes, as iced's
+/// `markdown::view(&items, ..)` does: values the runner's arena holds,
+/// which the call borrows in one slice (`SliceLent`).
+fn lent_slice_element(ty: &convert::Type) -> Option<&convert::Type> {
+    let convert::Type::Borrowed { mutable: false, ty } = ty else {
+        return None;
+    };
+    match &**ty {
+        convert::Type::Sequence {
+            element,
+            length: None,
+            ..
+        } if lendable(element) => Some(element),
+        _ => None,
+    }
 }
 
 /// Takes an adapter's `&str` arguments pinned for the runner's life while
@@ -18150,6 +18325,24 @@ mod tests {
         ] {
             assert!(runtime.contains(expected), "{expected}");
         }
+    }
+
+    /// iced's changelog: `boxed` of the `Map<impl Widget, ..>` that `map`
+    /// gave takes it at the type that holds the table's opaque type, and a
+    /// `_` inside a name isn't one.
+    #[test]
+    fn an_operand_holding_the_opaque_type_is_taken_at_its_own_type() {
+        assert_eq!(
+            super::opaque_holes("::__rawr_crate_parts::widget::Map<_, Box<dyn Fn(u8) -> m_x>, _a>"),
+            [34]
+        );
+        let body = "    let argument_0: Map<_, Box<dyn Fn(String) -> crate::Message>, String> = take_like(arguments, 0, _w)?;\n    let receiver: _ = take_like(arguments, 0, _w)?;\n";
+        let shaped = super::shape_witnesses(body, 0);
+        assert!(
+            shaped.contains("= take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(String) -> crate::Message>, String>> { std::marker::PhantomData } shape(_w) })?;"),
+            "{shaped}"
+        );
+        assert!(shaped.ends_with("    let receiver: _ = take_like(arguments, 0, _w)?;\n"), "{shaped}");
     }
 
     /// T204: `&(f64, f64)` and `&[u8]` lend the Rust value made from
