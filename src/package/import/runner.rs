@@ -102,6 +102,18 @@ pub enum StructuralKind {
     Take,
     /// A variant's fields lent, which shares the variant's selector.
     Lend,
+    /// A variant's fields lent mutably, which shares the variant's selector.
+    LendMut,
+    /// One of a variant's fields copied, which shares the variant's
+    /// selector.
+    Read {
+        field: u32,
+    },
+    /// One of a variant's fields lent, which shares the variant's
+    /// selector.
+    Borrow {
+        field: u32,
+    },
     /// A field set in place, which shares the field's selector.
     Store,
 }
@@ -463,6 +475,9 @@ fn authenticate_structural(
                 StructuralKind::Test => host::structural::Kind::Test,
                 StructuralKind::Take => host::structural::Kind::Take,
                 StructuralKind::Lend => host::structural::Kind::Lend,
+                StructuralKind::LendMut => host::structural::Kind::LendMut,
+                StructuralKind::Read { field } => host::structural::Kind::Read { field },
+                StructuralKind::Borrow { field } => host::structural::Kind::Borrow { field },
                 StructuralKind::Store => host::structural::Kind::Store,
             },
         )
@@ -607,7 +622,10 @@ fn structural_path<'facade>(
                         StructuralKind::Match
                         | StructuralKind::Test
                         | StructuralKind::Take
-                        | StructuralKind::Lend => row.kind,
+                        | StructuralKind::Lend
+                        | StructuralKind::LendMut
+                        | StructuralKind::Read { .. }
+                        | StructuralKind::Borrow { .. } => row.kind,
                         _ => StructuralKind::Variant,
                     },
                 )

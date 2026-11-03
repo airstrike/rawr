@@ -2255,7 +2255,13 @@ const fn structural_use(kind: crate::host::structural::Kind) -> &'static str {
         Kind::Constructor => "constructing it",
         Kind::Field { .. } => "reading this field",
         Kind::Variant => "constructing this variant",
-        Kind::Match | Kind::Test | Kind::Take | Kind::Lend => "matching on this variant",
+        Kind::Match
+        | Kind::Test
+        | Kind::Take
+        | Kind::Lend
+        | Kind::LendMut
+        | Kind::Read { .. }
+        | Kind::Borrow { .. } => "matching on this variant",
         Kind::Store => "assigning to this field",
     }
 }
@@ -11144,30 +11150,121 @@ struct HostPattern {
     binds: Vec<PatternBinding>,
     values: Vec<origin::Fragment>,
     /// The fields of crate values that bindings move or lend, each read
-    /// once for every binding of its variant.
+    /// once for every binding of its variant, and the fields that patterns
+    /// below a variant's read.
     parts: Vec<HostPart>,
     /// Each binding that reads a part: its index in `binds`, its part's
     /// index in `parts`, and the copy it reads where the part is not read.
     readers: Vec<(usize, usize, origin::Fragment)>,
+    /// The bindings and parts in the order they are bound: a binding of a
+    /// whole value before a part that moves or lends it, and a part before
+    /// what reads it.
+    steps: Vec<HostStep>,
+}
+
+/// One binding or part of a `HostPattern`, by its index.
+#[derive(Clone, Copy)]
+enum HostStep {
+    Bind(usize),
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
+    Part(usize),
+}
+
+/// Where a `HostPattern`'s bindings are read.
+#[derive(Clone, Copy)]
+enum HostReading {
+    /// In the arm, the scope they are used in.
+    Arm,
+    /// In an arm's guard, which binds them by reference, as Rust does, so
+    /// no part is moved before the arm is chosen.
+    Guard,
+    /// As values that leave the scope they are made in, as a `let`-`else`
+    /// gives them to the statements after it, past the end of any lend.
+    Escaping,
 }
 
 /// A crate value's fields, moved or lent for the bindings of one variant
-/// pattern, under a hidden name.
+/// pattern, or one field a pattern below the variant's reads, under a
+/// hidden name.
 struct HostPart {
     name: String,
     reader: origin::Fragment,
-    /// Whether reading the part moves the fields out of the value; a part
-    /// that does not lends them for the rest of its scope.
+    /// The reader where a guard reads the part, when it is not `reader`:
+    /// one that lends what `reader` moves.
+    guard: Option<origin::Fragment>,
+    /// The reader where the bindings leave their scope, or `None` where
+    /// the part lends what it reads and its bindings read copies instead.
+    escaping: Option<origin::Fragment>,
+    /// Whether reading the part moves the fields out of the value.
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
     moves: bool,
-    /// The reader that lends a moving part's fields instead, where Rust
-    /// binds them by reference.
-    lent: Option<origin::Fragment>,
+    /// Whether reading the part lends the fields mutably.
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
+    mutable: bool,
+}
+
+impl HostPart {
+    /// The part of a variant's fields read by `reader`, which moves them
+    /// out of the value when `guard` gives the reader that lends them
+    /// instead, or lends them, mutably when `mutable`.
+    #[cfg(feature = "rust-import")]
+    fn fields(
+        name: String,
+        reader: origin::Fragment,
+        guard: Option<origin::Fragment>,
+        mutable: bool,
+    ) -> Self {
+        let moves = guard.is_some();
+        Self {
+            name,
+            escaping: moves.then(|| reader.clone()),
+            reader,
+            guard,
+            moves,
+            mutable,
+        }
+    }
+
+    /// Whether the part moves or mutably lends what it reads: what a
+    /// pattern below the variant's reads then comes from the part, as
+    /// nothing else may reach the value meanwhile.
+    #[cfg(feature = "rust-import")]
+    const fn holds(&self) -> bool {
+        self.moves || self.mutable
+    }
+
+    /// The reader of the part where it is read as `reading`.
+    fn reader(&self, reading: HostReading) -> Option<&origin::Fragment> {
+        match reading {
+            HostReading::Arm => Some(&self.reader),
+            HostReading::Guard => Some(self.guard.as_ref().unwrap_or(&self.reader)),
+            HostReading::Escaping => self.escaping.as_ref(),
+        }
+    }
 }
 
 impl HostPattern {
     fn bind(&mut self, binding: PatternBinding, value: origin::Fragment) {
+        self.steps.push(HostStep::Bind(self.binds.len()));
         self.binds.push(binding);
         self.values.push(value);
+    }
+
+    /// Add `part`, bound before what is bound after it, and give its index.
+    #[cfg(feature = "rust-import")]
+    fn part(&mut self, part: HostPart) -> usize {
+        self.steps.push(HostStep::Part(self.parts.len()));
+        self.parts.push(part);
+        self.parts.len() - 1
     }
 
     /// Bind `binding` to member `index` of the part `part`, or to `copy`
@@ -11186,6 +11283,20 @@ impl HostPattern {
         self.bind(binding, value);
     }
 
+    /// Whether a part moves what it reads, which the variant above it then
+    /// moves out too.
+    #[cfg(feature = "rust-import")]
+    fn moves(&self) -> bool {
+        self.parts.iter().any(|part| part.moves)
+    }
+
+    /// Whether a part lends what it reads mutably, which the variant above
+    /// it then lends mutably too.
+    #[cfg(feature = "rust-import")]
+    fn lends_mutably(&self) -> bool {
+        self.parts.iter().any(|part| part.mutable)
+    }
+
     /// Take `other`'s bindings and the parts they read.
     fn absorb_binds(&mut self, other: Self) {
         let (binds, parts) = (self.binds.len(), self.parts.len());
@@ -11195,6 +11306,11 @@ impl HostPattern {
                 .into_iter()
                 .map(|(bind, part, copy)| (binds + bind, parts + part, copy)),
         );
+        self.steps
+            .extend(other.steps.into_iter().map(|step| match step {
+                HostStep::Bind(index) => HostStep::Bind(binds + index),
+                HostStep::Part(index) => HostStep::Part(parts + index),
+            }));
         self.binds.extend(other.binds);
         self.values.extend(other.values);
         self.parts.extend(other.parts);
@@ -11215,59 +11331,48 @@ impl HostPattern {
     /// `let name = value; ..` for each binding, in the scope the bindings
     /// are used in.
     fn rendered_binds(&self) -> origin::Fragment {
-        self.rendered(|part| Some(&part.reader))
+        self.rendered(HostReading::Arm)
     }
 
-    /// The bindings as an arm's guard reads them: as references, as Rust
-    /// binds them there, so no part is moved before the arm is chosen.
+    /// The bindings as an arm's guard reads them (`HostReading::Guard`).
     fn rendered_guard_binds(&self) -> origin::Fragment {
-        self.rendered(|part| {
-            if part.moves {
-                part.lent.as_ref()
-            } else {
-                Some(&part.reader)
-            }
-        })
+        self.rendered(HostReading::Guard)
     }
 
-    /// The bindings as values that leave the scope they are made in, as a
-    /// `let`-`else` gives them to the statements after it, past the end of
-    /// any lend.
+    /// The bindings as values that leave the scope they are made in
+    /// (`HostReading::Escaping`).
     fn rendered_escaping_binds(&self) -> origin::Fragment {
-        self.rendered(|part| part.moves.then_some(&part.reader))
+        self.rendered(HostReading::Escaping)
     }
 
-    /// Each binding that reads no part comes first, since it may read the
-    /// whole value a part then moves or lends; then each part by the reader
-    /// `read` gives it, and the bindings that read parts, by copy where
-    /// `read` gives none.
-    fn rendered<'a>(
-        &'a self,
-        read: impl Fn(&'a HostPart) -> Option<&'a origin::Fragment>,
-    ) -> origin::Fragment {
+    /// Each binding and part in order, a part by its reader where it is
+    /// read as `reading`, and a binding that reads a part by copy where
+    /// the part has none.
+    fn rendered(&self, reading: HostReading) -> origin::Fragment {
         let mut source = origin::Fragment::default();
         let mut bind = |name: &str, value: &origin::Fragment| {
             source.push_text(format!("let {name} = "));
             source.push(value.clone());
             source.push_text("; ");
         };
-        for (index, (binding, value)) in self.binds.iter().zip(&self.values).enumerate() {
-            if !self.readers.iter().any(|(reader, ..)| *reader == index) {
-                bind(&binding.name, value);
+        for step in &self.steps {
+            match *step {
+                HostStep::Part(index) => {
+                    let part = &self.parts[index];
+                    if let Some(reader) = part.reader(reading) {
+                        bind(&part.name, reader);
+                    }
+                }
+                HostStep::Bind(index) => {
+                    let value = self
+                        .readers
+                        .iter()
+                        .find(|(reader, ..)| *reader == index)
+                        .filter(|(_, part, _)| self.parts[*part].reader(reading).is_none())
+                        .map_or(&self.values[index], |(.., copy)| copy);
+                    bind(&self.binds[index].name, value);
+                }
             }
-        }
-        for part in &self.parts {
-            if let Some(reader) = read(part) {
-                bind(&part.name, reader);
-            }
-        }
-        for (index, part, copy) in &self.readers {
-            let value = if read(&self.parts[*part]).is_some() {
-                &self.values[*index]
-            } else {
-                copy
-            };
-            bind(&self.binds[*index].name, value);
         }
         source
     }
@@ -22246,6 +22351,14 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
     ) -> Result<(), Error> {
         self.mutable_use(receiver, operation);
+        // A `&mut T` reaches its value mutably without being `mut` itself,
+        // as a pattern's binding through `&mut T` does (#786).
+        if matches!(
+            self.inference.resolve(&receiver.ty),
+            Ty::Reference { mutable: true, .. }
+        ) {
+            return Ok(());
+        }
         // An imported value is changed where it lives, through its handle,
         // so a place below a mutable binding (`self.panes.split(..)`) needs
         // only that binding to be mutable, as Rust's `&mut self` does.
@@ -22288,6 +22401,15 @@ impl<'a> Parser<'a> {
         };
         let reason = match self.bindings.get(name.as_str()) {
             Some(binding) if binding.mutable && binding.available => return Ok(()),
+            Some(binding)
+                if binding.available
+                    && matches!(
+                        self.inference.resolve(&binding.ty),
+                        Ty::Reference { mutable: true, .. }
+                    ) =>
+            {
+                return Ok(());
+            }
             Some(binding) if !binding.available => {
                 format!("borrow of moved value: `{name}` (E0382)")
             }
@@ -29572,11 +29694,6 @@ impl<'a> Parser<'a> {
                 Some(&definition),
             )?);
         }
-        let payload = if fields.is_empty() {
-            Ty::Unit
-        } else {
-            Ty::Tuple(fields.clone().into_boxed_slice())
-        };
         let selector = variant.imported_identity();
         // A matcher reads the value by its handle and gives new values, its
         // fields, which take its output's witness; the value stays
@@ -29600,20 +29717,8 @@ impl<'a> Parser<'a> {
             [origin::Fragment::call(&tester, [value.clone()])],
         );
         out.tests.push(test);
-        let copied = operation(
-            crate::host::structural::Kind::Match,
-            Ty::Option(Box::new(payload)),
-        );
-        let helper = self.push_imported_op(&path, selector, Some(copied), at)?;
-        let matched = origin::Fragment::call(&helper, [value.clone()]);
-        let inner = self.prelude_op(PreludeOp::Unwrap, [matched]);
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } = selector else {
             unreachable!("an enum variant's selector names an enum variant")
-        };
-        let field_at = |index: usize| {
-            let mut field = inner.clone().surrounded("(", ")");
-            field.push_text(format!("[{index}]"));
-            field
         };
         let discard = PatternSyntax::Discard { span: at };
         let members: Vec<(usize, &PatternSyntax)> = match (form, &pattern.named) {
@@ -29668,64 +29773,191 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        // A binding of a field Rawr can't read in place, as an
-        // `io::Error`, takes the field as rustc does: by value it moves
-        // the variant's fields out, and through `&T` it borrows them where
-        // a copy can't stand in for the borrow. Other fields are read in
-        // place, as Rust reads a `Copy` field and Rawr its own values.
+        // Each field is read alone (#785): one read in place, as Rust reads
+        // a `Copy` field and Rawr its own values, is copied, and one a
+        // pattern below the variant's matches is lent to it, so a field
+        // without `Clone` beside it is no obstacle.
+        let reader =
+            |this: &mut Self, index: usize, lent: bool| -> Result<origin::Fragment, Error> {
+                let field = u32::try_from(index).map_err(|_| Error::InvalidMatch {
+                    owner: path.clone(),
+                    reason: "the variant has too many fields".into(),
+                    pattern: at,
+                })?;
+                let kind = if lent {
+                    crate::host::structural::Kind::Borrow { field }
+                } else {
+                    crate::host::structural::Kind::Read { field }
+                };
+                let read = operation(kind, fields[index].clone());
+                let helper = this.push_imported_op(&path, selector, Some(read), at)?;
+                Ok(origin::Fragment::call(&helper, [value.clone()]))
+            };
+        // A pattern below the variant's is matched on its field under a
+        // hidden name, first, so the variant's own reader can be chosen
+        // for what it binds.
+        let mut nested = Vec::new();
+        for (index, member) in &members {
+            if matches!(
+                member,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Literal { .. }
+                    | PatternSyntax::Range { .. }
+            ) {
+                continue;
+            }
+            let name = self.temporary("field");
+            let mut below = HostPattern::default();
+            self.host_pattern(
+                member,
+                origin::Fragment::plain(name.as_str()),
+                &fields[*index],
+                &mut below,
+            )?;
+            nested.push((*index, name, below));
+        }
+        // A binding of a field Rawr can't read in place, as an `io::Error`,
+        // takes the field as rustc does: by value it moves the variant's
+        // fields out, through `&T` it borrows them where a copy can't stand
+        // in for the borrow, and through `&mut T` or as `ref mut` it borrows
+        // them mutably (#786). Other fields are read in place, as Rust reads
+        // a `Copy` field and Rawr its own values. A pattern below that moves
+        // or mutably borrows reads its field from the variant's fields moved
+        // or mutably borrowed alike.
         let native = |this: &Self, ty: &Ty| {
             !this.type_provides(ty, capability::Kind::Copy) && !this.plain_value(ty)
         };
         let unclonable = |this: &Self, ty: &Ty| {
             native(this, ty) && !this.type_provides(ty, capability::Kind::Clone)
         };
-        let binds = |this: &Self, wanted: &dyn Fn(&Self, &Ty) -> bool| {
-            members.iter().any(|(index, member)| {
-                matches!(member, PatternSyntax::Binding { .. }) && wanted(this, &fields[*index])
+        let outer = self.host_binding_mode.get();
+        let binds = |wanted: &dyn Fn(&PatternSyntax, Option<bool>, &Ty) -> bool| {
+            members.iter().any(|(index, member)| match member {
+                PatternSyntax::Binding { .. } => wanted(member, outer, &fields[*index]),
+                PatternSyntax::Ref { mutable, .. } => {
+                    wanted(member, Some(*mutable), &fields[*index])
+                }
+                _ => false,
             })
         };
-        let kind = match self.host_binding_mode.get() {
-            None if binds(self, &native) => Some(crate::host::structural::Kind::Take),
-            Some(false) if binds(self, &unclonable) => Some(crate::host::structural::Kind::Lend),
-            _ => None,
+        let mutable = binds(&|_, mode, ty| mode == Some(true) && native(self, ty))
+            || nested.iter().any(|(.., below)| below.lends_mutably());
+        let moves = binds(&|_, mode, ty| mode.is_none() && native(self, ty))
+            || nested.iter().any(|(.., below)| below.moves());
+        let lends = binds(&|member, mode, ty| {
+            mode == Some(false)
+                && (unclonable(self, ty)
+                    || (matches!(member, PatternSyntax::Ref { .. }) && native(self, ty)))
+        });
+        let kind = if mutable {
+            Some(crate::host::structural::Kind::LendMut)
+        } else if moves {
+            Some(crate::host::structural::Kind::Take)
+        } else if lends {
+            Some(crate::host::structural::Kind::Lend)
+        } else {
+            None
         };
         let part = match kind {
             Some(kind) => {
                 let output = Ty::Tuple(fields.clone().into_boxed_slice());
-                let moves = kind == crate::host::structural::Kind::Take;
                 // A guard binds what the arm moves by reference.
-                let lent = if moves {
+                let guard = if kind == crate::host::structural::Kind::Take {
                     let lent = operation(crate::host::structural::Kind::Lend, output.clone());
                     let lender = self.push_imported_op(&path, selector, Some(lent), at)?;
                     Some(origin::Fragment::call(&lender, [value.clone()]))
                 } else {
                     None
                 };
-                let reader =
+                let read =
                     self.push_imported_op(&path, selector, Some(operation(kind, output)), at)?;
-                out.parts.push(HostPart {
-                    name: self.temporary("part"),
-                    reader: origin::Fragment::call(&reader, [value]),
-                    moves,
-                    lent,
-                });
-                Some(out.parts.len() - 1)
+                let part = HostPart::fields(
+                    self.temporary("part"),
+                    origin::Fragment::call(&read, [value.clone()]),
+                    guard,
+                    kind == crate::host::structural::Kind::LendMut,
+                );
+                Some(out.part(part))
             }
             None => None,
         };
+        let mut nested = nested.into_iter().peekable();
         for (index, member) in members {
-            let Some(part) = part.filter(|_| matches!(member, PatternSyntax::Binding { .. }))
-            else {
-                self.host_pattern(member, field_at(index), &fields[index], out)?;
+            if let Some((_, name, below)) = nested.next_if(|(field, ..)| *field == index) {
+                // The pattern's tests read the field lent to them alone.
+                if let Some(condition) = below.condition() {
+                    let mut test = origin::Fragment::plain(format!("{{ let {name} = "));
+                    test.push(reader(self, index, true)?);
+                    test.push_text("; ");
+                    test.push(condition);
+                    test.push_text(" }");
+                    out.tests.push(test);
+                }
+                if below.binds.is_empty() {
+                    continue;
+                }
+                // What it binds reads the field from the variant's part
+                // when the part moves the fields or lends them mutably, and
+                // lent alone, or copied where it leaves its scope, else.
+                let held = part.filter(|part| out.parts[*part].holds());
+                let field = match held {
+                    Some(held) => {
+                        let mut field = origin::Fragment::plain(out.parts[held].name.as_str());
+                        field.push_text(format!("[{index}]"));
+                        let source = &out.parts[held];
+                        HostPart {
+                            name,
+                            escaping: source.escaping.is_some().then(|| field.clone()),
+                            reader: field,
+                            guard: None,
+                            moves: source.moves,
+                            mutable: source.mutable,
+                        }
+                    }
+                    None => HostPart {
+                        name,
+                        reader: reader(self, index, true)?,
+                        guard: None,
+                        escaping: Some(reader(self, index, false)?),
+                        moves: false,
+                        mutable: false,
+                    },
+                };
+                out.part(field);
+                for binding in &below.binds {
+                    self.require_new_host_binding(out, &binding.name, binding.span)?;
+                }
+                out.absorb_binds(below);
+                continue;
+            }
+            if matches!(member, PatternSyntax::Discard { .. }) {
+                continue;
+            }
+            let copy = reader(self, index, false)?;
+            let Some(part) = part.filter(|_| {
+                matches!(
+                    member,
+                    PatternSyntax::Binding { .. } | PatternSyntax::Ref { .. }
+                )
+            }) else {
+                self.host_pattern(member, copy, &fields[index], out)?;
                 continue;
             };
             // The binding any pattern on the field makes, read from the
-            // part instead.
+            // part instead: by reference for `ref` and `ref mut`.
             let mut single = HostPattern::default();
-            self.host_pattern(member, field_at(index), &fields[index], &mut single)?;
-            let (Some(binding), Some(copy)) = (single.binds.pop(), single.values.pop()) else {
+            self.host_pattern(member, copy, &fields[index], &mut single)?;
+            let (Some(mut binding), Some(copy)) = (single.binds.pop(), single.values.pop()) else {
                 unreachable!("a binding pattern binds its name")
             };
+            if let PatternSyntax::Ref { mutable, .. } = member {
+                binding.ty = Ty::Reference {
+                    mutable: *mutable,
+                    target: Box::new(binding.ty),
+                };
+            }
             self.require_new_host_binding(out, &binding.name, binding.span)?;
             out.bind_part(binding, part, index, copy);
         }
@@ -29769,6 +30001,127 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the unguarded arms `rows` of a match on facade values, one
+    /// pattern for each of `tys` in each row, cover every value, as rustc
+    /// checks it: the arms on one variant of a facade enum cover it when
+    /// their patterns below it cover its fields together, so `A(B(x))` and
+    /// `A(C)` cover `A` when `B` and `C` are its field's variants.
+    fn host_rows_cover(
+        &mut self,
+        rows: Vec<Vec<&PatternSyntax>>,
+        tys: &[Ty],
+        at: Span,
+    ) -> Result<bool, Error> {
+        let Some((ty, rest)) = tys.split_first() else {
+            return Ok(!rows.is_empty());
+        };
+        // Each row by its first pattern, past `name @` and `&`, with each
+        // alternative of a `|` a row of its own.
+        let mut spread = Vec::new();
+        for row in rows {
+            let Some((&first, tail)) = row.split_first() else {
+                continue;
+            };
+            let mut firsts = vec![first];
+            while let Some(first) = firsts.pop() {
+                match first {
+                    PatternSyntax::At { pattern, .. }
+                    | PatternSyntax::Reference { pattern, .. } => {
+                        firsts.push(pattern);
+                    }
+                    PatternSyntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    _ => spread.push((first, tail.to_vec())),
+                }
+            }
+        }
+        let irrefutable = |pattern: &PatternSyntax| {
+            matches!(
+                pattern,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Rest { .. }
+            )
+        };
+        let resolved = self.inference.resolve(ty);
+        let enumerated = match without_references(&resolved) {
+            Ty::Host { proof, arguments } => match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum(variants) => {
+                    Some((proof.clone(), arguments.clone(), variants.to_vec()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((proof, arguments, variants)) =
+            enumerated.filter(|_| spread.iter().any(|(first, _)| !irrefutable(first)))
+        else {
+            // Only a pattern that matches every value covers a type whose
+            // values are not told apart here.
+            let wild = spread
+                .into_iter()
+                .filter(|(first, _)| irrefutable(first))
+                .map(|(_, tail)| tail)
+                .collect();
+            return self.host_rows_cover(wild, rest, at);
+        };
+        let definition = proof.definition.clone();
+        let path: ImmutableString = definition.path().as_str().into();
+        let discard = PatternSyntax::Discard { span: at };
+        for variant in &variants {
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            let mut fields = Vec::with_capacity(variant.fields().len());
+            for field in variant.fields() {
+                fields.push(self.instantiate_host_type(
+                    field.ty(),
+                    &mut parameters,
+                    &path,
+                    at,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )?);
+            }
+            let mut specialized = Vec::new();
+            for (first, tail) in &spread {
+                let members = match first {
+                    pattern if irrefutable(pattern) => vec![&discard; fields.len()],
+                    PatternSyntax::Enum(pattern) if pattern.variant.as_str() == variant.name() => {
+                        match &pattern.named {
+                            Some((names, _)) => {
+                                let mut members = vec![&discard; fields.len()];
+                                for ((name, _), member) in names.iter().zip(pattern.payload.iter())
+                                {
+                                    if let Some(index) = variant
+                                        .fields()
+                                        .iter()
+                                        .position(|field| field.name() == name.as_str())
+                                    {
+                                        members[index] = member;
+                                    }
+                                }
+                                members
+                            }
+                            None if pattern.payload.is_empty() => vec![&discard; fields.len()],
+                            None => tuple_members(&pattern.payload, fields.len(), &discard)?,
+                        }
+                    }
+                    _ => continue,
+                };
+                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+            }
+            let tys: Vec<Ty> = fields.into_iter().chain(rest.iter().cloned()).collect();
+            if !self.host_rows_cover(specialized, &tys, at)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// `match` on a facade enum: `Status::Hovered`, `Status::Active { is_checked }`,
     /// `Key::Named(key::Named::Tab)`, `A | B`, `_` and bindings, lowered to
     /// the facade's variant tests and field readers.
@@ -29800,6 +30153,9 @@ impl<'a> Parser<'a> {
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
         let mut covered = Vec::<ImmutableString>::new();
+        // The arms without a guard, whose patterns below a variant cover it
+        // together.
+        let mut unguarded = Vec::new();
         let mut exhaustive = false;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
@@ -29836,6 +30192,7 @@ impl<'a> Parser<'a> {
                 exhaustive = true;
             } else {
                 Self::host_covers(&syntax, &mut covered);
+                unguarded.push(syntax);
             }
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
@@ -29861,7 +30218,14 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
-        if !exhaustive && !variants.iter().all(|variant| covered.contains(variant)) {
+        if !exhaustive
+            && !variants.iter().all(|variant| covered.contains(variant))
+            && !self.host_rows_cover(
+                unguarded.iter().map(|syntax| vec![syntax]).collect(),
+                std::slice::from_ref(&subject_ty),
+                match_span,
+            )?
+        {
             return Err(Error::InvalidMatch {
                 owner: owner_path.as_str().into(),
                 reason: "non-exhaustive patterns; add a `_` arm".into(),

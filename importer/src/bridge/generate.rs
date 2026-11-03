@@ -2055,6 +2055,43 @@ fn reach_lender<T: 'static>(
     })
 }
 
+/// Reach the value `lender` names mutably, for the scope a pattern through
+/// `&mut T` lends its fields to. A value in a slot is leased for the
+/// scope, so the arena is free while the fields are lent, every other use
+/// of the value meanwhile is refused, as rustc refuses it, and the value
+/// goes back when the scope ends. A value an iced view's home holds is
+/// changed there.
+#[allow(dead_code)]
+fn reach_lender_mut<T: 'static>(
+    lender: &Lender,
+    visit: &mut dyn FnMut(&mut T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+    let handle = match lender {
+        Lender::Lent(lent) => {
+            let failed = |error| place_error(Error::Lent(lent.name(), error));
+            let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |value| result = Some(visit(value)))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            return result.unwrap_or_else(|| Err(failed(__rawr_internal::scope::Error::Busy)));
+        }
+        Lender::Handle(handle) => handle,
+    };
+    let held = with_arena(|arena| {
+        if arena.homed(handle).is_some() {
+            return Ok(None);
+        }
+        arena.lease_place::<T>(handle.clone()).map(Some)
+    })
+    .map_err(place_error)?;
+    let Some(mut held) = held else {
+        return with_arena(|arena| arena.mutable::<T, _>(handle.clone(), |value| visit(value)))
+            .map_err(place_error)?;
+    };
+    let value = held.value.as_mut().ok_or_else(|| place_error(Error::StaleHandle))?;
+    visit(value)
+}
+
 /// Run `body` with each argument at `lendable` (its index, whether the call
 /// takes it `&mut`, and how to reach it) that is a value native code lent
 /// (D558.3) reached for the call, nested in its accessor, as ratatui's
@@ -6727,6 +6764,17 @@ enum Matcher {
     /// The fields, lent for the rest of the scope that binds them, as a
     /// pattern through `&T` binds them (`render_lent_fields`).
     Lend,
+    /// The fields, lent mutably for the rest of the scope that binds them,
+    /// as a pattern through `&mut T` or a `ref mut` binding binds them
+    /// (`render_lent_fields`).
+    LendMut,
+    /// The field at the index, copied, as a binding of a `Copy` field or of
+    /// a value Rawr holds as its own reads it.
+    Read(u32),
+    /// The field at the index, lent for the rest of the scope that reads
+    /// it, as a pattern below the variant's tests and binds it
+    /// (`render_borrowed_field`).
+    Borrow(u32),
 }
 
 impl Matcher {
@@ -6738,37 +6786,50 @@ impl Matcher {
             Self::Test => b"rawr-variant-test",
             Self::Take => b"rawr-variant-take",
             Self::Lend => b"rawr-variant-lend",
+            Self::LendMut => b"rawr-variant-lend-mut",
+            Self::Read(_) => b"rawr-variant-read",
+            Self::Borrow(_) => b"rawr-variant-borrow",
         });
+        if let Self::Read(field) | Self::Borrow(field) = self {
+            hasher.update(field.to_le_bytes());
+        }
         hasher.update(plan.identity().as_bytes());
         hasher.finalize().into()
     }
 
     fn name(self, plan: &Plan) -> String {
         let suffix = match self {
-            Self::Copy => "match",
-            Self::Test => "test",
-            Self::Take => "take",
-            Self::Lend => "lend",
+            Self::Copy => "match".to_owned(),
+            Self::Test => "test".to_owned(),
+            Self::Take => "take".to_owned(),
+            Self::Lend => "lend".to_owned(),
+            Self::LendMut => "lend_mut".to_owned(),
+            Self::Read(field) => format!("read_{field}"),
+            Self::Borrow(field) => format!("borrow_{field}"),
         };
         format!("{}_{suffix}", adapter_name(plan))
     }
 
     /// The runner's `StructuralKind` variant.
-    const fn kind(self) -> &'static str {
+    fn kind(self) -> String {
         match self {
-            Self::Copy => "Match",
-            Self::Test => "Test",
-            Self::Take => "Take",
-            Self::Lend => "Lend",
+            Self::Copy => "Match".to_owned(),
+            Self::Test => "Test".to_owned(),
+            Self::Take => "Take".to_owned(),
+            Self::Lend => "Lend".to_owned(),
+            Self::LendMut => "LendMut".to_owned(),
+            Self::Read(field) => format!("Read {{ field: {field} }}"),
+            Self::Borrow(field) => format!("Borrow {{ field: {field} }}"),
         }
     }
 }
 
 /// The matchers of a variant of a non-generic enum: one that copies its
-/// fields and its test, and, with fields, one that moves them and one that
-/// lends them. The set depends on the plan alone, so the runner's manifest
-/// and its rows name the same adapters; how each reaches the fields is
-/// decided where it is rendered (`render_matcher`).
+/// fields and its test, and, with fields, one that moves them, one that
+/// lends them, one that lends them mutably, and for each field one that
+/// copies it and one that lends it. The set depends on the plan alone, so
+/// the runner's manifest and its rows name the same adapters; how each
+/// reaches the fields is decided where it is rendered (`render_matcher`).
 fn matchers(plan: &Plan) -> Vec<Matcher> {
     let Operation::EnumVariant {
         parameters, fields, ..
@@ -6782,7 +6843,17 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
     if fields.is_empty() {
         return vec![Matcher::Copy, Matcher::Test];
     }
-    vec![Matcher::Copy, Matcher::Test, Matcher::Take, Matcher::Lend]
+    let mut matchers = vec![
+        Matcher::Copy,
+        Matcher::Test,
+        Matcher::Take,
+        Matcher::Lend,
+        Matcher::LendMut,
+    ];
+    for field in (0..fields.len()).filter_map(|index| u32::try_from(index).ok()) {
+        matchers.extend([Matcher::Read(field), Matcher::Borrow(field)]);
+    }
+    matchers
 }
 
 /// Whether the value of the variant `plan` builds is held where its fields
@@ -6837,10 +6908,31 @@ fn variant_pattern(
     }
 }
 
+/// The pattern of the variant `name` of `path` in `form`, binding the field
+/// at `index` of `fields` to `field_0` and no other.
+fn field_pattern(
+    path: &str,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    index: usize,
+) -> String {
+    match (form, fields.get(index)) {
+        (crate::api::model::FieldForm::Tuple, Some(_)) => {
+            format!("{path}::{name}({}field_0, ..)", "_, ".repeat(index))
+        }
+        (crate::api::model::FieldForm::Record, Some(field)) => {
+            format!("{path}::{name} {{ {}: field_0, .. }}", field.name())
+        }
+        _ => variant_pattern(path, name, form, &[]),
+    }
+}
+
 /// The matcher `matcher` of a variant: `Some` of the variant's fields,
 /// copied, or of `()` for its test, when the value the first argument
-/// holds is that variant, otherwise `None`; or the variant's fields moved
-/// (`render_moved_fields`) or lent (`render_lent_fields`).
+/// holds is that variant, otherwise `None`; one field copied; or the
+/// variant's fields moved (`render_moved_fields`) or lent
+/// (`render_lent_fields`), or one field lent (`render_borrowed_field`).
 fn render_matcher(
     plan: &Plan,
     matcher: Matcher,
@@ -6853,28 +6945,55 @@ fn render_matcher(
         return Ok(());
     };
     let lent = |field: &crate::surface::adapter::Field| lendable(field.ty());
-    let fields = match matcher {
-        Matcher::Copy => &**fields,
-        Matcher::Test => &[],
+    let path = rust_path(plan);
+    let (pattern, fields) = match matcher {
+        Matcher::Copy => (variant_pattern(&path, name, *form, fields), &**fields),
+        Matcher::Test => (variant_pattern(&path, name, *form, &[]), &[][..]),
         Matcher::Take if reaches_fields(plan) => {
             return render_moved_fields(plan, name, *form, fields, output);
         }
-        Matcher::Lend
+        Matcher::Lend | Matcher::LendMut
             if reaches_fields(plan)
                 && fields.iter().any(lent)
                 && fields
                     .iter()
                     .all(|field| plain_value(field.ty()) || lent(field)) =>
         {
-            return render_lent_fields(plan, name, *form, fields, output);
+            let mutable = matcher == Matcher::LendMut;
+            return render_lent_fields(plan, name, *form, fields, mutable, output);
         }
-        Matcher::Take | Matcher::Lend => return render_copied_fields(plan, matcher, output),
+        Matcher::Take | Matcher::Lend | Matcher::LendMut => {
+            return render_copied_fields(plan, matcher, output);
+        }
+        Matcher::Borrow(field)
+            if reaches_fields(plan)
+                && fields
+                    .get(field as usize)
+                    .is_some_and(|field| lendable(field.ty())) =>
+        {
+            return render_borrowed_field(plan, name, *form, fields, field, output);
+        }
+        Matcher::Borrow(field) => return render_read_field(plan, field, output),
+        Matcher::Read(field) => {
+            let index = field as usize;
+            let Some(read) = fields.get(index..=index) else {
+                return Err(request::drift("a variant field's index"));
+            };
+            (field_pattern(&path, name, *form, fields, index), read)
+        }
     };
-    let path = rust_path(plan);
+    // The copying matcher and its test give `Some` of what they read, and
+    // `None` for another variant; a field's reader runs after the
+    // pattern's test has chosen the variant, and gives the field itself.
+    let reads = matches!(matcher, Matcher::Read(_));
+    let missed = if reads {
+        "Err(Error::TypeMismatch)"
+    } else {
+        "Ok(__rawr_internal::option::none())"
+    };
     let bound = (0..fields.len())
         .map(|index| format!("field_{index}"))
         .collect::<Vec<_>>();
-    let pattern = variant_pattern(&path, name, *form, fields);
     // A field Rawr holds as its own value is copied, as Rust reads it in
     // place. A native field is copied by its `Clone`; one without `Clone`
     // can't leave the borrowed value, which rustc says as E0507.
@@ -6909,6 +7028,11 @@ fn render_matcher(
     // A value in a scope frame's region (D558 tier 1): its fields that
     // carry the region's lifetime stay there.
     if let Some(family) = container_family(&path, &path) {
+        let found = if reads {
+            "values.into_iter().next().ok_or(Error::TypeMismatch)"
+        } else {
+            "Ok(__rawr_internal::option::some(if values.is_empty() { Dynamic::from(()) } else { Dynamic::from_array(values) }))"
+        };
         let mut values = String::new();
         {
             let _region = InRegion::enter();
@@ -6924,13 +7048,13 @@ fn render_matcher(
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unreachable_patterns)]
             let output = match region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
-            let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+            let Some(fields) = output else {{ return {missed}; }};
             let fields = fields?;
             #[allow(unused_mut)]
             let mut values: Vec<Dynamic> = Vec::new();
             #[allow(clippy::let_unit_value)]
             let _ = &fields;{values}
-            Ok(__rawr_internal::option::some(if values.is_empty() {{ Dynamic::from(()) }} else {{ Dynamic::from_array(values) }}))
+            {found}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
     }}"
@@ -6948,7 +7072,7 @@ fn render_matcher(
             "    let handle = native_handle(arguments, 0, false)?;
     #[allow(unreachable_patterns)]
     let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let Some(fields) = output else {{ return {missed}; }};
     let fields = fields?;"
         )
         .map_err(request::unwritable)?;
@@ -6973,7 +7097,7 @@ fn render_matcher(
             arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
         }}
     }};
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let Some(fields) = output else {{ return {missed}; }};
     let fields = fields?;"
         )
         .map_err(request::unwritable)?;
@@ -6983,6 +7107,11 @@ fn render_matcher(
             .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
             .map_err(request::unwritable)?;
         return Ok(());
+    }
+    if let ([field], true) = (fields, reads) {
+        let mut converted = String::new();
+        render_to_dynamic(field.ty(), "fields.0", 0, &mut converted)?;
+        return writeln!(output, "    {converted}\n}}\n").map_err(request::unwritable);
     }
     output
         .write_all(b"    let mut values = Vec::new();\n")
@@ -7065,14 +7194,20 @@ fn render_lent_fields(
     name: &str,
     form: crate::api::model::FieldForm,
     fields: &[crate::surface::adapter::Field],
+    mutable: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let path = rust_path(plan);
     let pattern = variant_pattern(&path, name, form, fields);
+    let matcher = if mutable {
+        Matcher::LendMut
+    } else {
+        Matcher::Lend
+    };
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
-        Matcher::Lend.name(plan)
+        matcher.name(plan)
     )
     .map_err(request::unwritable)?;
     let mut copies = String::new();
@@ -7083,19 +7218,13 @@ fn render_lent_fields(
             let mut converted = String::new();
             render_to_dynamic(ty, "copied", 0, &mut converted)?;
             copies.push_str(&format!(
-                "\n            let value_{index} = {{ let copied = Clone::clone(field_{index}); {converted} }}.map_err(place_error)?;"
+                "\n            let value_{index} = {{ let copied = Clone::clone(&*field_{index}); {converted} }}.map_err(place_error)?;"
             ));
             continue;
         }
         let rust =
             concrete_type(ty).ok_or_else(|| request::drift("a lent field's concrete type"))?;
-        writeln!(
-            output,
-            "    struct Field{index};
-    impl __rawr_internal::scope::Family for Field{index} {{ type Of<'a> = {rust}; }}
-    const SHARED_{index}: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
-        )
-        .map_err(request::unwritable)?;
+        render_field_family(index, &rust, mutable, output)?;
         lent.push((index, rust));
     }
     let values = (0..fields.len())
@@ -7105,12 +7234,19 @@ fn render_lent_fields(
     let mut body = format!("rest(Dynamic::from_array(vec![{values}]))");
     for (index, rust) in lent.iter().rev() {
         body = format!(
-            "__rawr_internal::scope::lend_ref::<Field{index}, _>(field_{index}, |nonce| {{
-                let value_{index} = Dynamic::from(__rawr_internal::scope::Lent::new(nonce, {rust:?}, None, Some(&SHARED_{index} as __rawr_internal::scope::Accessor)));
+            "{} {{
+                let value_{index} = {};
                 {body}
-            }})"
+            }})",
+            lend_field(*index, mutable),
+            lent_field(*index, rust, mutable),
         );
     }
+    let reach = if mutable {
+        "reach_lender_mut"
+    } else {
+        "reach_lender"
+    };
     writeln!(
         output,
         "    let lender = match lent_value(arguments, 0) {{
@@ -7118,7 +7254,7 @@ fn render_lent_fields(
         None => Lender::Handle(native_handle(arguments, 0, false)?),
     }};
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
-        reach_lender::<{path}>(&lender, &mut |input| {{
+        {reach}::<{path}>(&lender, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};{copies}
             {body}
@@ -7128,6 +7264,116 @@ fn render_lent_fields(
 "
     )
     .map_err(request::unwritable)
+}
+
+/// The field at `index` of the variant `name` of the value the first
+/// argument holds, lent for the rest of the scope that reads it, as a
+/// pattern below the variant's reads it: a scope frame that, opened, lends
+/// the field by its own type, as `render_lent_fields` lends each field.
+/// The value stays where it is, shared, while the frame lends the field.
+/// The pattern's test has already chosen the variant.
+fn render_borrowed_field(
+    plan: &Plan,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    field: u32,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let path = rust_path(plan);
+    let index = field as usize;
+    let rust = fields
+        .get(index)
+        .and_then(|field| concrete_type(field.ty()))
+        .ok_or_else(|| request::drift("a lent field's concrete type"))?;
+    let pattern = field_pattern(&path, name, form, fields, index);
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        Matcher::Borrow(field).name(plan)
+    )
+    .map_err(request::unwritable)?;
+    render_field_family(0, &rust, false, output)?;
+    writeln!(
+        output,
+        "    let lender = match lent_value(arguments, 0) {{
+        Some(lent) => Lender::Lent(lent),
+        None => Lender::Handle(native_handle(arguments, 0, false)?),
+    }};
+    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
+        reach_lender::<{path}>(&lender, &mut |input| {{
+            #[allow(irrefutable_let_patterns)]
+            let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
+            {} rest({}))
+        }})
+    }})))
+}}
+",
+        lend_field(0, false),
+        lent_field(0, &rust, false),
+    )
+    .map_err(request::unwritable)
+}
+
+/// The lender of a field that is not lent by its type: the field copied,
+/// as its reader copies it.
+fn render_read_field(plan: &Plan, field: u32, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    {}(arguments)
+}}
+",
+        Matcher::Borrow(field).name(plan),
+        Matcher::Read(field).name(plan)
+    )
+    .map_err(request::unwritable)
+}
+
+/// The scope family `Field{index}` of a lent field of the Rust type
+/// `rust`, and the accessors its `Lent` reaches it by: shared, and, when
+/// it is lent `mutable`, mutable.
+fn render_field_family(
+    index: usize,
+    rust: &str,
+    mutable: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "    struct Field{index};
+    impl __rawr_internal::scope::Family for Field{index} {{ type Of<'a> = {rust}; }}
+    const SHARED_{index}: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
+    )
+    .map_err(request::unwritable)?;
+    if mutable {
+        writeln!(
+            output,
+            "    const MUTABLE_{index}: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// The start of the lend of `field_{index}`, up to its body's opening
+/// brace: `lend` when it is lent `mutable`, `lend_ref` otherwise.
+fn lend_field(index: usize, mutable: bool) -> String {
+    let lend = if mutable { "lend" } else { "lend_ref" };
+    format!("__rawr_internal::scope::{lend}::<Field{index}, _>(field_{index}, |nonce|")
+}
+
+/// The script value of the field `lend_field` lends: a `Lent` reached by
+/// the accessors `render_field_family` made.
+fn lent_field(index: usize, rust: &str, mutable: bool) -> String {
+    let writer = if mutable {
+        format!("Some(&MUTABLE_{index} as __rawr_internal::scope::Accessor)")
+    } else {
+        "None".to_owned()
+    };
+    format!(
+        "Dynamic::from(__rawr_internal::scope::Lent::new(nonce, {rust:?}, {writer}, Some(&SHARED_{index} as __rawr_internal::scope::Accessor)))"
+    )
 }
 
 /// Key a structural row by the same concrete arguments as its adapter.
