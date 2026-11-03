@@ -48,6 +48,12 @@ pub fn select(project: &Path) -> Result<()> {
     crate::process::Native::selected_in(project, &environment).map(drop)
 }
 
+/// `rawr cache clean`: remove drivers this `rawr-import` would not use.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn clean(home: &Path) {
+    driver::clean(home);
+}
+
 /// The directory of the std table rawr checks programs against for this
 /// process's toolchain, when it isn't the pinned nightly: rawr embeds that
 /// one's (`rawr::std_table`).

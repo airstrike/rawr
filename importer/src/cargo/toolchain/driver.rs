@@ -77,6 +77,8 @@ impl Built {
         let staging = drivers.join(format!(".staging-{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
         let result = build(&staging, identity, root, environment).and_then(|()| {
+            // A directory without its driver is a partial one: replace it.
+            let _ = fs::remove_dir_all(&built.directory);
             fs::rename(&staging, &built.directory)
                 .map_err(|source| io("install", &built.directory, source))
         });
@@ -90,19 +92,34 @@ impl Built {
     }
 }
 
+/// `rawr cache clean`: remove the drivers built from other sources than
+/// this `rawr-import`'s, which it never uses.
+pub(crate) fn clean(home: &Path) {
+    let sources = sources();
+    let Ok(entries) = fs::read_dir(home.join("drivers")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with('.') && !name.ends_with(&sources) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// The directory name: the toolchain's rustc commit and the driver sources'
 /// digest, each shortened.
 fn key(identity: &Identity) -> String {
-    let mut text = String::with_capacity(33);
-    text.push_str(
-        identity
-            .rustc_commit()
-            .get(..16)
-            .unwrap_or(identity.rustc_commit()),
-    );
-    text.push('-');
+    let commit = identity.rustc_commit();
+    format!("{}{}", commit.get(..16).unwrap_or(commit), sources())
+}
+
+/// The driver sources' part of a directory name.
+fn sources() -> String {
+    use std::fmt::Write as _;
+    let mut text = String::from("-");
     for byte in &DIGEST[..8] {
-        use std::fmt::Write as _;
         let _ = write!(text, "{byte:02x}");
     }
     text
@@ -283,6 +300,7 @@ mod tests {
     fn a_driver_is_keyed_by_its_toolchain_and_sources() {
         let pinned = key(Identity::pinned());
         assert!(pinned.starts_with("375b1431b7d89d1c-"), "{pinned}");
+        assert!(pinned.ends_with(&super::sources()), "{pinned}");
         assert_eq!(pinned.len(), 33);
     }
 }
