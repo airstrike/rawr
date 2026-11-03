@@ -6377,10 +6377,10 @@ impl<P: api::Phase> Context<'_, P> {
     /// shared reference to a crate type that declares none, as iced's
     /// `qr_code<'a, Theme>(data: &'a Data) -> QRCode<'a, Theme>`: its output
     /// borrows those values, which a view's region holds for as long as the
-    /// output lives. So does a function whose opaque output captures an
-    /// early lifetime, as iced's `markdown::view<'a>(items: &'a [Item], ..)
-    /// -> impl Widget<..> + 'a`, and an input that is a shared slice of
-    /// such crate values.
+    /// output lives. The output may also be opaque and capture an early
+    /// lifetime, and an input may be a shared slice of such crate values, as
+    /// in iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
+    /// Widget<..> + 'a`.
     fn lends_values(&self, signature: &model::Signature) -> bool {
         let lifetimes = |id: &api::identity::Definition| {
             self.graph
