@@ -1285,6 +1285,21 @@ fn a_widget_borrows_a_crate_value_of_the_state_for_the_views_lifetime() {
     );
 }
 
+/// iced's combo_box: `combo_box(&'a state, .., selection: Option<&T>, ..)`
+/// lends its selection at a late-bound lifetime for the call alone. The
+/// output is `cargo run`'s.
+#[test]
+fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
+    let (rawr, cargo) = both_printed("crossing-chosen", "chosen.rs", "Elm,Rust");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 <Type a language...? Rust|Elm>")
+            && rawr.contains("2 view pad 0 <Elm? Rust|Elm>")
+            && rawr.ends_with("last view pad 0 <Rust? Rust|Elm>"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas examples: the program's own type implements the crate's
 /// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
 /// crate calls the impl's `draw` back while it lays the view out, lending

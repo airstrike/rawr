@@ -12422,10 +12422,13 @@ impl Lease {
                 ),
                 kind: LeaseKind::Std,
             }),
+            // A script value, as iced's `combo_box(.., selection: Option<&T>,
+            // ..)` takes the program's `&Language`, is held as its proxy, as
+            // a script value fills a crate's `T` by value.
             convert::Type::Borrowed {
                 mutable: false,
                 ty: lent,
-            } if is_made_for_call(lent) => {
+            } if is_made_for_call(lent) || matches!(**lent, convert::Type::Script { .. }) => {
                 // A slice is held as the `Vec` made for it.
                 let rust = match &**lent {
                     convert::Type::Sequence { element, .. } => {

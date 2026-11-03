@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 95;
+const CLASSIFIER_VERSION: u32 = 96;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6930,14 +6930,26 @@ impl<P: api::Phase> Context<'_, P> {
         values: bool,
     ) -> Result<representability::Representability, Failure> {
         use representability::{callable, function, method, ownership, Representability};
-        if !receiver_binder_is_exact(signature)
-            && !late_binders_lend_strings(signature)
-            && !late_binders_lend_inputs(signature)
-            && !self.async_lends_inputs(signature)
-            && !opens_copies
+        let rebound;
+        let signature = if receiver_binder_is_exact(signature)
+            || late_binders_lend_strings(signature)
+            || late_binders_lend_inputs(signature)
+            || self.async_lends_inputs(signature)
+            || opens_copies
         {
+            signature
+        } else if let Some(early) = output_binders_early(signature, generics)
+            && (receiver_binder_is_exact(&early) || late_binders_lend_inputs(&early))
+        {
+            // A lifetime of the function's own that its output names, as
+            // iced's `markdown::view<'a>(items: &'a [Item], ..) -> impl
+            // Widget + 'a`, is read as the early-bound lifetime rustc treats
+            // it as at a direct call.
+            rebound = early;
+            &rebound
+        } else {
             return Err(representability::reject::Kind::HigherRankedBinder.into());
-        }
+        };
         // An early-bound lifetime is `'static` only where no input borrows
         // at it (D558 tier 0). An associated function whose output borrows
         // its `&str` inputs, as `Parser::new(text: &'input str)`, opens a
@@ -9117,16 +9129,181 @@ fn late_binders_lend_inputs(signature: &model::Signature) -> bool {
         }
     ));
     signature.binders().len() > receiver_binders
-        && signature
-            .inputs()
-            .any(|input| matches!(input, model::Type::Reference { .. }))
-        && signature.inputs().all(|input| match input {
-            model::Type::Reference { ty, .. } => {
-                is_str_reference(input) || !names_late_lifetime(ty)
-            }
-            input => !names_late_lifetime(input),
-        })
+        && signature.inputs().any(names_late_lifetime)
+        && signature.inputs().all(lends_late_borrows)
         && !names_late_lifetime(signature.output())
+}
+
+/// Whether each late-bound lifetime `ty` names is the lifetime of a borrow
+/// the call lends: a reference to a value that names none, alone or in a
+/// type's arguments, as iced's `combo_box(.., selection: Option<&T>, ..)`
+/// takes.
+fn lends_late_borrows(ty: &model::Type) -> bool {
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Type(ty) => lends_late_borrows(ty),
+        model::Argument::Lifetime(lifetime) => !matches!(lifetime, model::Lifetime::Late { .. }),
+        model::Argument::Const(_) => true,
+    };
+    match ty {
+        model::Type::Reference { ty, .. } => !names_late_lifetime(ty),
+        model::Type::Definition { arguments, .. } => arguments.iter().all(argument),
+        model::Type::Tuple(types) => types.iter().all(lends_late_borrows),
+        model::Type::Slice(ty) => lends_late_borrows(ty),
+        model::Type::Array { element, .. } | model::Type::RawPointer { ty: element, .. } => {
+            lends_late_borrows(element)
+        }
+        ty => !names_late_lifetime(ty),
+    }
+}
+
+/// `signature`, of a function that borrows no receiver, with each of its
+/// own late-bound lifetimes that its output names made early-bound, at
+/// the index it would have after `generics`' parameters. rustc makes no
+/// difference between the two at a direct call. `None` where the output
+/// names none of them.
+fn output_binders_early(
+    signature: &model::Signature,
+    generics: &model::Generics,
+) -> Option<model::Signature> {
+    if !matches!(
+        signature.receiver(),
+        model::Receiver::None | model::Receiver::Value { .. }
+    ) {
+        return None;
+    }
+    let declared = u32::try_from(generics.parameters().len()).ok()?;
+    let mut early = signature.clone();
+    let mut kept = Vec::new();
+    for binder in signature.binders() {
+        let late = model::Lifetime::Late {
+            binder: binder.clone(),
+            index: binder.index(),
+        };
+        let bound = model::Lifetime::Early {
+            owner: binder.owner().clone(),
+            index: declared.checked_add(binder.index())?,
+        };
+        let output = rebind_lifetime(early.output(), &late, &bound);
+        if output == *early.output() {
+            kept.push(binder.clone());
+            continue;
+        }
+        early = map_signature_types(&early, |ty| rebind_lifetime(ty, &late, &bound));
+    }
+    (kept.len() < signature.binders().len()).then(|| early.with_binders(kept.into()))
+}
+
+/// `ty` with each `from` lifetime in it as `to`, in an opaque type's
+/// captures and bounds too. A function pointer's and a trait object's own
+/// bounds are left as they are.
+fn rebind_lifetime(ty: &model::Type, from: &model::Lifetime, to: &model::Lifetime) -> model::Type {
+    let lifetime = |lifetime: &model::Lifetime| {
+        if lifetime == from {
+            to.clone()
+        } else {
+            lifetime.clone()
+        }
+    };
+    let ty_of = |ty: &model::Type| rebind_lifetime(ty, from, to);
+    let argument = |argument: &model::Argument| match argument {
+        model::Argument::Lifetime(named) => model::Argument::Lifetime(lifetime(named)),
+        model::Argument::Type(ty) => model::Argument::Type(ty_of(ty)),
+        model::Argument::Const(_) => argument.clone(),
+    };
+    let predicate = |predicate: &model::Predicate| match predicate {
+        model::Predicate::Bound { ty, bound } => model::Predicate::Bound {
+            ty: ty_of(ty),
+            bound: match bound {
+                model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity,
+                    binders,
+                } => model::Bound::Trait {
+                    trait_id: trait_id.clone(),
+                    arguments: arguments.iter().map(argument).collect(),
+                    polarity: *polarity,
+                    binders: binders.clone(),
+                },
+                model::Bound::MaybeSized => model::Bound::MaybeSized,
+            },
+        },
+        model::Predicate::ProjectionEquality { projection, ty } => {
+            model::Predicate::ProjectionEquality {
+                projection: ty_of(projection),
+                ty: ty_of(ty),
+            }
+        }
+        model::Predicate::LifetimeOutlives { longer, shorter } => {
+            model::Predicate::LifetimeOutlives {
+                longer: lifetime(longer),
+                shorter: lifetime(shorter),
+            }
+        }
+        model::Predicate::TypeOutlives {
+            ty,
+            lifetime: named,
+        } => model::Predicate::TypeOutlives {
+            ty: ty_of(ty),
+            lifetime: lifetime(named),
+        },
+        model::Predicate::ConstEvaluatable(_) => predicate.clone(),
+    };
+    match ty {
+        model::Type::Definition { id, arguments } => model::Type::Definition {
+            id: id.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Projection {
+            trait_id,
+            associated,
+            arguments,
+        } => model::Type::Projection {
+            trait_id: trait_id.clone(),
+            associated: associated.clone(),
+            arguments: arguments.iter().map(argument).collect(),
+        },
+        model::Type::Tuple(members) => model::Type::Tuple(members.iter().map(ty_of).collect()),
+        model::Type::Slice(element) => model::Type::Slice(Box::new(ty_of(element))),
+        model::Type::Array { element, length } => model::Type::Array {
+            element: Box::new(ty_of(element)),
+            length: length.clone(),
+        },
+        model::Type::Reference {
+            lifetime: named,
+            mutability,
+            ty,
+        } => model::Type::Reference {
+            lifetime: lifetime(named),
+            mutability: *mutability,
+            ty: Box::new(ty_of(ty)),
+        },
+        model::Type::RawPointer { mutability, ty } => model::Type::RawPointer {
+            mutability: *mutability,
+            ty: Box::new(ty_of(ty)),
+        },
+        model::Type::TraitObject {
+            bounds,
+            lifetime: named,
+        } => model::Type::TraitObject {
+            bounds: bounds.clone(),
+            lifetime: lifetime(named),
+        },
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.iter().map(predicate).collect(),
+            captures: captures.iter().map(argument).collect(),
+        },
+        model::Type::Primitive(_)
+        | model::Type::Parameter { .. }
+        | model::Type::SelfType(_)
+        | model::Type::FunctionPointer(_)
+        | model::Type::Never => ty.clone(),
+    }
 }
 
 /// A method whose output borrows its receiver, as quick-xml's
@@ -10998,6 +11175,114 @@ mod tests {
             super::selector(&definition).expect("support-only selector classification is total"),
             Selector::Unavailable
         );
+    }
+
+    #[test]
+    fn late_binders_the_output_names_bind_early_and_others_lend() {
+        use crate::api::model;
+
+        let id = crate::test_fixture::graph()
+            .definitions()
+            .next()
+            .expect("fixture definition exists")
+            .id()
+            .clone();
+        let binder = model::Binder::new(id.clone(), 0, 0, "'a".into());
+        let late = model::Lifetime::Late {
+            binder: binder.clone(),
+            index: 0,
+        };
+        let free = |inputs: Box<[model::Type]>, output| {
+            model::Signature::new(
+                model::Safety::Safe,
+                false,
+                false,
+                "\"Rust\"".into(),
+                false,
+                Box::from([binder.clone()]),
+                model::Receiver::None,
+                inputs,
+                output,
+            )
+        };
+        let reference = |lifetime: model::Lifetime, ty| model::Type::Reference {
+            lifetime,
+            mutability: model::Mutability::Shared,
+            ty: Box::new(ty),
+        };
+        let parameter = model::Type::Parameter {
+            owner: id.clone(),
+            index: 0,
+        };
+        let unit = model::Type::Tuple(Box::default());
+
+        // `combo_box(.., selection: Option<&T>, ..)`: the `&T` in a type's
+        // arguments is lent for the call.
+        let selection = free(
+            Box::from([model::Type::Definition {
+                id: id.clone(),
+                arguments: Box::from([model::Argument::Type(reference(
+                    late.clone(),
+                    parameter.clone(),
+                ))]),
+            }]),
+            unit.clone(),
+        );
+        assert!(super::late_binders_lend_inputs(&selection));
+        let generics = model::Generics::new(Box::default(), Box::default());
+        assert!(super::output_binders_early(&selection, &generics).is_none());
+
+        // `markdown::view<'a>(items: &'a [Item]) -> impl Widget + 'a`: the
+        // lifetime the opaque output captures is read as early-bound.
+        let items = reference(
+            late.clone(),
+            model::Type::Slice(Box::new(parameter.clone())),
+        );
+        let view = free(
+            Box::from([items]),
+            model::Type::ImplTrait {
+                id: id.clone(),
+                bounds: Box::from([model::Predicate::TypeOutlives {
+                    ty: parameter.clone(),
+                    lifetime: late.clone(),
+                }]),
+                captures: Box::from([model::Argument::Lifetime(late.clone())]),
+            },
+        );
+        assert!(!super::late_binders_lend_inputs(&view));
+        let early = super::output_binders_early(&view, &generics).expect("the output names 'a");
+        let bound = model::Lifetime::Early {
+            owner: id.clone(),
+            index: 0,
+        };
+        assert_eq!(early.binders().len(), 0);
+        assert!(super::receiver_binder_is_exact(&early));
+        assert_eq!(
+            early.inputs().next(),
+            Some(&reference(
+                bound.clone(),
+                model::Type::Slice(Box::new(parameter.clone()))
+            ))
+        );
+        assert!(
+            matches!(early.output(), model::Type::ImplTrait { bounds, captures, .. }
+            if captures[..] == [model::Argument::Lifetime(bound.clone())]
+                && matches!(&bounds[..], [model::Predicate::TypeOutlives { lifetime, .. }]
+                    if *lifetime == bound))
+        );
+
+        // `cause(failure: &Failure) -> &io::Error`: a borrowed output.
+        let cause = free(
+            Box::from([reference(late.clone(), parameter.clone())]),
+            reference(late.clone(), parameter.clone()),
+        );
+        let early = super::output_binders_early(&cause, &generics).expect("the output names 'a");
+        assert_eq!(early.output(), &reference(bound.clone(), parameter.clone()));
+
+        // A lifetime nothing names stays a higher-ranked binder.
+        let unnamed = free(Box::from([parameter.clone()]), unit);
+        assert!(!super::late_binders_lend_inputs(&unnamed));
+        assert!(super::output_binders_early(&unnamed, &generics).is_none());
     }
 
     #[test]
