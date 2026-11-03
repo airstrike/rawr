@@ -114,6 +114,10 @@ pub struct Definition {
     /// `Font::with_name(&'static str)` and `title(impl Title<State>)`
     /// take: a borrow of a local passed there is rustc's E0597.
     lent_static: u64,
+    /// The arguments, by bit, whose borrows the output keeps for as long
+    /// as it lives, as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
+    /// keeps `items`.
+    lends: u64,
     /// A `macro_rules!` macro's source.
     rules: Option<crate::Shared<MacroRules>>,
     /// The proof-backed application this imported method stands for: its
@@ -152,6 +156,7 @@ pub struct Fingerprint {
     guard: Option<Guard>,
     opens: bool,
     lent_static: u64,
+    lends: u64,
     rules: Option<Box<[u8; 32]>>,
     application: Option<Box<[u8; 32]>>,
 }
@@ -205,6 +210,7 @@ impl Definition {
             guard: self.guard,
             opens: self.opens,
             lent_static: self.lent_static,
+            lends: self.lends,
             application: self.application,
             rules: self.rules.clone(),
         })
@@ -228,6 +234,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
@@ -261,6 +268,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -284,6 +292,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -305,6 +314,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -326,6 +336,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -350,6 +361,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -371,6 +383,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -393,6 +406,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -415,6 +429,7 @@ impl Definition {
             guard: None,
             opens: false,
             lent_static: 0,
+            lends: 0,
             application: None,
             rules: None,
         })
@@ -524,6 +539,18 @@ impl Definition {
         self
     }
 
+    /// The arguments, by bit, whose borrows the output keeps.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn lending(mut self, arguments: u64) -> Self {
+        self.lends = arguments;
+        self
+    }
+
+    /// Whether the output keeps the borrows of the argument at `index`.
+    pub(crate) const fn lends(&self, index: usize) -> bool {
+        index < 64 && self.lends & (1 << index) != 0
+    }
+
     /// Whether only a `&'static str` fills the argument at `index`.
     pub(crate) const fn lent_static(&self, index: usize) -> bool {
         index < 64 && self.lent_static & (1 << index) != 0
@@ -556,6 +583,7 @@ impl Definition {
             guard: self.guard,
             opens: self.opens,
             lent_static: self.lent_static,
+            lends: self.lends,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         }
@@ -574,6 +602,7 @@ impl Definition {
             guard: self.guard,
             opens: self.opens,
             lent_static: self.lent_static,
+            lends: self.lends,
             application: self.application.map(Box::new),
             rules: self.rules.as_deref().map(|rules| Box::new(rules.digest())),
         })
@@ -664,6 +693,7 @@ impl Definition {
             guard: self.guard,
             opens: self.opens,
             lent_static: self.lent_static,
+            lends: self.lends,
             application: self.application,
             rules: self.rules.clone(),
         })

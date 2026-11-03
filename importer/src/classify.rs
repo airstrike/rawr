@@ -5353,6 +5353,20 @@ impl<P: api::Phase> Context<'_, P> {
                 Representability::FunctionItem(item) => {
                     Ok(Representability::FunctionItem(item.with_instance(instance)))
                 }
+                // A method of a trait without parameters, on an opaque type
+                // of a function without type parameters, as `fn view<'a>(..)
+                // -> impl Show + 'a` gives: an item of no parameters, whose
+                // `Self` the opaque type's witness names.
+                Representability::Method(plan) => Ok(Representability::FunctionItem(
+                    representability::callable::Item::new(
+                        plan.signature().clone(),
+                        Some(plan.receiver()),
+                        None,
+                        Box::default(),
+                        Box::default(),
+                    )
+                    .with_instance(instance),
+                )),
                 _ => Err(Failure::from(reject::Kind::GenericImplementation)),
             }
         });
@@ -6997,6 +7011,7 @@ impl<P: api::Phase> Context<'_, P> {
         ) {
             return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
         }
+        let mut lends = Vec::new();
         let scope = if borrows_receiver {
             Some(representability::signature::Scope::Borrows)
         } else if opens_copies {
@@ -7010,13 +7025,23 @@ impl<P: api::Phase> Context<'_, P> {
                 && names_early_lifetime(signature.output())
             {
                 Some(representability::signature::Scope::Opens)
-            } else if self.view_output(signature.output()) || self.lends_values(signature) {
+            } else if self.lends_values(signature) {
+                // A value whose type borrows a crate value its function
+                // takes, as iced's `qr_code(&'a Data) -> QRCode<'a, Theme>`
+                // and `markdown::view(&'a [Item], ..) -> impl Widget + 'a`:
+                // the value keeps those inputs borrowed for as long as it
+                // lives, as rustc's checker reads the signature.
+                lends = signature
+                    .inputs()
+                    .enumerate()
+                    .filter(|(_, input)| borrows_at_early_lifetime(input))
+                    .filter_map(|(index, _)| u32::try_from(index).ok())
+                    .collect();
+                None
+            } else if self.view_output(signature.output()) {
                 // An iced view type's constructor, as `PaneGrid::new(&state,
                 // view)`: its value is a recipe, which borrows its inputs
-                // again at each lowering (D558 tier 2). So is a value whose
-                // type borrows a crate value its function takes, as iced's
-                // `qr_code(&'a Data) -> QRCode<'a, Theme>`: a view's region
-                // keeps the borrowed value for the view's lifetime.
+                // again at each lowering (D558 tier 2).
                 None
             } else {
                 return Err(representability::reject::Kind::LifetimeOrConstGeneric.into());
@@ -7322,6 +7347,7 @@ impl<P: api::Phase> Context<'_, P> {
         .with_relations(relations)
         .with_guard(guard)
         .with_scope(scope)
+        .with_lends(lends.into_boxed_slice())
         .with_opaques(opaques.into_boxed_slice());
         // A receiver of an impl that fixes its type's arguments, as
         // `impl<'a> Reader<&'a [u8]>`: the instance the bridge reaches.

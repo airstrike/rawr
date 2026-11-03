@@ -781,6 +781,15 @@ impl Parser<'_> {
                 Some(_) => Summary::unknown(),
             };
         }
+        // `view<'a>(items: &'a [Item]) -> impl Show + 'a`'s value keeps
+        // the borrows of the inputs at the lifetime its type names.
+        let kept: Vec<Tap> = (0..arguments)
+            .filter(|index| item.lends(*index))
+            .map(|index| all(Input::Argument(index)))
+            .collect();
+        if !kept.is_empty() {
+            return Summary::taps(mode, kept, Vec::new());
+        }
         let lends = item.guard().is_some() || *output == Ty::Str;
         match (mode, lends) {
             (Some(mode @ (signature::Receiver::Shared | signature::Receiver::Mutable)), true) => {

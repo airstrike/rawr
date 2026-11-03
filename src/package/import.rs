@@ -2598,7 +2598,8 @@ fn imported_item(
                 _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?)
-            .lending_static(lent_static(plan.signature())),
+            .lending_static(lent_static(plan.signature()))
+            .lending(lends(plan.signature())),
         ),
         Representability::Method(plan) => Some(
             host::item::Definition::method(
@@ -2609,7 +2610,8 @@ fn imported_item(
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
             .opening(plan.signature().scope().is_some())
-            .lending_static(lent_static(plan.signature())),
+            .lending_static(lent_static(plan.signature()))
+            .lending(lends(plan.signature())),
         ),
         Representability::Constant(plan) => Some(
             match outcome.identity().selector() {
@@ -2654,7 +2656,8 @@ fn imported_item(
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
             .opening(plan.signature().scope().is_some())
-            .lending_static(lent_static(plan.signature())),
+            .lending_static(lent_static(plan.signature()))
+            .lending(lends(plan.signature())),
         ),
         // A generic function Rawr calls at the types it infers or a
         // turbofish names. The bridge calls it at those types, where rustc
@@ -2697,7 +2700,8 @@ fn imported_item(
             .imported(outcome.identity().selector().try_clone()?)
             .guarded(guard(plan.signature()))
             .opening(plan.signature().scope().is_some())
-            .lending_static(lent_static(plan.signature())),
+            .lending_static(lent_static(plan.signature()))
+            .lending(lends(plan.signature())),
         ),
         Representability::Value(_)
         | Representability::Struct(_)
@@ -2707,6 +2711,16 @@ fn imported_item(
         | Representability::Rejected(_) => None,
     };
     Ok(item)
+}
+
+/// The inputs of `signature`, by bit, whose borrows the output keeps for
+/// as long as it lives (`Signature::lends`).
+fn lends(signature: &representability::signature::Signature) -> u64 {
+    signature
+        .lends()
+        .iter()
+        .filter(|index| **index < 64)
+        .fold(0, |bits, index| bits | 1 << index)
 }
 
 /// The inputs of `signature`, by bit, that only a `&'static str` fills:
@@ -2792,7 +2806,8 @@ fn imported_values(
             .imported(selector.try_clone()?)
             .guarded(guard(values.signature()))
             .opening(values.signature().scope().is_some())
-            .lending_static(lent_static(values.signature())),
+            .lending_static(lent_static(values.signature()))
+            .lending(lends(values.signature())),
     ))
 }
 

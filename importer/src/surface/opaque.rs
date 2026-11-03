@@ -50,6 +50,18 @@ fn collect(ty: &model::Type, found: &mut BTreeSet<[u8; 32]>) {
     }
 }
 
+/// Whether the facade path `path` names an opaque type a function gives
+/// (`path`).
+#[must_use]
+pub fn declared(path: &str) -> bool {
+    path.rsplit("::")
+        .next()
+        .is_some_and(|name| name.starts_with(PREFIX))
+}
+
+/// The start of the name of each opaque type a facade declares.
+const PREFIX: &str = "__rawr_opaque_";
+
 /// The name a facade declares the opaque type a function at `path` gives
 /// under: beside the function, as `widget::__rawr_opaque_iced` for
 /// `widget::iced`. Several opaque types one function gives are numbered
@@ -61,9 +73,9 @@ pub fn path(function: &str, index: usize) -> String {
         None => (None, function),
     };
     let name = if index == 0 {
-        format!("__rawr_opaque_{name}")
+        format!("{PREFIX}{name}")
     } else {
-        format!("__rawr_opaque_{name}_{index}")
+        format!("{PREFIX}{name}_{index}")
     };
     match parent {
         Some(parent) => format!("{parent}::{name}"),

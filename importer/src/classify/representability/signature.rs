@@ -116,6 +116,12 @@ pub struct Signature {
     /// arguments, after the ones it captures.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     opaques: Box<[Opaque]>,
+    /// The inputs, by position, whose borrows the output keeps for as long
+    /// as it lives, as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
+    /// keeps `items`: a shared reference to crate values at a lifetime the
+    /// output names.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lends: Box<[u32]>,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -436,6 +442,7 @@ impl Signature {
             instance: None,
             through: None,
             opaques: Box::new([]),
+            lends: Box::new([]),
         }
     }
 
@@ -508,6 +515,17 @@ impl Signature {
     #[must_use]
     pub const fn scope(&self) -> Option<Scope> {
         self.scope
+    }
+
+    pub(crate) fn with_lends(mut self, lends: Box<[u32]>) -> Self {
+        self.lends = lends;
+        self
+    }
+
+    /// The inputs, by position, whose borrows the output keeps.
+    #[must_use]
+    pub fn lends(&self) -> &[u32] {
+        &self.lends
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

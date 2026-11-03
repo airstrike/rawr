@@ -24,6 +24,7 @@ pub mod pointers;
 pub mod results;
 pub mod selector;
 pub mod sequences;
+pub mod shelf;
 pub mod signatures;
 
 /// What `view` gives: a label borrowed from the state, and the message a
