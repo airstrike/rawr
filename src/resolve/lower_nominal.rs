@@ -7798,6 +7798,7 @@ impl ExecutableOp {
 /// slice 2), as quick-xml's `read_event_into(&mut buf)` takes its buffer
 /// and pulldown-cmark's `push_html(&mut s, ..)` its string: the arguments
 /// whose input is `&mut [T]`, `&mut Vec<T>` or `&mut String`, in order.
+/// A `&mut PathBuf` moves in and back out (`moved_input`).
 fn copied_places(
     inference: &Inference,
     inputs: &[Ty],
@@ -7812,13 +7813,46 @@ fn copied_places(
 }
 
 /// Whether a host call copies an input of `ty` in and back out
-/// (`copied_places`): a `&mut` array or string.
+/// (`copied_places`): a `&mut` array or string, or one of std's values
+/// (`moved_input`).
 fn copied_input(inference: &Inference, ty: &Ty) -> bool {
+    moved_input(inference, ty)
+        || matches!(
+            inference.resolve(ty),
+            Ty::Reference { mutable: true, target }
+                if matches!(*target, Ty::Array { .. } | Ty::String)
+        )
+}
+
+/// Whether a host call takes an input of `ty` moved in and gives it back
+/// after its value (#680): a `&mut` of one of std's types Rawr's std holds
+/// as its Rust value (`crossing::Std`), as a crate's `fn f(path: &mut
+/// PathBuf)` takes. The call changes the program's value itself, and none
+/// is copied, as rustc's borrow copies none.
+fn moved_input(inference: &Inference, ty: &Ty) -> bool {
     matches!(
         inference.resolve(ty),
         Ty::Reference { mutable: true, target }
-            if matches!(*target, Ty::Array { .. } | Ty::String)
+            if matches!(&*target, Ty::Host { proof, .. }
+                if proof
+                    .definition
+                    .path()
+                    .strip_prefix(crate::std_facade::ROOT)
+                    .and_then(|path| path.strip_prefix("::"))
+                    .is_some_and(crate::std_facade::held))
     )
+}
+
+/// Each argument of a host call that `moved_input` takes, moved out of its
+/// place for the call (`copied_call` stores it back).
+fn move_into_call(inference: &Inference, inputs: &[Ty], arguments: &mut [ParsedExpr]) {
+    for (input, argument) in inputs.iter().zip(arguments.iter_mut()) {
+        if moved_input(inference, input) && argument.lvalue.is_some() {
+            argument.source =
+                origin::Fragment::call(crate::engine::KEYWORD_MOVE, [argument.rendered_source()]);
+            argument.prelude = origin::Fragment::default();
+        }
+    }
 }
 
 /// The dispatch type of an operand. A sequence or string may be a typed
@@ -20273,7 +20307,9 @@ impl<'a> Parser<'a> {
             call,
         )?;
         let places = if imported {
-            copied_places(&self.inference, &signature.inputs, &arguments)
+            let places = copied_places(&self.inference, &signature.inputs, &arguments);
+            move_into_call(&self.inference, &signature.inputs, &mut arguments);
+            places
         } else {
             Vec::new()
         };
@@ -21734,7 +21770,9 @@ impl<'a> Parser<'a> {
         let guard = item.guard();
         let opens = item.opens();
         let places = if item.imported_identity().is_some() {
-            copied_places(&self.inference, &signature.inputs, &arguments)
+            let places = copied_places(&self.inference, &signature.inputs, &arguments);
+            move_into_call(&self.inference, &signature.inputs, &mut arguments);
+            places
         } else {
             Vec::new()
         };
@@ -50493,8 +50531,9 @@ impl<'a> Parser<'a> {
         // The operand's local is the call's alone: a value that moves goes
         // into the call, as Rust moves it, and the local keeps no copy of
         // it (#698). A `vec![Family::new(..)]` given to a crate function
-        // then gives the function the families themselves.
-        if self.moves_by_value(&operand.ty) {
+        // then gives the function the families themselves. So does a
+        // `&mut PathBuf` a crate's call takes moved in (`moved_input`).
+        if self.moves_by_value(&operand.ty) || moved_input(&self.inference, &operand.ty) {
             return origin::Fragment::call(
                 crate::engine::KEYWORD_MOVE,
                 [origin::Fragment::plain(temporary)],

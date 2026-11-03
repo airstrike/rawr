@@ -19,6 +19,16 @@ use crate::host::{self, facade};
 /// The facade's root.
 pub(crate) const ROOT: &str = "rawr_std";
 
+/// Whether the type at `path` under the root is one Rawr's std holds as
+/// std's own Rust value, which a crate takes, gives and borrows as itself
+/// (`crossing::Std`).
+pub(crate) fn held(path: &str) -> bool {
+    matches!(
+        path,
+        "path::PathBuf" | "ffi::OsString" | "io::Error" | "io::ErrorKind"
+    )
+}
+
 /// The facade's compile-time definition, built once per thread.
 pub(crate) fn definition() -> facade::Definition {
     thread_local! {

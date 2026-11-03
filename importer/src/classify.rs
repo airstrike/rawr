@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 97;
+const CLASSIFIER_VERSION: u32 = 98;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -9044,15 +9044,20 @@ fn receiver_binder_is_exact(signature: &model::Signature) -> bool {
 /// them as the generator's `Lease` does: every borrow `convert_input` gives
 /// is one the call lends, alone or in an `Option`, a `Result` or a tuple,
 /// beside members that borrow nothing and move. A `&mut` of Rawr's own
-/// string or array, copied in and back out, has no place to go back to
+/// string or array, copied in and back out, or of one of std's values
+/// Rawr's std holds, moved in and back out, has no place to go back to
 /// from inside one.
 fn leased(ty: representability::convert::Type) -> Result<representability::convert::Type, Failure> {
     use representability::convert::{Builtin, Type};
     fn leasable(ty: &Type) -> bool {
         match ty {
-            Type::Borrowed { mutable: true, ty } => {
-                !matches!(**ty, Type::Sequence { .. } | Type::Builtin(Builtin::String))
-            }
+            Type::Borrowed { mutable: true, ty } => match &**ty {
+                Type::Sequence { .. } | Type::Builtin(Builtin::String) => false,
+                Type::Nominal { definition, .. } => {
+                    crate::surface::identity::Definition::std_path(definition.as_bytes()).is_none()
+                }
+                _ => true,
+            },
             Type::Option(element) => leasable(element),
             Type::Result(ok, err) => leasable(ok) && leasable(err),
             Type::Tuple(members) => members.iter().all(leasable),

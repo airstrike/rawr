@@ -1975,6 +1975,27 @@ impl<T: Send + 'static> Held<T> {
             Self::Leased { value, .. } => value.as_mut().expect("a lent value is held until dropped"),
         }
     }
+
+    fn get(&self) -> &T {
+        match self {
+            Self::Cloned(value) => value,
+            Self::Leased { value, .. } => value.as_ref().expect("a lent value is held until dropped"),
+        }
+    }
+}
+
+/// A `&U` a crate's value lends, as a `&self` method's `&io::Error`
+/// borrows its receiver (#680): the receiver, leased from its slot while
+/// the guard lives, and the method that reaches the `U` in it.
+#[allow(dead_code)]
+struct Projected<T: Send + 'static, U: 'static>(Held<T>, fn(&T) -> &U);
+
+impl<T: Send + 'static, U: 'static> std::ops::Deref for Projected<T, U> {
+    type Target = U;
+
+    fn deref(&self) -> &U {
+        (self.1)(self.0.get())
+    }
 }
 
 impl<T: Send + 'static> Drop for Held<T> {
@@ -10832,6 +10853,74 @@ fn render_scoped_guard(
     }
 }
 
+/// The Rust path of `target` when it is one of std's types Rawr's std
+/// holds that has no `Clone`, as `io::Error`: a borrow of one crosses as
+/// the borrow, never a copy (`render_borrowed_std`).
+fn borrowed_std(target: &convert::Type) -> Option<String> {
+    let convert::Type::Nominal { definition, .. } = target else {
+        return None;
+    };
+    std_value(target)
+        .filter(|_| !crate::surface::identity::Definition::std_clone(definition.as_bytes()))
+}
+
+/// A `&self` method that takes nothing else and gives a `&T` of one of
+/// std's types with no `Clone` (`borrowed_std`), as a crate's `fn
+/// error(&self) -> &io::Error` (#680): a script value that borrows the
+/// receiver's value. Each use leases the receiver from its slot and calls
+/// the method again, so the program reads the error where the receiver
+/// holds it, as Rust does, and none is copied.
+#[allow(clippy::too_many_arguments)]
+fn render_borrowed_std(
+    plan: &Plan,
+    path: &str,
+    rust: &str,
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+    constants: &[convert::Constant],
+    container_parameters: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let mut container = Vec::new();
+    render_container_path(
+        path,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        true,
+        &mut container,
+    )?;
+    let container = String::from_utf8(container).map_err(request::unwritable)?;
+    let mut method = format!("owner.{}", plan.name()).into_bytes();
+    render_item_turbofish(
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        &mut method,
+    )?;
+    let method = String::from_utf8(method).map_err(request::unwritable)?;
+    writeln!(
+        output,
+        "    let receiver = native_handle(arguments, 0, false)?;
+    fn project(owner: &{container}) -> &{rust} {{
+        {method}()
+    }}
+    let borrow: __rawr_internal::crossing::Borrow<{rust}> = std::sync::Arc::new(move |arena: Option<&mut dyn Any>| {{
+        let lease = |arena: &mut Arena| arena.lease::<{container}>(receiver.clone());
+        let held = match arena {{
+            Some(arena) => arena.downcast_mut::<Arena>().ok_or(Error::TypeMismatch).and_then(lease),
+            None => with_arena(lease),
+        }}
+        .map_err(runtime_error)?;
+        Ok(Box::new(Projected(held, project)) as __rawr_internal::crossing::Lending<{rust}>)
+    }});
+    <{rust} as __rawr_internal::crossing::Std>::borrowed(borrow).ok_or(Error::TypeMismatch)"
+    )
+    .map_err(request::unwritable)
+}
+
 /// A method whose Rust output is a borrow guard, as Freya's `State::read`
 /// and `State::write` give. The guard borrows the receiver, which lives in
 /// the arena, so it never leaves the one call that holds the receiver.
@@ -10864,6 +10953,22 @@ fn render_guard(
         "arguments.arena.shared"
     };
     let target = substituted(signature.output(), signature, substitutions)?;
+    if matches!(guard, Guard::Shared)
+        && matches!(receiver, Receiver::Shared)
+        && signature.inputs().is_empty()
+        && let Some(rust) = borrowed_std(&target)
+    {
+        return render_borrowed_std(
+            plan,
+            path,
+            &rust,
+            signature,
+            substitutions,
+            constants,
+            container_parameters,
+            output,
+        );
+    }
     let copy = copy_macro(&target);
     // `arena.shared::<Receiver, _>(handle, |receiver| { let mut guard =
     // receiver.method(..); ` through `access`, whose closure takes `taking`.
@@ -13078,7 +13183,7 @@ fn render_take_input(
     {
         return writeln!(
             output,
-            "    let argument_{local}_lent = <{rust} as __rawr_internal::crossing::Std>::lend((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take()).ok_or(Error::TypeMismatch)?;\n    let argument_{local} = &*argument_{local}_lent;"
+            "    let argument_{local}_lent = <{rust} as __rawr_internal::crossing::Std>::lend((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(), &mut *arguments.arena).ok_or(Error::TypeMismatch)?;\n    let argument_{local} = &*argument_{local}_lent;"
         )
         .map_err(request::unwritable);
     }
@@ -13372,7 +13477,7 @@ impl Lease {
             } if let Some(rust) = std_value(lent) => Some(Self {
                 held: format!("<{rust} as __rawr_internal::crossing::Std>::Lent"),
                 take: format!(
-                    "<{rust} as __rawr_internal::crossing::Std>::lend(value_{depth}).ok_or(Error::TypeMismatch)?"
+                    "<{rust} as __rawr_internal::crossing::Std>::lend(value_{depth}, &mut *arguments.arena).ok_or(Error::TypeMismatch)?"
                 ),
                 kind: LeaseKind::Std,
             }),
@@ -15073,14 +15178,16 @@ fn copied_inputs(
         .collect()
 }
 
-/// Whether a `&mut` input of `ty` is a copy of Rawr's value the call
-/// changes and gives back: an array, as `&mut Vec<u8>`, or a string, as
-/// `&mut String`.
+/// Whether a `&mut` input of `ty` is Rawr's value the call changes and
+/// gives back: a copy of an array, as `&mut Vec<u8>`, or of a string, as
+/// `&mut String`, or one of std's values Rawr's std holds as itself, as
+/// `&mut PathBuf`, which the program moves into the call and gets back
+/// (#680).
 fn is_copied(ty: &convert::Type) -> bool {
     matches!(
         ty,
         convert::Type::Sequence { .. } | convert::Type::Builtin(convert::Builtin::String)
-    )
+    ) || std_value(ty).is_some()
 }
 
 /// Whether a `&` input of `ty` lends a Rust value the bridge makes from
