@@ -7367,13 +7367,11 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
 
 /// Whether the value of the variant `plan` builds is held where its fields
 /// can be moved or lent: in an arena slot, or lent by native code, not in a
-/// scope frame's region with a lifetime its fields may carry. A generic
-/// enum's fields are copied as the copying matcher reads them.
+/// scope frame's region with a lifetime its fields may carry, as a generic
+/// enum at an instance that borrows is, as iced's `Key<&str>`.
 fn reaches_fields(plan: &Plan) -> bool {
     let path = rust_path(plan);
-    plan.structural_instance().is_empty()
-        && !carries_lifetimes(&path)
-        && container_family(&path, &path).is_none()
+    !carries_lifetimes(&path) && container_family(&path, &structural_type(plan)).is_none()
 }
 
 /// Whether a variant's field of type `ty` is lent where a pattern borrows
@@ -7684,11 +7682,12 @@ fn render_moved_fields(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let path = rust_path(plan);
+    let ty = structural_type(plan);
     let pattern = variant_pattern(&path, name, form, fields);
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
-    let input: {path} = take_native(arguments, 0)?;
+    let input: {ty} = take_native(arguments, 0)?;
     #[allow(irrefutable_let_patterns)]
     let {pattern} = input else {{ return Err(Error::TypeMismatch); }};
     let mut values: Vec<Dynamic> = Vec::new();",
@@ -7725,6 +7724,7 @@ fn render_lent_fields(
         return render_projected_fields(plan, name, form, fields, output);
     }
     let path = rust_path(plan);
+    let ty = structural_type(plan);
     let pattern = variant_pattern(&path, name, form, fields);
     let matcher = Matcher::LendMut;
     writeln!(
@@ -7776,8 +7776,8 @@ fn render_lent_fields(
         Some(lent) => Lender::Lent(lent),
         None => Lender::Handle(native_handle(arguments, 0, false)?),
     }};
-    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
-        {reach}::<{path}>(&lender, &mut |input| {{
+    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({ty:?}, move |rest| {{
+        {reach}::<{ty}>(&lender, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};{copies}
             {body}
@@ -7803,6 +7803,7 @@ fn render_projected_fields(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let path = rust_path(plan);
+    let ty = structural_type(plan);
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
@@ -7847,7 +7848,7 @@ fn render_projected_fields(
     writeln!(
         output,
         "    let lender = Lender::of(&parent)?;
-    lend(arguments.arena, || reach_lender::<{path}>(&lender, &mut |input| {{
+    lend(arguments.arena, || reach_lender::<{ty}>(&lender, &mut |input| {{
         #[allow(irrefutable_let_patterns, unused_variables)]
         let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};{values}
         Ok(Dynamic::from_array(vec![{array}]))
@@ -7903,6 +7904,8 @@ fn render_projection(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let path = rust_path(plan);
+    // The value's type, at a generic enum's instance.
+    let ty = structural_type(plan);
     let rust = fields
         .get(index)
         .and_then(|field| concrete_type(field.ty()))
@@ -7915,7 +7918,7 @@ fn render_projection(
         parent: &Dynamic,
         body: &mut dyn FnMut(__rawr_internal::scope::Lent) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
     ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
-        reach_lender::<{path}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
+        reach_lender::<{ty}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
             __rawr_internal::scope::lend_ref::<Field{index}, _>(field_0, |nonce| {{
@@ -7927,7 +7930,7 @@ fn render_projection(
         #[allow(unused_imports)]
         use crate::{{ViaDebug as _, ViaDisplay as _, WithoutDebug as _, WithoutDisplay as _}};
         let mut text = None;
-        reach_lender::<{path}>(&Lender::of(parent).ok()?, &mut |input| {{
+        reach_lender::<{ty}>(&Lender::of(parent).ok()?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Ok(Dynamic::UNIT); }};
             let format = if display {{
@@ -7946,7 +7949,7 @@ fn render_projection(
         witness: Option<&__rawr_internal::host::runtime::Witness>,
     ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
         let mut copied = None;
-        reach_lender::<{path}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
+        reach_lender::<{ty}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
             copied = Some(guard_copy!(field_0));
