@@ -334,7 +334,7 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
     let Some(found) = inherent(native, member) else {
         return Arguments::default();
     };
-    let Some(declared) = Declared::parse(found.item.declaration()) else {
+    let Some(declared) = std_table::Declared::parse(found.item.declaration()) else {
         return Arguments::default();
     };
     let Some(step) = steps(native)
@@ -426,7 +426,7 @@ fn closure_inputs(bound: &'static str) -> Option<&'static str> {
     let open = ["FnOnce(", "FnMut(", "Fn("]
         .iter()
         .find_map(|closure| bound.starts_with(closure).then_some(closure.len() - 1))?;
-    let close = open + closing(&bound[open..], '(', ')')?;
+    let close = open + std_table::closing(&bound[open..], '(', ')')?;
     Some(&bound[open + 1..close])
 }
 
