@@ -20351,7 +20351,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
-        let summary = self.host_summary(&item, &self.inference.resolve(&ty), &types);
+        let summary = self.host_summary(&item, None, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
         let helper = self.push_intrinsic(
             item,
@@ -21798,7 +21798,12 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|argument| argument.ty.clone())
             .collect::<Vec<_>>();
-        let summary = self.host_summary(&item, &self.inference.resolve(&ty), &types);
+        let summary = self.host_summary(
+            &item,
+            Some(&receiver.ty),
+            &self.inference.resolve(&ty),
+            &types,
+        );
         self.note_call(call.end(), summary);
         let mutable = item.receiver() == Some(receiver::Mode::Mutable);
         let shared = item.receiver() == Some(receiver::Mode::Shared);

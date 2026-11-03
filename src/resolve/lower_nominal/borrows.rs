@@ -723,10 +723,11 @@ impl Parser<'_> {
     pub(super) fn host_summary(
         &self,
         item: &crate::host::item::Definition,
+        receiver: Option<&Ty>,
         output: &Ty,
         arguments: &[Ty],
     ) -> Summary {
-        let mut summary = self.host_keeps(item, output, arguments.len());
+        let mut summary = self.host_keeps(item, receiver, output, arguments.len());
         // A string borrowed where only a `&'static str` goes, as iced's
         // `title(impl Title<State>)` takes one, is borrowed for `'static`:
         // a literal is, and a borrow of a local is rustc's E0597.
@@ -751,6 +752,7 @@ impl Parser<'_> {
     fn host_keeps(
         &self,
         item: &crate::host::item::Definition,
+        receiver: Option<&Ty>,
         output: &Ty,
         arguments: usize,
     ) -> Summary {
@@ -790,6 +792,20 @@ impl Parser<'_> {
         if !kept.is_empty() {
             return Summary::taps(mode, kept, Vec::new());
         }
+        // `again(&self) -> Self` of an imported `impl Trait` value keeps
+        // what the value it is called on keeps, as the `'a` its type
+        // captures: not the receiver's borrow, but what it refers to.
+        if let Some(signature::Receiver::Shared | signature::Receiver::Mutable) = mode
+            && let Some(receiver) = receiver
+            && self.imported_opaque(output)
+            && without_references(&self.inference.resolve(receiver)) == output
+        {
+            let referent = Tap {
+                into: Path::ROOT,
+                from: Source::Input(Input::Receiver, Path::of(&[Step::Arg(0)])),
+            };
+            return Summary::taps(mode, vec![referent], Vec::new());
+        }
         let lends = item.guard().is_some() || *output == Ty::Str;
         match (mode, lends) {
             (Some(mode @ (signature::Receiver::Shared | signature::Receiver::Mutable)), true) => {
@@ -798,6 +814,17 @@ impl Parser<'_> {
             (_, true) => Summary::unknown(),
             (mode, false) => Summary::nothing(mode),
         }
+    }
+
+    /// Whether `ty` is an imported `impl Trait` value, which may hold the
+    /// borrows of the call that made it (`surface::opaque`).
+    fn imported_opaque(&self, ty: &Ty) -> bool {
+        #[cfg(feature = "rust-import")]
+        if let Ty::Host { proof, .. } = ty {
+            return rawr_import::surface::opaque::declared(&proof.definition.path());
+        }
+        let _ = ty;
+        false
     }
 
     /// The function returns the value spanning `value`, of type `ty`: its

@@ -62,9 +62,10 @@ pub enum Kind {
     /// the type the call fixes `S` to decides it (#568).
     ProjectedClosureInput,
     /// The function gives an `impl Trait` that borrows its arguments, which
-    /// Rawr holds as a trait object beside them, and its trait can't be one
-    /// (#846).
-    OpaqueObject,
+    /// Rawr holds beside them through a proxy of its traits, and one of its
+    /// bounds is higher-ranked, negative, or at types Rawr can't write
+    /// (#846, #849).
+    OpaqueBounds,
     /// A signature names a std type rawr doesn't take from or give to a
     /// crate yet (D711 step 5, D712.1).
     StdNotRun(crate::classify::std_binding::Unrun),
@@ -128,9 +129,9 @@ impl Kind {
             Self::ProjectedClosureInput => {
                 "it takes a closure whose input is an associated type of a type parameter"
             }
-            Self::OpaqueObject => {
-                "it gives an `impl Trait` that borrows its arguments, and its trait can't be \
-                 made into a trait object"
+            Self::OpaqueBounds => {
+                "it gives an `impl Trait` that borrows its arguments, with bounds rawr can't \
+                 write yet"
             }
             Self::StdNotRun(unrun) => unrun.describe(),
         }

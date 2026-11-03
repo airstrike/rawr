@@ -27,6 +27,7 @@ pub mod selector;
 pub mod sequences;
 pub mod shelf;
 pub mod signatures;
+pub mod stock;
 
 /// What `view` gives: a label borrowed from the state, and the message a
 /// press sends.
