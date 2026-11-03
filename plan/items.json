@@ -853,6 +853,10 @@
     {"t":"T850","issue":850,"title":"T850: A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0619c8c6f","release":null},
     {"t":"T851","issue":851,"title":"T851: scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T852","issue":852,"title":"T852: Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T853","issue":853,"title":"T853: A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T853","issue":853,"title":"T853: A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T854","issue":854,"title":"T854: The ?play image's universe runner pulls a [patch] crate into its workspace and can't settle offline","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"d64c9b255","release":"0.3.119"},
+    {"t":"T855","issue":855,"title":"T855: Runner workspace membership follows the project's beyond hidden crates","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T856","issue":856,"title":"T856: A crate call that takes a borrowing `impl Trait` result by value runs","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T857","issue":857,"title":"T857: A named result type that borrows crate values lives beside them instead of in pins","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

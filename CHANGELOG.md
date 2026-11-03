@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.119 (2026-11-03)
+
+- A crate a macro names that the project reaches only through a `[patch]` no longer joins the runner's workspace, so the runner resolves no more than the project does and settles offline; the ?play image builds again. (#854)
+
 ## 0.3.118 (2026-11-03)
 
 - A crate type that implements `Ord` can key a `BTreeMap` or `BTreeSet`, as iced's `window::Id` does in multi_window, and the map keeps the crate's order. (#363)

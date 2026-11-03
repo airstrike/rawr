@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.118",
+  "version": "0.3.119",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.119",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"A crate a macro names that the project reaches only through a `[patch]` no longer joins the runner's workspace, so the runner resolves no more than the project does and settles offline; the ?play image builds again.","issues":[854]}
+        ]
+      },
       {
         "version": "0.3.118",
         "date": "2026-11-03",
@@ -2029,7 +2036,11 @@
     {"issue":850,"title":"A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)"},
     {"issue":851,"title":"scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)"},
     {"issue":852,"title":"Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc"},
-    {"issue":853,"title":"A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc"}
+    {"issue":853,"title":"A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc"},
+    {"issue":854,"title":"The ?play image's universe runner pulls a [patch] crate into its workspace and can't settle offline","state":"closed","category":"Health","release":"0.3.119"},
+    {"issue":855,"title":"Runner workspace membership follows the project's beyond hidden crates","state":"open","category":"Health"},
+    {"issue":856,"title":"A crate call that takes a borrowing `impl Trait` result by value runs","state":"open","category":"No glue (D593)"},
+    {"issue":857,"title":"A named result type that borrows crate values lives beside them instead of in pins","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

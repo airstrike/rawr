@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.119",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"A crate a macro names that the project reaches only through a `[patch]` no longer joins the runner's workspace, so the runner resolves no more than the project does and settles offline; the ?play image builds again.","issues":[854]}
+      ]
+    },
+    {
       "version": "0.3.118",
       "date": "2026-11-03",
       "entries": [
