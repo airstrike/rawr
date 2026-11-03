@@ -48533,7 +48533,7 @@ impl<'a> Parser<'a> {
         // program's calls its `deref`.
         if let Some((ty, calls)) = self.deref_coercion(&target, &source) {
             source = ty.clone();
-            self.apply_derefs(value, calls, ty);
+            self.apply_derefs(value, calls, ty)?;
         }
         // A reborrow: `&mut T` where `&T` is expected, as a `&mut Game`
         // parameter passed on to a function that only reads it. The

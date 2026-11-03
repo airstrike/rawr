@@ -363,3 +363,93 @@ pub mod table {
         Hsl(value, std::marker::PhantomData)
     }
 }
+
+/// Types that implement `Deref` to another of the crate's types, to a
+/// `String` and to a `Vec`, as many crates' newtypes do: a method or field
+/// the type lacks is its target's, and a `&Type` is a `&Target` where one
+/// is taken.
+pub mod deref {
+    use std::ops::{Deref, DerefMut};
+
+    /// `Clone`: rawr reads a crate type's `Deref` target as a borrow
+    /// guard's, a copy made inside the call (D554).
+    #[derive(Clone)]
+    pub struct Counter {
+        pub step: i64,
+        count: i64,
+    }
+
+    impl Counter {
+        pub fn count(&self) -> i64 {
+            self.count
+        }
+
+        pub fn bump(&mut self) {
+            self.count += self.step;
+        }
+    }
+
+    pub struct Labeled {
+        pub label: String,
+        counter: Counter,
+    }
+
+    impl Labeled {
+        pub fn new(label: &str, step: i64) -> Self {
+            Labeled {
+                label: label.to_string(),
+                counter: Counter { step, count: 0 },
+            }
+        }
+    }
+
+    impl Deref for Labeled {
+        type Target = Counter;
+
+        fn deref(&self) -> &Counter {
+            &self.counter
+        }
+    }
+
+    impl DerefMut for Labeled {
+        fn deref_mut(&mut self) -> &mut Counter {
+            &mut self.counter
+        }
+    }
+
+    pub struct Name(String);
+
+    impl Name {
+        pub fn new(text: &str) -> Self {
+            Name(text.to_string())
+        }
+    }
+
+    impl Deref for Name {
+        type Target = String;
+
+        fn deref(&self) -> &String {
+            &self.0
+        }
+    }
+
+    pub struct Scores(Vec<i64>);
+
+    impl Scores {
+        pub fn new(scores: Vec<i64>) -> Self {
+            Scores(scores)
+        }
+    }
+
+    impl Deref for Scores {
+        type Target = Vec<i64>;
+
+        fn deref(&self) -> &Vec<i64> {
+            &self.0
+        }
+    }
+
+    pub fn shout(text: &str) -> String {
+        text.to_uppercase()
+    }
+}
