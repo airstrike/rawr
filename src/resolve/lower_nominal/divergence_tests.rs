@@ -345,3 +345,51 @@ main();
     }
 }
 
+#[test]
+fn language_text_into_takes_the_type_inference_gives_it() {
+    // A branch's `.into()` takes the type the other branch, the return
+    // type or a block's `let` gives it, as rustc infers it (#860).
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+
+fn f(b: bool) -> Cow<'static, str> {
+    if b { "x".into() } else { Cow::Owned(String::new()) }
+}
+
+fn g() -> Cow<'static, str> {
+    "y".into()
+}
+
+fn h(b: bool) -> Cow<'static, str> {
+    match b {
+        true => "t".into(),
+        false => {
+            "f".into()
+        }
+    }
+}
+
+fn s(b: bool) -> String {
+    if b { "s".into() } else { String::new() }
+}
+
+fn main() {
+    println!("{:?} {:?} {:?} {:?} {}", f(true), f(false), g(), h(false), s(true));
+    let c: Cow<str> = if true { "a".into() } else { "b".into() };
+    let d: Cow<str> = {
+        let t = "blk";
+        t.into()
+    };
+    let x: Cow<str> = match 1 {
+        1 => "one".into(),
+        _ => Cow::Borrowed("other"),
+    };
+    println!("{c} {d} {x}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "\"x\" \"\" \"y\" \"f\" s\na blk one\n");
+}
+

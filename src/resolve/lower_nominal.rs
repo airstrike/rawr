@@ -10830,6 +10830,24 @@ fn format_placeholder(index: usize) -> String {
     format!("{head:_<PENDING_FORMAT_WIDTH$}")
 }
 
+/// A `text.into()` whose target the use site gives once inference has it:
+/// a `String`, or a std type of std's `From` of text (`Cow<str>`), written
+/// over the placeholder before the text's `(text)`.
+struct TextInto {
+    span: Span,
+    source: Ty,
+    target: Ty,
+    placeholder: String,
+}
+
+/// The placeholder of the `text.into()` numbered `index`.
+fn text_into_placeholder(index: usize) -> String {
+    // One more than any helper name, for the `(` written after it.
+    let head = format!("__rawr_nominal_text_into_{index:010}");
+    let width = head.len() + 1;
+    format!("{head:_<width$}")
+}
+
 struct PendingConversion {
     placeholder: String,
     source: Ty,
@@ -11868,10 +11886,9 @@ struct Parser<'a> {
     pending_parses: Vec<(Ty, Ty, Span, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
-    /// The `text.into()` calls, each one's span, the text's type and the
-    /// target, which `Err(..)` may box as `dyn Error` (`error_object.rs`)
-    /// and the use site gives.
-    text_into: Vec<(Span, Ty, Ty)>,
+    /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
+    /// Error` (`error_object.rs`) and the use site gives.
+    text_into: Vec<TextInto>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -17196,28 +17213,35 @@ impl<'a> Parser<'a> {
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
         // A `text.into()` no use gives a target: rustc's E0283, as std has
-        // many `From<String>` impls. A target other than the text's own
-        // type or a `String` is one rawr doesn't convert into.
-        for (at, source, target) in std::mem::take(&mut self.text_into) {
-            match self.inference.resolve(&target) {
+        // many `From<String>` impls. Its target is the text's own type, a
+        // `String`, or a std type of std's `From` of text, which an `if`'s
+        // other branch may give (`Cow<str>`); another is a mismatch.
+        for into in std::mem::take(&mut self.text_into) {
+            let helper = match self.inference.resolve(&into.target) {
                 Ty::Infer(_) => {
                     return Err(Error::StdPath {
                         code: "E0283",
                         message: "type annotations needed".into(),
                         label: Some("type must be known at this point".into()),
                         note: None,
-                        reference: at,
+                        reference: into.span,
                     });
                 }
-                target if target == Ty::String || target == source => {}
-                target => {
-                    return Err(Error::TypeMismatch {
-                        expected: target.name(&self.models),
-                        actual: Ty::String.name(&self.models),
-                        expression: at,
-                    });
-                }
-            }
+                target if target == Ty::String || target == into.source => String::new(),
+                target => match self.std_conversion(&target, &into.source) {
+                    Some(op) => op
+                        .map(|op| self.push_op(Op::Prelude(op)))
+                        .unwrap_or_default(),
+                    None => {
+                        return Err(Error::TypeMismatch {
+                            expected: target.name(&self.models),
+                            actual: Ty::String.name(&self.models),
+                            expression: into.span,
+                        });
+                    }
+                },
+            };
+            self.write_over(&into.placeholder, &format!("{helper}("));
         }
         self.finish_formats()?;
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
@@ -50052,10 +50076,22 @@ impl<'a> Parser<'a> {
         }
         // Text converts into a `String`, through `From<&str>` or
         // `From<T> for T` (or into a boxed error, `box_returned_error`):
-        // the target the use site gives, which rustc needs (E0283).
+        // the target the use site gives, which rustc needs (E0283), or
+        // one inference gives later: `placeholder(text))`, the
+        // placeholder written as the conversion once it is known.
         if source.is_text() {
             let target = self.inference.fresh();
-            self.text_into.push((value.span, source, target.clone()));
+            let placeholder = text_into_placeholder(self.text_into.len());
+            let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+            rendered.push_text(")");
+            value.source = rendered;
+            value.prelude = origin::Fragment::default();
+            self.text_into.push(TextInto {
+                span: value.span,
+                source,
+                target: target.clone(),
+                placeholder,
+            });
             value.ty = target;
         }
         Ok(value.retain_origin())
