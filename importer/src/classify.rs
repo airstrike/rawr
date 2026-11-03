@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 104;
+const CLASSIFIER_VERSION: u32 = 105;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -4587,6 +4587,7 @@ impl<P: api::Phase> Context<'_, P> {
                 } else {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
+                    records.extend(self.trait_opaque_implementations(export, definition)?);
                     records.extend(self.self_member_implementations(export, definition)?);
                     records.into_boxed_slice()
                 };
@@ -4949,8 +4950,93 @@ impl<P: api::Phase> Context<'_, P> {
         };
         let mut opaques = Vec::new();
         impl_traits(signature.output(), &mut opaques);
+        self.opaque_records(export, definition, generics, &opaques)
+    }
+
+    /// The methods of each trait an opaque `impl Trait` type a method of
+    /// the trait `definition` gives from the trait's own default body
+    /// implements, as `opaque_implementations` gives a function's: iced's
+    /// `Widget::explain` gives a value whose `Widget::boxed` layout calls.
+    /// The method is a function of the trait's `Self`, its parameter 0, as
+    /// `classify_self_member` has it, and of the trait's parameters and its
+    /// own.
+    fn trait_opaque_implementations(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+    ) -> Result<Vec<ImplementationRecord>, Error> {
+        let model::Kind::Trait {
+            associated,
+            generics: container,
+            ..
+        } = definition.kind()
+        else {
+            return Ok(Vec::new());
+        };
+        let trait_id = definition.id();
         let mut records = Vec::new();
-        for opaque in opaques {
+        for method_id in associated.iter() {
+            let Some(method) = self
+                .graph
+                .definition_index(method_id)
+                .and_then(|index| self.graph.definitions().nth(index))
+            else {
+                continue;
+            };
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = method.kind()
+            else {
+                continue;
+            };
+            let output = self_as_parameter(signature.output(), trait_id);
+            let mut opaques = Vec::new();
+            impl_traits(&output, &mut opaques);
+            if opaques.is_empty() {
+                continue;
+            }
+            // `Self` is the trait's parameter 0, a parameter of its own here.
+            let parameters = std::iter::once(model::Parameter::new(
+                trait_id.clone(),
+                0,
+                "This".into(),
+                model::ParameterKind::Type {
+                    bounds: Box::default(),
+                    default: model::Default::Absent,
+                },
+            ))
+            .chain(
+                container
+                    .parameters()
+                    .filter(|parameter| parameter.name() != "Self")
+                    .cloned(),
+            )
+            .chain(generics.parameters().cloned())
+            .collect::<Box<[_]>>();
+            let predicates = container
+                .predicates()
+                .chain(generics.predicates())
+                .map(|predicate| self_predicate_as_parameter(predicate, trait_id))
+                .collect::<Box<[_]>>();
+            let generics = model::Generics::new(parameters, predicates);
+            records.extend(self.opaque_records(export, method, &generics, &opaques)?);
+        }
+        Ok(records)
+    }
+
+    /// The members of each opaque type in `opaques`, which the function
+    /// `definition`, whose generics are `generics`, gives
+    /// (`opaque_implementations`).
+    fn opaque_records(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+        generics: &model::Generics,
+        opaques: &[&model::Type],
+    ) -> Result<Vec<ImplementationRecord>, Error> {
+        let mut records = Vec::new();
+        for &opaque in opaques {
             let model::Type::ImplTrait { id, bounds, .. } = opaque else {
                 continue;
             };
@@ -10358,6 +10444,17 @@ fn self_replaced(
         model::Type::RawPointer { mutability, ty } => model::Type::RawPointer {
             mutability: *mutability,
             ty: inner(ty),
+        },
+        // The opaque type a trait's method gives captures `Self`, as
+        // iced's `Widget::explain` does.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.clone(),
+            captures: arguments(captures),
         },
         other => other.clone(),
     }

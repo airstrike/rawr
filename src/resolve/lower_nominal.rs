@@ -1393,6 +1393,11 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 .output
                 .as_ref()
                 .map(|output| substitute_parameters(output, &substituted));
+            // Elision reads the template's output, as rustc reads the
+            // generic signature (`method::Definition::instance`).
+            if instance.lifetimes.written_output.is_none() {
+                instance.lifetimes.written_output = definition.output.clone().map(Box::new);
+            }
             instance.lifetimes.bounds = instance
                 .lifetimes
                 .bounds
