@@ -1,11 +1,11 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-03",
-  "version": "0.3.117",
+  "version": "0.3.118",
   "examples": {
-    "running": 31,
+    "running": 37,
     "total": 56,
-    "note": "31 pass rawr check: the 25 before plus bezier_tool back, lazy, solar_system, sierpinski_triangle and combo_box, with qr_code's regression fixed; stopwatch, multi_window, delineate, modal and gradient pass on branches not yet merged"
+    "note": "37 pass rawr check: the 31 of 0.3.117 plus stopwatch, multi_window, delineate, modal, gradient and pane_grid"
   },
   "groups": [
     {

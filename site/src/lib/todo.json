@@ -1,16 +1,26 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.117",
+  "version": "0.3.118",
   "examples": {
-    "running": 31,
+    "running": 37,
     "total": 56,
-    "note": "31 pass rawr check: the 25 before plus bezier_tool back, lazy, solar_system, sierpinski_triangle and combo_box, with qr_code's regression fixed; stopwatch, multi_window, delineate, modal and gradient pass on branches not yet merged"
+    "note": "37 pass rawr check: the 31 of 0.3.117 plus stopwatch, multi_window, delineate, modal, gradient and pane_grid"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.118",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"A crate type that implements `Ord` can key a `BTreeMap` or `BTreeSet`, as iced's `window::Id` does in multi_window, and the map keeps the crate's order.","issues":[363]},
+          {"text":"An imported generic enum is matched and constructed at the types its use gives, with declared defaults filling what nothing else fixes, as iced's `keyboard::Key` in `KeyPressed { key: Key::Named(Named::Tab), .. }` and `key.as_ref()` matches.","issues":[841]},
+          {"text":"A crate constant whose type is a `RangeInclusive` of the crate's own type, such as iced's `Radians::RANGE`, can be read and passed on, so `slider(Radians::RANGE, self.angle, ..)` makes a slider of `Radians`.","issues":[842]},
+          {"text":"`.into()` on a crate value read through a field chain converts through the target's `From`, and a crate function generic over a trait it also implements for closures, such as iced's `selector::find(id)`, takes a plain value.","issues":[843,844]}
+        ]
+      },
       {
         "version": "0.3.117",
         "date": "2026-11-03",
@@ -1529,7 +1539,7 @@
     {"issue":360,"title":"Methods of a type only an alias names","state":"closed","category":"No glue (D593)","release":"0.3.17"},
     {"issue":361,"title":"A crate function's opaque output inside a borrowing widget","state":"open","category":"No glue (D593)"},
     {"issue":362,"title":"Operators of crate types","state":"open","category":"No glue (D593)"},
-    {"issue":363,"title":"A crate type's derived Ord","state":"open","category":"No glue (D593)"},
+    {"issue":363,"title":"A crate type's derived Ord","state":"closed","category":"No glue (D593)","release":"0.3.118"},
     {"issue":364,"title":"A generic crate struct literal at an inferred instance, and a field write through a lent crate value","state":"closed","category":"No glue (D593)","release":"0.3.17"},
     {"issue":365,"title":"Native mutable vectors lose script callback changes","state":"open","category":"Divergences from rustc"},
     {"issue":366,"title":"Discover a factory return type through an unnamed public alias","state":"open","category":"No glue (D593)"},
@@ -2007,11 +2017,19 @@
     {"issue":838,"title":"The std table marks io::Error's methods unstable","state":"open","category":"Divergences from rustc"},
     {"issue":839,"title":"The std facade expands generic parameters into one form per argument type","state":"open","category":"Health"},
     {"issue":840,"title":"A from-source rawr-import with no driver downloads a release that may not exist","state":"open","category":"Health"},
-    {"issue":841,"title":"modal: `keyboard::Key::Named(..)` leaves Key's defaulted type parameter unknown","state":"open","category":"No glue (D593)"},
-    {"issue":842,"title":"gradient: `Radians::RANGE` is refused for its generic argument","state":"open","category":"No glue (D593)"},
-    {"issue":843,"title":"scrollable: `Color::into` is not found","state":"open","category":"No glue (D593)"},
-    {"issue":844,"title":"delineate: `selector::find` is not found, with no reason","state":"open","category":"No glue (D593)"},
-    {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"open","category":"No glue (D593)"}
+    {"issue":841,"title":"modal: `keyboard::Key::Named(..)` leaves Key's defaulted type parameter unknown","state":"closed","category":"No glue (D593)","release":"0.3.118"},
+    {"issue":842,"title":"gradient: `Radians::RANGE` is refused for its generic argument","state":"closed","category":"No glue (D593)","release":"0.3.118"},
+    {"issue":843,"title":"scrollable: `Color::into` is not found","state":"closed","category":"No glue (D593)","release":"0.3.118"},
+    {"issue":844,"title":"delineate: `selector::find` is not found, with no reason","state":"closed","category":"No glue (D593)","release":"0.3.118"},
+    {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"open","category":"No glue (D593)"},
+    {"issue":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"open","category":"No glue (D593)"},
+    {"issue":847,"title":"An opaque `impl Sub<..>` leaves a type parameter unknown when Sub has a blanket impl over its supertrait","state":"open","category":"Divergences from rustc"},
+    {"issue":848,"title":"`&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc"},
+    {"issue":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"open","category":"No glue (D593)"},
+    {"issue":850,"title":"A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)"},
+    {"issue":851,"title":"scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)"},
+    {"issue":852,"title":"Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc"},
+    {"issue":853,"title":"A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {

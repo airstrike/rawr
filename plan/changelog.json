@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.3.118",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"A crate type that implements `Ord` can key a `BTreeMap` or `BTreeSet`, as iced's `window::Id` does in multi_window, and the map keeps the crate's order.","issues":[363]},
+        {"text":"An imported generic enum is matched and constructed at the types its use gives, with declared defaults filling what nothing else fixes, as iced's `keyboard::Key` in `KeyPressed { key: Key::Named(Named::Tab), .. }` and `key.as_ref()` matches.","issues":[841]},
+        {"text":"A crate constant whose type is a `RangeInclusive` of the crate's own type, such as iced's `Radians::RANGE`, can be read and passed on, so `slider(Radians::RANGE, self.angle, ..)` makes a slider of `Radians`.","issues":[842]},
+        {"text":"`.into()` on a crate value read through a field chain converts through the target's `From`, and a crate function generic over a trait it also implements for closures, such as iced's `selector::find(id)`, takes a plain value.","issues":[843,844]}
+      ]
+    },
+    {
       "version": "0.3.117",
       "date": "2026-11-03",
       "entries": [
