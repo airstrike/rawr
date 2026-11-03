@@ -1366,10 +1366,12 @@ impl Plan {
                     item.signature.output.opaque(&opaque, &mut found);
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
                         let path = super::opaque::path(&item.path, index);
-                        if types
-                            .iter()
-                            .any(|ty| *ty.path == *path || (ty.opaque && ty.identity == identity))
-                        {
+                        if types.iter().any(|ty| {
+                            *ty.path == *path
+                                || (ty.opaque
+                                    && ty.identity == identity
+                                    && super::member::declared(&ty.path))
+                        }) {
                             continue;
                         }
                         let associated = item
