@@ -2,6 +2,16 @@
 
 #![feature(rustc_private)]
 
+#[cfg(rawr_rustc_outside_window)]
+compile_error!(concat!(
+    "rawr-import-driver builds on ",
+    env!("RAWR_RUSTC_WINDOW"),
+    " (`importer/src/cargo/toolchain/window.rs`)"
+));
+
+#[cfg(rawr_rustc_attr_ir)]
+extern crate rustc_attr_ir;
+
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
@@ -12,6 +22,9 @@ extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_trait_selection;
+
+#[path = "driver/compat.rs"]
+mod compat;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -41,7 +54,9 @@ const PLAN_SCHEMA: u32 = 9;
 // One number in four places: `driver/compiler.rs`, `cargo/toolchain.rs`
 // (`SUPPORTED_PROBE_PROTOCOL`) and `extract/protocol.rs` (`SCHEMA`) move with it.
 const PROTOCOL_SCHEMA: u32 = 46;
-const COMPILER_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
+/// The commit of the nightly this driver was built with, which it reads
+/// metadata of and names in its version.
+const COMPILER_COMMIT: &str = env!("RAWR_RUSTC_COMMIT");
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ITEMS: usize = 2_500_000;
 const CANONICAL_ITEMS: usize = 19_000_000;
@@ -367,7 +382,7 @@ fn std_catalog(arguments: &[String]) -> Result<ExitCode, String> {
                 result: None,
             };
             let exit = rustc_driver::catch_with_exit_code(|| {
-                rustc_driver::run_compiler(&compiler_arguments, &mut callbacks);
+                crate::compat::compiler_entrypoint(&compiler_arguments, &mut callbacks);
             });
             match callbacks.result {
                 Some(Err(error)) => Err(error),
@@ -411,7 +426,7 @@ fn std_table(arguments: &[String]) -> Result<ExitCode, String> {
     ];
     let mut callbacks = compiler::std_table::StdTable { out, result: None };
     let exit = rustc_driver::catch_with_exit_code(|| {
-        rustc_driver::run_compiler(&compiler_arguments, &mut callbacks);
+        crate::compat::compiler_entrypoint(&compiler_arguments, &mut callbacks);
     });
     let _ = fs::remove_dir_all(&scratch);
     match callbacks.result {

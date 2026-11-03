@@ -176,13 +176,14 @@ impl Attestation {
     }
 
     fn validate_fixed(&self) -> Result<(), node::Error> {
-        let fixed = self.proof.channel.as_ref() == super::CHANNEL
-            && self.proof.rustc_release.as_ref() == super::RUST_RELEASE
-            && self.proof.rustc_commit.as_ref() == super::RUST_COMMIT
-            && self.proof.rustdoc_release.as_ref() == super::RUST_RELEASE
-            && self.proof.rustdoc_commit.as_ref() == super::RUST_COMMIT
-            && self.proof.cargo_release.as_ref() == super::CARGO_RELEASE
-            && self.proof.cargo_commit.as_ref() == super::CARGO_COMMIT
+        let identity = super::active();
+        let fixed = self.proof.channel.as_ref() == identity.name()
+            && self.proof.rustc_release.as_ref() == identity.rustc_release()
+            && self.proof.rustc_commit.as_ref() == identity.rustc_commit()
+            && self.proof.rustdoc_release.as_ref() == identity.rustc_release()
+            && self.proof.rustdoc_commit.as_ref() == identity.rustc_commit()
+            && self.proof.cargo_release.as_ref() == identity.cargo_release()
+            && self.proof.cargo_commit.as_ref() == identity.cargo_commit()
             && self.proof.host.as_ref() == super::HOST
             && self.proof.target.as_ref() == super::HOST
             && self.proof.components.as_ref()
@@ -357,12 +358,13 @@ impl FileEvidence {
 
 fn fixed_recipe() -> Box<[u8]> {
     let mut bytes = Vec::new();
+    let identity = super::active();
     for value in [
-        super::CHANNEL,
-        super::RUST_RELEASE,
-        super::RUST_COMMIT,
-        super::CARGO_RELEASE,
-        super::CARGO_COMMIT,
+        identity.name(),
+        identity.rustc_release(),
+        identity.rustc_commit(),
+        identity.cargo_release(),
+        identity.cargo_commit(),
         super::HOST,
     ] {
         bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());

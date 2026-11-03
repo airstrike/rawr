@@ -8,12 +8,12 @@ use std::io::{self, Cursor, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::compat::Reexport as RustReexport;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir as hir;
 use rustc_hir::def::{CtorKind, DefKind, Namespace as RustNamespace, Res};
 use rustc_hir::definitions::DefPathData;
 use rustc_infer::infer::TyCtxtInferExt;
-use rustc_middle::metadata::Reexport as RustReexport;
 use rustc_middle::mir;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeVisitableExt};
 use rustc_span::def_id::{CrateNum, DefId};
@@ -206,8 +206,8 @@ struct Builder<'tcx, 'invocation, 'budget, 'diagnostic> {
 struct TraitObligation<'tcx> {
     trait_id: DefId,
     self_ty: Ty<'tcx>,
-    arguments: ty::GenericArgsRef<'tcx>,
-    polarity: ty::PredicatePolarity,
+    arguments: crate::compat::GenericArgsRef<'tcx>,
+    polarity: crate::compat::ClausePolarity,
     associated: Option<DefId>,
     param_env: ty::ParamEnv<'tcx>,
     relevance: DefId,
@@ -217,8 +217,8 @@ struct TraitObligation<'tcx> {
 struct TraitObligationKey<'tcx> {
     trait_id: DefId,
     self_ty: Ty<'tcx>,
-    arguments: ty::GenericArgsRef<'tcx>,
-    polarity: ty::PredicatePolarity,
+    arguments: crate::compat::GenericArgsRef<'tcx>,
+    polarity: crate::compat::ClausePolarity,
     associated: Option<DefId>,
     param_env: ty::ParamEnv<'tcx>,
 }
@@ -254,7 +254,7 @@ enum AssociatedDemandKind {
 struct AssociatedObligation<'tcx> {
     kind: AssociatedDemandKind,
     trait_item: Option<DefId>,
-    arguments: Option<ty::GenericArgsRef<'tcx>>,
+    arguments: Option<crate::compat::GenericArgsRef<'tcx>>,
     param_env: ty::ParamEnv<'tcx>,
 }
 
@@ -459,6 +459,10 @@ enum Shape {
         ty: Type,
         value: Explicit<Constant>,
     },
+    #[cfg_attr(
+        rawr_rustc_no_type_const,
+        allow(dead_code, reason = "a newer compiler has no `type const`")
+    )]
     TypeConst {
         ty: Type,
         rhs: Explicit<Constant>,
@@ -835,7 +839,7 @@ pub(super) fn run(
         result: None,
     };
     let exit = rustc_driver::catch_with_exit_code(|| {
-        rustc_driver::run_compiler(&arguments, &mut callbacks);
+        crate::compat::compiler_entrypoint(&arguments, &mut callbacks);
     });
     match callbacks.result {
         Some(Ok(mut budget)) if exit == ExitCode::SUCCESS => {
@@ -1119,10 +1123,7 @@ fn extract<'tcx>(
     diagnostic: &mut Option<Diagnostic>,
 ) -> Result<Extracted, String> {
     let root = engine::Root {
-        module: tcx
-            .def_path_hash(selected.as_def_id())
-            .to_raw_def_path_hash()
-            .0,
+        module: tcx.def_path_hash(selected.as_def_id()).0.to_le_bytes(),
         krate: stable_crate_id.to_owned(),
     };
     let Root::Selected { aliases } = &invocation.root;
@@ -1782,7 +1783,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let Some(diagnostic) = self.diagnostic.as_mut() else {
             return Ok(());
         };
-        let raw_hash = self.tcx.def_path_hash(def_id).to_raw_def_path_hash().0;
+        let raw_hash = self.tcx.def_path_hash(def_id).0.to_le_bytes();
         let hash = hex(&raw_hash)?;
         let path = self.tcx.def_path_str(def_id);
         let mut identity = String::new();
@@ -1835,7 +1836,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let Some(diagnostic) = self.diagnostic.as_mut() else {
             return Ok(());
         };
-        let raw_hash = self.tcx.def_path_hash(def_id).to_raw_def_path_hash().0;
+        let raw_hash = self.tcx.def_path_hash(def_id).0.to_le_bytes();
         let hash = hex(&raw_hash)?;
         let path = self.tcx.def_path_str(def_id);
         let mut identity = String::new();
@@ -2039,8 +2040,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         &mut self,
         owner: DefId,
         trait_id: DefId,
-        arguments: ty::GenericArgsRef<'tcx>,
-        polarity: ty::PredicatePolarity,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
+        polarity: crate::compat::ClausePolarity,
         associated: Option<DefId>,
     ) -> Result<(), String> {
         let self_ty = arguments
@@ -2132,9 +2133,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if let Some(error) = candidate_error {
                 return Err(error);
             }
-            candidates.sort_unstable_by_key(|impl_id| {
-                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
+            candidates
+                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
             candidates.dedup();
             self.budget.items(1)?;
             self.obligation_candidates.try_reserve(1).map_err(|error| {
@@ -2192,7 +2192,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // classifier can read the callable one (D551.6), and those for a
         // concrete `S`, as Freya's `From<(u8, u8, u8)> for Fill`, so it can
         // read which argument shapes give `T`.
-        if obligation.polarity == ty::PredicatePolarity::Positive
+        if obligation.polarity == crate::compat::ClausePolarity::Positive
             && obligation.associated.is_none()
             && Some(obligation.trait_id) == self.tcx.get_diagnostic_item(rustc_span::sym::Into)
             && let Some(target) = obligation
@@ -2205,9 +2205,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut implementations = Vec::new();
             self.tcx
                 .for_each_relevant_impl(from, target, |impl_id| implementations.push(impl_id));
-            implementations.sort_unstable_by_key(|impl_id| {
-                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
+            implementations
+                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
             for impl_id in implementations.into_iter().take(RELATION_IMPLEMENTATIONS) {
                 self.budget.edge(1)?;
                 if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
@@ -2223,7 +2222,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         // each with its associated type, so the classifier can read what
         // the projection is there (T318).
         if let Some(trait_item) = obligation.associated {
-            if obligation.polarity != ty::PredicatePolarity::Positive
+            if obligation.polarity != crate::compat::ClausePolarity::Positive
                 || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
                 || self.is_sysroot_crate(obligation.trait_id.krate)?
                 || self.tcx.def_kind(trait_item) != DefKind::AssocTy
@@ -2258,7 +2257,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     }
                 }
                 implementations.sort_unstable_by_key(|impl_id| {
-                    self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+                    self.tcx.def_path_hash(*impl_id).0.to_le_bytes()
                 });
                 let associated = Some(AssociatedObligation {
                     kind: AssociatedDemandKind::SelectedMember,
@@ -2296,9 +2295,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     return Ok(());
                 }
             }
-            implementations.sort_unstable_by_key(|impl_id| {
-                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
+            implementations
+                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
             implementations.dedup();
             let associated = Some(AssociatedObligation {
                 kind: AssociatedDemandKind::SelectedMember,
@@ -2327,7 +2325,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             return Ok(());
         }
-        if obligation.polarity != ty::PredicatePolarity::Positive
+        if obligation.polarity != crate::compat::ClausePolarity::Positive
             || obligation.trait_id.krate == rustc_span::def_id::LOCAL_CRATE
             || self.is_sysroot_crate(obligation.trait_id.krate)?
         {
@@ -2357,9 +2355,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     implementations.push(impl_id);
                 }
             }
-            implementations.sort_unstable_by_key(|impl_id| {
-                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
+            implementations
+                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
             for impl_id in implementations {
                 self.request_implementation(impl_id, obligation.relevance, None)?;
             }
@@ -2381,9 +2378,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 .map_err(|error| format!("relation implementation allocation failed: {error}"))?;
             implementations.push(impl_id);
         }
-        implementations.sort_unstable_by_key(|impl_id| {
-            self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-        });
+        implementations
+            .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
         for impl_id in implementations {
             if self.tcx.impl_polarity(impl_id) == ty::ImplPolarity::Positive {
                 self.request_implementation(impl_id, obligation.relevance, None)?;
@@ -2397,7 +2393,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         obligation: TraitObligation<'tcx>,
         parameter: ty::ParamTy,
     ) -> Result<(), String> {
-        if obligation.polarity != ty::PredicatePolarity::Positive
+        if obligation.polarity != crate::compat::ClausePolarity::Positive
             || obligation.associated.is_some()
             || obligation.arguments.len() != 1
             || self.parameter_owner_def_id(
@@ -2453,7 +2449,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         || reference.self_ty() != scalar_ty
                         || self.tcx.impl_polarity(impl_id) != ty::ImplPolarity::Positive
                         || self.tcx.generics_of(impl_id).count() != 0
-                        || !self.tcx.predicates_of(impl_id).predicates.is_empty()
+                        || !crate::compat::own_clauses(self.tcx, impl_id).is_empty()
                     {
                         continue;
                     }
@@ -2470,17 +2466,9 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 (true, _, _) => ScalarPredicateOutcome::Unresolved,
             };
             let key = ScalarPredicateKey {
-                owner_hash: self
-                    .tcx
-                    .def_path_hash(obligation.relevance)
-                    .to_raw_def_path_hash()
-                    .0,
+                owner_hash: self.tcx.def_path_hash(obligation.relevance).0.to_le_bytes(),
                 parameter: parameter.index,
-                trait_hash: self
-                    .tcx
-                    .def_path_hash(obligation.trait_id)
-                    .to_raw_def_path_hash()
-                    .0,
+                trait_hash: self.tcx.def_path_hash(obligation.trait_id).0.to_le_bytes(),
                 scalar,
             };
             let proof = ScalarPredicateProof {
@@ -2780,7 +2768,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     })?;
                 inherent.extend_from_slice(self.tcx.inherent_impls(def_id));
                 inherent.sort_unstable_by_key(|impl_id| {
-                    self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
+                    self.tcx.def_path_hash(*impl_id).0.to_le_bytes()
                 });
                 inherent.dedup();
                 let nominal_demand = Some(AssociatedObligation {
@@ -2864,9 +2852,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
         }
         for candidates in index.values_mut() {
-            candidates.sort_unstable_by_key(|impl_id| {
-                self.tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-            });
+            candidates
+                .sort_unstable_by_key(|impl_id| self.tcx.def_path_hash(*impl_id).0.to_le_bytes());
             candidates.dedup();
         }
         self.budget.items(1)?;
@@ -3062,11 +3049,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         selected: &mut BTreeMap<[u8; 16], DefId>,
     ) -> Result<(), String> {
         self.edge(1)?;
-        let key = self
-            .tcx
-            .def_path_hash(definition_id)
-            .to_raw_def_path_hash()
-            .0;
+        let key = self.tcx.def_path_hash(definition_id).0.to_le_bytes();
         match selected.get(&key) {
             Some(existing) if *existing != definition_id => {
                 Err("stable associated definition identity collision".to_owned())
@@ -3350,15 +3333,14 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 signature: self.signature(def_id)?,
                 generics: self.generics(def_id)?,
             },
+            #[cfg(not(rawr_rustc_no_type_const))]
             DefKind::Const {
                 is_type_const: true,
             }
             | DefKind::AssocConst {
                 is_type_const: true,
             } => self.type_constant_shape(def_id)?,
-            DefKind::Const {
-                is_type_const: false,
-            } => Shape::Const {
+            crate::compat::value_const!(Const) => Shape::Const {
                 ty: self.type_of(
                     self.tcx
                         .type_of(def_id)
@@ -3371,9 +3353,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     value: self.constant(def_id)?,
                 },
             },
-            DefKind::AssocConst {
-                is_type_const: false,
-            } => Shape::Const {
+            crate::compat::value_const!(AssocConst) => Shape::Const {
                 ty: self.type_of(
                     self.tcx
                         .type_of(def_id)
@@ -3443,6 +3423,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         Ok(shape)
     }
 
+    #[cfg(not(rawr_rustc_no_type_const))]
     fn type_constant_shape(&mut self, def_id: DefId) -> Result<Shape, String> {
         if !self.tcx.is_type_const(def_id) {
             return Err("type-constant kind disagrees with compiler metadata".to_owned());
@@ -3471,8 +3452,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let rhs = if has_value {
             Explicit::Present {
                 value: self.ty_constant(
-                    self.tcx
-                        .const_of_item(def_id)
+                    crate::compat::const_of_item(self.tcx, def_id)?
                         .instantiate_identity()
                         .skip_norm_wip(),
                     def_id,
@@ -3509,7 +3489,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 .map_err(|error| format!("trait associated allocation failed: {error}"))?;
             associated.push(self.id(associated_id, associated_namespace)?);
         }
-        let predicates = tcx.explicit_super_predicates_of(def_id).skip_binder();
+        let predicates = crate::compat::explicit_super_clauses(tcx, def_id).skip_binder();
         self.edge(predicates.len())?;
         let supertraits =
             self.predicates_from_clauses(def_id, predicates.iter().map(|(clause, _)| *clause))?;
@@ -3788,12 +3768,19 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             ty::Uint(kind) => self.primitive(kind.name_str())?,
             ty::Float(kind) => self.primitive(kind.name_str())?,
             ty::Str => self.primitive("str")?,
+            #[cfg_attr(
+                not(rawr_rustc_generic_args_value),
+                allow(
+                    clippy::explicit_auto_deref,
+                    reason = "a newer compiler's arguments are a value"
+                )
+            )]
             ty::Adt(definition, arguments) => {
                 let def_id = definition.did();
                 self.ensure(def_id, Namespace::Type)?;
                 Type::Definition {
                     id: self.id(def_id, Namespace::Type)?,
-                    arguments: self.arguments(arguments, owner, depth.saturating_add(1))?,
+                    arguments: self.arguments(*arguments, owner, depth.saturating_add(1))?,
                 }
             }
             ty::Param(parameter) => {
@@ -3963,7 +3950,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         owner,
                         self.tcx.parent(associated),
                         alias.args,
-                        ty::PredicatePolarity::Positive,
+                        crate::compat::ClausePolarity::Positive,
                         Some(associated),
                     )?;
                     self.ensure(self.tcx.parent(associated), Namespace::Type)?;
@@ -4013,7 +4000,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
 
     fn arguments(
         &mut self,
-        arguments: ty::GenericArgsRef<'tcx>,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
         owner: DefId,
         depth: usize,
     ) -> Result<Vec<Argument>, String> {
@@ -4031,7 +4018,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
 
     fn arguments_with_opaque(
         &mut self,
-        arguments: ty::GenericArgsRef<'tcx>,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
         owner: DefId,
         depth: usize,
         opaque: Option<DefId>,
@@ -4125,12 +4112,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             owner,
                             self.tcx.parent(definition),
                             alias.args,
-                            ty::PredicatePolarity::Positive,
+                            crate::compat::ClausePolarity::Positive,
                             Some(definition),
                         )?;
                         definition
                     }
+                    #[cfg(not(rawr_rustc_inherent_const_kinds))]
                     ty::AliasConstKind::Inherent { def_id } => def_id,
+                    #[cfg(rawr_rustc_inherent_const_kinds)]
+                    ty::AliasConstKind::InherentSelf { def_id }
+                    | ty::AliasConstKind::InherentImpl { def_id } => def_id,
                     ty::AliasConstKind::Free { def_id } => def_id,
                     ty::AliasConstKind::Anon { def_id } => {
                         return self.anonymous_constant(
@@ -4158,14 +4149,11 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         &mut self,
         value: ty::Const<'tcx>,
         definition: DefId,
-        arguments: ty::GenericArgsRef<'tcx>,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
         constant_ty: Ty<'tcx>,
         owner: DefId,
     ) -> Result<Constant, String> {
-        if !matches!(
-            self.tcx.def_kind(definition),
-            DefKind::AnonConst | DefKind::InlineConst
-        ) {
+        if !crate::compat::is_anonymous_constant(self.tcx.def_kind(definition)) {
             return Err("anonymous constant kind disagrees with compiler definition".to_owned());
         }
         // An anonymous constant Rawr cannot represent rejects only the items
@@ -4225,7 +4213,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
 
     fn generics(&mut self, def_id: DefId) -> Result<Generics, String> {
         let generics = self.tcx.generics_of(def_id);
-        let clauses = self.tcx.predicates_of(def_id).predicates;
+        let clauses = crate::compat::own_clauses(self.tcx, def_id);
         self.edge(clauses.len())?;
         let mut parameter_bounds = HashMap::<DefId, Vec<Bound>>::new();
         let mut own_type_parameters = HashMap::<u32, DefId>::new();
@@ -4255,7 +4243,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             }
             if let ty::ClauseKind::Trait(trait_predicate) = kind
                 && trait_predicate.def_id() == sized
-                && trait_predicate.polarity == ty::PredicatePolarity::Positive
+                && trait_predicate.polarity == crate::compat::ClausePolarity::Positive
                 && let ty::Param(parameter) = trait_predicate.self_ty().kind()
                 && let Some(parameter_id) = own_type_parameters.get(&parameter.index)
             {
@@ -4359,7 +4347,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                         Explicit::Absent
                     },
                 },
-                ty::GenericParamDefKind::Const { has_default } => {
+                ty::GenericParamDefKind::Const { has_default, .. } => {
                     if !bounds.is_empty() {
                         return Err("const generic parameter has declared bounds".to_owned());
                     }
@@ -4465,8 +4453,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             0,
                         )?,
                         polarity: match predicate.polarity {
-                            ty::PredicatePolarity::Positive => Polarity::Positive,
-                            ty::PredicatePolarity::Negative => Polarity::Negative,
+                            crate::compat::ClausePolarity::Positive => Polarity::Positive,
+                            crate::compat::ClausePolarity::Negative => Polarity::Negative,
                         },
                         binders,
                     },
@@ -4491,7 +4479,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                     owner,
                     self.tcx.parent(associated),
                     predicate.projection_term.args,
-                    ty::PredicatePolarity::Positive,
+                    crate::compat::ClausePolarity::Positive,
                     Some(associated),
                 )?;
                 self.ensure(self.tcx.parent(associated), Namespace::Type)?;
@@ -4815,8 +4803,13 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         })
     }
 
-    fn visibility(&mut self, visibility: ty::Visibility<DefId>) -> Result<Visibility, String> {
-        match visibility {
+    /// A newer compiler scopes a visibility by its module (`ModId`), an
+    /// older one by `DefId`; both name the module's `DefId`.
+    fn visibility<Scope: Into<DefId>>(
+        &mut self,
+        visibility: ty::Visibility<Scope>,
+    ) -> Result<Visibility, String> {
+        match visibility.map_id(Into::into) {
             ty::Visibility::Public => Ok(Visibility::Public),
             ty::Visibility::Restricted(scope) => {
                 self.ensure(scope, Namespace::Type)?;
@@ -5090,8 +5083,7 @@ fn macro_rules_source(text: &str) -> Option<&str> {
 }
 
 fn def_hash(tcx: TyCtxt<'_>, def_id: DefId) -> Result<String, String> {
-    let raw = tcx.def_path_hash(def_id).to_raw_def_path_hash();
-    hex(&raw.0)
+    hex(&tcx.def_path_hash(def_id).0.to_le_bytes())
 }
 
 fn associated_path_kind(
@@ -5306,13 +5298,16 @@ fn selected_surface_work(kind: DefKind, associated_default: bool) -> SelectedSur
         | DefKind::Use
         | DefKind::ForeignMod
         | DefKind::AnonConst
-        | DefKind::InlineConst
         | DefKind::OpaqueTy
         | DefKind::GlobalAsm
         | DefKind::Field => SelectedSurfaceWork::Noop,
+        #[cfg(not(rawr_rustc_anon_inline_const))]
+        DefKind::InlineConst => SelectedSurfaceWork::Noop,
         DefKind::Impl { .. } | DefKind::Closure | DefKind::SyntheticCoroutineBody => {
             SelectedSurfaceWork::Reject
         }
+        #[cfg(rawr_rustc_test_binder_constraints)]
+        DefKind::TestBinderConstraints => SelectedSurfaceWork::Reject,
     }
 }
 
@@ -5341,13 +5336,16 @@ fn implementation_work(kind: DefKind) -> ImplementationWork {
         | DefKind::Use
         | DefKind::ForeignMod
         | DefKind::AnonConst
-        | DefKind::InlineConst
         | DefKind::OpaqueTy
         | DefKind::GlobalAsm
         | DefKind::Field => ImplementationWork::Noop,
+        #[cfg(not(rawr_rustc_anon_inline_const))]
+        DefKind::InlineConst => ImplementationWork::Noop,
         DefKind::Impl { .. } | DefKind::Closure | DefKind::SyntheticCoroutineBody => {
             ImplementationWork::Reject
         }
+        #[cfg(rawr_rustc_test_binder_constraints)]
+        DefKind::TestBinderConstraints => ImplementationWork::Reject,
     }
 }
 
@@ -5375,15 +5373,18 @@ fn definition_namespace(kind: DefKind) -> Namespace {
         | DefKind::AssocFn
         | DefKind::AssocConst { .. }
         | DefKind::AnonConst
-        | DefKind::InlineConst
         | DefKind::Closure
         | DefKind::SyntheticCoroutineBody => Namespace::Value,
+        #[cfg(not(rawr_rustc_anon_inline_const))]
+        DefKind::InlineConst => Namespace::Value,
         DefKind::Macro(..) => Namespace::Macro,
         DefKind::LifetimeParam
         | DefKind::ExternCrate
         | DefKind::Use
         | DefKind::ForeignMod
         | DefKind::GlobalAsm => Namespace::Type,
+        #[cfg(rawr_rustc_test_binder_constraints)]
+        DefKind::TestBinderConstraints => Namespace::Type,
     }
 }
 
@@ -5418,6 +5419,8 @@ fn primitive_name(ty: Ty<'_>) -> Option<&'static str> {
 
 fn def_kind_text(kind: DefKind) -> &'static str {
     match kind {
+        #[cfg(rawr_rustc_test_binder_constraints)]
+        DefKind::TestBinderConstraints => "test-binder-constraints",
         DefKind::Mod => "module",
         DefKind::Struct => "struct",
         DefKind::Union => "union",
@@ -5442,6 +5445,7 @@ fn def_kind_text(kind: DefKind) -> &'static str {
         DefKind::Use => "use",
         DefKind::ForeignMod => "foreign-module",
         DefKind::AnonConst => "anonymous-constant",
+        #[cfg(not(rawr_rustc_anon_inline_const))]
         DefKind::InlineConst => "inline-constant",
         DefKind::OpaqueTy => "opaque-type",
         DefKind::GlobalAsm => "global-assembly",

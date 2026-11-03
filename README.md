@@ -92,9 +92,16 @@ it, and says how to install it when it is missing.
   ([measurements](benches/README.md#release-hot-reload-measurements)).
   An [iced](https://github.com/iced-rs/iced) app is one of these programs.
 
-rawr-import reads crate APIs with the pinned nightly `nightly-2026-07-11`
-and its `rustc-dev` and `rust-src` components. The first program that needs
-them installs them through [rustup](https://rustup.rs), once per machine.
+rawr-import reads crate APIs with a nightly and its `rustc-dev` and
+`rust-src` components: the nightly the project names, as rustup picks it
+(`cargo +nightly`, `RUSTUP_TOOLCHAIN`, an override or `rust-toolchain.toml`),
+or the pinned `nightly-2026-07-11` when it names none or names a stable or
+beta release. Any nightly from
+`nightly-2026-07-11` through `nightly-2026-11-02` works. The first program
+that needs one installs it through [rustup](https://rustup.rs), once per
+machine. The installed `rawr-import-driver` is the pinned nightly's; for
+another nightly, rawr-import builds a driver once and keeps it in rawr's
+home.
 
 Prebuilt binaries cover macOS on Apple Silicon and Intel, and Linux on
 x86_64 and aarch64. rawr-import has been tested on Apple Silicon Macs, and

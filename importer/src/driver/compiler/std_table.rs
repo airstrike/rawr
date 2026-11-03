@@ -53,7 +53,7 @@ impl Callbacks for StdTable {
 /// `s` for a stable item (or one with no attribute), else `u` and its
 /// feature, issue and reason: `u allocator_api 32838 -`.
 fn stability(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
-    use rustc_hir::{StabilityLevel, UnstableReason};
+    use crate::compat::{StabilityLevel, UnstableReason};
     let stability = tcx.lookup_stability(def_id)?;
     match stability.level {
         StabilityLevel::Stable { .. } => None,
@@ -584,20 +584,23 @@ impl<'tcx> Table<'tcx> {
     fn arguments(
         &self,
         def_id: DefId,
-        args: ty::GenericArgsRef<'tcx>,
+        args: crate::compat::GenericArgsRef<'tcx>,
         skip_self: bool,
     ) -> Vec<String> {
         let generics = self.tcx.generics_of(def_id);
         // `own_args_no_defaults` leaves a trait's `Self` out already.
         let (own, skip) = if args.len() == generics.count() {
-            (generics.own_args_no_defaults(self.tcx, args), 0)
+            (generics.own_args_no_defaults(self.tcx, args.as_slice()), 0)
         } else {
             let start = generics
                 .own_params
                 .first()
                 .map_or(0, |first| first.index as usize);
             let end = args.len().min(start + generics.own_params.len());
-            (&args[start.min(end)..end], usize::from(skip_self))
+            (
+                &args.as_slice()[start.min(end)..end],
+                usize::from(skip_self),
+            )
         };
         own.iter()
             .skip(skip)
@@ -651,10 +654,17 @@ impl<'tcx> Table<'tcx> {
                 ty.to_string()
             }
             ty::Never => "!".to_owned(),
+            #[cfg_attr(
+                not(rawr_rustc_generic_args_value),
+                allow(
+                    clippy::explicit_auto_deref,
+                    reason = "a newer compiler's arguments are a value"
+                )
+            )]
             ty::Adt(definition, args) => format!(
                 "{}{}",
                 self.name_of(definition.did()),
-                list(self.arguments(definition.did(), args, false))
+                list(self.arguments(definition.did(), *args, false))
             ),
             ty::Foreign(def_id) => self.name_of(*def_id),
             ty::Array(element, length) => format!("[{}; {length}]", self.ty(*element)),
@@ -748,7 +758,7 @@ impl<'tcx> Table<'tcx> {
             match clause.kind().skip_binder() {
                 ty::ClauseKind::Trait(predicate)
                     if predicate.self_ty() == subject
-                        && predicate.polarity == ty::PredicatePolarity::Positive =>
+                        && predicate.polarity == crate::compat::ClausePolarity::Positive =>
                 {
                     let def_id = predicate.def_id();
                     if Some(def_id) == sized {
@@ -846,8 +856,7 @@ impl<'tcx> Table<'tcx> {
     fn trait_signatures(&mut self, def_id: DefId, canonical: &str) {
         let tcx = self.tcx;
         let self_ty = tcx.types.self_param;
-        let supers = tcx
-            .explicit_super_predicates_of(def_id)
+        let supers = crate::compat::explicit_super_clauses(tcx, def_id)
             .skip_binder()
             .iter()
             .map(|(clause, _)| *clause)
@@ -924,9 +933,7 @@ impl<'tcx> Table<'tcx> {
             .instantiate_identity()
             .skip_norm_wip()
             .skip_binder();
-        let clauses = tcx
-            .predicates_of(def_id)
-            .predicates
+        let clauses = crate::compat::own_clauses(tcx, def_id)
             .iter()
             .map(|(clause, _)| *clause)
             .collect::<Vec<_>>();
@@ -1177,7 +1184,7 @@ impl<'tcx> Table<'tcx> {
             .skip_norm_wip();
         let self_ty = trait_ref.self_ty();
         let key = simplified(tcx, self_ty)?;
-        let arguments = trait_ref.args[1..]
+        let arguments = trait_ref.args.as_slice()[1..]
             .iter()
             .filter_map(|argument| match argument.kind() {
                 ty::GenericArgKind::Type(ty) => Some(ty),
@@ -1197,9 +1204,7 @@ impl<'tcx> Table<'tcx> {
                 GenericParamDefKind::Lifetime => None,
             })
             .collect::<Vec<_>>();
-        let clauses = tcx
-            .predicates_of(implementation)
-            .predicates
+        let clauses = crate::compat::own_clauses(tcx, implementation)
             .iter()
             .map(|(clause, _)| *clause)
             .collect::<Vec<_>>();

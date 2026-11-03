@@ -1,4 +1,6 @@
-//! Bounded synchronous observation of pinned locator callsites.
+//! Bounded synchronous observation of the building nightly's locator
+//! callsites: its `locator.rs` and the lines of the two events read, which
+//! moved inside the window (`driver/compat.rs`).
 //! This collector grants no file identity, content or invocation authority.
 
 use std::fmt::{self, Write as _};
@@ -10,10 +12,13 @@ use tracing::{Event, Metadata, Subscriber};
 
 use super::Budget;
 
-const FILE: &str =
-    "/rustc-dev/375b1431b7d89d1c2e2bc168c011848ae12b7d14/compiler/rustc_metadata/src/locator.rs";
-const LINE: u32 = 598;
-const QUERY_LINE: u32 = 442;
+const FILE: &str = concat!(
+    "/rustc-dev/",
+    env!("RAWR_RUSTC_COMMIT"),
+    "/compiler/rustc_metadata/src/locator.rs"
+);
+const LINE: u32 = crate::compat::LOCATOR_LINES.0;
+const QUERY_LINE: u32 = crate::compat::LOCATOR_LINES.1;
 const QUERY_PREFIX: &str = "lib candidate: ";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EVENTS: usize = 65_536;
@@ -356,7 +361,7 @@ mod tests {
         }
         let mut callback = Callback(false);
         let exit = rustc_driver::catch_with_exit_code(|| {
-            rustc_driver::run_compiler(
+            crate::compat::compiler_entrypoint(
                 &[
                     "rustc".to_owned(),
                     "--crate-name=attempt_fixture".to_owned(),
