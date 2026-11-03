@@ -2,7 +2,8 @@
 //! step 4). Which methods a native type has, the probe step each is found
 //! at, how it takes its receiver and what a call keeps of its inputs are
 //! read from std's declarations: `Vec<T>`'s own, then `[T]`'s through
-//! `Deref`, `String`'s, then `str`'s, and `VecDeque<T>`'s own.
+//! `Deref`, `String`'s, then `str`'s, `VecDeque<T>`'s own, and an
+//! iterator's from `Iterator` and the traits and adapter it stands for.
 //!
 //! [`steps`] is the binding: which std type each native type's probe
 //! steps stand for. It states no method, signature or receiver. How rawr
@@ -19,6 +20,30 @@ use crate::resolve::item::Lifetimes;
 use crate::resolve::type_ref::{Argument, Path as TypePath, Target, Type};
 use crate::std_table::{self, Item, Stability, Written};
 use crate::{Position, Span};
+
+/// What rawr's iterator value stands for: any iterator std's adapters
+/// make, so it has the methods of `Iterator`, `DoubleEndedIterator`,
+/// `Peekable` and `IntoIterator`. Its `Self` is a type parameter, as a
+/// trait method's is, and `Self::Item` is its items'.
+const ITERATOR: [&str; 4] = [
+    "core::iter::traits::iterator::Iterator",
+    "core::iter::traits::double_ended::DoubleEndedIterator",
+    "core::iter::adapters::peekable::Peekable",
+    "core::iter::traits::collect::IntoIterator",
+];
+
+/// The traits std implements for an iterator, which a crate's iterator or
+/// a range has the methods of where it implements them.
+const ITERATOR_TRAITS: [&str; 4] = [
+    "core::iter::traits::iterator::Iterator",
+    "core::iter::traits::double_ended::DoubleEndedIterator",
+    "core::iter::traits::exact_size::ExactSizeIterator",
+    "core::iter::traits::collect::IntoIterator",
+];
+
+/// The name `Self` of an iterator's method is read as: a type parameter
+/// holding its items, which no declaration can write.
+const ITERATOR_SELF: &str = "Self::Iterator";
 
 /// One step of a native type's method probe: the std type whose inherent
 /// methods it sees, and whether the step before is a shared reference to
@@ -91,6 +116,14 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
                 sequence::Kind::Deque => vec![own("alloc::collections::vec_deque::VecDeque")],
             }
         }
+        Ty::Iter(_) => ITERATOR
+            .iter()
+            .map(|owner| Step {
+                owner,
+                ty: ty.clone(),
+                behind_reference: false,
+            })
+            .collect(),
         Ty::Keyed(..) => match std_impl::std_definition(ty) {
             Some((definition, _)) => one(definition, ty),
             None => Vec::new(),
@@ -126,13 +159,7 @@ pub(super) fn mode_of(item: &Item) -> Option<receiver::Mode> {
 /// one whose impl's self type fits.
 pub(super) fn inherent(ty: &Ty, member: &str) -> Option<Inherent> {
     for (index, step) in steps(ty).into_iter().enumerate() {
-        let Some(item) = std_table::item(&format!("{}::{member}", step.owner)) else {
-            continue;
-        };
-        if item.kind != "assoc-fn" || item.stability != Stability::Stable {
-            continue;
-        }
-        let Some(mode) = mode_of(&item) else {
+        let Some((item, mode)) = stable(step.owner, member) else {
             continue;
         };
         if let Some(own) = item.impl_self()
@@ -156,6 +183,43 @@ pub(super) fn inherent(ty: &Ty, member: &str) -> Option<Inherent> {
         });
     }
     None
+}
+
+/// The stable function `member` that `owner` declares, and how it takes its
+/// receiver.
+fn stable(owner: &str, member: &str) -> Option<(Item, receiver::Mode)> {
+    let item = std_table::item(&format!("{owner}::{member}"))?;
+    if item.kind != "assoc-fn" || item.stability != Stability::Stable {
+        return None;
+    }
+    let mode = mode_of(&item)?;
+    Some((item, mode))
+}
+
+/// The stable method `member` that std's iterator traits declare, of those
+/// `implements` says an iterator has (by the trait's definition; `Iterator`
+/// and `IntoIterator` always): `Iterator::map`,
+/// `DoubleEndedIterator::rfind`, `ExactSizeIterator::len`. A crate's
+/// iterator or a range has these.
+pub(super) fn iterator(member: &str, implements: impl Fn(&str) -> bool) -> Option<Inherent> {
+    ITERATOR_TRAITS.iter().find_map(|owner| {
+        if !matches!(trait_name(owner), "Iterator" | "IntoIterator") && !implements(owner) {
+            return None;
+        }
+        let (item, mode) = stable(owner, member)?;
+        Some(Inherent {
+            item,
+            owner,
+            mode,
+            rank: 0,
+        })
+    })
+}
+
+/// The name a trait's definition ends in: `Iterator` of
+/// `core::iter::traits::iterator::Iterator`.
+pub(super) fn trait_name(definition: &str) -> &str {
+    definition.rsplit("::").next().unwrap_or(definition)
 }
 
 /// How the method `member` of the native type `ty` takes its receiver, as
@@ -309,11 +373,16 @@ fn fits(written: &Written, ty: &Ty) -> bool {
 /// (D711 step 4): its receiver mode, its lifetimes (elided ones as rustc
 /// elides them), and its type parameters, with a closure parameter's
 /// value where its bound's output is (`map`'s `U` is what `f` returns).
+/// An iterator's methods are read the same way, its adapters through
+/// std's `Iterator` impls for them (`Map<Self, F>` gives `B`, `Cloned<Self>`
+/// the `T` of `&T` items) and `collect`'s value through std's
+/// `FromIterator` impl for it.
 ///
 /// `receiver` is the native receiver (a reference around it is the
 /// call's), `output` the call's value, which picks a `SliceIndex`
 /// projection's type: `[T]` for `v.get(1..3)`, `T` for `v.get(1)`. `None`
-/// for a method std doesn't declare on the type.
+/// for a method std doesn't declare on the type, or one whose value holds
+/// what these facts can't place.
 pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> {
     let mut native = receiver;
     while let Ty::Reference { target, .. } = native {
@@ -331,16 +400,53 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         },
         substitution: Vec::new(),
         closures: Vec::new(),
+        generics: Vec::new(),
+        iterator: None,
     };
     // `F: FnOnce(T) -> U`: what each closure parameter returns.
     for generic in std_table::split_list(declared.generics) {
-        if let Some(colon) = std_table::top_level(generic, ": ") {
-            reader.closure(&generic[..colon], &generic[colon + 2..]);
+        match std_table::top_level(generic, ": ") {
+            Some(colon) => {
+                reader.closure(&generic[..colon], &generic[colon + 2..]);
+                reader
+                    .generics
+                    .push((&generic[..colon], &generic[colon + 2..]));
+            }
+            None => reader.generics.push((generic, "")),
         }
     }
-    let owner = match found.item.impl_self() {
-        Some(own) => reader.ty(own)?,
-        None => reader.owner(found.owner)?,
+    for clause in std_table::split_list(declared.wheres) {
+        if let Some(colon) = std_table::top_level(clause, ": ") {
+            reader.closure(&clause[..colon], &clause[colon + 2..]);
+            reader
+                .generics
+                .push((&clause[..colon], &clause[colon + 2..]));
+        }
+    }
+    let owner = match native {
+        // `Self` of an iterator's method: what holds its items.
+        Ty::Iter(item) if ITERATOR.contains(&found.owner) => {
+            let items = reader.items(item, "Self::Item");
+            let own = reader.iterator_self(items);
+            reader.iterator = Some(own.clone());
+            // `I` of `impl<I: Iterator> Peekable<I>`: the iterator below,
+            // whose items are the same.
+            if let Some(line) =
+                std_table::impls("core::iter::traits::iterator::Iterator", found.owner).next()
+            {
+                for (subject, bounds) in line.wheres() {
+                    if std_table::split_bounds(bounds).contains(&"Iterator") {
+                        reader.substitution.push((subject, own.clone()));
+                    }
+                }
+            }
+            reader.collected(output);
+            own
+        }
+        _ => match found.item.impl_self() {
+            Some(own) => reader.ty(own)?,
+            None => reader.owner(found.owner)?,
+        },
     };
     reader.lifetimes.owner = Some(Box::new(owner));
     let mut inputs = std_table::split_list(declared.inputs);
@@ -369,6 +475,9 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         Some(output) => reader.ty(output)?,
         None => Type::Unit(Span::NONE),
     };
+    if reader.iterator.is_some() && reader.unplaced(&output_ty, &parameters) {
+        return None;
+    }
     let mode = match found.mode {
         receiver::Mode::Owned => signature::Receiver::Owned,
         receiver::Mode::Shared => signature::Receiver::Shared,
@@ -386,34 +495,181 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
     // can't place (`Entry<'_, K, V>`, `<[T] as Concat<Item>>::Output`):
     // rawr's binding says, or the call is left to rustc (D572.5).
     summary.output.as_ref()?;
-    // What a closure parameter returns is where its bound's output is.
     if let Some(taps) = &mut summary.output {
         for (index, parameter) in parameters.iter().enumerate() {
             let Type::Path(path) = parameter else {
                 continue;
             };
-            let Some((_, returns)) = reader
+            // What a closure parameter returns is where its bound's output
+            // is: `B` of `map`, and of `filter_map`'s `Option<B>`.
+            if let Some((_, returns)) = reader
                 .closures
                 .iter()
                 .find(|(name, _)| *name == path.name.as_str())
-            else {
-                continue;
-            };
-            let mut places = Vec::new();
-            if Some(*returns) == declared.output {
-                places.push(RegionPath::ROOT);
-            } else {
-                parameter_paths(&output_ty, RegionPath::ROOT, returns, &mut places);
+            {
+                let mut places = Vec::new();
+                if Some(*returns) == declared.output {
+                    places.push(RegionPath::ROOT);
+                } else {
+                    let mut names = Vec::new();
+                    named(&std_table::written(returns), &mut names);
+                    for name in names {
+                        parameter_paths(&output_ty, RegionPath::ROOT, name, &mut places);
+                    }
+                }
+                for into in places {
+                    taps.push(Tap {
+                        into,
+                        from: Source::Call(index),
+                    });
+                }
             }
-            for into in places {
-                taps.push(Tap {
-                    into,
-                    from: Source::Call(index),
-                });
+            // `U: IntoIterator<Item = Self::Item>` of `chain`: its items
+            // are where the receiver's are.
+            if reader.iterator.is_some()
+                && let Some(item) = reader.bound_item(path.name.as_str())
+            {
+                let mut places = Vec::new();
+                type_paths(&output_ty, &item, RegionPath::ROOT, &mut places);
+                for into in places {
+                    taps.push(Tap {
+                        into,
+                        from: Source::Input(signature::Input::Argument(index), RegionPath::ROOT),
+                    });
+                }
             }
         }
     }
     Some(summary)
+}
+
+/// What a closure bound returns: `B` of `FnMut(T) -> B`, `()` of `FnMut(T)`.
+fn returns(bound: &'static str) -> Option<&'static str> {
+    ["FnOnce(", "FnMut(", "Fn("]
+        .iter()
+        .any(|closure| bound.starts_with(closure))
+        .then(|| {
+            std_table::top_level(bound, " -> ").map_or("()", |arrow| bound[arrow + 4..].trim())
+        })
+}
+
+/// `W` of the binding `name = W` a bound writes: `Item` of
+/// `IntoIterator<Item = Self::Item>`.
+fn binding(bound: &'static str, name: &str) -> Option<&'static str> {
+    let open = bound.find('<')?;
+    let inner = bound[open + 1..].strip_suffix('>')?;
+    std_table::split_list(inner)
+        .into_iter()
+        .find_map(|argument| argument.strip_prefix(name)?.strip_prefix(" = "))
+}
+
+/// The iterator and the name of an iterator projection std writes:
+/// `Self::Item`, `<I as Iterator>::Item`, `<U as IntoIterator>::IntoIter`.
+fn projection(text: &'static str) -> Option<(&'static str, &'static str)> {
+    let (base, name) = if text.starts_with('<') {
+        let close = closing(text, '<', '>')?;
+        let inner = &text[1..close];
+        let at = std_table::top_level(inner, " as ")?;
+        let trait_ = inner[at + 4..].rsplit("::").next()?;
+        if !matches!(trait_, "Iterator" | "IntoIterator" | "DoubleEndedIterator") {
+            return None;
+        }
+        (&inner[..at], text[close + 1..].strip_prefix("::")?)
+    } else {
+        let (base, name) = text.split_once("::")?;
+        if base.contains('<') {
+            return None;
+        }
+        (base, name)
+    };
+    matches!(name, "Item" | "IntoIter").then_some((base, name))
+}
+
+/// Whether a type is an iterator: rawr's, or an iterator method's `Self`.
+fn iterator_shaped(path: &TypePath) -> bool {
+    match path.target {
+        Target::Builtin => matches!(
+            path.name.as_str(),
+            crate::item::type_ref::ITER_TYPE | crate::item::type_ref::INTO_ITER_TYPE
+        ),
+        Target::Parameter => path.name.as_str() == ITERATOR_SELF,
+        _ => false,
+    }
+}
+
+/// The type parameters `ty` has.
+fn parameter_names(ty: &Type, out: &mut Vec<String>) {
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for member in members.iter() {
+                parameter_names(member, out);
+            }
+        }
+        Type::Reference { target, .. } => parameter_names(target, out),
+        Type::Path(path) => {
+            if path.target == Target::Parameter {
+                out.push(path.name.to_string());
+            }
+            for argument in path.arguments.iter() {
+                if let Argument::Type(argument) = argument {
+                    parameter_names(argument, out);
+                }
+            }
+        }
+    }
+}
+
+/// The names of the paths `written` has: `B` of `Option<B>`.
+fn named(written: &Written, out: &mut Vec<&'static str>) {
+    match written {
+        Written::Path {
+            path,
+            arguments,
+            bindings,
+        } => {
+            out.push(path);
+            for argument in arguments.iter().chain(bindings.iter().map(|(_, ty)| ty)) {
+                named(argument, out);
+            }
+        }
+        Written::Reference { target, .. } => named(target, out),
+        Written::Slice(element) | Written::Array(element, _) => named(element, out),
+        Written::Tuple(members) => {
+            for member in members {
+                named(member, out);
+            }
+        }
+        Written::Never | Written::Other(_) => {}
+    }
+}
+
+/// The positions in `ty` where `target` is.
+fn type_paths(ty: &Type, target: &Type, at: RegionPath, out: &mut Vec<RegionPath>) {
+    if ty == target {
+        out.push(at);
+        return;
+    }
+    match ty {
+        Type::Unit(_) => {}
+        Type::Tuple { members, .. } => {
+            for (index, member) in members.iter().enumerate() {
+                type_paths(member, target, at.push(RegionStep::Arg(index as u8)), out);
+            }
+        }
+        Type::Reference { target: inner, .. } => {
+            type_paths(inner, target, at.push(RegionStep::Arg(0)), out)
+        }
+        Type::Path(path) => {
+            let mut index = 0;
+            for argument in path.arguments.iter() {
+                if let Argument::Type(argument) = argument {
+                    type_paths(argument, target, at.push(RegionStep::Arg(index)), out);
+                    index += 1;
+                }
+            }
+        }
+    }
 }
 
 /// A declaration's parts: `fn name<generics>(inputs) -> output where ..`.
@@ -421,6 +677,8 @@ struct Declared {
     generics: &'static str,
     inputs: &'static str,
     output: Option<&'static str>,
+    /// Its where-clauses: `B: Default + Extend<Self::Item>`.
+    wheres: &'static str,
 }
 
 impl Declared {
@@ -435,15 +693,22 @@ impl Declared {
         let close = closing(rest, '(', ')')?;
         let inputs = &rest[1..close];
         let rest = rest[close + 1..].trim();
-        let rest = match std_table::top_level(rest, " where ") {
-            Some(at) => &rest[..at],
-            None => rest.split(" where ").next().unwrap_or(rest),
+        let (rest, wheres) = match std_table::top_level(rest, " where ") {
+            Some(at) => (&rest[..at], &rest[at + 7..]),
+            None => match rest.split_once(" where ") {
+                Some((rest, wheres)) => (rest, wheres),
+                None => match rest.strip_prefix("where ") {
+                    Some(wheres) => ("", wheres),
+                    None => (rest, ""),
+                },
+            },
         };
         let output = rest.strip_prefix("-> ").map(str::trim);
         Some(Self {
             generics,
             inputs,
             output,
+            wheres,
         })
     }
 }
@@ -511,7 +776,8 @@ struct Reader {
     next: u16,
     /// A `SliceIndex<[T]>` projection is `[T]` (else `T`).
     slice_output: bool,
-    /// An iterator's impl parameters, as its path's arguments give them.
+    /// An iterator's impl parameters, as its path's arguments give them,
+    /// and the type parameters a call picks (`B` of `collect`).
     substitution: Vec<(&'static str, Type)>,
     /// The item of the call's value, an iterator, for one whose `Iterator`
     /// impl the table doesn't have (`str::Split`'s needs the unstable
@@ -519,6 +785,11 @@ struct Reader {
     output_item: Option<Ty>,
     /// Each closure parameter and what its bound returns: `F`, `U`.
     closures: Vec<(&'static str, &'static str)>,
+    /// The function's type parameters and where-clauses, each with its
+    /// bounds: (`U`, `IntoIterator<Item = Self::Item>`).
+    generics: Vec<(&'static str, &'static str)>,
+    /// `Self` of an iterator's method, which holds its items.
+    iterator: Option<Type>,
 }
 
 impl Reader {
@@ -541,12 +812,7 @@ impl Reader {
 
     fn closure(&mut self, name: &'static str, bounds: &'static str) {
         for bound in std_table::split_bounds(bounds) {
-            if ["FnOnce(", "FnMut(", "Fn("]
-                .iter()
-                .any(|closure| bound.starts_with(closure))
-            {
-                let returns = std_table::top_level(bound, " -> ")
-                    .map_or("()", |arrow| bound[arrow + 4..].trim());
+            if let Some(returns) = returns(bound) {
                 self.closures.push((name, returns));
             }
         }
@@ -662,6 +928,17 @@ impl Reader {
         {
             return self.ty(base);
         }
+        // `Self::Item`, `<I as Iterator>::Item`, `<U as IntoIterator>::IntoIter`:
+        // what an iterator's method names of the iterators it takes.
+        if self.iterator.is_some()
+            && let Some((base, name)) = projection(text)
+        {
+            let base = self.ty(base)?;
+            return Some(match name {
+                "Item" => self.item_of(base),
+                _ => self.iterated(base),
+            });
+        }
         if text.starts_with('<') || text.starts_with("dyn ") || text.starts_with("impl ") {
             return Some(self.unknown(text));
         }
@@ -683,7 +960,10 @@ impl Reader {
             return Some(ty.clone());
         }
         if name == "Self" {
-            return Some(self.parameter("Self"));
+            return Some(match &self.iterator {
+                Some(own) => own.clone(),
+                None => self.parameter("Self"),
+            });
         }
         let Some(definition) = std_table::definition_of(name) else {
             // An impl's or the function's type parameter.
@@ -749,10 +1029,293 @@ impl Reader {
             }
         }
         let saved = std::mem::replace(&mut self.substitution, substitution);
+        // The impl's other parameters, as its where-clauses give them; one
+        // they don't is a type these facts can't place.
+        let generics: Vec<&'static str> = line.generics().collect();
+        self.bind(&line, &generics, &saved);
+        for generic in &generics {
+            if !self.bound(generic) {
+                let unknown = self.unknown(generic);
+                self.substitution.push((generic, unknown));
+            }
+        }
         let item = self.ty(item);
         self.substitution = saved;
         let item = item?;
         Some(self.builtin(crate::item::type_ref::ITER_TYPE, vec![Argument::Type(item)]))
+    }
+
+    /// Whether the parameter `name` is given.
+    fn bound(&self, name: &str) -> bool {
+        self.substitution.iter().any(|(param, _)| *param == name)
+    }
+
+    /// Gives the impl `line`'s parameters `generics` that its where-clauses
+    /// determine: `T` of `I: Iterator<Item = &T>`, `U` of `I::Item:
+    /// IntoIterator<IntoIter = U>`, and `B` of `F: FnMut(I::Item) -> B` where
+    /// `F` is the call's closure, whose bound in the call's own `outer`
+    /// parameters says what it returns.
+    fn bind(
+        &mut self,
+        line: &std_table::Impl,
+        generics: &[&'static str],
+        outer: &[(&'static str, Type)],
+    ) {
+        // A clause can name a parameter a later one gives.
+        for _ in 0..2 {
+            for (subject, bounds) in line.wheres() {
+                if generics.contains(&subject) && !self.bound(subject) {
+                    continue;
+                }
+                let Some(ty) = self.ty(subject) else {
+                    continue;
+                };
+                for bound in std_table::split_bounds(bounds) {
+                    if let Some(written) = returns(bound) {
+                        let Type::Path(path) = &ty else {
+                            continue;
+                        };
+                        let Some((_, returned)) = self
+                            .closures
+                            .iter()
+                            .find(|(name, _)| *name == path.name.as_str())
+                            .copied()
+                        else {
+                            continue;
+                        };
+                        let inner = std::mem::replace(&mut self.substitution, outer.to_vec());
+                        let found = self.ty(returned);
+                        self.substitution = inner;
+                        if let Some(found) = found {
+                            self.unify(&std_table::written(written), &found, generics);
+                        }
+                        continue;
+                    }
+                    if let Some(item) = binding(bound, "Item") {
+                        let found = self.item_of(ty.clone());
+                        self.unify(&std_table::written(item), &found, generics);
+                    }
+                    if let Some(iterator) = binding(bound, "IntoIter") {
+                        let found = self.iterated(ty.clone());
+                        self.unify(&std_table::written(iterator), &found, generics);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Gives each of `generics` that `written` has the part of `ty` where it
+    /// is: `T` of `&T` against `&'a u8`. A type parameter in `ty` holds all
+    /// of what its parts hold.
+    fn unify(&mut self, written: &Written, ty: &Type, generics: &[&'static str]) {
+        match (written, ty) {
+            (
+                Written::Path {
+                    path, arguments, ..
+                },
+                _,
+            ) if arguments.is_empty() && generics.contains(path) => {
+                if !self.bound(path) {
+                    self.substitution.push((path, ty.clone()));
+                }
+            }
+            (Written::Reference { target, .. }, Type::Reference { target: found, .. }) => {
+                self.unify(target, found, generics)
+            }
+            (Written::Tuple(members), Type::Tuple { members: found, .. })
+                if members.len() == found.len() =>
+            {
+                for (member, found) in members.iter().zip(found.iter()) {
+                    self.unify(member, found, generics);
+                }
+            }
+            (Written::Path { arguments, .. }, Type::Path(found))
+                if found.target == Target::Builtin =>
+            {
+                let found: Vec<&Type> = found
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        Argument::Type(ty) => Some(ty),
+                        Argument::Lifetime(_) => None,
+                    })
+                    .collect();
+                for (argument, found) in arguments.iter().zip(found) {
+                    self.unify(argument, found, generics);
+                }
+            }
+            (_, Type::Path(found)) if found.target == Target::Parameter => {
+                let mut names = Vec::new();
+                named(written, &mut names);
+                for name in names {
+                    if generics.contains(&name) && !self.bound(name) {
+                        self.substitution.push((name, ty.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The items of rawr's iterator of `item`, each region of them named
+    /// by where it is (`at`): `Self::Item` of an iterator's method.
+    fn items(&mut self, item: &Ty, at: &str) -> Type {
+        match item {
+            Ty::Reference { mutable, target } => {
+                let lifetime = self.lifetime(Some(at));
+                let target = self.items(target, &format!("{at}.0"));
+                Type::Reference {
+                    mutable: *mutable,
+                    lifetime,
+                    target: Box::new(target),
+                    span: self.span(),
+                }
+            }
+            Ty::Str => {
+                let lifetime = self.lifetime(Some(at));
+                self.text(lifetime)
+            }
+            Ty::Tuple(members) => {
+                let members = members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| self.items(member, &format!("{at}.{index}")))
+                    .collect();
+                Type::Tuple {
+                    members,
+                    span: self.span(),
+                }
+            }
+            Ty::Unit => Type::Unit(self.span()),
+            _ => self.parameter(at),
+        }
+    }
+
+    /// `Self` of an iterator's method: a type parameter holding `items`.
+    fn iterator_self(&mut self, items: Type) -> Type {
+        Type::Path(TypePath {
+            name: ITERATOR_SELF.into(),
+            target: Target::Parameter,
+            arguments: vec![Argument::Type(items)].into_boxed_slice(),
+            span: self.span(),
+        })
+    }
+
+    /// The items of `ty`: an iterator's, those its bound gives a type
+    /// parameter (`U: IntoIterator<Item = Self::Item>`), else what a
+    /// collection holds, which its items hold at most.
+    fn item_of(&mut self, ty: Type) -> Type {
+        if let Type::Path(path) = &ty {
+            if iterator_shaped(path)
+                && let Some(item) = path.arguments.iter().find_map(|argument| match argument {
+                    Argument::Type(item) => Some(item),
+                    Argument::Lifetime(_) => None,
+                })
+            {
+                return item.clone();
+            }
+            if path.target == Target::Parameter
+                && let Some(item) = self.bound_item(path.name.as_str())
+            {
+                return item;
+            }
+        }
+        ty
+    }
+
+    /// The iterator `ty` gives as `IntoIterator`: itself, or one of its
+    /// items.
+    fn iterated(&mut self, ty: Type) -> Type {
+        if let Type::Path(path) = &ty
+            && iterator_shaped(path)
+        {
+            return ty;
+        }
+        let item = self.item_of(ty);
+        self.builtin(crate::item::type_ref::ITER_TYPE, vec![Argument::Type(item)])
+    }
+
+    /// `W` of the function's type parameter `name` bound by
+    /// `IntoIterator<Item = W>`.
+    fn bound_item(&mut self, name: &str) -> Option<Type> {
+        let written = self
+            .generics
+            .iter()
+            .filter(|(generic, _)| *generic == name)
+            .flat_map(|(_, bounds)| std_table::split_bounds(bounds))
+            .find_map(|bound| binding(bound, "Item"))?;
+        self.ty(written)
+    }
+
+    /// Gives the function's type parameter bound by `FromIterator` (`B` of
+    /// `collect`) the call's value `output`, as std's `FromIterator` impl
+    /// for it says it holds the items: `Vec<T>` of `T`, `HashMap<K, V>` of
+    /// `(K, V)`.
+    fn collected(&mut self, output: &Ty) {
+        let Some((definition, _)) = std_impl::std_definition(output) else {
+            return;
+        };
+        let Some(own) = self.iterator.clone() else {
+            return;
+        };
+        let items = self.item_of(own);
+        for (name, bounds) in self.generics.clone() {
+            if !std_table::split_bounds(bounds)
+                .iter()
+                .any(|bound| bound.starts_with("FromIterator<"))
+            {
+                continue;
+            }
+            for line in std_table::impls("core::iter::traits::collect::FromIterator", definition) {
+                let arguments = line.arguments();
+                let [argument] = arguments[..] else {
+                    continue;
+                };
+                if !fits(&std_table::written(line.self_ty), output) {
+                    continue;
+                }
+                let generics: Vec<&'static str> = line.generics().collect();
+                let saved = std::mem::take(&mut self.substitution);
+                self.unify(&std_table::written(argument), &items, &generics);
+                for generic in &generics {
+                    if !self.bound(generic) {
+                        let unknown = self.unknown(generic);
+                        self.substitution.push((generic, unknown));
+                    }
+                }
+                let collection = self.ty(line.self_ty);
+                self.substitution = saved;
+                if let Some(collection) = collection {
+                    self.substitution.push((name, collection));
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Whether the call's value `output` has a type parameter the call picks
+    /// that no input gives and whose bound may make it of the items
+    /// (`S: Sum<Self::Item>`, `B: Extend<Self::Item>`), which these facts
+    /// can't place.
+    fn unplaced(&self, output: &Type, parameters: &[Type]) -> bool {
+        let mut given = Vec::new();
+        for parameter in parameters {
+            parameter_names(parameter, &mut given);
+        }
+        for (_, returns) in &self.closures {
+            let mut names = Vec::new();
+            named(&std_table::written(returns), &mut names);
+            given.extend(names.into_iter().map(str::to_owned));
+        }
+        let mut found = Vec::new();
+        parameter_names(output, &mut found);
+        found.iter().any(|name| {
+            !given.contains(name)
+                && self
+                    .generics
+                    .iter()
+                    .any(|(generic, bounds)| *generic == name.as_str() && bounds.contains('<'))
+        })
     }
 
     /// A native type as a signature with its lifetimes elided writes it.
@@ -899,5 +1462,139 @@ mod tests {
         }));
         let bytes = summary(&Ty::String, &Ty::Unknown, "into_bytes").expect("into_bytes");
         assert_eq!(bytes.mode, Some(signature::Receiver::Owned));
+    }
+
+    /// An iterator's methods and what each keeps come from `Iterator`'s
+    /// declaration and std's impls for its adapters (#768): an adapter
+    /// holds the iterator and closure it takes, its items are where the
+    /// declaration says, and `collect` holds them where `FromIterator` for
+    /// its value puts them.
+    #[test]
+    fn iterator_summaries_come_from_declarations() {
+        use signature::{Input, Receiver};
+        let at = |steps: &[RegionStep]| RegionPath::of(steps);
+        let receiver = |steps: &[RegionStep]| Source::Input(Input::Receiver, at(steps));
+        let argument =
+            |index, steps: &[RegionStep]| Source::Input(Input::Argument(index), at(steps));
+        let tap = |into: &[RegionStep], from| Tap {
+            into: at(into),
+            from,
+        };
+        let (own, a0, a1) = (RegionStep::Own, RegionStep::Arg(0), RegionStep::Arg(1));
+        let reference = Ty::Reference {
+            mutable: false,
+            target: Box::new(Ty::Int(Int::I64)),
+        };
+        let iter = |item: Ty| Ty::Iter(Box::new(item));
+        let refs = iter(reference.clone());
+        let taps = |member: &str, output: &Ty| {
+            let found = summary(&refs, output, member).unwrap_or_else(|| panic!("{member}"));
+            (
+                found.mode,
+                found.output.unwrap_or_else(|| panic!("{member}")),
+            )
+        };
+        let has = |member: &str, output: &Ty, mode, expected: &[Tap]| {
+            let (found, taps) = taps(member, output);
+            assert_eq!(found, Some(mode), "{member}");
+            for expected in expected {
+                assert!(
+                    taps.contains(expected),
+                    "{member}: {expected:?} in {taps:?}"
+                );
+            }
+        };
+        let adapted = [
+            tap(&[own], receiver(&[own])),
+            tap(&[own], argument(0, &[own])),
+        ];
+        // `map`'s items are what its closure returns, `filter`'s the
+        // receiver's.
+        let mut map = adapted.to_vec();
+        map.push(tap(&[a0], Source::Call(0)));
+        has("map", &iter(Ty::Unknown), Receiver::Owned, &map);
+        has("filter_map", &iter(Ty::Unknown), Receiver::Owned, &map);
+        let mut filter = adapted.to_vec();
+        filter.extend([
+            tap(&[a0, own], receiver(&[a0, own])),
+            tap(&[a0, a0], receiver(&[a0, a0])),
+        ]);
+        has("filter", &refs, Receiver::Owned, &filter);
+        // `Copied<I>`'s items are the `T` of `I: Iterator<Item = &T>`.
+        has(
+            "copied",
+            &iter(Ty::Int(Int::I64)),
+            Receiver::Owned,
+            &[
+                tap(&[own], receiver(&[own])),
+                tap(&[a0], receiver(&[a0, a0])),
+            ],
+        );
+        has(
+            "enumerate",
+            &Ty::Unknown,
+            Receiver::Owned,
+            &[tap(&[a0, a1, own], receiver(&[a0, own]))],
+        );
+        // `zip`'s and `chain`'s items hold the argument's.
+        has(
+            "zip",
+            &Ty::Unknown,
+            Receiver::Owned,
+            &[
+                tap(&[a0, a0, own], receiver(&[a0, own])),
+                tap(&[a0, a1], argument(0, &[])),
+            ],
+        );
+        has(
+            "chain",
+            &refs,
+            Receiver::Owned,
+            &[
+                tap(&[a0, own], receiver(&[a0, own])),
+                tap(&[a0], argument(0, &[])),
+            ],
+        );
+        has(
+            "next",
+            &Ty::Option(Box::new(reference.clone())),
+            Receiver::Mutable,
+            &[tap(&[a0, own], receiver(&[a0, a0, own]))],
+        );
+        // `Peekable::peek` borrows the iterator.
+        has(
+            "peek",
+            &Ty::Unknown,
+            Receiver::Mutable,
+            &[
+                tap(&[a0, own], receiver(&[own])),
+                tap(&[a0, a0, own], receiver(&[a0, a0, own])),
+            ],
+        );
+        has(
+            "by_ref",
+            &Ty::Unknown,
+            Receiver::Mutable,
+            &[tap(&[own], receiver(&[own])), tap(&[a0], receiver(&[a0]))],
+        );
+        has(
+            "into_iter",
+            &refs,
+            Receiver::Owned,
+            &[tap(&[], receiver(&[]))],
+        );
+        // `FromIterator<T> for Vec<T>`: the items are the elements.
+        let collected = Ty::sequence(sequence::Kind::Vec, reference.clone());
+        has(
+            "collect",
+            &collected,
+            Receiver::Owned,
+            &[tap(&[a0, own], receiver(&[a0, own]))],
+        );
+        // A value the declaration can't place is left to rustc.
+        assert!(summary(&refs, &Ty::Unknown, "collect").is_none());
+        assert!(summary(&refs, &Ty::Int(Int::I64), "sum").is_none());
+        // `count` keeps nothing.
+        assert_eq!(taps("count", &Ty::Int(Int::Usize)).1, Vec::new());
     }
 }
