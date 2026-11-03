@@ -8788,22 +8788,23 @@ impl Drop for OpaqueCell {
     }
 }
 
-/// Whether the value `plan` gives lives beside the crate values it borrows
-/// (`lent_cell`), as its adapter makes it.
-fn lends_cell(plan: &Plan) -> Result<bool, request::Error> {
+/// How the value `plan` gives lives beside the crate values it borrows
+/// (`lent_cell`), as its adapter makes it, when it does.
+fn lends_cell(plan: &Plan) -> Result<Option<Owned>, request::Error> {
     let Operation::Function {
         signature,
         substitutions,
         ..
     } = plan.operation()
     else {
-        return Ok(false);
+        return Ok(None);
     };
     let pinned = opaque_pinned_strings(signature, substitutions);
     let substitutions: &[convert::Type] = pinned.as_deref().unwrap_or(substitutions);
-    Ok(!instance_opens(signature, substitutions)
-        && views_natives(signature, substitutions)?
-        && lent_cell(signature, substitutions)?.is_some())
+    if instance_opens(signature, substitutions) || !views_natives(signature, substitutions)? {
+        return Ok(None);
+    }
+    lent_cell(signature, substitutions)
 }
 
 /// Sets `OPAQUE_WITNESSED` for as long as it lives.
@@ -9042,8 +9043,12 @@ fn opaque_table_source(
         return Ok(None);
     };
     // A value that lives beside what it borrows (`lent_cell`) is reached
-    // through the trait object it is held as.
-    let cell = lends_cell(plan)?;
+    // through the trait object it is held as. Where it implements the
+    // trait through that object (`Owned::forwards`), a call takes it by
+    // value, and what it borrows moves with it (#856).
+    let owned = lends_cell(plan)?;
+    let cell = owned.is_some();
+    let forwarded = owned.is_some_and(|owned| owned.forwards.is_some());
     let mut entries = Vec::new();
     for consumer in opaque_consumers(cohort, &key)? {
         let Some((position, _, operand)) = opaque_operand(consumer)? else {
@@ -9111,9 +9116,12 @@ fn opaque_table_source(
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
         };
-        // A call that takes the value itself can't take it from beside
-        // what it borrows.
-        let body = if cell && body.contains(&format!("take_native(arguments, {position})")) {
+        // A call that takes the value itself, where it can't stand for the
+        // trait object it holds, can't take it from beside what it borrows.
+        let body = if cell
+            && !forwarded
+            && body.contains(&format!("take_native(arguments, {position})"))
+        {
             "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
         } else {
             body
@@ -11013,9 +11021,14 @@ fn render_borrowed_receiver(
     let access = if mutable { "mutable" } else { "shared" };
     let borrow = if mutable { "&mut " } else { "&" };
     // A value that lives beside what it borrows (`lent_cell`) is reached
-    // through the trait object it is held as, at the type `_w` names.
-    if OPAQUE_CELL.get() && container == "_" {
-        let reach = if mutable {
+    // through the trait object it is held as, at the type `_w` names. Any
+    // other value of an opaque type, as `wrap(view(&items))` gives (#856),
+    // is reached at that type itself.
+    let witnessed = OPAQUE_WITNESSED.with_borrow(Option::is_some);
+    if (OPAQUE_CELL.get() || witnessed) && container == "_" {
+        let reach = if !OPAQUE_CELL.get() {
+            call.clone()
+        } else if mutable {
             format!("receiver.with_dependent_mut(|_, receiver| {{ let receiver = &mut **receiver; {call} }})")
         } else {
             format!("{{ let receiver = &**receiver.borrow_dependent(); {call} }}")
@@ -16231,6 +16244,12 @@ struct Owned {
     object: String,
     /// The type of each lent argument the value owns, and its name.
     owners: Vec<(String, String)>,
+    /// The value's impl of the trait, each method calling the object's
+    /// (#856), so a crate call that takes an `impl Trait` takes the value,
+    /// and what the object borrows moves with it, as rustc moves the
+    /// borrow with the result. `None` when a method has no Rust spelling
+    /// Rawr writes (`Opaque::forwards`).
+    forwards: Option<String>,
 }
 
 /// The value an opaque output that borrows its call's crate values lives
@@ -16328,7 +16347,59 @@ fn lent_cell(
         };
         owners.push((owner, name));
     }
-    Ok((!owners.is_empty()).then_some(Owned { object, owners }))
+    let forwards = opaque
+        .forwards()
+        .and_then(|forwards| render_forwards(&path, forwards));
+    Ok((!owners.is_empty()).then_some(Owned {
+        object,
+        owners,
+        forwards,
+    }))
+}
+
+/// `impl {path} for Lent`, each of `forwards` calling the method of the
+/// trait object the value holds, or `None` when a type has no Rust
+/// spelling.
+fn render_forwards(
+    path: &str,
+    forwards: &[crate::classify::representability::signature::Forward],
+) -> Option<String> {
+    let mut methods = String::new();
+    for forward in forwards {
+        let name = forward.name();
+        let mut parameters = String::new();
+        let mut names = String::new();
+        for (position, input) in forward.inputs().iter().enumerate() {
+            parameters.push_str(&format!(", input_{position}: {}", impl_type(input, &[])?));
+            names.push_str(&format!(", input_{position}"));
+        }
+        let output = match forward.output() {
+            convert::Type::Unit => String::new(),
+            ty => format!(" -> {}", impl_type(ty, &[])?),
+        };
+        let method = if forward.mutable() {
+            format!(
+                "        fn {name}(&mut self{parameters}){output} {{
+            self.with_dependent_mut(|_, object| {path}::{name}(&mut **object{names}))
+        }}
+"
+            )
+        } else {
+            format!(
+                "        fn {name}(&self{parameters}){output} {{
+            {path}::{name}(&**self.borrow_dependent(){names})
+        }}
+"
+            )
+        };
+        methods.push_str(&method);
+    }
+    Some(format!(
+        "    #[allow(clippy::all)]
+    impl {path} for Lent {{
+{methods}    }}
+"
+    ))
 }
 
 /// The output of `call` in the value that owns what it borrows (`Owned`):
@@ -16348,6 +16419,7 @@ fn render_lent_cell(owned: &Owned, call: &str, output: &mut Vec<u8>) -> std::io:
         .map(|(_, name)| format!("{name}, "))
         .collect::<String>();
     let object = &owned.object;
+    let forwards = owned.forwards.as_deref().unwrap_or_default();
     writeln!(
         output,
         "    type LentOutput<'a> = Box<{object} + 'a>;
@@ -16358,7 +16430,7 @@ fn render_lent_cell(owned: &Owned, call: &str, output: &mut Vec<u8>) -> std::io:
             dependent: LentOutput,
         }}
     );
-    let output = lend(arguments.arena, || Lent::new(({names}), |({names})| Box::new({call}) as LentOutput<'_>));"
+{forwards}    let output = lend(arguments.arena, || Lent::new(({names}), |({names})| Box::new({call}) as LentOutput<'_>));"
     )
 }
 

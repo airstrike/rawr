@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 102;
+const CLASSIFIER_VERSION: u32 = 103;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6542,6 +6542,157 @@ impl<P: api::Phase> Context<'_, P> {
         principal
     }
 
+    /// Each method of the trait of an opaque type's `bounds`
+    /// (`opaque_principal`), when a value held as its trait object can
+    /// implement the trait by calling the object's own (#856), as `wrap(s:
+    /// impl Show)` takes a `view(&items)` that lives beside its items:
+    /// each takes `&self` or `&mut self`, has no generics of its own, and
+    /// takes and gives types Rawr writes as they are, giving none that
+    /// borrows. The trait has no arguments, supertraits, associated types
+    /// or methods only a `Sized` type has. `None` when it isn't so.
+    fn opaque_forwards(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Option<Box<[representability::signature::Forward]>> {
+        let definition = |id: &api::identity::Definition| {
+            self.graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+        };
+        let mut principal = None;
+        for predicate in bounds {
+            let model::Predicate::Bound {
+                bound:
+                    model::Bound::Trait {
+                        trait_id,
+                        arguments,
+                        polarity: model::Polarity::Positive,
+                        binders,
+                    },
+                ..
+            } = predicate
+            else {
+                continue;
+            };
+            if !binders.is_empty()
+                || self.is_core_trait(trait_id, "Sized")
+                || self.sizedness(trait_id)
+                || self.auto_trait(trait_id)
+            {
+                continue;
+            }
+            // Its arguments after `Self`.
+            if arguments.len() > 1 || principal.replace(trait_id).is_some() {
+                return None;
+            }
+        }
+        let id = principal?;
+        let Some(model::Kind::Trait {
+            supertraits,
+            associated,
+            ..
+        }) = definition(id).map(model::Definition::kind)
+        else {
+            return None;
+        };
+        let supertrait = supertraits.iter().any(|predicate| {
+            !matches!(predicate, model::Predicate::Bound {
+                bound: model::Bound::Trait { trait_id, .. },
+                ..
+            } if self.sizedness(trait_id) || self.auto_trait(trait_id))
+        });
+        if supertrait {
+            return None;
+        }
+        let mut forwards = Vec::new();
+        for item in associated.iter() {
+            let member = definition(item)?;
+            let model::Kind::Function {
+                signature,
+                generics,
+            } = member.kind()
+            else {
+                return None;
+            };
+            let mutable = match signature.receiver() {
+                model::Receiver::Reference { mutability, .. } => {
+                    matches!(mutability, model::Mutability::Mutable)
+                }
+                _ => return None,
+            };
+            let own = generics
+                .parameters()
+                .any(|parameter| parameter.owner() == item);
+            let sized = generics.predicates().any(|predicate| {
+                matches!(predicate, model::Predicate::Bound {
+                    bound: model::Bound::Trait { trait_id, .. },
+                    ..
+                } if self.is_core_trait(trait_id, "Sized"))
+            });
+            if own || sized || signature.async_function() {
+                return None;
+            }
+            let mut inputs = Vec::new();
+            for input in signature.inputs() {
+                if !self.forwardable(input, true) {
+                    return None;
+                }
+                inputs.push(self.convert(input).ok()?);
+            }
+            if !self.forwardable(signature.output(), false) {
+                return None;
+            }
+            let output = self.convert(signature.output()).ok()?;
+            let name = self.definition_name(item)?;
+            self.retain_str(name).ok()?;
+            forwards.push(representability::signature::Forward::new(
+                name.into(),
+                mutable,
+                inputs.into_boxed_slice(),
+                output,
+            ));
+        }
+        Some(forwards.into_boxed_slice())
+    }
+
+    /// Whether `ty`, in a method a value held as a trait object forwards
+    /// (`opaque_forwards`), is one Rawr writes as it is: a primitive, the
+    /// unit type, a `String`, an `Option` of such a type, or a crate's own
+    /// type without type arguments, and, as an `input`, a reference to one
+    /// at any lifetime. An output borrows nothing.
+    fn forwardable(&self, ty: &model::Type, input: bool) -> bool {
+        match ty {
+            model::Type::Primitive(name) => name.as_ref() != "str",
+            model::Type::Tuple(members) => members.is_empty(),
+            model::Type::Reference { ty, .. } if input => {
+                matches!(&**ty, model::Type::Primitive(name) if name.as_ref() == "str")
+                    || self.forwardable(ty, false)
+            }
+            model::Type::Definition { id, arguments } => {
+                let Some(definition) = self
+                    .graph
+                    .definition_index(id)
+                    .and_then(|index| self.graph.definitions().nth(index))
+                else {
+                    return false;
+                };
+                match std_binding::of(definition) {
+                    Some(Std::String) => true,
+                    Some(Std::Option) => matches!(
+                        &arguments[..],
+                        [model::Argument::Type(inner)] if self.forwardable(inner, false)
+                    ),
+                    Some(_) => false,
+                    None => arguments.iter().all(|argument| match argument {
+                        model::Argument::Lifetime(_) => input,
+                        _ => false,
+                    }),
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Whether `id` is one of core's traits below `Sized` that every type
     /// a trait object can be implements, as rustc's `MetaSized` is of each
     /// trait's `Self`.
@@ -8154,6 +8305,9 @@ impl<P: api::Phase> Context<'_, P> {
                 }
                 let definition = crate::surface::identity::Definition::of(id);
                 let principal = self.opaque_principal(bounds);
+                let forwards = principal
+                    .as_ref()
+                    .and_then(|_| self.opaque_forwards(bounds));
                 if !associated.is_empty() || principal.is_some() {
                     let mut opaques = self.opaque_associated.borrow_mut();
                     if !opaques
@@ -8164,6 +8318,7 @@ impl<P: api::Phase> Context<'_, P> {
                             *definition.as_bytes(),
                             associated.into_boxed_slice(),
                             principal,
+                            forwards,
                         ));
                     }
                 }

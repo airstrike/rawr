@@ -135,6 +135,61 @@ pub struct Opaque {
     /// it is held as where it borrows what its call takes (#846).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     principal: Option<super::convert::Type>,
+    /// Each method of its trait, when a value held as the trait object
+    /// implements the trait by calling the object's (#856), as a crate call
+    /// that takes the value by value needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forwards: Option<Box<[Forward]>>,
+}
+
+/// One method of an opaque type's trait, which a value held as its trait
+/// object forwards to the object's (`Opaque::forwards`).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Forward {
+    name: Box<str>,
+    mutable: bool,
+    inputs: Box<[super::convert::Type]>,
+    output: super::convert::Type,
+}
+
+impl Forward {
+    pub(crate) const fn new(
+        name: Box<str>,
+        mutable: bool,
+        inputs: Box<[super::convert::Type]>,
+        output: super::convert::Type,
+    ) -> Self {
+        Self {
+            name,
+            mutable,
+            inputs,
+            output,
+        }
+    }
+
+    /// The method's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether it takes `&mut self`, else `&self`.
+    #[must_use]
+    pub const fn mutable(&self) -> bool {
+        self.mutable
+    }
+
+    /// The types it takes after its receiver.
+    #[must_use]
+    pub const fn inputs(&self) -> &[super::convert::Type] {
+        &self.inputs
+    }
+
+    /// The type it gives.
+    #[must_use]
+    pub const fn output(&self) -> &super::convert::Type {
+        &self.output
+    }
 }
 
 impl Opaque {
@@ -142,12 +197,21 @@ impl Opaque {
         definition: [u8; 32],
         associated: Box<[(Associated, u32)]>,
         principal: Option<super::convert::Type>,
+        forwards: Option<Box<[Forward]>>,
     ) -> Self {
         Self {
             definition,
             associated,
             principal,
+            forwards,
         }
+    }
+
+    /// Each method of its trait a value held as its trait object forwards,
+    /// when it can implement the trait so.
+    #[must_use]
+    pub fn forwards(&self) -> Option<&[Forward]> {
+        self.forwards.as_deref()
     }
 
     /// Its trait besides auto traits, at the bound's arguments after
