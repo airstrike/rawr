@@ -61,6 +61,22 @@ impl Slot {
         }
     }
 
+    /// The slot as a universe runner keys it (`crate::universe`): it
+    /// serves programs whose functions it never saw, so a script
+    /// function's slot is its place alone, and holds whichever function a
+    /// program passes there. Elsewhere, and for a closure that captures or
+    /// a crate's callable, the slot itself.
+    #[must_use]
+    pub fn served(self) -> Self {
+        if !crate::universe::enabled() || self.is_closure() || self.is_native() {
+            return self;
+        }
+        Self {
+            position: self.position,
+            key: served_key(),
+        }
+    }
+
     /// Whether a closure that captures fills the slot ([`Slot::closure`]).
     #[must_use]
     pub fn is_closure(&self) -> bool {
@@ -101,6 +117,11 @@ impl Slot {
 fn closure_key() -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
     Sha256::digest(b"rawr.instance.slot.closure/v1").into()
+}
+
+fn served_key() -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(b"rawr.instance.slot.served/v1").into()
 }
 
 fn native_key() -> [u8; 32] {

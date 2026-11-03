@@ -51,7 +51,22 @@
 <p>A snippet has no <code>Cargo.toml</code>, no files and no window.</p>
 
 <h3 id="crates">Crates</h3>
-<p>In <code class="nw">?play</code> a snippet can use iced, iced_test and tokio, through bindings built once with the bot. It can make the calls into them that the bot&rsquo;s universe program makes (<code>play/universe</code>), such as iced&rsquo;s counter and tokio&rsquo;s <code>spawn</code>, <code>sleep</code> and <code>spawn_blocking</code>. Another call doesn&rsquo;t compile there. An iced program answers with what it printed and a picture of its window, drawn at the program&rsquo;s own <code>scale_factor</code>. The picture is a PNG of the window once the program has booted and the tasks it started have finished. When the program keeps changing on its own, through a subscription or a widget&rsquo;s animation, the picture is a GIF of each change instead. It shows 20 frames a second, for at most 100 frames and within the snippet&rsquo;s time, and plays once and holds the last frame. Use <code>rawr run</code> for a program that needs another crate or call. The playground in the browser uses rawr&rsquo;s std and no crates.</p>
+<p>In <code class="nw">?play</code> a snippet can use iced, iced_test and tokio, through bindings built once with the bot. It can make the calls into them that the bot&rsquo;s universe program makes (<code>play/universe</code>), at the types that program makes them. Those are tokio&rsquo;s <code>spawn</code>, <code>sleep</code> and <code>spawn_blocking</code>, and iced&rsquo;s calls in these examples:</p>
+<ul>
+  <li>the counter: <code>column!</code> and <code>row!</code> with <code>spacing</code>, <code>padding</code> and alignment, <code>button</code>, and <code>text</code> of an <code>i64</code>, a <code>&amp;str</code> or a <code>String</code> such as <code>format!</code> makes;</li>
+  <li>a <code>slider</code> of an <code>f32</code>, and one of <code>Radians</code> over <code>Radians::RANGE</code>;</li>
+  <li>a <code>pick_list</code> of the snippet&rsquo;s own enum, with <code>on_select</code> and <code>placeholder</code>;</li>
+  <li>a subscription of <code>window::frames()</code>, of keys matched from <code>keyboard::listen()</code>, or both through <code>Subscription::batch</code>;</li>
+  <li><code>iced::run</code>, and <code>iced::application</code> with a <code>subscription</code>, a <code>scale_factor</code>, or both in either order.</li>
+</ul>
+<p>The snippet&rsquo;s first three types take the places of that program&rsquo;s state, message and enum, whatever their names. The functions a call takes, such as an application&rsquo;s <code>view</code> or a slider&rsquo;s message, may have any names. Each call of that program takes one function at each place, so a snippet that passes two different functions to calls of one kind, such as two <code>f32</code> sliders with two messages, doesn&rsquo;t compile there.</p>
+<p>Another call doesn&rsquo;t compile there either, and the error points at it:</p>
+<div class="block"><pre><code>error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn&rsquo;t among the universe&rsquo;s bindings
+ --&gt; play.rs:12:17-12:40
+ 12 |         column![text(self.volume as f64), button("Up").on_press(Message::Up)]
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^ the universe&rsquo;s program doesn&rsquo;t make it</code></pre></div>
+<p>A crate item that program doesn&rsquo;t use at all gets rustc&rsquo;s error for a missing item, such as <code>error[E0425]: cannot find function `checkbox` in module `iced::widget`</code>.</p>
+<p>An iced program answers with what it printed and a picture of its window, drawn at the program&rsquo;s own <code>scale_factor</code>. The picture is a PNG of the window once the program has booted and the tasks it started have finished. When the program keeps changing on its own, through a subscription or a widget&rsquo;s animation, the picture is a GIF of each change instead. It shows 20 frames a second, for at most 100 frames and within the snippet&rsquo;s time, and plays once and holds the last frame. Use <code>rawr run</code> for a program that needs another crate or call. The playground in the browser uses rawr&rsquo;s std and no crates.</p>
 
 
 <h3 id="async-main">An async main</h3>

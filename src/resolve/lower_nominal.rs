@@ -1900,8 +1900,12 @@ pub(crate) struct ImportedUse {
     /// The item takes a script closure for its `F: FnOnce` parameter.
     pub(crate) callable: bool,
     /// The script functions that fill its callable parameters as slots
-    /// (D594).
+    /// (D594), as its instance keys them ([`Slot::served`]).
+    ///
+    /// [`Slot::served`]: rawr_import::surface::instance::Slot::served
     pub(crate) slots: Box<[rawr_import::surface::instance::Slot]>,
+    /// The same slots by the functions that fill them.
+    pub(crate) fillers: Box<[rawr_import::surface::instance::Slot]>,
     /// The proof-backed application this use calls, when it is one.
     pub(crate) application: Option<[u8; 32]>,
     pub(crate) span: Span,
@@ -17675,13 +17679,17 @@ impl<'a> Parser<'a> {
                 let instance = self.imported_instance_key(
                     &item,
                     &requirements,
-                    &self.crossing_slots(
-                        &item,
-                        operands
-                            .iter()
-                            .filter(|(_, _, receiver)| !*receiver)
-                            .map(|(ty, _, _)| ty.clone()),
-                    ),
+                    &self
+                        .crossing_slots(
+                            &item,
+                            operands
+                                .iter()
+                                .filter(|(_, _, receiver)| !*receiver)
+                                .map(|(ty, _, _)| ty.clone()),
+                        )
+                        .iter()
+                        .map(|slot| slot.served())
+                        .collect::<Box<[_]>>(),
                 );
                 let operands = operands
                     .iter()
@@ -44327,12 +44335,7 @@ impl<'a> Parser<'a> {
         let ty = match &self.callable {
             Some(callable) => {
                 self.closure_count += 1;
-                let key = crate::item::Key::new(
-                    callable.package().into(),
-                    callable.modules().into(),
-                    format!("{}{{closure#{}}}", callable.name(), self.closure_count).into(),
-                    crate::item::Kind::Function,
-                );
+                let key = crate::item::Key::closure(callable, self.closure_count);
                 // Passed to the host, the closure is its generated function
                 // with each capture's value bound where it is written.
                 let mut lifted_parameters = Vec::new();
@@ -51163,6 +51166,7 @@ impl<'a> Parser<'a> {
             mappers: Box::default(),
             callable: false,
             slots: Box::default(),
+            fillers: Box::default(),
             application: None,
             span,
         });
@@ -51519,7 +51523,8 @@ impl<'a> Parser<'a> {
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
             callable: item.signature().takes_callable(),
-            slots,
+            slots: slots.iter().map(|slot| slot.served()).collect(),
+            fillers: slots,
             application: item.application().copied(),
             span,
         });
