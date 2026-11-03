@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.121",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"A result that borrows its call's values works whatever its trait: generic methods at several types, methods that give `Self`, associated types the result binds and supertrait methods all run, through a proxy rustc still checks. A `Self` such a method gives keeps the same values borrowed, as rustc has it.","issues":[849]}
+      ]
+    },
+    {
       "version": "0.3.120",
       "date": "2026-11-03",
       "entries": [

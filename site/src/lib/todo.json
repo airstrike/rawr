@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.120",
+  "version": "0.3.121",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.121",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"A result that borrows its call's values works whatever its trait: generic methods at several types, methods that give `Self`, associated types the result binds and supertrait methods all run, through a proxy rustc still checks. A `Self` such a method gives keeps the same values borrowed, as rustc has it.","issues":[849]}
+        ]
+      },
       {
         "version": "0.3.120",
         "date": "2026-11-03",
@@ -2041,7 +2048,7 @@
     {"issue":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"closed","category":"No glue (D593)","release":"0.3.120"},
     {"issue":847,"title":"An opaque `impl Sub<..>` leaves a type parameter unknown when Sub has a blanket impl over its supertrait","state":"open","category":"Divergences from rustc"},
     {"issue":848,"title":"`&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc"},
-    {"issue":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"open","category":"No glue (D593)"},
+    {"issue":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"closed","category":"No glue (D593)","release":"0.3.121"},
     {"issue":850,"title":"A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)"},
     {"issue":851,"title":"scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)"},
     {"issue":852,"title":"Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc"},
@@ -2060,7 +2067,10 @@
     {"issue":865,"title":"Read Cargo's new build-dir layout","state":"open","category":"Health"},
     {"issue":866,"title":"Check nightlies inside the driver window, not only its edges","state":"open","category":"Health"},
     {"issue":867,"title":"rawr +toolchain names the import nightly","state":"open","category":"Health"},
-    {"issue":868,"title":"Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health"}
+    {"issue":868,"title":"Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health"},
+    {"issue":869,"title":"Read a crate trait's associated const through a generic parameter","state":"open","category":"Divergences from rustc"},
+    {"issue":870,"title":"Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc"},
+    {"issue":871,"title":"Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {

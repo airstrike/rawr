@@ -849,7 +849,7 @@
     {"t":"T846","issue":846,"title":"T846: An opaque result that borrows its inputs lives as long as Rust says","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"eb7eac93c","release":"0.3.120"},
     {"t":"T847","issue":847,"title":"T847: An opaque `impl Sub<..>` leaves a type parameter unknown when Sub has a blanket impl over its supertrait","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T848","issue":848,"title":"T848: `&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T849","issue":849,"title":"T849: Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T849","issue":849,"title":"T849: Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"8fea50c6d","release":"0.3.121"},
     {"t":"T850","issue":850,"title":"T850: A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":"0619c8c6f","release":null},
     {"t":"T851","issue":851,"title":"T851: scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T852","issue":852,"title":"T852: Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -868,6 +868,9 @@
     {"t":"T865","issue":865,"title":"T865: Read Cargo's new build-dir layout","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T866","issue":866,"title":"T866: Check nightlies inside the driver window, not only its edges","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T867","issue":867,"title":"T867: rawr +toolchain names the import nightly","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T868","issue":868,"title":"T868: Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T868","issue":868,"title":"T868: Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T869","issue":869,"title":"T869: Read a crate trait's associated const through a generic parameter","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T870","issue":870,"title":"T870: Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T871","issue":871,"title":"T871: Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
