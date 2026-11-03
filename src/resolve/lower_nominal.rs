@@ -22306,6 +22306,14 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
     ) -> Result<(), Error> {
         self.mutable_use(receiver, operation);
+        // A `&mut T` reaches its value mutably without being `mut` itself,
+        // as a pattern's binding through `&mut T` does (#786).
+        if matches!(
+            self.inference.resolve(&receiver.ty),
+            Ty::Reference { mutable: true, .. }
+        ) {
+            return Ok(());
+        }
         // An imported value is changed where it lives, through its handle,
         // so a place below a mutable binding (`self.panes.split(..)`) needs
         // only that binding to be mutable, as Rust's `&mut self` does.
@@ -22348,6 +22356,15 @@ impl<'a> Parser<'a> {
         };
         let reason = match self.bindings.get(name.as_str()) {
             Some(binding) if binding.mutable && binding.available => return Ok(()),
+            Some(binding)
+                if binding.available
+                    && matches!(
+                        self.inference.resolve(&binding.ty),
+                        Ty::Reference { mutable: true, .. }
+                    ) =>
+            {
+                return Ok(());
+            }
             Some(binding) if !binding.available => {
                 format!("borrow of moved value: `{name}` (E0382)")
             }
@@ -29927,6 +29944,127 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the unguarded arms `rows` of a match on facade values, one
+    /// pattern for each of `tys` in each row, cover every value, as rustc
+    /// checks it: the arms on one variant of a facade enum cover it when
+    /// their patterns below it cover its fields together, so `A(B(x))` and
+    /// `A(C)` cover `A` when `B` and `C` are its field's variants.
+    fn host_rows_cover(
+        &mut self,
+        rows: Vec<Vec<&PatternSyntax>>,
+        tys: &[Ty],
+        at: Span,
+    ) -> Result<bool, Error> {
+        let Some((ty, rest)) = tys.split_first() else {
+            return Ok(!rows.is_empty());
+        };
+        // Each row by its first pattern, past `name @` and `&`, with each
+        // alternative of a `|` a row of its own.
+        let mut spread = Vec::new();
+        for row in rows {
+            let Some((&first, tail)) = row.split_first() else {
+                continue;
+            };
+            let mut firsts = vec![first];
+            while let Some(first) = firsts.pop() {
+                match first {
+                    PatternSyntax::At { pattern, .. }
+                    | PatternSyntax::Reference { pattern, .. } => {
+                        firsts.push(pattern);
+                    }
+                    PatternSyntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    _ => spread.push((first, tail.to_vec())),
+                }
+            }
+        }
+        let irrefutable = |pattern: &PatternSyntax| {
+            matches!(
+                pattern,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Rest { .. }
+            )
+        };
+        let resolved = self.inference.resolve(ty);
+        let enumerated = match without_references(&resolved) {
+            Ty::Host { proof, arguments } => match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum(variants) => {
+                    Some((proof.clone(), arguments.clone(), variants.to_vec()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((proof, arguments, variants)) =
+            enumerated.filter(|_| spread.iter().any(|(first, _)| !irrefutable(first)))
+        else {
+            // Only a pattern that matches every value covers a type whose
+            // values are not told apart here.
+            let wild = spread
+                .into_iter()
+                .filter(|(first, _)| irrefutable(first))
+                .map(|(_, tail)| tail)
+                .collect();
+            return self.host_rows_cover(wild, rest, at);
+        };
+        let definition = proof.definition.clone();
+        let path: ImmutableString = definition.path().as_str().into();
+        let discard = PatternSyntax::Discard { span: at };
+        for variant in &variants {
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            let mut fields = Vec::with_capacity(variant.fields().len());
+            for field in variant.fields() {
+                fields.push(self.instantiate_host_type(
+                    field.ty(),
+                    &mut parameters,
+                    &path,
+                    at,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )?);
+            }
+            let mut specialized = Vec::new();
+            for (first, tail) in &spread {
+                let members = match first {
+                    pattern if irrefutable(pattern) => vec![&discard; fields.len()],
+                    PatternSyntax::Enum(pattern) if pattern.variant.as_str() == variant.name() => {
+                        match &pattern.named {
+                            Some((names, _)) => {
+                                let mut members = vec![&discard; fields.len()];
+                                for ((name, _), member) in names.iter().zip(pattern.payload.iter())
+                                {
+                                    if let Some(index) = variant
+                                        .fields()
+                                        .iter()
+                                        .position(|field| field.name() == name.as_str())
+                                    {
+                                        members[index] = member;
+                                    }
+                                }
+                                members
+                            }
+                            None if pattern.payload.is_empty() => vec![&discard; fields.len()],
+                            None => tuple_members(&pattern.payload, fields.len(), &discard)?,
+                        }
+                    }
+                    _ => continue,
+                };
+                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+            }
+            let tys: Vec<Ty> = fields.into_iter().chain(rest.iter().cloned()).collect();
+            if !self.host_rows_cover(specialized, &tys, at)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// `match` on a facade enum: `Status::Hovered`, `Status::Active { is_checked }`,
     /// `Key::Named(key::Named::Tab)`, `A | B`, `_` and bindings, lowered to
     /// the facade's variant tests and field readers.
@@ -29958,6 +30096,9 @@ impl<'a> Parser<'a> {
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
         let mut covered = Vec::<ImmutableString>::new();
+        // The arms without a guard, whose patterns below a variant cover it
+        // together.
+        let mut unguarded = Vec::new();
         let mut exhaustive = false;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
@@ -29994,6 +30135,7 @@ impl<'a> Parser<'a> {
                 exhaustive = true;
             } else {
                 Self::host_covers(&syntax, &mut covered);
+                unguarded.push(syntax);
             }
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
@@ -30019,7 +30161,14 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
-        if !exhaustive && !variants.iter().all(|variant| covered.contains(variant)) {
+        if !exhaustive
+            && !variants.iter().all(|variant| covered.contains(variant))
+            && !self.host_rows_cover(
+                unguarded.iter().map(|syntax| vec![syntax]).collect(),
+                std::slice::from_ref(&subject_ty),
+                match_span,
+            )?
+        {
             return Err(Error::InvalidMatch {
                 owner: owner_path.as_str().into(),
                 reason: "non-exhaustive patterns; add a `_` arm".into(),
