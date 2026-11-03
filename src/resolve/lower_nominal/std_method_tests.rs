@@ -449,9 +449,9 @@ fn language_vec_and_vec_deque_methods_are_each_their_own() {
         );
     }
     // std's own `VecDeque` method rawr doesn't run yet (D712.1).
-    let report = refused(&format!("{deque}d.rotate_left(1); }}\nmain();\n"));
+    let report = refused(&format!("{deque}d.binary_search(&1); }}\nmain();\n"));
     assert!(
-        report.contains("rawr doesn't run `VecDeque::rotate_left` yet"),
+        report.contains("rawr doesn't run `VecDeque::binary_search` yet"),
         "{report}"
     );
 }
