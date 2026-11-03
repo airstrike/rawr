@@ -389,7 +389,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         native = target;
     }
     let found = inherent(native, member)?;
-    let declared = Declared::parse(found.item.declaration())?;
+    let declared = std_table::Declared::parse(found.item.declaration())?;
     let mut reader = Reader {
         lifetimes: Lifetimes::default(),
         next: 0,
@@ -567,7 +567,7 @@ fn binding(bound: &'static str, name: &str) -> Option<&'static str> {
 /// `Self::Item`, `<I as Iterator>::Item`, `<U as IntoIterator>::IntoIter`.
 fn projection(text: &'static str) -> Option<(&'static str, &'static str)> {
     let (base, name) = if text.starts_with('<') {
-        let close = closing(text, '<', '>')?;
+        let close = std_table::closing(text, '<', '>')?;
         let inner = &text[1..close];
         let at = std_table::top_level(inner, " as ")?;
         let trait_ = inner[at + 4..].rsplit("::").next()?;
@@ -670,66 +670,6 @@ fn type_paths(ty: &Type, target: &Type, at: RegionPath, out: &mut Vec<RegionPath
             }
         }
     }
-}
-
-/// A declaration's parts: `fn name<generics>(inputs) -> output where ..`.
-struct Declared {
-    generics: &'static str,
-    inputs: &'static str,
-    output: Option<&'static str>,
-    /// Its where-clauses: `B: Default + Extend<Self::Item>`.
-    wheres: &'static str,
-}
-
-impl Declared {
-    fn parse(text: &'static str) -> Option<Self> {
-        let open = text.find(['<', '('])?;
-        let (generics, rest) = if text[open..].starts_with('<') {
-            let close = open + closing(&text[open..], '<', '>')?;
-            (&text[open + 1..close], &text[close + 1..])
-        } else {
-            ("", &text[open..])
-        };
-        let close = closing(rest, '(', ')')?;
-        let inputs = &rest[1..close];
-        let rest = rest[close + 1..].trim();
-        let (rest, wheres) = match std_table::top_level(rest, " where ") {
-            Some(at) => (&rest[..at], &rest[at + 7..]),
-            None => match rest.split_once(" where ") {
-                Some((rest, wheres)) => (rest, wheres),
-                None => match rest.strip_prefix("where ") {
-                    Some(wheres) => ("", wheres),
-                    None => (rest, ""),
-                },
-            },
-        };
-        let output = rest.strip_prefix("-> ").map(str::trim);
-        Some(Self {
-            generics,
-            inputs,
-            output,
-            wheres,
-        })
-    }
-}
-
-/// The index in `text` (which starts with `open`) of its matching `close`.
-fn closing(text: &str, open: char, close: char) -> Option<usize> {
-    let mut depth = 0usize;
-    for (index, c) in text.char_indices() {
-        if c == '>' && index > 0 && text.as_bytes()[index - 1] == b'-' {
-            continue;
-        }
-        if c == open {
-            depth += 1;
-        } else if c == close {
-            depth = depth.checked_sub(1)?;
-            if depth == 0 {
-                return Some(index);
-            }
-        }
-    }
-    None
 }
 
 /// Whether a call's value holds an array where a reference is: `v.get(1..3)`

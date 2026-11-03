@@ -10198,6 +10198,37 @@ main();
     );
 }
 
+/// The std facade's items have std's signatures (D711 step 6): a
+/// parameter std bounds by `AsRef<Path>` or `AsRef<OsStr>` takes every type
+/// std gives it, `From` is each of std's impls, and `io::Error::from` of
+/// an error is the error, as rustc prints.
+#[test]
+fn language_std_items_take_what_stds_bounds_give() {
+    assert_eq!(
+        printed_with(
+            r#"
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+
+fn main() {
+    let os = OsString::from("a");
+    let path = PathBuf::from(os.clone()).join(&os).join(String::from("b.txt"));
+    println!("{}", path.display());
+    let borrowed: &Path = Path::new(&os);
+    println!("{:?} {:?}", borrowed.to_str(), OsString::from(&path).to_str());
+    let missing = std::fs::read_to_string(&path).unwrap_err();
+    let same = io::Error::from(missing);
+    println!("{:?}", same.kind());
+}
+main();
+"#,
+            crate::Access::all(),
+        ),
+        "a/a/b.txt\nSome(\"a\") Some(\"a/a/b.txt\")\nNotFound\n"
+    );
+}
+
 /// `std::process::id()` is the running process's id, a `u32`, as rustc
 /// gives it.
 #[test]

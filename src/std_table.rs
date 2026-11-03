@@ -23,7 +23,10 @@
 //!   (D711 step 4) has its impl's self type in `extra` where it isn't the
 //!   type's own (`Option<&T>` of `copied`), and its declaration with its
 //!   lifetimes and its impl's bounds: `fn iter(&self) -> std::slice::Iter<'_,
-//!   T>`, `fn sort(&mut self) where T: Ord`.
+//!   T>`, `fn sort(&mut self) where T: Ord`. A free function has its
+//!   declaration too, `fn read<P: AsRef<std::path::Path>>(path: P) ->
+//!   Result<Vec<u8>, std::io::Error>`, and a type alias the type it names,
+//!   `Result<T, std::io::Error>` (D711 step 6).
 //!
 //! - `impls.tsv` (D711 step 3): `trait  key  self  arguments  generics
 //!   where  associated`, one line per impl of a stable trait that stable
@@ -675,6 +678,14 @@ impl Impl {
             .collect()
     }
 
+    /// The associated types it declares, each with its type: (`Target`,
+    /// `str`) of `impl Deref for String`.
+    pub(crate) fn associated_types(&self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        split_list(self.associated)
+            .into_iter()
+            .filter_map(|binding| binding.split_once(" = "))
+    }
+
     /// The associated type `name` it declares: `str` for `Target` of
     /// `impl Deref for String`.
     pub(crate) fn associated(&self, name: &str) -> Option<&'static str> {
@@ -733,7 +744,16 @@ pub(crate) fn split_bounds(text: &'static str) -> Vec<&'static str> {
 /// The impls of the trait `trait_` (its definition) whose self type has the
 /// simplified key `key`: `alloc::string::String`, `&`, `[]`, `_`.
 pub(crate) fn impls(trait_: &str, key: &str) -> impl Iterator<Item = Impl> {
-    let prefix = format!("{trait_}\t{key}\t");
+    impl_lines(format!("{trait_}\t{key}\t"))
+}
+
+/// Every impl of the trait `trait_` (its definition), of any self type.
+pub(crate) fn trait_impls(trait_: &str) -> impl Iterator<Item = Impl> {
+    impl_lines(format!("{trait_}\t"))
+}
+
+/// The impls whose lines start with `prefix`.
+fn impl_lines(prefix: String) -> impl Iterator<Item = Impl> {
     lines_from(IMPLS, &prefix)
         .lines()
         .take_while(move |line| line.starts_with(&prefix))
@@ -861,6 +881,68 @@ pub(crate) fn written(text: &'static str) -> Written {
     }
 }
 
+/// A declaration's parts: `fn name<generics>(inputs) -> output where ..`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Declared {
+    pub generics: &'static str,
+    pub inputs: &'static str,
+    pub output: Option<&'static str>,
+    /// Its where-clauses: `B: Default + Extend<Self::Item>`.
+    pub wheres: &'static str,
+}
+
+impl Declared {
+    /// The parts of the declaration `text`, as `items.tsv` writes it.
+    pub(crate) fn parse(text: &'static str) -> Option<Self> {
+        let open = text.find(['<', '('])?;
+        let (generics, rest) = if text[open..].starts_with('<') {
+            let close = open + closing(&text[open..], '<', '>')?;
+            (&text[open + 1..close], &text[close + 1..])
+        } else {
+            ("", &text[open..])
+        };
+        let close = closing(rest, '(', ')')?;
+        let inputs = &rest[1..close];
+        let rest = rest[close + 1..].trim();
+        let (rest, wheres) = match top_level(rest, " where ") {
+            Some(at) => (&rest[..at], &rest[at + 7..]),
+            None => match rest.split_once(" where ") {
+                Some((rest, wheres)) => (rest, wheres),
+                None => match rest.strip_prefix("where ") {
+                    Some(wheres) => ("", wheres),
+                    None => (rest, ""),
+                },
+            },
+        };
+        let output = rest.strip_prefix("-> ").map(str::trim);
+        Some(Self {
+            generics,
+            inputs,
+            output,
+            wheres,
+        })
+    }
+}
+
+/// The index in `text` (which starts with `open`) of its matching `close`.
+pub(crate) fn closing(text: &str, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, c) in text.char_indices() {
+        if c == '>' && index > 0 && text.as_bytes()[index - 1] == b'-' {
+            continue;
+        }
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
 /// The definition a path std's declarations write names: a primitive's
 /// name, or the definition of a prelude name or a path
 /// (`std::rc::Rc` is `alloc::rc::Rc`, `String` is `alloc::string::String`).
@@ -930,6 +1012,20 @@ mod tests {
             item("core::result::Result").map(|v| v.type_arity()),
             Some((2, 2))
         );
+    }
+
+    #[test]
+    fn std_table_functions_and_aliases_carry_declarations() {
+        assert_eq!(
+            item("std::fs::read").map(|read| read.declaration()),
+            Some("fn read<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<u8>, std::io::Error>")
+        );
+        assert_eq!(
+            item("core::io::error::Result").map(|result| result.declaration()),
+            Some("Result<T, std::io::Error>")
+        );
+        // std's `impl io::Error` for core's `io::Error`.
+        assert!(item("core::io::error::Error::new").is_some());
     }
 
     #[test]
