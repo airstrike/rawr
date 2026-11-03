@@ -23544,8 +23544,10 @@ impl<'a> Parser<'a> {
         // `&shot.rgba`, and `shot.rgba.len()` through a `&self` method: the
         // field lent where it is, for the statement, or for the rest of the
         // block of a `let`, as Rust borrows it, and the struct stays whole
-        // (D683.1).
+        // (D683.1). A crate value field is lent by its own type; a `Vec` or
+        // a box of one is still read by the reader.
         if !shared
+            && matches!(self.inference.resolve(&ty), Ty::Host { .. })
             && definition.parameters().is_empty()
             && receiver.prelude.is_empty()
             && variable_name(receiver.source.as_str()).is_some()
