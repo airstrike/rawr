@@ -18,7 +18,7 @@ use crate::support::{copy, start_with};
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-tui");
 
 fn fixture(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
     root
@@ -102,7 +102,7 @@ const KEYS: &[&str] = &[
 /// `examples/tui`'s marked `app.rs` and `ui.rs` beside the headless
 /// driver, which draws each frame on a `TestBackend`.
 fn draw_fixture(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(DRAW), &root);
     for file in ["app.rs", "ui.rs"] {
@@ -212,7 +212,7 @@ const STATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-sta
 /// leave are what `cargo run` prints.
 #[test]
 fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tui-state");
+    let root = crate::support::scratch().join("tui-state");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(STATE), &root);
     let native = Command::new("cargo")
@@ -228,7 +228,7 @@ fn a_lent_list_state_goes_to_render_stateful_widget_as_cargo_run_does() {
     assert!(expected.contains("|│> delta       │|"), "{expected}");
     assert!(expected.contains("selected Some(4) offset 2"), "{expected}");
 
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -383,7 +383,7 @@ impl Terminal {
         };
         let pty = nix::pty::openpty(&size, None).unwrap();
         let slave = nix::unistd::ttyname(pty.slave.as_raw_fd()).unwrap();
-        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let directory = crate::support::scratch();
         let tty = || Stdio::from(pty.slave.try_clone().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
         command

@@ -4,7 +4,7 @@
 //! with a one-line reason. Build the driver first, as for `islands`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::support::{copy, start};
@@ -25,7 +25,7 @@ fn edit(path: &Path, from: &str, to: &str) {
 
 #[test]
 fn a_marked_main_in_a_native_loop_takes_a_body_edit_at_its_next_call() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("marked-ticker");
+    let root = crate::support::scratch().join("marked-ticker");
     let _ = fs::remove_file(root.join("stop"));
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);

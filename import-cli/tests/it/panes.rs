@@ -12,7 +12,7 @@
 //! first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use crate::support::copy;
@@ -25,7 +25,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("panes");
+    let root = crate::support::scratch().join("panes");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
     let native = Command::new("cargo")
@@ -43,7 +43,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
         "{expected}"
     );
 
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -72,7 +72,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
 /// with rustc's E0502, before anything runs (D572).
 #[test]
 fn a_lent_str_keeps_its_value_borrowed() {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("panes-lent");
+    let root = crate::support::scratch().join("panes-lent");
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
     fs::write(
@@ -80,7 +80,7 @@ fn a_lent_str_keeps_its_value_borrowed() {
         "// rawr\nuse natives::label::Label;\n\nfn main() {\n    let mut label = Label::new(\"left\");\n    println!(\"start\");\n    let text = label.text();\n    label.set(\"right\");\n    println!(\"{text}\");\n}\n",
     )
     .unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)

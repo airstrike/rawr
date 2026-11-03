@@ -134,8 +134,7 @@ fn parse_items(engine: &Engine, source: &str) -> ParseResult<ParsedItems> {
             let position = next.1;
             if !at_top || scan.delimiter_depth != 0 {
                 return Err(inner_attribute_error(
-                    "an inner attribute (`#![..]`) is only permitted at the top of a file, \
-                     before its items",
+                    "an inner attribute (`#![..]`) is only permitted before a file's first item",
                 )
                 .into_err(position));
             }
@@ -413,27 +412,119 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
 /// it accepts and ignores them, as rustc does a lint it does not know.
 const LINT_ATTRIBUTES: &[&str] = &["allow", "warn", "deny", "forbid", "expect"];
 
-/// `#![lint(..)]` after its `#!`: accepted and ignored. Any other inner
-/// attribute is an error naming it.
+/// The crate attributes that leave a program's meaning as it is under
+/// `rawr run`: a build setting (the crate's name and type, the Windows
+/// subsystem, the compiler's limits, `no_builtins`, a debugger's
+/// visualizer) or documentation. Rawr accepts and ignores them, as rustc
+/// ignores what does not apply to the build at hand.
+const IGNORED_CRATE_ATTRIBUTES: &[&str] = &[
+    "crate_name",
+    "crate_type",
+    "windows_subsystem",
+    "recursion_limit",
+    "type_length_limit",
+    "no_builtins",
+    "debugger_visualizer",
+    "doc",
+];
+
+/// One inner attribute after its `#!`. A lint, build-setting or
+/// documentation attribute is accepted and ignored.
+/// `#![cfg_attr(predicate, ..)]` applies its attributes, each under the same
+/// rules, when its predicate holds, and none of them when it does not. Any
+/// other inner attribute is an error naming it.
 fn parse_inner_attribute(input: &mut TokenStream, hash: Position) -> ParseResult<Span> {
-    let attribute = parse_attribute_after_marker(input, hash)?;
-    let name = attribute
-        .path
-        .segments
+    expect(input, Token::LeftBracket, "after '#!' in an attribute")?;
+    let path = parse_path(input)?;
+    let close = if attribute_name(&path) == "cfg_attr" {
+        expect(input, Token::LeftParen, "after `cfg_attr`")?;
+        let enabled = parse_cfg_predicate(input)?;
+        expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
+        while !matches!(input.peek(), Some((Token::RightParen, _))) {
+            let (_, position) = *input.peek().expect("token streams always end with EOF");
+            let applied = parse_meta_item(input)?;
+            if enabled {
+                check_inner_attribute(&applied, position)?;
+            }
+            if matches!(input.peek(), Some((Token::Comma, _))) {
+                input.next();
+            }
+        }
+        expect(input, Token::RightParen, "to close `cfg_attr`")?;
+        expect(input, Token::RightBracket, "to close an attribute")?
+    } else {
+        check_inner_attribute(&path, hash)?;
+        skip_to_attribute_end(input)?
+    };
+    let span = Span::new(hash, after(close, 1));
+    INNER.with_borrow_mut(|inner| {
+        inner.push(crate::item::Attribute {
+            path,
+            arguments: Box::default(),
+            span,
+            text: ImmutableString::new(),
+        });
+    });
+    Ok(span)
+}
+
+/// One attribute inside `cfg_attr(..)`: a path, then `(..)` or `= value`,
+/// as `doc = include_str!("README.md")`, up to the next `,` or the `)`.
+fn parse_meta_item(input: &mut TokenStream) -> ParseResult<type_ref::Path> {
+    let path = parse_path(input)?;
+    let mut depth = 0usize;
+    loop {
+        match input.peek().expect("token streams always end with EOF") {
+            (Token::Comma | Token::RightParen, _) if depth == 0 => return Ok(path),
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => {
+                depth = depth.saturating_sub(1);
+            }
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::RightParen.into(),
+                    "to close `cfg_attr`".into(),
+                )
+                .into_err(*position));
+            }
+            _ => {}
+        }
+        input.next();
+    }
+}
+
+fn attribute_name(path: &type_ref::Path) -> String {
+    path.segments
         .iter()
         .map(|segment| segment.name.text.as_str())
         .collect::<Vec<_>>()
-        .join("::");
-    if !LINT_ATTRIBUTES.contains(&name.as_str()) {
-        return Err(inner_attribute_error(&format!(
-            "unsupported inner attribute `#![{name}]`: Rawr accepts only the lint attributes \
-             `allow`, `warn`, `deny`, `forbid` and `expect` at the top of a file"
-        ))
-        .into_err(hash));
+        .join("::")
+}
+
+/// Accept an inner attribute Rawr ignores; refuse any other, naming it.
+fn check_inner_attribute(path: &type_ref::Path, position: Position) -> ParseResult<()> {
+    let name = attribute_name(path);
+    if LINT_ATTRIBUTES.contains(&name.as_str()) || IGNORED_CRATE_ATTRIBUTES.contains(&name.as_str())
+    {
+        return Ok(());
     }
-    let span = attribute.span;
-    INNER.with_borrow_mut(|inner| inner.push(attribute));
-    Ok(span)
+    let reason = match name.as_str() {
+        "no_std" | "no_core" | "no_implicit_prelude" => {
+            "Rawr runs every file with the standard library and its prelude"
+        }
+        "no_main" => "Rawr runs a file from its `fn main`, as rustc builds it",
+        "feature" => "Rawr runs stable Rust and enables no unstable features",
+        _ => {
+            "Rawr ignores the lint attributes, `doc` and build settings such as \
+             `windows_subsystem`, and supports no other crate attribute"
+        }
+    };
+    Err(inner_attribute_error(&format!(
+        "unsupported inner attribute `#![{name}]`: {reason}"
+    ))
+    .into_err(position))
 }
 
 fn inner_attribute_error(message: &str) -> PERR {
