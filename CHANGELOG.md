@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- An iterator's methods and what each call borrows come from std's own declarations of Iterator, DoubleEndedIterator, Peekable and IntoIterator, and of std's adapter and FromIterator impls. A method std declares that rawr doesn't run yet, such as `rposition` or `next_back`, says so instead of being an unknown method, and calling `next` on an iterator not declared `mut` is rustc's E0596. (#768)
+- A ratatui builder method that keeps a string, such as `Block::title("list")`, works under `rawr run` again, and a program using `ratatui::DefaultTerminal` builds its runner. (#787)
+- A marked file may use `#![cfg_attr(..)]` and build-setting crate attributes such as `#![windows_subsystem = "windows"]`, `crate_name`, `recursion_limit` and `doc` after its `// rawr` marker, as rustc allows. Attributes that change the prelude or the language, such as `no_std` and `feature`, are refused with an error that names them. (#791)
 
 ## 0.3.114 (2026-11-02)
 

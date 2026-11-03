@@ -14,7 +14,7 @@ use crate::support::copy;
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/std-types");
 
 fn fixture(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     let _ = fs::remove_dir_all(root.join("files"));
     copy(Path::new(FIXTURE), &root);
@@ -51,7 +51,7 @@ fn std_path_and_io_error_are_the_crates_own_types() {
     );
     assert!(expected.contains("wrapped io: slow\n"), "{expected}");
 
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let rawr = run(Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)

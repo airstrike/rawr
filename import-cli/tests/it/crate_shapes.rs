@@ -4,7 +4,7 @@
 //! run`. Build the driver first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use crate::support::copy;
@@ -18,7 +18,7 @@ fn text(bytes: &[u8]) -> String {
 /// The fixture with `mains/{main}.rs` as its `src/main.rs`, run by `cargo
 /// run` and by `rawr-import run`: both print `expected`.
 fn runs_as_cargo_does(main: &str, expected: &str) {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("crate-shapes-{main}"));
+    let root = crate::support::scratch().join(format!("crate-shapes-{main}"));
     let _ = fs::remove_dir_all(root.join("src"));
     let _ = fs::remove_dir_all(root.join("natives/src"));
     copy(Path::new(FIXTURE), &root);
@@ -37,7 +37,7 @@ fn runs_as_cargo_does(main: &str, expected: &str) {
     assert!(native.status.success(), "{}", text(&native.stderr));
     assert_eq!(text(&native.stdout), expected);
 
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
