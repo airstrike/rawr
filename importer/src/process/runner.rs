@@ -357,6 +357,10 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
                 prepare(&mut command);
             }
         }
+        // A toolchain other than the pinned nightly has its own std table.
+        if let Some(table) = crate::cargo::toolchain::std_table() {
+            command.env("RAWR_STD_TABLE", table);
+        }
         // One preview rendered alone (`rawr mcp`'s `render_preview`).
         if let (Lifecycle::SnapshotCheck | Lifecycle::SnapshotUpdate, Some(selection)) =
             (process.lifecycle, std::env::var_os("RAWR_SNAPSHOT_ONLY"))

@@ -663,6 +663,153 @@ impl<M: LentMap> Drop for MapLent<M> {
     }
 }
 
+/// A slice of crate values a call borrows, as `view(&items)` takes it
+/// (#846): each value moved out of its slot into one `Vec` once, and not
+/// copied. Each slot reaches its value there (`SliceHome`), so the values
+/// are read while the slice is lent, and none is changed or moved. The
+/// last of the slices that share the values gives them back to their slots
+/// when it drops (`Unlend`).
+#[allow(dead_code)]
+struct SliceLent<T: 'static> { items: std::rc::Rc<Vec<T>>, handles: std::rc::Rc<[NativeHandle]> }
+
+impl<T: 'static> std::ops::Deref for SliceLent<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.items
+    }
+}
+
+impl<T: 'static> Drop for SliceLent<T> {
+    fn drop(&mut self) {
+        // Each slot's home shares the values: with none besides them, this
+        // is the last slice, and the values go back.
+        if std::rc::Rc::strong_count(&self.items) != self.handles.len() + 1 {
+            return;
+        }
+        let unlend = SliceUnlend { items: self.items.clone(), handles: self.handles.clone() };
+        UNLENDS.with_borrow_mut(|unlends| unlends.push(Box::new(unlend)));
+        let _ = with_arena(|_| Ok(()));
+    }
+}
+
+/// The home of a slot whose value a lent slice holds (`SliceLent`): the
+/// value is read there, and refuses to be changed while it is lent.
+#[allow(dead_code)]
+struct SliceHome<T> { items: std::rc::Rc<Vec<T>>, index: usize }
+
+impl<T: 'static> Homed for SliceHome<T> {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        call(self.items.get(self.index).ok_or(Error::StaleHandle)?);
+        Ok(())
+    }
+
+    /// A result still borrows it, as rustc's E0502 says of a `&mut` while
+    /// a shared borrow lives.
+    fn mutable(&self, _call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        Err(Error::Home(
+            "cannot borrow this value as mutable because a result still borrows it (E0502)".into(),
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn value(&self) -> Option<&dyn Any> {
+        self.items.get(self.index).map(|item| item as &dyn Any)
+    }
+
+    /// The values go back together, once nothing borrows the slice
+    /// (`Unlend`).
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        Err(self)
+    }
+}
+
+/// Values a lent slice gave back, moved into their slots the next time the
+/// owner thread has the arena.
+trait Unlend {
+    fn unlend(self: Box<Self>, arena: &mut Arena);
+}
+
+struct SliceUnlend<T: 'static> { items: std::rc::Rc<Vec<T>>, handles: std::rc::Rc<[NativeHandle]> }
+
+impl<T: 'static> Unlend for SliceUnlend<T> {
+    fn unlend(self: Box<Self>, arena: &mut Arena) {
+        let Self { items, handles } = *self;
+        // The homes let the values go first; a value whose slot went
+        // meanwhile drops with the slice.
+        for handle in handles.iter() {
+            arena.unhome_slice::<T>(handle);
+        }
+        let Ok(items) = std::rc::Rc::try_unwrap(items) else {
+            return;
+        };
+        for (handle, item) in handles.iter().zip(items) {
+            arena.restore(handle.clone(), Box::new(item));
+        }
+    }
+}
+
+thread_local! {
+    /// Slices whose last borrow ended (`SliceLent`), their values back to
+    /// their slots the next time the owner thread has the arena.
+    static UNLENDS: RefCell<Vec<Box<dyn Unlend>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The values of `handles`, moved out of their slots into one slice, or
+/// the slice they are in already, as a second `view(&items)` shares the
+/// first's.
+#[allow(dead_code)]
+fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Result<SliceLent<T>, Error> {
+    if let Some(first) = handles.first()
+        && let Some(home) = arena.homed(first)
+    {
+        let items = home
+            .as_any()
+            .downcast_ref::<SliceHome<T>>()
+            .map(|home| home.items.clone())
+            .ok_or(Error::Leased)?;
+        let same = items.len() == handles.len()
+            && handles.iter().enumerate().all(|(index, handle)| {
+                arena
+                    .homed(handle)
+                    .and_then(|home| home.as_any().downcast_ref::<SliceHome<T>>())
+                    .is_some_and(|home| home.index == index && std::rc::Rc::ptr_eq(&home.items, &items))
+            });
+        if !same {
+            return Err(Error::Leased);
+        }
+        return Ok(SliceLent { items, handles: handles.into() });
+    }
+    // Every value is there before any moves.
+    for handle in &handles {
+        arena.settle(handle);
+        if arena.homed(handle).is_some() {
+            return Err(Error::Leased);
+        }
+        let index = arena.index::<T>(handle)?;
+        if arena.slots[index].value.is_none() {
+            return Err(Error::Leased);
+        }
+    }
+    let mut items = Vec::new();
+    items.try_reserve_exact(handles.len()).map_err(|_| Error::Allocation)?;
+    for handle in &handles {
+        let index = arena.index::<T>(handle)?;
+        let value = arena.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        items.push(*value.downcast::<T>().map_err(|_| Error::TypeMismatch)?);
+    }
+    let items = std::rc::Rc::new(items);
+    for (index, handle) in handles.iter().enumerate() {
+        if let Some(slot) = arena.slots.get_mut(handle.slot as usize) {
+            slot.homed = Some(Box::new(SliceHome { items: items.clone(), index }));
+        }
+    }
+    Ok(SliceLent { items, handles: handles.into() })
+}
+
 /// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
 /// it points to, which a rawr `Rc` or `Arc` holds the handle of. The
 /// value is read through it, as `Deref` reads it, and never copied out.
@@ -1432,6 +1579,19 @@ impl Arena {
         }
     }
 
+    /// The slot of `handle` out of the home a lent slice gave it, waiting
+    /// for its value (`SliceUnlend`), unless its last handle went meanwhile.
+    fn unhome_slice<T: 'static>(&mut self, handle: &NativeHandle) {
+        if handle.epoch != self.epoch { return; }
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize)
+            && entry.generation == handle.generation
+            && entry.homed.as_ref().is_some_and(|home| home.as_any().is::<SliceHome<T>>())
+        {
+            entry.homed = None;
+            entry.leased = true;
+        }
+    }
+
     /// Give the slot of `handle` its value back from its home once nothing
     /// borrows it there.
     fn settle(&mut self, handle: &NativeHandle) {
@@ -1680,6 +1840,9 @@ impl Arena {
         }
         for (handle, value) in RELENDS.try_with(RefCell::take).unwrap_or_default() {
             self.restore(handle, value);
+        }
+        for unlend in UNLENDS.try_with(RefCell::take).unwrap_or_default() {
+            unlend.unlend(self);
         }
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
@@ -2697,6 +2860,30 @@ fn take_handle_like<T: 'static>(
     _witness: std::marker::PhantomData<T>,
 ) -> Result<T, Error> {
     arena.take(handle)
+}
+
+/// [`Arena::shared`] at the type `witness` names, which Rust code can't
+/// write.
+#[allow(dead_code)]
+fn shared_like<T: 'static, R>(
+    arena: &Arena,
+    handle: NativeHandle,
+    _witness: std::marker::PhantomData<T>,
+    call: impl FnOnce(&T) -> R,
+) -> Result<R, Error> {
+    arena.shared(handle, call)
+}
+
+/// [`Arena::mutable`] at the type `witness` names, which Rust code can't
+/// write.
+#[allow(dead_code)]
+fn mutable_like<T: 'static, R>(
+    arena: &mut Arena,
+    handle: NativeHandle,
+    _witness: std::marker::PhantomData<T>,
+    call: impl FnOnce(&mut T) -> R,
+) -> Result<R, Error> {
+    arena.mutable(handle, call)
 }
 
 /// The type of `value`, which Rust code can't write when it is opaque.
@@ -8581,6 +8768,42 @@ thread_local! {
     /// While the call that makes such a value is rendered only for rustc
     /// to read its type: the value goes to `witness`.
     static OPAQUE_WITNESSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// While a call in a table is rendered whose value lives beside what it
+    /// borrows (`lent_cell`): the call reaches it through that value.
+    static OPAQUE_CELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets `OPAQUE_CELL` for as long as it lives.
+struct OpaqueCell(bool);
+
+impl OpaqueCell {
+    fn enter(cell: bool) -> Self {
+        Self(OPAQUE_CELL.replace(cell))
+    }
+}
+
+impl Drop for OpaqueCell {
+    fn drop(&mut self) {
+        OPAQUE_CELL.set(self.0);
+    }
+}
+
+/// Whether the value `plan` gives lives beside the crate values it borrows
+/// (`lent_cell`), as its adapter makes it.
+fn lends_cell(plan: &Plan) -> Result<bool, request::Error> {
+    let Operation::Function {
+        signature,
+        substitutions,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(false);
+    };
+    let pinned = opaque_pinned_strings(signature, substitutions);
+    let substitutions: &[convert::Type] = pinned.as_deref().unwrap_or(substitutions);
+    Ok(!instance_opens(signature, substitutions)
+        && views_natives(signature, substitutions)?
+        && lent_cell(signature, substitutions)?.is_some())
 }
 
 /// Sets `OPAQUE_WITNESSED` for as long as it lives.
@@ -8818,11 +9041,18 @@ fn opaque_table_source(
     let Some(key) = first_opaque(&returned).cloned() else {
         return Ok(None);
     };
+    // A value that lives beside what it borrows (`lent_cell`) is reached
+    // through the trait object it is held as.
+    let cell = lends_cell(plan)?;
     let mut entries = Vec::new();
     for consumer in opaque_consumers(cohort, &key)? {
-        let Some((position, _, _)) = opaque_operand(consumer)? else {
+        let Some((position, _, operand)) = opaque_operand(consumer)? else {
             continue;
         };
+        // An operand that holds the table's opaque type, where the table's
+        // type is that opaque type itself, is taken at the type that holds
+        // it (`shape_witnesses`).
+        let holding = same_opaque(&returned, &key) && !same_opaque(&operand, &key);
         // A call that gives a value of another opaque type, as iced's
         // `Application::subscription` gives another `impl Program`, makes
         // that value's own table here, where rustc knows its type. One that
@@ -8850,6 +9080,7 @@ fn opaque_table_source(
             let _producing = OpaqueProducing::enter(inner);
             let _consuming = OpaqueConsuming::enter(!other);
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
+            let _cell = OpaqueCell::enter(cell);
             let mut body = Vec::new();
             let region = region_inputs(consumer)?;
             if !region.is_empty() {
@@ -8880,11 +9111,23 @@ fn opaque_table_source(
             render_adapter_body(consumer, cohort, profile, facade, &mut body)?;
             String::from_utf8(body).map_err(request::unwritable)?
         };
+        // A call that takes the value itself can't take it from beside
+        // what it borrows.
+        let body = if cell && body.contains(&format!("take_native(arguments, {position})")) {
+            "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
+        } else {
+            body
+        };
         // The operand is taken at the type of the value this call made.
         let body = body.replace(
             &format!("take_native(arguments, {position})"),
             &format!("take_like(arguments, {position}, _w)"),
         );
+        let body = if holding {
+            shape_witnesses(&body, position)
+        } else {
+            body
+        };
         entries.push(format!(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
         ));
@@ -8922,6 +9165,56 @@ fn opaque_table_source(
     }}",
         entries.join(",\n")
     )))
+}
+
+/// `body` with each operand at `position` taken at a type that holds the
+/// table's opaque type, as `boxed` takes the `Map<impl Widget, ..>` that
+/// `map` gave, taken at that type: the witness of the opaque type, made
+/// the witness of the type that holds it where `_` spells the opaque type.
+fn shape_witnesses(body: &str, position: usize) -> String {
+    let take = format!(" = take_like(arguments, {position}, _w)?;");
+    let mut shaped = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        let held = line
+            .trim_start()
+            .strip_prefix("let ")
+            .and_then(|rest| rest.split_once(": "))
+            .and_then(|(_, rest)| rest.split_once(&take))
+            .map(|(ty, _)| ty)
+            .filter(|ty| *ty != "_");
+        let Some(ty) = held else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holes = opaque_holes(ty);
+        let [hole] = holes[..] else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holding = format!("{}T{}", &ty[..hole], &ty[hole + 1..]);
+        shaped.push_str(&line.replacen(
+            &take,
+            &format!(
+                " = take_like(arguments, {position}, {{ fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+            ),
+            1,
+        ));
+    }
+    shaped
+}
+
+/// The offsets of each `_` in the Rust type `ty` that stands for a whole
+/// type, as in `Map<_, F, M>`, and not inside a name.
+fn opaque_holes(ty: &str) -> Vec<usize> {
+    let bytes = ty.as_bytes();
+    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (0..bytes.len())
+        .filter(|&at| {
+            bytes[at] == b'_'
+                && (at == 0 || !name(bytes[at - 1]))
+                && bytes.get(at + 1).is_none_or(|&next| !name(next))
+        })
+        .collect()
 }
 
 /// The signature, substitutions and argument offset of a call: a
@@ -9254,6 +9547,13 @@ fn render_adapter_body(
                     convert::Type::Nominal { definition, .. }
                         if *definition == crate::surface::identity::Definition::future()
                 );
+                // An opaque output that borrows crate values its call takes
+                // lives beside them in one value (#846).
+                let owned = if VIEWED_ARGUMENTS.get() && !lazy {
+                    lent_cell(signature, substitutions)?
+                } else {
+                    None
+                };
                 let mut call = Vec::new();
                 render_function_path(
                     plan,
@@ -9272,15 +9572,18 @@ fn render_adapter_body(
                     &mut call,
                 )?;
                 call.write_all(b"(").map_err(request::unwritable)?;
-                function_argument_list(
-                    signature,
-                    substitutions,
-                    functions,
-                    mappers,
-                    None,
-                    crossed,
-                    &mut call,
-                )?;
+                {
+                    let _cell = LentCell::enter(owned.is_some());
+                    function_argument_list(
+                        signature,
+                        substitutions,
+                        functions,
+                        mappers,
+                        None,
+                        crossed,
+                        &mut call,
+                    )?;
+                }
                 call.write_all(b")").map_err(request::unwritable)?;
                 let call = String::from_utf8(call).map_err(request::unwritable)?;
                 let returned = &substituted(signature.output(), signature, substitutions)?;
@@ -9307,6 +9610,8 @@ fn render_adapter_body(
                         output,
                         "    let output = __rawr_profile_host::task::lazy(move || {call});"
                     )
+                } else if let Some(owned) = &owned {
+                    render_lent_cell(owned, &call, output)
                 } else if VIEWED_ARGUMENTS.get() {
                     // Out of any view's region, the output is at
                     // `'static`, and so is what it borrows.
@@ -10707,6 +11012,21 @@ fn render_borrowed_receiver(
     )?;
     let access = if mutable { "mutable" } else { "shared" };
     let borrow = if mutable { "&mut " } else { "&" };
+    // A value that lives beside what it borrows (`lent_cell`) is reached
+    // through the trait object it is held as, at the type `_w` names.
+    if OPAQUE_CELL.get() && container == "_" {
+        let reach = if mutable {
+            format!("receiver.with_dependent_mut(|_, receiver| {{ let receiver = &mut **receiver; {call} }})")
+        } else {
+            format!("{{ let receiver = &**receiver.borrow_dependent(); {call} }}")
+        };
+        return writeln!(
+            output,
+            "    let receiver = native_handle(arguments, 0, false)?;
+    let output = {access}_like(arguments.arena, receiver, _w, |receiver| {reach})?;"
+        )
+        .map_err(encoding);
+    }
     // A method that calls a script closure back, as `Frame::with_save(&mut
     // self, f: impl FnOnce(&mut Frame) -> R)` does, holds its receiver out
     // of its slot and lends the arena while it runs, as a function does
@@ -13011,16 +13331,35 @@ fn function_argument_list(
             {
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
+            // In the builder of the value that owns them (`LENT_CELL`), a
+            // lent argument is the builder's borrow of it.
+            _ if VIEWED_ARGUMENTS.get()
+                && lent_slice_element(&substituted(ty, signature, substitutions)?).is_some() =>
+            {
+                if LENT_CELL.get() {
+                    write!(output, "&argument_{position}[..]")
+                } else {
+                    write!(
+                        output,
+                        "&pins.hold(std::rc::Rc::new(argument_{position}))[..]"
+                    )
+                }
+                .map_err(request::unwritable)?;
+            }
             _ if VIEWED_ARGUMENTS.get()
                 && viewed_native(&substituted(ty, signature, substitutions)?).is_some() =>
             {
-                if matches!(
+                let option = matches!(
                     substituted(ty, signature, substitutions)?,
                     convert::Type::Option(_)
-                ) {
-                    write!(output, "argument_{position}.map(|value| pins.hold(value))")
-                } else {
-                    write!(output, "pins.hold(argument_{position})")
+                );
+                match (LENT_CELL.get(), option) {
+                    (true, true) => write!(output, "argument_{position}.as_deref()"),
+                    (true, false) => write!(output, "&**argument_{position}"),
+                    (false, true) => {
+                        write!(output, "argument_{position}.map(|value| pins.hold(value))")
+                    }
+                    (false, false) => write!(output, "pins.hold(argument_{position})"),
                 }
                 .map_err(request::unwritable)?;
             }
@@ -13197,6 +13536,31 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
+    // each value moved out of its slot into one slice, and back once nothing
+    // borrows it (`SliceLent`). An output that may borrow it keeps it
+    // (`views_natives`): an opaque one owns it (`lent_cell`), and another
+    // has the call's pins hold it. Else it goes back after the call.
+    let lent = substituted(ty, signature, substitutions)?;
+    if let Some(element) = lent_slice_element(&lent)
+        && !LENT_ARGUMENTS.get()
+    {
+        let item =
+            concrete_type(element).ok_or_else(|| request::drift("a lent slice's element type"))?;
+        let (name, borrow) = if VIEWED_ARGUMENTS.get() {
+            (format!("argument_{local}"), String::new())
+        } else {
+            (
+                format!("argument_{local}_lent"),
+                format!("\n    let argument_{local}: &[{item}] = &argument_{local}_lent.items;"),
+            )
+        };
+        return writeln!(
+            output,
+            "    let {name} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }};{borrow}"
+        )
+        .map_err(request::unwritable);
+    }
     // A crate value the output borrows past the call: the value moved into
     // an `Rc` its slot shares, which the call's pins hold (`views_natives`).
     if VIEWED_ARGUMENTS.get() {
@@ -15834,6 +16198,167 @@ thread_local! {
     /// which it shares with `pins` for as long as the output can borrow
     /// them (`views_natives`).
     static VIEWED_ARGUMENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether an adapter's opaque output borrows the crate values it
+    /// takes from the one value that owns them (`lent_cell`): each such
+    /// argument is named in the builder of that value.
+    static LENT_CELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Names an adapter's lent arguments in the builder of the value that owns
+/// them (`LENT_CELL`) while it lives, when `cell`.
+struct LentCell(bool);
+
+impl LentCell {
+    fn enter(cell: bool) -> Self {
+        Self(LENT_CELL.replace(cell))
+    }
+}
+
+impl Drop for LentCell {
+    fn drop(&mut self) {
+        LENT_CELL.set(self.0);
+    }
+}
+
+/// How an opaque output that borrows crate values its call takes lives
+/// beside them (#846), as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
+/// gives: one self-referential value owns what the call lends, and the
+/// output borrows it there as the trait object `object`.
+struct Owned {
+    /// The trait object the output is held as, without its lifetime, as
+    /// `dyn events::shelf::Show`.
+    object: String,
+    /// The type of each lent argument the value owns, and its name.
+    owners: Vec<(String, String)>,
+}
+
+/// The value an opaque output that borrows its call's crate values lives
+/// in (`Owned`), or `None` when the output isn't one, or its trait or
+/// arguments have no Rust spelling.
+fn lent_cell(
+    signature: &crate::classify::representability::signature::Signature,
+    substitutions: &[convert::Type],
+) -> Result<Option<Owned>, request::Error> {
+    // Only an output the classifier read as borrowing its inputs, whose
+    // trait it found can be a trait object (`Signature::lends`).
+    if signature.lends().is_empty() {
+        return Ok(None);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let convert::Type::Nominal {
+        definition,
+        arguments,
+    } = &returned
+    else {
+        return Ok(None);
+    };
+    if !is_opaque(definition) {
+        return Ok(None);
+    }
+    let Some(opaque) = signature
+        .opaques()
+        .iter()
+        .find(|opaque| opaque.definition() == definition.as_bytes())
+    else {
+        return Ok(None);
+    };
+    let Some(convert::Type::Nominal {
+        definition: principal,
+        arguments: bound,
+    }) = opaque.principal()
+    else {
+        return Ok(None);
+    };
+    let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(principal.as_bytes()).cloned())
+    else {
+        return Ok(None);
+    };
+    let mut written = Vec::new();
+    for argument in bound {
+        let Some(rust) = concrete_type(&substituted(argument, signature, substitutions)?) else {
+            return Ok(None);
+        };
+        written.push(rust);
+    }
+    // Each associated type the bounds bind, as `Item = T`; the marks of a
+    // future or a callable are no trait's.
+    let marks = [
+        *crate::surface::identity::Definition::future().as_bytes(),
+        *crate::surface::identity::Definition::callable().as_bytes(),
+    ];
+    for (associated, position) in opaque.associated() {
+        if marks.contains(&associated.trait_identity()) {
+            continue;
+        }
+        let Some(rust) = usize::try_from(*position)
+            .ok()
+            .and_then(|position| arguments.get(position))
+            .and_then(concrete_type)
+        else {
+            return Ok(None);
+        };
+        written.push(format!("{} = {rust}", associated.name()));
+    }
+    let object = if written.is_empty() {
+        format!("dyn {path}")
+    } else {
+        format!("dyn {path}<{}>", written.join(", "))
+    };
+    let mut owners = Vec::new();
+    for (position, input) in signature.inputs().iter().enumerate() {
+        let input = substituted(input, signature, substitutions)?;
+        let name = format!("argument_{position}");
+        let owner = if let Some(element) = lent_slice_element(&input) {
+            let Some(item) = concrete_type(element) else {
+                return Ok(None);
+            };
+            format!("SliceLent<{item}>")
+        } else if let Some(target) = viewed_native(&input) {
+            let Some(rust) = concrete_type(target) else {
+                return Ok(None);
+            };
+            if matches!(input, convert::Type::Option(_)) {
+                format!("Option<std::rc::Rc<{rust}>>")
+            } else {
+                format!("std::rc::Rc<{rust}>")
+            }
+        } else {
+            continue;
+        };
+        owners.push((owner, name));
+    }
+    Ok((!owners.is_empty()).then_some(Owned { object, owners }))
+}
+
+/// The output of `call` in the value that owns what it borrows (`Owned`):
+/// the lent arguments move into it, and `call` names each by the builder's
+/// borrow of it (`LENT_CELL`). When its handle drops, the output drops
+/// first, and then the arguments, which give the values back to their
+/// slots.
+fn render_lent_cell(owned: &Owned, call: &str, output: &mut Vec<u8>) -> std::io::Result<()> {
+    let types = owned
+        .owners
+        .iter()
+        .map(|(ty, _)| format!("{ty}, "))
+        .collect::<String>();
+    let names = owned
+        .owners
+        .iter()
+        .map(|(_, name)| format!("{name}, "))
+        .collect::<String>();
+    let object = &owned.object;
+    writeln!(
+        output,
+        "    type LentOutput<'a> = Box<{object} + 'a>;
+    __rawr_internal::self_cell::self_cell!(
+        struct Lent {{
+            owner: ({types}),
+            #[covariant]
+            dependent: LentOutput,
+        }}
+    );
+    let output = lend(arguments.arena, || Lent::new(({names}), |({names})| Box::new({call}) as LentOutput<'_>));"
+    )
 }
 
 /// Takes an adapter's `&T` arguments of crate values shared with `pins`
@@ -15875,8 +16400,9 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// Whether the call's output carries a lifetime and an input is a `&T` of
-/// a crate value, or an `Option` of one (`viewed_native`): the output may
+/// Whether the call's output carries a lifetime, or is opaque, and an input
+/// is a `&T` of a crate value, or an `Option` of one (`viewed_native`), or
+/// a `&[T]` of them (`lent_slice_element`): the output may
 /// borrow the value for as long as it lives, so the adapter shares it with
 /// the pins of the view's region, or of the runner out of any region,
 /// instead of lending it for the call alone (D568).
@@ -15885,15 +16411,39 @@ fn views_natives(
     substitutions: &[convert::Type],
 ) -> Result<bool, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
-    if !matches!(returned, convert::Type::Nominal { .. }) || !carries_lifetime(&returned) {
+    let borrows = match &returned {
+        convert::Type::Nominal { definition, .. } => {
+            carries_lifetime(&returned) || is_opaque(definition)
+        }
+        _ => false,
+    };
+    if !borrows {
         return Ok(false);
     }
     for input in signature.inputs() {
-        if viewed_native(&substituted(input, signature, substitutions)?).is_some() {
+        let input = substituted(input, signature, substitutions)?;
+        if viewed_native(&input).is_some() || lent_slice_element(&input).is_some() {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// The crate type of the elements of a `&[T]` a call takes, as iced's
+/// `markdown::view(&items, ..)` does: values the runner's arena holds,
+/// which the call borrows in one slice (`SliceLent`).
+fn lent_slice_element(ty: &convert::Type) -> Option<&convert::Type> {
+    let convert::Type::Borrowed { mutable: false, ty } = ty else {
+        return None;
+    };
+    match &**ty {
+        convert::Type::Sequence {
+            element,
+            length: None,
+            ..
+        } if lendable(element) => Some(element),
+        _ => None,
+    }
 }
 
 /// Takes an adapter's `&str` arguments pinned for the runner's life while
@@ -18324,6 +18874,27 @@ mod tests {
         ] {
             assert!(runtime.contains(expected), "{expected}");
         }
+    }
+
+    /// iced's changelog: `boxed` of the `Map<impl Widget, ..>` that `map`
+    /// gave takes it at the type that holds the table's opaque type, and a
+    /// `_` inside a name isn't one.
+    #[test]
+    fn an_operand_holding_the_opaque_type_is_taken_at_its_own_type() {
+        assert_eq!(
+            super::opaque_holes("::__rawr_crate_parts::widget::Map<_, Box<dyn Fn(u8) -> m_x>, _a>"),
+            [34]
+        );
+        let body = "    let argument_0: Map<_, Box<dyn Fn(String) -> crate::Message>, String> = take_like(arguments, 0, _w)?;\n    let receiver: _ = take_like(arguments, 0, _w)?;\n";
+        let shaped = super::shape_witnesses(body, 0);
+        assert!(
+            shaped.contains("= take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(String) -> crate::Message>, String>> { std::marker::PhantomData } shape(_w) })?;"),
+            "{shaped}"
+        );
+        assert!(
+            shaped.ends_with("    let receiver: _ = take_like(arguments, 0, _w)?;\n"),
+            "{shaped}"
+        );
     }
 
     /// T204: `&(f64, f64)` and `&[u8]` lend the Rust value made from

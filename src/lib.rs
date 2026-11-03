@@ -168,6 +168,10 @@ pub mod resolve;
 pub mod result;
 /// Scoped loans: a borrow native code lends script code for one call.
 pub mod scope;
+/// A result that borrows the values a runner lends it, kept beside them in
+/// one value: a generated runner's own dependency (#846).
+#[doc(hidden)]
+pub use self_cell;
 #[cfg(feature = "serde")]
 pub mod serde;
 /// Canonical callable signature fingerprints.
@@ -176,7 +180,8 @@ pub mod signature;
 pub mod source;
 mod std_facade;
 // D711: std's paths, kinds, stability and generics, from the sysroot.
-pub(crate) mod std_table;
+#[doc(hidden)]
+pub mod std_table;
 mod tests;
 /// Host-requested timing observations.
 pub mod timing;

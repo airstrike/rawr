@@ -28,6 +28,17 @@ pub fn same_build(root: &Path) -> Result<(), String> {
     same_build_as(root, active.as_deref(), required.as_deref(), &overrides)
 }
 
+/// Read crate APIs with the nightly the project at `root` names, or the
+/// pinned one when it names none, and check its programs against that
+/// nightly's std. `Err` says what to change.
+pub fn toolchain(root: &Path) -> Result<(), String> {
+    rawr_import::cargo::toolchain::select(root).map_err(|error| error.to_string())?;
+    if let Some(table) = rawr_import::cargo::toolchain::std_table() {
+        rawr::std_table::install(&table).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// The version of the Rust compiler the project at `root` builds with, as
 /// `rustc --version` prints it there: rustup picks the toolchain from the
 /// directory (`RUSTUP_TOOLCHAIN`, an override, a `rust-toolchain.toml`

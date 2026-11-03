@@ -6,7 +6,10 @@ use std::path::{Component, Path, PathBuf};
 use crate::extract::Allocation;
 use crate::{Error, Result};
 
-const COMPILER: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
+/// The commit of the compiler this process imports with.
+fn active_compiler() -> &'static str {
+    crate::cargo::toolchain::active().rustc_commit()
+}
 
 /// Current selector facts only; directory membership and content are separate.
 #[derive(Debug, Eq, PartialEq)]
@@ -21,7 +24,7 @@ impl Search {
     pub(super) fn revalidate(&self, allocation: &mut Allocation) -> Result<()> {
         let current = Self::observe(
             &self.rustc,
-            COMPILER,
+            active_compiler(),
             crate::cargo::toolchain::HOST,
             crate::cargo::toolchain::HOST,
             allocation,
@@ -39,7 +42,8 @@ impl Search {
         target: &str,
         allocation: &mut Allocation,
     ) -> Result<Self> {
-        if compiler != COMPILER || host != crate::cargo::toolchain::HOST || target != host {
+        if compiler != active_compiler() || host != crate::cargo::toolchain::HOST || target != host
+        {
             return Err(invalid("compiler search pin differs"));
         }
         if !rustc.is_absolute()
@@ -155,7 +159,7 @@ mod tests {
         let observe = || {
             Search::observe(
                 &rustc,
-                COMPILER,
+                active_compiler(),
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::with_limits(100, 65536),
@@ -181,7 +185,7 @@ mod tests {
         assert_ne!(absent, present);
         let spent = Search::observe(
             &rustc,
-            COMPILER,
+            active_compiler(),
             crate::cargo::toolchain::HOST,
             crate::cargo::toolchain::HOST,
             &mut Allocation::with_limits(100, 65536),
@@ -193,7 +197,7 @@ mod tests {
         assert_eq!(
             Search::observe(
                 &rustc,
-                COMPILER,
+                active_compiler(),
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut recorded,
@@ -208,7 +212,7 @@ mod tests {
         assert!(matches!(
             Search::observe(
                 &rustc,
-                COMPILER,
+                active_compiler(),
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::refused(),
@@ -224,7 +228,7 @@ mod tests {
         assert!(matches!(
             Search::observe(
                 &missing,
-                COMPILER,
+                active_compiler(),
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut short,
@@ -239,7 +243,7 @@ mod tests {
         assert!(matches!(
             Search::observe(
                 &missing,
-                COMPILER,
+                active_compiler(),
                 crate::cargo::toolchain::HOST,
                 crate::cargo::toolchain::HOST,
                 &mut Allocation::refused(),

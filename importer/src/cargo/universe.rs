@@ -40,8 +40,6 @@ const PLAIN_SEED_BYTES: &[u8] =
 const RECEIPT_SCHEMA: u32 = 2;
 const TARGET: &str = super::toolchain::HOST;
 const CARGO_PROFILE: &str = "dev";
-const RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
-const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
 
 /// Exact bounded canonical protected source/build facts observed after build.
 #[derive(Debug, Eq, PartialEq)]
@@ -608,8 +606,8 @@ impl Catalog {
             PLAIN_SEED_BYTES,
             TARGET,
             CARGO_PROFILE,
-            RUSTC_COMMIT,
-            CARGO_COMMIT,
+            super::toolchain::active().rustc_commit(),
+            super::toolchain::active().cargo_commit(),
         )
         .map(Self::new)
     }

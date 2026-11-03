@@ -1,0 +1,233 @@
+# Keep rawr-import's nightly window current. rawr-import builds its driver
+# for the nightly a project names, within the window that
+# importer/src/cargo/toolchain/window.rs defines (OLDEST, NEWEST, RANGE).
+# A nightly newer than NEWEST is refused, so a project on an undated
+# `nightly` stops working with rawr-import at its next `rustup update`
+# until the window moves.
+#
+# Once a day this job installs the latest nightly with rustc-dev and
+# rust-src, and builds rawr-import-driver on it with RAWR_NIGHTLY_PROBE set,
+# which lets importer/build.rs build a nightly past NEWEST with every
+# change's cfg instead of refusing it. Only this job sets that variable.
+#
+# - When the driver builds and reads that nightly's std (`--std-table`, the
+#   cheapest real extraction: the driver runs inside that nightly's rustc
+#   over a whole crate), it opens or updates one pull request, from the
+#   branch `ci/nightly-window`, that moves NEWEST to the nightly's
+#   commit-date and the range's end to its name in window.rs, the README
+#   and the docs. A pull request opened with GITHUB_TOKEN starts no other
+#   workflow, so close and reopen it to run linux.yml on it. The repository
+#   must allow GitHub Actions to create pull requests.
+# - When it fails, it opens or updates one issue titled "Nightly <date>
+#   breaks rawr-import-driver" with the compiler's errors. The fix is a new
+#   `rawr_rustc_*` entry in window.rs's CHANGES and its shim in
+#   importer/src/driver/compat.rs, after which the next run moves NEWEST.
+#
+# A nightly no newer than NEWEST ends the job early. The target directory is
+# cached per nightly, so a rerun on the same day builds nothing again.
+name: Nightly window
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+concurrency:
+  group: nightly-window
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: 0
+      BRANCH: ci/nightly-window
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The nightly's name is its manifest's date. Its commit-date is what
+      # window.rs compares, usually the day before.
+      - name: Install the latest nightly
+        id: nightly
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rustc-dev,rust-src --no-self-update
+          rustc +nightly -vV
+          sysroot="$(rustc +nightly --print sysroot)"
+          date="$(sed -n 's/^date = "\(.*\)"$/\1/p' \
+            "$sysroot/lib/rustlib/multirust-channel-manifest.toml")"
+          commit_date="$(rustc +nightly -vV | sed -n 's/^commit-date: //p')"
+          window=importer/src/cargo/toolchain/window.rs
+          newest="$(sed -n 's/^pub(crate) const NEWEST: &str = "\(.*\)";$/\1/p' "$window")"
+          end="$(sed -n 's/^pub(crate) const RANGE: &str = ".* through \(nightly-[0-9-]*\)";$/\1/p' "$window")"
+          if [[ -z "$date" || -z "$commit_date" || -z "$newest" || -z "$end" ]]; then
+            echo "could not read the nightly's dates or window.rs's window" >&2
+            exit 1
+          fi
+          {
+            echo "name=nightly-$date"
+            echo "date=$date"
+            echo "commit_date=$commit_date"
+            echo "newest=$newest"
+            echo "end=$end"
+            echo "sysroot=$sysroot"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$commit_date" > "$newest" ]]; then
+            echo "newer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nightly-$date ($commit_date) is inside the window, which ends at $newest."
+            echo "newer=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore the Cargo registry
+        if: steps.nightly.outputs.newer == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: linux-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-registry-
+
+      # A driver built on one nightly is no use on another, so the key is
+      # the nightly's.
+      - name: Restore the target directory
+        if: steps.nightly.outputs.newer == 'true'
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: nightly-window-${{ steps.nightly.outputs.date }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: nightly-window-${{ steps.nightly.outputs.date }}-
+
+      - name: Build rawr-import-driver with the window relaxed
+        id: build
+        if: steps.nightly.outputs.newer == 'true'
+        env:
+          RAWR_NIGHTLY_PROBE: "1"
+        run: |
+          set +e
+          cargo +nightly build --locked -p rawr-import --features rustc-driver \
+            --bin rawr-import-driver --message-format=json \
+            > "$RUNNER_TEMP/build.json" 2> "$RUNNER_TEMP/build.log"
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/build.log"
+          jq -r 'select(.reason == "compiler-message" and .message.level == "error")
+            | .message.rendered' "$RUNNER_TEMP/build.json" > "$RUNNER_TEMP/errors.txt" || true
+          cat "$RUNNER_TEMP/errors.txt"
+          if [[ $status -eq 0 ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            # A failure before rustc (a build script, a component) has no
+            # compiler message; the log's end says what it was.
+            if [[ ! -s "$RUNNER_TEMP/errors.txt" ]]; then
+              tail -n 200 "$RUNNER_TEMP/build.log" > "$RUNNER_TEMP/errors.txt"
+            fi
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The driver runs inside the nightly's rustc and reads all of std, as
+      # scripts/std-table.sh does for the pinned nightly. Its output is only
+      # checked for being there: the committed table is the pinned nightly's.
+      - name: Read std with the driver
+        id: smoke
+        if: steps.build.outputs.ok == 'true'
+        env:
+          SYSROOT: ${{ steps.nightly.outputs.sysroot }}
+        run: |
+          out="$RUNNER_TEMP/std-table"
+          rm -rf "$out"
+          mkdir -p "$out"
+          set +e
+          LD_LIBRARY_PATH="$SYSROOT/lib" target/debug/rawr-import-driver \
+            --std-table "$SYSROOT/bin/rustc" "$out" x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/smoke.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/smoke.log"
+          for file in paths.tsv items.tsv impls.tsv; do
+            if [[ ! -s "$out/$file" ]]; then
+              echo "the driver wrote no $file" >> "$RUNNER_TEMP/smoke.log"
+              status=1
+            fi
+          done
+          if [[ $status -eq 0 ]]; then
+            wc -l "$out"/*.tsv
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            tail -n 200 "$RUNNER_TEMP/smoke.log" > "$RUNNER_TEMP/errors.txt"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # One branch, force-pushed, so there is one pull request whatever the
+      # number of nightlies it has moved through.
+      - name: Open or update the pull request moving the window
+        if: steps.smoke.outputs.ok == 'true'
+        env:
+          NAME: ${{ steps.nightly.outputs.name }}
+          COMMIT_DATE: ${{ steps.nightly.outputs.commit_date }}
+          END: ${{ steps.nightly.outputs.end }}
+        run: |
+          window=importer/src/cargo/toolchain/window.rs
+          sed -i "s/^pub(crate) const NEWEST: &str = \".*\";$/pub(crate) const NEWEST: \&str = \"$COMMIT_DATE\";/" "$window"
+          # The range's end names the window everywhere it is written.
+          for file in "$window" README.md site/src/content/docs/imports.html \
+            site/src/content/docs/reference/requirements.html; do
+            sed -i "s/$END/$NAME/g" "$file"
+          done
+          git diff --stat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git commit -am "chore: extend the nightly window to $NAME"
+          git push --force origin "$BRANCH"
+          title="Extend the nightly window to $NAME"
+          body="The scheduled [nightly-window run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) built rawr-import-driver on \`$NAME\` (commit-date $COMMIT_DATE) and read its std with it. This moves the window's end from \`$END\` to \`$NAME\`.
+
+          Close and reopen this pull request to run the Linux workflow on it: one opened by GitHub Actions starts none."
+          number="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' | head -n 1)"
+          if [[ -n "$number" ]]; then
+            gh pr edit "$number" --title "$title" --body "$body"
+          else
+            gh pr create --head "$BRANCH" --title "$title" --body "$body"
+          fi
+
+      # One open issue: a later failing nightly retitles it, since the fix
+      # for the first usually covers the next.
+      - name: Open or update the issue about the breaking nightly
+        if: steps.build.outputs.ok == 'false' || steps.smoke.outputs.ok == 'false'
+        env:
+          NAME: ${{ steps.nightly.outputs.name }}
+          DATE: ${{ steps.nightly.outputs.date }}
+          COMMIT_DATE: ${{ steps.nightly.outputs.commit_date }}
+          STAGE: ${{ steps.build.outputs.ok == 'false' && 'build' || 'std read' }}
+        run: |
+          title="Nightly $DATE breaks rawr-import-driver"
+          body="$RUNNER_TEMP/issue.md"
+          {
+            echo "The scheduled [nightly-window run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) failed the driver's $STAGE on \`$NAME\` (commit-date $COMMIT_DATE), with RAWR_NIGHTLY_PROBE relaxing the window."
+            echo
+            echo "Add a \`rawr_rustc_*\` entry dated with the breaking merge's commit-date to \`CHANGES\` in \`importer/src/cargo/toolchain/window.rs\`, and its shim in \`importer/src/driver/compat.rs\`. The next run then opens a pull request moving the window."
+            echo
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/errors.txt"
+            echo
+            echo '```'
+          } > "$body"
+          number="$(gh issue list --state open --search 'breaks rawr-import-driver in:title' \
+            --json number,title \
+            --jq '.[] | select(.title | test("^Nightly .* breaks rawr-import-driver$")) | .number' \
+            | head -n 1)"
+          if [[ -n "$number" ]]; then
+            gh issue edit "$number" --title "$title" --body-file "$body"
+          else
+            gh issue create --title "$title" --body-file "$body"
+          fi

@@ -1199,6 +1199,100 @@ where
     qr_code::QRCode::new(data)
 }
 
+/// iced's `markdown`: parsed items a view borrows as a slice.
+pub mod markdown {
+    use crate::widgets::Widget;
+
+    /// One parsed block, as iced's `markdown::Item`. It isn't `Clone`
+    /// and counts its draws.
+    #[derive(Debug)]
+    pub struct Item {
+        text: String,
+        draws: std::cell::Cell<u32>,
+    }
+
+    /// The target of a link, as iced's `markdown::Uri`.
+    pub type Uri = String;
+
+    /// How items are shown.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Settings {
+        text_size: f32,
+    }
+
+    impl Default for Settings {
+        fn default() -> Self {
+            Self { text_size: 16.0 }
+        }
+    }
+
+    impl Settings {
+        /// The settings with text of `text_size`.
+        pub fn with_text_size(text_size: f32) -> Self {
+            Self { text_size }
+        }
+    }
+
+    /// The items of each line of `markdown` that holds text. iced's
+    /// gives them as an iterator.
+    pub fn parse(markdown: &str) -> Vec<Item> {
+        markdown
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| Item {
+                text: line.trim().to_owned(),
+                draws: std::cell::Cell::new(0),
+            })
+            .collect()
+    }
+
+    /// The widget of `items`, which it borrows for `'a`, as iced's
+    /// `markdown::view`: its type is opaque, behind the trait `map` is a
+    /// method of, as iced's `Widget` is. A press on an item's text sends
+    /// that text as a link.
+    pub fn view<'a, Theme, Renderer>(
+        items: &'a [Item],
+        settings: impl Into<Settings>,
+        theme: Theme,
+    ) -> impl crate::widgets::Framed<Uri, Theme, Renderer> + 'a
+    where
+        Theme: 'static,
+    {
+        struct View<'a, Theme> {
+            items: &'a [Item],
+            settings: Settings,
+            theme: std::marker::PhantomData<Theme>,
+        }
+
+        impl<Theme, Renderer> Widget<Uri, Theme, Renderer> for View<'_, Theme> {
+            fn labels(&self, labels: &mut Vec<String>) {
+                for item in self.items {
+                    let draws = item.draws.get() + 1;
+                    item.draws.set(draws);
+                    labels.push(format!(
+                        "md {}@{} draw {draws}",
+                        item.text, self.settings.text_size
+                    ));
+                }
+            }
+
+            fn press(&self, label: &str) -> Option<Uri> {
+                self.items
+                    .iter()
+                    .find(|item| item.text == label)
+                    .map(|item| item.text.clone())
+            }
+        }
+
+        let _ = theme;
+        View {
+            items,
+            settings: settings.into(),
+            theme: std::marker::PhantomData,
+        }
+    }
+}
+
 /// A searchable choice, as iced's `combo_box`.
 pub mod choose {
     use crate::widgets::Widget;

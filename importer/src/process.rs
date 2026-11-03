@@ -445,7 +445,7 @@ impl Preflight {
                 [
                     "which",
                     "--toolchain",
-                    crate::cargo::toolchain::CHANNEL,
+                    crate::cargo::toolchain::active().name(),
                     program.as_str(),
                 ]
                 .map(OsString::from)
@@ -462,7 +462,7 @@ impl Preflight {
                     "component",
                     "list",
                     "--toolchain",
-                    crate::cargo::toolchain::CHANNEL,
+                    crate::cargo::toolchain::active().name(),
                     "--installed",
                 ]
                 .map(OsString::from)
@@ -474,7 +474,7 @@ impl Preflight {
                     "target",
                     "list",
                     "--toolchain",
-                    crate::cargo::toolchain::CHANNEL,
+                    crate::cargo::toolchain::active().name(),
                     "--installed",
                 ]
                 .map(OsString::from)
@@ -720,7 +720,8 @@ impl Native {
         })
     }
 
-    /// Discover the pinned installation from one already sealed import context.
+    /// Discover the adopted toolchain's installation (`toolchain::active`)
+    /// from one already sealed import context.
     pub(crate) fn pinned_in(
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,
@@ -766,11 +767,11 @@ impl Native {
             &rustup,
             Program::Rustdoc,
             current_dir,
-            command_environment,
+            command_environment.clone(),
             limits,
         )?;
         #[cfg(feature = "rustc-driver")]
-        let driver = find_driver_in()?;
+        let driver = active_driver(environment, &command_environment)?;
         Ok(Self {
             cargo: canonical_program_in("cargo executable", &cargo)?,
             rustc: canonical_program_in("rustc executable", &rustc)?,
@@ -800,11 +801,13 @@ impl Native {
         }
     }
 
-    /// The installation the sealed environment selects. It launches nothing
-    /// unless the pinned toolchain or one of its components is missing, which
-    /// rustup then installs. These paths key the toolchain record, so
-    /// different installs keep different records instead of rejecting each
-    /// other.
+    /// The installation the sealed environment selects for the project in
+    /// `current_dir` (`toolchain::Selection`), which this process adopts. It
+    /// launches the toolchain's `rustc -vV` and `cargo -vV`, and rustup only
+    /// when the toolchain or one of its components is missing; a toolchain
+    /// other than the pinned nightly also gets its driver built the first
+    /// time. These paths key the toolchain record, so different installs keep
+    /// different records instead of rejecting each other.
     pub(crate) fn selected_in(
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,
@@ -844,16 +847,25 @@ impl Native {
             .entries()
             .map(|(key, value)| (OsString::from(key), OsString::from(value)))
             .collect::<Vec<_>>();
+        let selection = crate::cargo::toolchain::Selection::resolve(
+            current_dir,
+            value,
+            &rustup_home,
+            crate::cargo::toolchain::HOST,
+        )?;
         let installed = crate::cargo::toolchain::Installed::ensure(
             &rustup,
             &rustup_home,
+            &selection,
             &command_environment,
         )?;
         let toolchain = fs::canonicalize(installed.root()).map_err(|source| Error::Io {
-            operation: "canonicalize pinned toolchain root",
+            operation: "canonicalize the selected toolchain's root",
             path: installed.root().to_path_buf(),
             source,
         })?;
+        crate::cargo::toolchain::Identity::read(&selection, &toolchain, &command_environment)?
+            .adopt()?;
         let selected_cargo =
             canonical_program_in("Cargo executable", &toolchain.join("bin/cargo"))?;
         let selected_rustc =
@@ -866,7 +878,7 @@ impl Native {
             rustdoc: selected_rustdoc,
             rustup,
             #[cfg(feature = "rustc-driver")]
-            driver: find_driver_in()?,
+            driver: active_driver(environment, &command_environment)?,
         })
     }
 
@@ -1323,6 +1335,30 @@ fn find_driver_in() -> Result<PathBuf> {
         fetch_driver(target_directory)?;
     }
     canonical_program_in("metadata probe driver", &candidate)
+}
+
+/// The driver for the toolchain this process adopted: the one beside
+/// `rawr-import` for the pinned nightly, else the one built for it in rawr's
+/// home (`toolchain::Built`), built first if there is none.
+#[cfg(feature = "rustc-driver")]
+fn active_driver(
+    environment: &crate::cargo::config::Environment,
+    command_environment: &[(OsString, OsString)],
+) -> Result<PathBuf> {
+    let identity = crate::cargo::toolchain::active();
+    let Some(root) = identity.root().filter(|_| !identity.is_pinned()) else {
+        return find_driver_in();
+    };
+    let cargo_home = environment.cargo_home()?.ok_or_else(|| Error::Request {
+        reason: "neither `CARGO_HOME` nor `HOME` is set, so rawr's home can't be found".into(),
+    })?;
+    let built = crate::cargo::toolchain::Built::ensure(
+        &crate::store::home(&cargo_home),
+        identity,
+        root,
+        command_environment,
+    )?;
+    canonical_program_in("metadata probe driver", &built.driver())
 }
 
 /// Install the driver of this version beside a `rawr-import` built without

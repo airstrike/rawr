@@ -298,10 +298,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             methods.insert(self.budget.owned(item.name().as_str())?);
                         }
                     }
-                    for (clause, _) in self
-                        .tcx
-                        .explicit_super_predicates_of(trait_id)
-                        .skip_binder()
+                    for (clause, _) in
+                        crate::compat::explicit_super_clauses(self.tcx, trait_id).skip_binder()
                     {
                         if let ty::ClauseKind::Trait(bound) = clause.kind().skip_binder() {
                             pending.push(bound.def_id());
@@ -390,7 +388,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     }
 
     pub(super) fn hash(&mut self, def_id: DefId) -> Hash {
-        let hash = self.tcx.def_path_hash(def_id).to_raw_def_path_hash().0;
+        let hash = self.tcx.def_path_hash(def_id).0.to_le_bytes();
         self.definitions.insert(hash, def_id);
         hash
     }
@@ -416,8 +414,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
 
     pub(super) fn obligation_key(&self, obligation: TraitObligation<'tcx>) -> String {
         let polarity: u8 = match obligation.polarity {
-            ty::PredicatePolarity::Positive => 0,
-            ty::PredicatePolarity::Negative => 1,
+            crate::compat::ClausePolarity::Positive => 0,
+            crate::compat::ClausePolarity::Negative => 1,
         };
         self.stable(&(
             (
@@ -551,6 +549,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 let polarity = match header.polarity {
                     ty::ImplPolarity::Positive => Polarity::Positive,
                     ty::ImplPolarity::Negative => Polarity::Negative,
+                    #[cfg(not(rawr_rustc_no_reservation_impls))]
                     ty::ImplPolarity::Reservation => {
                         self.breadcrumb(
                             "complete",
@@ -680,9 +679,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 implementations.push((impl_id, reference.args));
             }
         }
-        implementations.sort_unstable_by_key(|(impl_id, _)| {
-            tcx.def_path_hash(*impl_id).to_raw_def_path_hash().0
-        });
+        implementations
+            .sort_unstable_by_key(|(impl_id, _)| tcx.def_path_hash(*impl_id).0.to_le_bytes());
         for (impl_id, arguments) in implementations {
             let obligation = AssociatedObligation {
                 kind: AssociatedDemandKind::SelectedMember,
@@ -769,8 +767,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                 traits.push(trait_id);
             }
         }
-        traits
-            .sort_unstable_by_key(|trait_id| tcx.def_path_hash(*trait_id).to_raw_def_path_hash().0);
+        traits.sort_unstable_by_key(|trait_id| tcx.def_path_hash(*trait_id).0.to_le_bytes());
         traits.dedup();
         // A generic type whose every parameter has a default is reached
         // at that instance, which its path names as a type: palette's
@@ -957,12 +954,12 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             if generics.parent.is_some() {
                 continue;
             }
-            for (clause, _) in tcx.predicates_of(implementation).predicates {
+            for (clause, _) in crate::compat::own_clauses(tcx, implementation) {
                 self.edge(1)?;
                 let ty::ClauseKind::Trait(predicate) = clause.kind().skip_binder() else {
                     continue;
                 };
-                if predicate.polarity != ty::PredicatePolarity::Positive
+                if predicate.polarity != crate::compat::ClausePolarity::Positive
                     || !matches!(predicate.self_ty().kind(), ty::Param(bounded) if bounded.index == blanket.index)
                 {
                     continue;
@@ -1015,8 +1012,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         }
         found.sort_unstable_by_key(|(implementation, base, _)| {
             (
-                tcx.def_path_hash(*implementation).to_raw_def_path_hash().0,
-                tcx.def_path_hash(*base).to_raw_def_path_hash().0,
+                tcx.def_path_hash(*implementation).0.to_le_bytes(),
+                tcx.def_path_hash(*base).0.to_le_bytes(),
             )
         });
         found.dedup_by_key(|(implementation, base, _)| (*implementation, *base));
@@ -1049,16 +1046,16 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         &mut self,
         implementation: DefId,
         base: DefId,
-        arguments: ty::GenericArgsRef<'tcx>,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
         adt: DefId,
         obligation: AssociatedObligation<'tcx>,
     ) -> Result<(), String> {
         let tcx = self.tcx;
         let mut digest = Sha256::new();
         digest.update(b"rawr.blanket-through-application/v1");
-        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(base).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
+        digest.update(tcx.def_path_hash(implementation).0.to_le_bytes());
+        digest.update(tcx.def_path_hash(base).0.to_le_bytes());
+        digest.update(tcx.def_path_hash(adt).0.to_le_bytes());
         let digest = digest.finalize();
         let key = hex(&digest[..16])?;
         let instantiated = tcx
@@ -1141,8 +1138,8 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
         let tcx = self.tcx;
         let mut digest = Sha256::new();
         digest.update(b"rawr.blanket-application/v1");
-        digest.update(tcx.def_path_hash(implementation).to_raw_def_path_hash().0);
-        digest.update(tcx.def_path_hash(adt).to_raw_def_path_hash().0);
+        digest.update(tcx.def_path_hash(implementation).0.to_le_bytes());
+        digest.update(tcx.def_path_hash(adt).0.to_le_bytes());
         let digest = digest.finalize();
         let key = hex(&digest[..16])?;
         let instantiated = tcx
@@ -1222,7 +1219,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     fn applied_associated_types(
         &mut self,
         implementation: DefId,
-        arguments: ty::GenericArgsRef<'tcx>,
+        arguments: crate::compat::GenericArgsRef<'tcx>,
         context: DefId,
         id: &Id,
     ) -> Result<Vec<Id>, String> {
@@ -1243,7 +1240,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
             let mut digest = Sha256::new();
             digest.update(b"rawr.applied-associated-type/v1");
             digest.update(id.def_path_hash.as_bytes());
-            digest.update(tcx.def_path_hash(item).to_raw_def_path_hash().0);
+            digest.update(tcx.def_path_hash(item).0.to_le_bytes());
             let digest = digest.finalize();
             let hash: Hash = digest[..16]
                 .try_into()
@@ -1421,7 +1418,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
     /// What a public walk names at one child.
     fn child_export(
         &mut self,
-        child: &rustc_middle::metadata::ModChild,
+        child: &crate::compat::ModChild,
     ) -> Result<engine::ChildExport, String> {
         let tcx = self.tcx;
         // A re-exported variant, as `pub use Alignment::Center;`, names its
@@ -1465,7 +1462,7 @@ impl<'tcx> Builder<'tcx, '_, '_, '_> {
                             || child.reexport_chain.is_empty()
                             || !matches!(
                                 child.reexport_chain.last(),
-                                Some(rustc_middle::metadata::Reexport::Single(_))
+                                Some(crate::compat::Reexport::Single(_))
                             ))
                     {
                         Some("anonymous import lacks exact trait single-import evidence".to_owned())
