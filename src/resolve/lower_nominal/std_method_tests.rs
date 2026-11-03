@@ -508,4 +508,35 @@ main();
             "{call}: {report}"
         );
     }
+
+fn language_an_options_clone_borrows_its_receiver() {
+    // std writes `const impl<T> Clone for Option<T> where T: [const] Clone
+    // + [const] Destruct`; the table keeps that impl, so `clone` takes
+    // `&self` through a field of `&self` and through a `&Option`.
+    let source = r#"
+struct App {
+    t: Option<String>,
+}
+
+impl App {
+    fn get(&self) -> Option<String> {
+        self.t.clone()
+    }
+}
+
+fn get(o: &Option<String>) -> Option<String> {
+    o.clone()
+}
+
+fn main() {
+    let app = App { t: Some(String::from("a")) };
+    let o = Some(String::from("b"));
+    println!("{:?} {:?} {:?} {:?}", app.get(), get(&o), app.t, o);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Some(\"a\") Some(\"b\") Some(\"a\") Some(\"b\")\n"
+    );
 }
