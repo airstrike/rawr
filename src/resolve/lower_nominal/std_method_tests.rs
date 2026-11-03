@@ -242,7 +242,7 @@ fn main() {
     let mut it = v.iter().peekable();
     let first = it.peek().copied();
     let rest: Vec<i64> = it.map(|x| x * 2).collect();
-    let pairs: Vec<(usize, &i64)> = v.iter().enumerate().filter(|(_, x)| **x > 1).collect();
+    let pairs: Vec<(usize, &i64)> = v.iter().enumerate().filter(|&(_, x)| *x > 1).collect();
     let both: Vec<&i64> = v.iter().chain(v.iter().rev()).take(6).collect();
     println!("{:?} {:?} {:?} {:?}", first, rest, pairs, both);
 }
@@ -273,7 +273,7 @@ main();
     // A method std declares that rawr doesn't run yet, never an unknown
     // member.
     for (call, path) in [
-        ("rposition(|x| *x > 1)", "Iterator::rposition"),
+        ("rposition(|x: &i64| *x > 1)", "Iterator::rposition"),
         ("next_back()", "DoubleEndedIterator::next_back"),
     ] {
         let report = refused(&format!(
