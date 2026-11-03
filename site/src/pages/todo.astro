@@ -101,9 +101,13 @@ const tally = (rows: Row[]) => {
   // The tab, before the page paints: /todo#<tab>, else the chart (whose
   // groups and rows keep their own anchors).
   (() => {
+    // A release (#v0.3.115) or one of its changes (#v0.3.115-2) opens the
+    // changelog.
     const tabs = ["gantt", "changelog", "todo", "decisions", "code"];
     const hash = decodeURIComponent(location.hash.slice(1));
-    document.documentElement.dataset.tab = tabs.includes(hash) ? hash : "gantt";
+    document.documentElement.dataset.tab = tabs.includes(hash)
+      ? hash
+      : /^v\d/.test(hash) ? "changelog" : "gantt";
   })();
 </script>
 <style is:inline>
@@ -247,6 +251,12 @@ const tally = (rows: Row[]) => {
   .release li:last-child { border-bottom: 0; }
   .release .refs { display: inline; margin-left: 6px; color: var(--quiet); }
   .release .refs a { color: inherit; }
+  .release .anchor { color: inherit; text-decoration: none; }
+  .release li { position: relative; scroll-margin-top: 24px; }
+  .release .mark { position: absolute; left: -1.1em; color: var(--quiet); opacity: 0; }
+  .release li:hover .mark, .release .mark:focus { opacity: 1; }
+  .release li:target { background: #fff5c2; }
+  .release:target h2 a { text-decoration: underline; }
 
   /* TODO: radio filters, then the categories. */
   .filters { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 14px 0; border-bottom: 1px solid var(--rule); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -416,12 +426,12 @@ const tally = (rows: Row[]) => {
   </article>
   {CHANGELOG.releases.map((r) => (
     <article class="release" id={`v${r.version}`}>
-      <div><h2>{r.version}</h2><span class="date">{r.date}</span></div>
+      <div><h2><a class="anchor" href={`#v${r.version}`}>{r.version}</a></h2><span class="date">{r.date}</span></div>
       <div>
         {r.lede && <p class="say"><Text text={r.lede} /></p>}
         <ul>
-          {r.entries.map((e) => (
-            <li><Text text={e.text} />{(e.issues.length > 0 || e.refs) && <span class="refs">({e.issues.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}{e.refs && <>{e.issues.length > 0 && "; "}part of {e.refs.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}</>})</span>}</li>
+          {r.entries.map((e, i) => (
+            <li id={`v${r.version}-${i + 1}`}><a class="anchor mark" href={`#v${r.version}-${i + 1}`} aria-label={`Link to this change in ${r.version}`}>#</a><Text text={e.text} />{(e.issues.length > 0 || e.refs) && <span class="refs">({e.issues.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}{e.refs && <>{e.issues.length > 0 && "; "}part of {e.refs.map((n, i) => <>{i > 0 && ", "}<a href={issueUrl(n)}>#{n}</a></>)}</>})</span>}</li>
           ))}
         </ul>
       </div>
@@ -536,7 +546,7 @@ const tally = (rows: Row[]) => {
     }
     const fromHash = () => {
       const hash = decodeURIComponent(location.hash.slice(1));
-      show(tabs.includes(hash) ? hash : "gantt");
+      show(tabs.includes(hash) ? hash : /^v\d/.test(hash) ? "changelog" : "gantt");
     };
     addEventListener("popstate", fromHash);
     addEventListener("hashchange", fromHash);
