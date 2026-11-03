@@ -10,8 +10,12 @@
 //! upgrades while a handle is alive. Std's `Deref` reads the value, and
 //! `get_mut` and `make_mut` lend the cell as the place a `&mut T` changes.
 //!
-//! An `Rc` or `Arc` of a crate's value doesn't cross to a crate as the
-//! pointer itself yet: that waits on crate signatures naming them (#746).
+//! An `Rc` or `Arc` of a crate's value stands for the crate's own pointer
+//! once one crosses (#775): its value is the crate value's handle, whose
+//! slot the runner's native pointer is the home of, and the allocation is
+//! linked to that pointer ([`Link`]). Its count is then
+//! rawr's handles and the native pointers outside rawr, as Rust's is, and
+//! two pointers to one native allocation are `ptr_eq`.
 
 use super::*;
 
@@ -20,9 +24,17 @@ type WeakShared<T> = std::rc::Weak<T>;
 #[cfg(feature = "sync")]
 type WeakShared<T> = std::sync::Weak<T>;
 
-/// One allocation: the value, in a cell `get_mut` and `make_mut` lend.
+/// What a runner reads of a crate's own `Rc` or `Arc` that a rawr `Rc` or
+/// `Arc` stands for (#775), given the pointer's value, the handle of the
+/// crate value it points to: its strong count and its address, while the
+/// value is in it.
+pub type Link = fn(&Dynamic) -> Option<(usize, usize)>;
+
+/// One allocation: the value, in a cell `get_mut` and `make_mut` lend,
+/// and the crate's own pointer it stands for, once one crosses.
 pub struct Allocation {
     value: Dynamic,
+    native: std::sync::OnceLock<Link>,
 }
 
 /// An `Rc` or `Arc`.
@@ -38,6 +50,7 @@ impl Counted {
     fn new(value: Dynamic) -> Self {
         Self(crate::Shared::new(Allocation {
             value: cell::made(value, false),
+            native: std::sync::OnceLock::new(),
         }))
     }
 
@@ -45,8 +58,30 @@ impl Counted {
         cell::value(&self.0.value).unwrap_or(Dynamic::UNIT)
     }
 
+    /// The strong count and address of the crate's own pointer this
+    /// stands for, while its value is in the pointer.
+    fn native(&self) -> Option<(usize, usize)> {
+        let link = self.0.native.get()?;
+        link(&self.get())
+    }
+
+    /// rawr's handles, and the crate's pointers but the one rawr's
+    /// allocation holds.
     fn strong(&self) -> usize {
-        crate::Shared::strong_count(&self.0)
+        let native = self
+            .native()
+            .map_or(0, |(count, _)| count.saturating_sub(1));
+        crate::Shared::strong_count(&self.0) + native
+    }
+
+    /// Whether `self` and `other` point to one allocation: rawr's, or the
+    /// crate's own both stand for.
+    fn ptr_eq(&self, other: &Self) -> bool {
+        crate::Shared::ptr_eq(&self.0, &other.0)
+            || matches!(
+                (self.native(), other.native()),
+                (Some((_, left)), Some((_, right))) if left == right
+            )
     }
 
     fn weak(&self) -> usize {
@@ -84,6 +119,35 @@ pub(crate) fn is_weak(value: &Dynamic) -> bool {
 /// A new `Rc` or `Arc` of `value`.
 pub(crate) fn new(value: Dynamic) -> Dynamic {
     Dynamic::from(Counted::new(value))
+}
+
+/// A new `Rc` or `Arc` of `value`, a crate value's handle, standing for
+/// the crate's own pointer `link` reads.
+#[cfg(feature = "sync")]
+pub(crate) fn native(value: Dynamic, link: Link) -> Dynamic {
+    let counted = Counted::new(value);
+    let _ = counted.0.native.set(link);
+    Dynamic::from(counted)
+}
+
+/// The value the `Rc` or `Arc` `value` points to, rawr's strong count of
+/// it, and whether `value` is rawr's only pointer to it, strong or weak.
+#[cfg(feature = "sync")]
+pub(crate) fn pointee(value: &Dynamic) -> Option<(Dynamic, usize, bool)> {
+    with_counted(value, |pointer| {
+        let strong = crate::Shared::strong_count(&pointer.0);
+        let only = strong == 1 && crate::Shared::weak_count(&pointer.0) == 0;
+        (pointer.get(), strong, only)
+    })
+}
+
+/// Link the `Rc` or `Arc` `value` to the crate's own pointer `link` reads,
+/// once.
+#[cfg(feature = "sync")]
+pub(crate) fn link(value: &Dynamic, link: Link) {
+    with_counted(value, |pointer| {
+        let _ = pointer.0.native.set(link);
+    });
 }
 
 /// `Weak::new()`: a `Weak` of no allocation.
@@ -138,7 +202,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         PreludeOp::CountedPtrEq => {
             let (first, second) = (&*args[0], &*args[1]);
             with_counted(first, |pointer| {
-                with_counted(second, |other| crate::Shared::ptr_eq(&pointer.0, &other.0))
+                with_counted(second, |other| pointer.ptr_eq(other))
             })
             .flatten()
             .map(Dynamic::from_bool)

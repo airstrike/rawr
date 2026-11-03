@@ -1413,6 +1413,43 @@ fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
     );
 }
 
+/// An `Rc` or `Arc` of a crate's type crosses as the crate's own pointer
+/// (#775): one the crate gives keeps the copy the crate holds in its count
+/// and is `ptr_eq` to another of the same allocation; an `Arc` taken by
+/// value sees rawr's other pointers in its count; one passed and given
+/// back is the same pointer; and one the program makes with `Arc::new`
+/// becomes the crate's pointer the first time it crosses. Its value's
+/// methods run through `Deref`. The output is `cargo run`'s.
+#[test]
+fn an_arc_of_a_crate_value_crosses_as_the_crates_own_pointer() {
+    let (rawr, cargo) = both_printed("crossing-pointers", "pointers.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "shared 3 true shared\nmade 2 true\nkept true 2 2\nlevel 2\n\
+         after 1 Config { name: \"made\", level: 2 }\nown true 2\nheld 3\n\
+         back true 2 own\nnode leaf node leaf\nholders 3\ndropped 1"
+    );
+}
+
+/// std's maps and sets in a crate's signature are rawr's (#777): a
+/// `&HashMap` and a `&BTreeMap` of crate values without `Clone` lend each
+/// value to the call and keep it after, a `&HashSet` of strings and a
+/// `HashMap` by value are made from rawr's, and a `BTreeMap`, a `HashMap`
+/// of crate values, a `BTreeSet` and a `HashSet` given back are rawr's,
+/// in key order. The output is `cargo run`'s.
+#[test]
+fn maps_and_sets_cross_as_rawrs_keyed_collections() {
+    let (rawr, cargo) = both_printed("crossing-keyed", "keyed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "total 7\nkept 3 2\ncheapest nib nib\nprices {\"a\": 1, \"b\": 2}\n\
+         catalog [\"cup\", \"mug\"] 5\ntags 8\nevens {0, 2, 4, 6}\n\
+         letters ['a', 'b', 'c']\ninvert {1: \"one\", 2: \"two\"}"
+    );
+}
+
 /// std's types in a crate's signature are its own in every position (D711
 /// step 5, #707): a tuple taken and given, `&String`, `&Vec<T>`,
 /// `Range<usize>` taken and given, `&Path` and a `Box<i64>` taken, given

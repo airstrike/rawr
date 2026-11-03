@@ -18,6 +18,11 @@ const INSTANT_DOMAIN: &[u8] = b"rawr.identity.instant/v1";
 const INFALLIBLE_DOMAIN: &[u8] = b"rawr.identity.infallible/v1";
 const RANGE_INCLUSIVE_DOMAIN: &[u8] = b"rawr.identity.range-inclusive/v1";
 const BOX_DOMAIN: &[u8] = b"rawr.identity.box/v1";
+const RC_DOMAIN: &[u8] = b"rawr.identity.rc/v1";
+const ARC_DOMAIN: &[u8] = b"rawr.identity.arc/v1";
+const KEYED_DOMAIN: &[u8] = b"rawr.identity.keyed/v1";
+/// std's keyed collections, which cross as rawr's (#777).
+const KEYED: [&str; 4] = ["HashMap", "HashSet", "BTreeMap", "BTreeSet"];
 const TEXT_MEMBER_DOMAIN: &[u8] = b"rawr.identity.text-member/v1";
 const SELF_MEMBER_DOMAIN: &[u8] = b"rawr.identity.self-member/v1";
 const CALLABLE_DOMAIN: &[u8] = b"rawr.identity.callable/v1";
@@ -282,6 +287,40 @@ impl Definition {
         Self(Framed::new(BOX_DOMAIN).finish())
     }
 
+    /// Rust's `Rc<T>` (`arc` false) or `Arc<T>` of a crate's `T`, which
+    /// crosses as rawr's counted pointer whose value is the crate's own
+    /// pointer, made in the runner (#775). It lives in `alloc`, which no
+    /// crate's facade declares.
+    #[must_use]
+    pub fn counted(arc: bool) -> Self {
+        Self(Framed::new(if arc { ARC_DOMAIN } else { RC_DOMAIN }).finish())
+    }
+
+    /// Whether these bytes name Rust's `Arc` (`Some(true)`) or `Rc`
+    /// (`Some(false)`), as [`Self::counted`] names them.
+    #[must_use]
+    pub fn counter(bytes: &[u8; 32]) -> Option<bool> {
+        [false, true]
+            .into_iter()
+            .find(|arc| Self::counted(*arc).0 == *bytes)
+    }
+
+    /// std's keyed collection `name` (`HashMap`, `HashSet`, `BTreeMap` or
+    /// `BTreeSet`), which crosses as rawr's collection of that kind (#777).
+    /// It lives in `std` or `alloc`, which no crate's facade declares.
+    #[must_use]
+    pub fn keyed(name: &str) -> Self {
+        let mut framed = Framed::new(KEYED_DOMAIN);
+        framed.strings([name].into_iter());
+        Self(framed.finish())
+    }
+
+    /// The keyed collection these bytes name, as [`Self::keyed`] names it.
+    #[must_use]
+    pub fn keyed_kind(bytes: &[u8; 32]) -> Option<&'static str> {
+        KEYED.into_iter().find(|name| Self::keyed(name).0 == *bytes)
+    }
+
     /// Rust's `std::time::Instant`, which crosses by value as Rawr's own
     /// `Instant`. It lives in `std`, which no crate's facade declares.
     #[must_use]
@@ -351,8 +390,8 @@ impl Definition {
 
     /// Whether these bytes name a type rawr declares for a Rust value no
     /// imported crate declares: a future, a duration, an instant, an
-    /// inclusive range, a box, `Infallible`, one of std's held types or a
-    /// script value.
+    /// inclusive range, a box, an `Rc` or an `Arc`, a keyed collection,
+    /// `Infallible`, one of std's held types or a script value.
     #[must_use]
     pub fn is_projected(bytes: &[u8; 32]) -> bool {
         Self::std_path(bytes).is_some()
@@ -362,6 +401,8 @@ impl Definition {
             || *bytes == Self::infallible().0
             || *bytes == Self::range_inclusive().0
             || *bytes == Self::boxed().0
+            || Self::counter(bytes).is_some()
+            || Self::keyed_kind(bytes).is_some()
             || *bytes == Self::value().0
     }
 
