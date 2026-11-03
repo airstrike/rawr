@@ -11489,6 +11489,12 @@ struct Parser<'a> {
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
+    /// The locals holding a `v.iter_mut()`, by name, each stepped by
+    /// `next()` (`places::HeldIterMut`).
+    held_iter_mut: BTreeMap<ImmutableString, places::HeldIterMut>,
+    /// The `v.iter_mut()` just read as a whole `let`'s value, which the
+    /// `let` keeps in `held_iter_mut`.
+    pending_iter_mut: Option<places::HeldIterMut>,
     /// The locals holding a map entry's `&mut`, as `let grains =
     /// map.entry(k).or_default();`, by name: their declaration and the
     /// tokens of the entry, which each use reads again.
@@ -11847,6 +11853,8 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
+            held_iter_mut: BTreeMap::new(),
+            pending_iter_mut: None,
             entry_aliases: BTreeMap::new(),
             last_cell_borrow: None,
             cell_guards: BTreeMap::new(),
@@ -23354,6 +23362,17 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let mut it = v.iter_mut();`: each `it.next()` lends the next
+        // element of `v`.
+        match self.pending_iter_mut.take() {
+            Some(mut held) if held.declaration == value.span => {
+                held.declaration = name_span;
+                self.held_iter_mut.insert(name.clone(), held);
+            }
+            _ => {
+                self.held_iter_mut.remove(&name);
+            }
+        }
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
@@ -38536,6 +38555,14 @@ impl<'a> Parser<'a> {
         self.mention(&name, declaration, &ty, name_span);
         if let Some(element) = self.aliased_element(&name, declaration, &ty, name_span)? {
             return Ok(element);
+        }
+        if let Some(held) = self
+            .held_iter_mut
+            .get(&name)
+            .filter(|held| held.declaration == declaration)
+            .cloned()
+        {
+            return self.step_iter_mut(&name, held, name_span);
         }
         // A local bound to a `RefCell` borrow: the cell's value. A closure
         // or async body reads its own borrows, not one it captures.

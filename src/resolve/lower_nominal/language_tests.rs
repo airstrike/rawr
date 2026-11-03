@@ -8053,6 +8053,44 @@ fn language_get_mut_and_iter_mut_find_lend_an_element() {
 }
 
 #[test]
+fn language_iter_mut_held_in_a_local_steps_with_next() {
+    // `let mut it = v.iter_mut();` lends each element in turn to `next()`.
+    let value = run_string(
+        r#"
+        struct P { n: i64 }
+        struct Q { ps: Vec<P> }
+        impl Q {
+            fn first_two(&mut self) {
+                let mut it = self.ps.iter_mut();
+                if let Some(p) = it.next() { p.n += 100; }
+                if let Some(p) = it.next() { p.n += 200; }
+            }
+        }
+        pub fn run() -> String {
+            let mut v = vec![1, 2, 3];
+            let mut it = v.iter_mut();
+            while let Some(x) = it.next() { *x *= 10; }
+            let mut w = vec![String::from("a"), String::from("b")];
+            let mut words = w.iter_mut();
+            let first = words.next().unwrap();
+            first.push('!');
+            let past = match words.next() { Some(s) => { s.push('?'); words.next().is_none() } None => false };
+            let mut q = Q { ps: vec![P { n: 1 }, P { n: 2 }, P { n: 3 }] };
+            q.first_two();
+            format!("{:?} {:?} {} {} {} {}", v, w, past, q.ps[0].n, q.ps[1].n, q.ps[2].n)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "[10, 20, 30] [\"a!\", \"b?\"] true 101 202 3");
+    // `next()` changes the iterator, which must be `mut`, as rustc says.
+    let error = rejected(
+        "pub fn run() -> i64 { let mut v = vec![1]; let it = v.iter_mut(); if let Some(x) = it.next() { *x = 2; } v[0] } run()",
+    );
+    assert!(error.contains("immutable binding 'it'"), "{error}");
+}
+
+#[test]
 fn language_euclidean_division_of_floats_and_integers() {
     let value = Engine::new()
         .eval::<f64>(
