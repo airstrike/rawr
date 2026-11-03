@@ -5355,9 +5355,14 @@ impl<P: api::Phase> Context<'_, P> {
                 parameter.kind().clone(),
             ));
         }
+        // Its bounds name its parameters at their new indices, as
+        // `tag<T: Display>`'s does.
         let own = model::Generics::new(
             own.into_boxed_slice(),
-            generics.predicates().cloned().collect(),
+            generics
+                .predicates()
+                .map(|predicate| substituted_predicate(predicate, &substitutions))
+                .collect(),
         );
         let signature = substituted_signature(signature, &substitutions);
         let inherited =
@@ -8061,6 +8066,32 @@ impl<P: api::Phase> Context<'_, P> {
             // `<T as Trait>::Name` of an impl of the trait for `T` that sets
             // `Name`, as `next`'s `Option<Self::Item>` names an iterator's
             // `Item` (D558 slice 2).
+            // `Self::Item` of a trait's method where it is a member of an
+            // opaque type (`opaque_implementations`): the type the opaque
+            // type's bounds bind it to, as `impl Stocked<Item = String>`.
+            model::Type::Projection {
+                associated,
+                arguments,
+                ..
+            } if matches!(
+                arguments.first(),
+                Some(model::Argument::Type(model::Type::SelfType(_)))
+            ) && self.opaque_self.borrow().is_some() =>
+            {
+                let opaque = self.opaque_self.borrow().clone();
+                let bound = match opaque {
+                    Some(model::Type::ImplTrait { bounds, .. }) => self
+                        .bound_associated(&bounds)
+                        .into_iter()
+                        .find(|(_, item, _)| item == associated)
+                        .map(|(_, _, ty)| ty),
+                    _ => None,
+                };
+                match bound {
+                    Some(ty) => return self.convert(&ty),
+                    None => return Err(representability::reject::Kind::Projection.into()),
+                }
+            }
             model::Type::Projection { .. } => match self.projected(ty) {
                 Some(item) => return self.convert(item),
                 None => return Err(representability::reject::Kind::Projection.into()),

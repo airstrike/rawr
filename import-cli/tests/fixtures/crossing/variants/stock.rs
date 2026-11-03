@@ -16,7 +16,9 @@ fn main() {
     let again = stock.again();
     println!("again {} {}", again.label(), again.first());
     drop(stock);
-    println!("still {}", again.again().label());
+    let still = again.again();
+    println!("still {}", still.label());
+    drop(still);
     println!("names {}", shelf::names(&items));
     drop(again);
     // Neither result borrows the items now.
