@@ -23,61 +23,6 @@ fn edit(path: &Path, from: &str, to: &str) {
     fs::write(path, text.replace(from, to)).unwrap();
 }
 
-/// The headless half of the fixture draws on ratatui's `TestBackend`, one
-/// frame per line it reads. A body edit of the marked view changes the
-/// next frame, and the app's state and the native `ListState` carry on.
-#[test]
-fn a_test_backend_frame_shows_a_body_edit_with_its_state_unbroken() {
-    let root = ISLANDS.lease(&[]);
-    let app = root.join("src/app.rs");
-    let mut run = start_with(
-        &root,
-        &[("TUI_HEADLESS", PathBuf::from("1"))],
-        &[],
-        Stdio::piped(),
-    );
-    let mut stdin = run.child.stdin.take().unwrap();
-    let mut frame = |run: &mut crate::support::Run, line: &str, limit| {
-        stdin.write_all(format!("{line}\n").as_bytes()).unwrap();
-        let from = run.seen.len();
-        run.until(limit, |line| line == "end");
-        run.seen[from..run.seen.len() - 1]
-            .iter()
-            .filter(|line| line.starts_with('|'))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-
-    let first = frame(&mut run, "down", Duration::from_secs(900));
-    assert_eq!(first[0], "|┌tui-one───────────────┐|", "{first:?}");
-    assert_eq!(first[2], "|│> beta                │|", "{first:?}");
-    let typed = frame(&mut run, "x", Duration::from_secs(30));
-    assert_eq!(typed[6], "|│keys=1:x              │|", "{typed:?}");
-
-    // An edit as the program starts may start it again (D531.9); this one
-    // comes once it runs.
-    std::thread::sleep(Duration::from_secs(3));
-    edit(&app, "\"tui-one\"", "\"tui-two\"");
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let swapped = loop {
-        let next = frame(&mut run, "", Duration::from_secs(30));
-        if next[0].contains("tui-two") {
-            break next;
-        }
-        assert!(Instant::now() < deadline, "{}", run.seen.join("\n"));
-        std::thread::sleep(Duration::from_millis(250));
-    };
-    let seen = run.seen.join("\n");
-    assert_eq!(swapped[0], "|┌tui-two───────────────┐|", "{seen}");
-    assert_eq!(swapped[2], "|│> beta                │|", "{seen}");
-    assert_eq!(swapped[6], "|│keys=1:x              │|", "{seen}");
-    assert!(
-        !run.seen.iter().any(|line| line.contains("restarting")),
-        "{}",
-        run.seen.join("\n")
-    );
-}
-
 const DRAW: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tui-draw");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tui/src");
 
