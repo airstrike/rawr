@@ -4587,7 +4587,6 @@ impl<P: api::Phase> Context<'_, P> {
                 } else {
                     let mut records = self.implementations(export, definitions)?.into_vec();
                     records.extend(self.opaque_implementations(export, definition)?);
-                    records.extend(self.trait_opaque_implementations(export, definition)?);
                     records.extend(self.self_member_implementations(export, definition)?);
                     records.into_boxed_slice()
                 };
@@ -4953,76 +4952,66 @@ impl<P: api::Phase> Context<'_, P> {
         self.opaque_records(export, definition, generics, &opaques)
     }
 
-    /// The methods of each trait an opaque `impl Trait` type a method of
-    /// the trait `definition` gives from the trait's own default body
-    /// implements, as `opaque_implementations` gives a function's: iced's
-    /// `Widget::explain` gives a value whose `Widget::boxed` layout calls.
-    /// The method is a function of the trait's `Self`, its parameter 0, as
+    /// The methods of each trait an opaque `impl Trait` type the method
+    /// `method` of the trait `definition` gives implements, as
+    /// `opaque_implementations` gives a function's: iced's `Widget::explain`
+    /// gives a value whose `Widget::boxed` layout calls. The method is a
+    /// function of the trait's `Self`, its parameter 0, as
     /// `classify_self_member` has it, and of the trait's parameters and its
-    /// own.
-    fn trait_opaque_implementations(
+    /// own, so the members are its self member's (`surface::member`).
+    fn method_opaque_implementations(
         &self,
         export: &ledger::Export,
         definition: &model::Definition,
-    ) -> Result<Vec<ImplementationRecord>, Error> {
-        let model::Kind::Trait {
-            associated,
-            generics: container,
-            ..
-        } = definition.kind()
-        else {
-            return Ok(Vec::new());
-        };
-        let trait_id = definition.id();
-        let mut records = Vec::new();
-        for method_id in associated.iter() {
-            let Some(method) = self
-                .graph
-                .definition_index(method_id)
-                .and_then(|index| self.graph.definitions().nth(index))
-            else {
-                continue;
-            };
-            let model::Kind::Function {
+        method: &model::Definition,
+    ) -> Result<Box<[ImplementationRecord]>, Error> {
+        let (
+            model::Kind::Trait {
+                generics: container,
+                ..
+            },
+            model::Kind::Function {
                 signature,
                 generics,
-            } = method.kind()
-            else {
-                continue;
-            };
-            let output = self_as_parameter(signature.output(), trait_id);
-            let mut opaques = Vec::new();
-            impl_traits(&output, &mut opaques);
-            if opaques.is_empty() {
-                continue;
-            }
-            // `Self` is the trait's parameter 0, a parameter of its own here.
-            let parameters = std::iter::once(model::Parameter::new(
-                trait_id.clone(),
-                0,
-                "This".into(),
-                model::ParameterKind::Type {
-                    bounds: Box::default(),
-                    default: model::Default::Absent,
-                },
-            ))
-            .chain(
-                container
-                    .parameters()
-                    .filter(|parameter| parameter.name() != "Self")
-                    .cloned(),
-            )
-            .chain(generics.parameters().cloned())
-            .collect::<Box<[_]>>();
-            let predicates = container
-                .predicates()
-                .chain(generics.predicates())
-                .map(|predicate| self_predicate_as_parameter(predicate, trait_id))
-                .collect::<Box<[_]>>();
-            let generics = model::Generics::new(parameters, predicates);
-            records.extend(self.opaque_records(export, method, &generics, &opaques)?);
+            },
+        ) = (definition.kind(), method.kind())
+        else {
+            return Ok(Box::default());
+        };
+        let trait_id = definition.id();
+        let output = self_as_parameter(signature.output(), trait_id);
+        let mut opaques = Vec::new();
+        impl_traits(&output, &mut opaques);
+        if opaques.is_empty() {
+            return Ok(Box::default());
         }
-        Ok(records)
+        // `Self` is the trait's parameter 0, a parameter of its own here.
+        let parameters = std::iter::once(model::Parameter::new(
+            trait_id.clone(),
+            0,
+            "This".into(),
+            model::ParameterKind::Type {
+                bounds: Box::default(),
+                default: model::Default::Absent,
+            },
+        ))
+        .chain(
+            container
+                .parameters()
+                .filter(|parameter| parameter.name() != "Self")
+                .cloned(),
+        )
+        .chain(generics.parameters().cloned())
+        .collect::<Box<[_]>>();
+        let predicates = container
+            .predicates()
+            .chain(generics.predicates())
+            .map(|predicate| self_predicate_as_parameter(predicate, trait_id))
+            .collect::<Box<[_]>>();
+        let generics = model::Generics::new(parameters, predicates);
+        Ok(self
+            .opaque_records(export, method, &generics, &opaques)?
+            .into_boxed_slice())
     }
 
     /// The members of each opaque type in `opaques`, which the function
@@ -5180,13 +5169,14 @@ impl<P: api::Phase> Context<'_, P> {
                 method_signature,
                 method_generics,
             )?;
+            let implementations = self.method_opaque_implementations(export, definition, method)?;
             outcomes.push(OutcomeRecord {
                 export: export.key().clone(),
                 identity,
                 name: name.into(),
                 origin: Some(origin),
                 evidence,
-                implementations: Box::default(),
+                implementations,
                 variant: None,
             });
         }

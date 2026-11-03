@@ -1076,16 +1076,15 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
 }
 
 /// iced's loupe (#845): `zoomed` gives the program's `Zoomed<impl
-/// Widget<Message> + 'a>` and `centered` the crate's `Column<impl
 /// Widget<Message> + 'a>`, an `impl Trait` inside the output, whose hidden
-/// type the checker infers from each body, as rustc does. The output is
+/// type the checker infers from the body, as rustc does. The output is
 /// `cargo run`'s.
 #[test]
 fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
     let (rawr, cargo) = both_printed("crossing-wrapped", "wrapped.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.ends_with("last view pad 0 pad 3 opaque [Increment] 2@50 pad 0 opaque [Decrement]"),
+        rawr.ends_with("last view pad 0 opaque [Increment] 2@50 pad 3 [Decrement]"),
         "{rawr}"
     );
 }

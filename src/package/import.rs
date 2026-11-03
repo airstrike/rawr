@@ -1390,6 +1390,10 @@ struct Facade<'contract> {
     /// which a program's own type that implements the trait calls
     /// (`surface::member`).
     self_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
+    /// The members of the opaque type each of `self_members` gives, each at
+    /// its path beside that type, as iced's `Widget::explain` gives one
+    /// whose `boxed` a program calls (`surface::opaque`).
+    opaque_members: Vec<(String, rawr_import::classify::Outcome<'contract>)>,
     /// The root's re-exports of std items, as iced's `time::Duration`:
     /// each path and the std path it names (`std::time::Duration`).
     std_reexports: Vec<(Box<str>, Box<str>)>,
@@ -1560,6 +1564,7 @@ fn install(
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
+                        opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1585,6 +1590,7 @@ fn install(
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
+                        opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1618,6 +1624,7 @@ fn install(
                             trait_identities: Vec::new(),
                             text_members: Vec::new(),
                             self_members: Vec::new(),
+                            opaque_members: Vec::new(),
                             std_reexports: Vec::new(),
                         },
                     );
@@ -1654,12 +1661,19 @@ fn install(
                     })
                     .flat_map(rawr_import::classify::ImplementationOutcome::associated)
                 {
+                    let path = rawr_import::surface::member::path(&relative, associated.name());
+                    let owner = rawr_import::surface::opaque::path(&path, 0);
+                    for member in associated
+                        .implementations()
+                        .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+                    {
+                        let members = &mut facades[index].opaque_members;
+                        members.try_reserve(1).map_err(|_| Error::Allocation)?;
+                        members.push((format!("{owner}::{}", member.name()), member));
+                    }
                     let members = &mut facades[index].self_members;
                     members.try_reserve(1).map_err(|_| Error::Allocation)?;
-                    members.push((
-                        rawr_import::surface::member::path(&relative, associated.name()),
-                        associated,
-                    ));
+                    members.push((path, associated));
                 }
             }
             let traits = &mut facades[index].traits;
@@ -1700,6 +1714,7 @@ fn install(
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
+                        opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -1761,6 +1776,7 @@ fn install(
                         trait_identities: Vec::new(),
                         text_members: Vec::new(),
                         self_members: Vec::new(),
+                        opaque_members: Vec::new(),
                         std_reexports: Vec::new(),
                     },
                 );
@@ -2342,6 +2358,18 @@ fn build(
                 {
                     builder.imported_item(values)?;
                 }
+            }
+        }
+    }
+    // A member of the opaque type a trait's method over its `Self` gives,
+    // as a function's member is (`surface::opaque`).
+    for (path, member) in &facade.opaque_members {
+        if let Some(item) = imported_item(&types, path, *member, allocation)?
+            .filter(|_| names_declared(*member, resolved))
+        {
+            builder.imported_item(item)?;
+            if let Some(values) = imported_values(&types, path, *member, allocation)? {
+                builder.imported_item(values)?;
             }
         }
     }
@@ -2996,6 +3024,9 @@ fn opaque_types(
     // (`surface::member`), as the runner's facade declares it.
     for (path, associated) in &facade.self_members {
         visit(path, *associated, false);
+    }
+    for (path, member) in &facade.opaque_members {
+        visit(path, *member, true);
     }
     // A member's opaque output is declared in its owner's module, as
     // `image::io::__rawr_opaque_Reader__into_decoder` for `Reader`'s

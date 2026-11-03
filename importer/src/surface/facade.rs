@@ -1080,6 +1080,23 @@ impl Plan {
                         .flat_map(crate::classify::ImplementationOutcome::associated)
                     {
                         let path = super::member::path(&relative, associated.name());
+                        // The members of the opaque type it gives, as of a
+                        // function's (`surface::opaque`), as iced's
+                        // `Widget::explain` gives one whose `boxed` a
+                        // program calls.
+                        let owner = super::opaque::path(&path, 0);
+                        for member in associated
+                            .implementations()
+                            .flat_map(crate::classify::ImplementationOutcome::associated)
+                        {
+                            let member_path = format!("{owner}::{}", member.name());
+                            if let Some(item) = item(&member_path, member)? {
+                                let mut items = std::mem::take(&mut facade.items).into_vec();
+                                items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                                items.push(item);
+                                facade.items = items.into_boxed_slice();
+                            }
+                        }
                         let Some(mut item) = item(&path, associated)? else {
                             continue;
                         };

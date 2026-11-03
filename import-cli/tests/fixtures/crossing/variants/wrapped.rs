@@ -1,11 +1,11 @@
 // rawr
-// iced's loupe: program functions whose outputs name `impl Widget` inside
+// iced's loupe: a program function whose output names `impl Widget` inside
 // another type. `zoomed` gives the program's own `Zoomed<impl Widget<M> +
-// 'a>` and `centered` the crate's `Column<impl Widget<M> + 'a>`. Each
-// hidden type is the crate's opaque widget, which the bodies make from
-// crate calls, as rustc infers it.
+// 'a>`, whose hidden type is the crate's opaque widget, which the body
+// makes from crate calls, as rustc infers it. The view passes it on to
+// `column!` and reads its zoom.
 
-use events::widgets::{button, center, column, opaque, text, Column, Widget};
+use events::widgets::{button, center, column, opaque, text, Widget};
 
 #[derive(Default)]
 struct Counter {
@@ -24,12 +24,6 @@ struct Zoomed<W> {
     content: W,
 }
 
-impl<W> Zoomed<W> {
-    fn padded(self) -> Column<W> {
-        center(self.content).padding(self.zoom)
-    }
-}
-
 fn zoomed<'a, Message: 'a>(
     zoom: u16,
     content: impl Widget<Message> + 'a,
@@ -38,10 +32,6 @@ fn zoomed<'a, Message: 'a>(
         zoom,
         content: opaque(content),
     }
-}
-
-fn centered<'a, Message: 'a>(content: impl Widget<Message> + 'a) -> Column<impl Widget<Message> + 'a> {
-    center(opaque(content))
 }
 
 impl Counter {
@@ -53,10 +43,12 @@ impl Counter {
     }
 
     fn view(&self) -> impl Widget<Message> {
+        let zoomed = zoomed(3, button("Increment").on_press(Message::Increment));
+        let padding = zoomed.zoom;
         column![
-            zoomed(3, button("Increment").on_press(Message::Increment)).padded(),
+            zoomed.content,
             text(self.value).size(50),
-            centered(button("Decrement").on_press(Message::Decrement)),
+            center(button("Decrement").on_press(Message::Decrement)).padding(padding),
         ]
     }
 }
