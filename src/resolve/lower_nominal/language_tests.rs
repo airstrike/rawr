@@ -10766,6 +10766,59 @@ main();
     }
 }
 
+/// A program's impls of one trait for `[T]` and for `Vec<T>` are two
+/// impls, as in Rust: a `Vec` finds its own first, then its slice's through
+/// `Deref`, and a slice finds only its own (an impl for `Vec<T>` on a
+/// `&[T]` is rustc's E0599).
+#[test]
+fn language_slice_and_vec_impls_are_each_their_own() {
+    assert_eq!(
+        printed(
+            r#"
+trait Total { fn total(&self) -> i64; }
+trait Named { fn name() -> &'static str; }
+impl Total for [i64] {
+    fn total(&self) -> i64 { self.iter().sum() }
+}
+impl Total for Vec<i64> {
+    fn total(&self) -> i64 { 100 + self.len() as i64 }
+}
+impl Named for Vec<i64> {
+    fn name() -> &'static str { "vec" }
+}
+trait Head { fn head(&self) -> Option<&i64>; }
+impl Head for [i64] {
+    fn head(&self) -> Option<&i64> { self.first() }
+}
+fn sum_of<T: Total>(t: &T) -> i64 { t.total() }
+fn main() {
+    let v = vec![1, 2, 3];
+    let s: &[i64] = &v;
+    println!("{} {} {}", v.total(), s.total(), v[..2].total());
+    println!("{} {:?} {:?}", (&v[1..]).total(), v.head(), s[2..].head());
+    println!("{} {}", <Vec<i64> as Named>::name(), sum_of(&v));
+}
+main();
+"#
+        ),
+        "103 6 3\n5 Some(1) Some(3)\nvec 103\n"
+    );
+    let error = Engine::new()
+        .compile(
+            "trait Total { fn total(&self) -> i64; }\n\
+             impl Total for Vec<i64> { fn total(&self) -> i64 { self.len() as i64 } }\n\
+             fn main() { let v = vec![1, 2]; let s: &[i64] = &v; println!(\"{}\", s.total()); }\n\
+             main();",
+        )
+        .map(|_| ())
+        .expect_err("rustc refuses an impl for `Vec<T>` on a `&[T]`")
+        .to_string();
+    assert!(
+        error.contains("no method named `total` found for `&[i64]`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn language_mut_ref_outputs_borrow_their_receiver() {
     let value = run_string(

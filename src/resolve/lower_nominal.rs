@@ -6968,12 +6968,16 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
         Ty::Bool => -5,
         Ty::Char => -6,
         Ty::Option(_) => -7,
-        // A program's impl for `[T]` is its impl for `Vec<T>`: both are
-        // an array at runtime.
+        // `Vec<T>` and `[T]` own their impls apart, as in Rust, though
+        // both are an array at runtime (`builtin_type_key`).
         Ty::Array {
-            kind: sequence::Kind::Vec | sequence::Kind::Slice,
+            kind: sequence::Kind::Vec,
             ..
         } => -8,
+        Ty::Array {
+            kind: sequence::Kind::Slice,
+            ..
+        } => -11,
         Ty::Unit => -9,
         Ty::Result(..) => -10,
         Ty::Boxed(inner) => return builtin_code(inner),
@@ -35419,6 +35423,18 @@ impl<'a> Parser<'a> {
                     Ty::Reference { target, .. } => (**target).clone(),
                     ty => ty.clone(),
                 };
+                // A `Vec<T>` or `[T; N]` without the method reaches its
+                // `[T]`'s impl, through `Deref` or unsizing, as a slice.
+                let receiver = match self.slice_impl_step(&receiver, &member) {
+                    Some((slice, mutable)) => {
+                        value.ty = Ty::Reference {
+                            mutable,
+                            target: Box::new(slice.clone()),
+                        };
+                        slice
+                    }
+                    None => receiver,
+                };
                 // Rust probes the receiver by value before it autorefs it:
                 // on a value (not a reference), a trait function taking
                 // `self` comes before an inherent one taking `&self`, and
@@ -41792,6 +41808,32 @@ impl<'a> Parser<'a> {
                 })
             }
         })
+    }
+
+    /// The `[T]` whose program impl a trait method `member` of a `Vec<T>`
+    /// or `[T; N]` `receiver` runs when the receiver's type has none of its
+    /// own, and whether it takes `&mut self`: Rust's probe reaches the
+    /// slice through `Deref` or unsizing. `[T]` and `Vec<T>` are each
+    /// their own impl owner.
+    fn slice_impl_step(&self, receiver: &Ty, member: &ImmutableString) -> Option<(Ty, bool)> {
+        let Ty::Array {
+            element,
+            kind: sequence::Kind::Vec | sequence::Kind::Array(_),
+        } = receiver
+        else {
+            return None;
+        };
+        let has = |ty: &Ty| {
+            owner_id(ty).and_then(|owner| self.models.trait_methods.get(&(owner, member.clone())))
+        };
+        if has(receiver).is_some() {
+            return None;
+        }
+        let slice = Ty::sequence(sequence::Kind::Slice, (**element).clone());
+        let mutable = has(&slice)?
+            .iter()
+            .any(|definition| definition.receiver() == Some(receiver::Mode::Mutable));
+        Some((slice, mutable))
     }
 
     /// The range operand of `drain(r)` or `range(r)`, between `open` and
