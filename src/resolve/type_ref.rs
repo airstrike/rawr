@@ -55,9 +55,10 @@ pub(crate) enum Target {
     Projection(Box<Type>, Option<ImmutableString>),
     /// A type alias, which a header reads as its target.
     Alias(Alias),
-    /// A std type Rawr resolves but has no representation for yet: its path
-    /// as the `use` that brought it in names it. A path to it is Rawr's
-    /// not-yet error (D712.1), and never resolves to a type.
+    /// A std type a `use` binds: its path as the `use` names it. A path
+    /// through the name is that std path, which resolves as rustc resolves
+    /// it: to Rawr's type for it, or to Rawr's not-yet error (D712.1) for
+    /// one it doesn't represent yet. Never a resolved path's target.
     Std(ImmutableString),
 }
 
@@ -261,6 +262,7 @@ pub(super) fn resolve(
             span,
         }),
         item::type_ref::Type::Path(path) => {
+            let path = through_scope(path, types)?;
             let written = path
                 .segments
                 .iter()
@@ -268,7 +270,7 @@ pub(super) fn resolve(
                 .collect::<Vec<_>>()
                 .join("::");
             // `PhantomData<T>` holds nothing: the unit type.
-            if super::std_phantom(&written) && !types.contains_key("PhantomData") {
+            if super::std_phantom(&written) && declared(types, "PhantomData").is_none() {
                 return Ok(Type::Unit(path.span));
             }
             // A bare `str`, as `AsRef<str>` writes it, is the text a `&str`
@@ -561,7 +563,7 @@ fn resolve_path(
     if let [prefix @ .., last] = &parsed.segments[..]
         && !prefix.is_empty()
         && last.arguments.is_empty()
-        && !types.contains_key(name.as_str())
+        && declared(types, name.as_str()).is_none()
     {
         let base_name = prefix
             .iter()
@@ -594,7 +596,7 @@ fn resolve_path(
 
     // `std::num::ParseIntError` and kin, unless the crate names the type.
     if let Some(error) = super::std_parse_error(&name)
-        && !types.contains_key(error)
+        && declared(types, error).is_none()
     {
         return Ok(Path {
             name: error.into(),
@@ -607,8 +609,8 @@ fn resolve_path(
     // and else Rawr's `Duration`, unless the crate names one.
     let name: ImmutableString = super::std_reexport(&name, host);
     if let Some(time) = super::std_time(&name)
-        && !types.contains_key(name.as_str())
-        && !types.contains_key(time)
+        && declared(types, name.as_str()).is_none()
+        && declared(types, time).is_none()
     {
         return Ok(Path {
             name: time.into(),
@@ -618,7 +620,7 @@ fn resolve_path(
         });
     }
     // `std::cmp::Ordering`, unless the crate names a type `Ordering`.
-    if !types.contains_key(name.as_str()) && super::std_ordering(&name) {
+    if declared(types, name.as_str()).is_none() && super::std_ordering(&name) {
         return Ok(Path {
             name: "Ordering".into(),
             target: Target::Builtin,
@@ -629,41 +631,37 @@ fn resolve_path(
     // `std::collections::HashMap` and its kin, and `std::cmp::Reverse`,
     // unless the crate names one.
     let name = match super::std_collection(&name) {
-        Some(collection) if !types.contains_key(name.as_str()) => collection.into(),
-        None if super::std_reverse(&name) && !types.contains_key("Reverse") => "Reverse".into(),
-        None if super::std_cell(&name) && !types.contains_key("RefCell") => "RefCell".into(),
-        None if !types.contains_key("VecDeque")
+        Some(collection) if declared(types, name.as_str()).is_none() => collection.into(),
+        None if super::std_reverse(&name) && declared(types, "Reverse").is_none() => {
+            "Reverse".into()
+        }
+        None if super::std_cell(&name) && declared(types, "RefCell").is_none() => "RefCell".into(),
+        None if declared(types, "VecDeque").is_none()
             && (super::std_vec_deque(&name) || name.as_str() == "VecDeque") =>
         {
             "VecDeque".into()
         }
         // `std::cell::Cell`, or a bare `Cell` that names no crate or host
         // type.
-        None if !types.contains_key("Cell")
+        None if declared(types, "Cell").is_none()
             && (super::std_plain_cell(&name)
                 || name.as_str() == "Cell" && host.source_type("Cell").is_none()) =>
         {
             "Cell".into()
         }
         None if let Some(pointer) = super::std_pointer(&name)
-            && !types.contains_key(pointer) =>
+            && declared(types, pointer).is_none() =>
         {
             pointer.into()
         }
-        None if !types.contains_key(name.as_str())
-            && super::std_range(&name).is_some_and(|range| !types.contains_key(range)) =>
+        None if declared(types, name.as_str()).is_none()
+            && super::std_range(&name).is_some_and(|range| declared(types, range).is_none()) =>
         {
             super::std_range(&name).expect("checked").into()
         }
         _ => name,
     };
-    let target = if let Some(Target::Std(path)) = types.get(name.as_str()) {
-        // A std type Rawr doesn't represent yet, which a `use` brought in.
-        return Err(Error::NotYet {
-            path: path.clone(),
-            reference: span,
-        });
-    } else if let Some(target) = types.get(name.as_str()) {
+    let target = if let Some(target) = declared(types, name.as_str()) {
         target.clone()
     } else if host.is_builtin(name.as_str())
         || prelude_arity(&parsed).is_some()
@@ -1044,6 +1042,63 @@ fn content_messages(
             kept <= definition.parameters().len()
         })
         .collect();
+}
+
+/// `path` as its scope binds its first segment: a `use` of a std type
+/// makes it that type's std path (`HashMap<K, V>` after `use
+/// std::collections::HashMap;` is `std::collections::HashMap<K, V>`), and a
+/// std type's bare name nothing binds is rustc's error (E0425, E0433).
+fn through_scope(
+    path: item::type_ref::Path,
+    types: &BTreeMap<ImmutableString, Target>,
+) -> Result<item::type_ref::Path, Error> {
+    let Some(first) = path.segments.first().filter(|_| !path.global) else {
+        return Ok(path);
+    };
+    match types.get(first.name.text.as_str()) {
+        Some(Target::Std(std)) => {
+            let mut rest = path.segments.into_vec().into_iter();
+            let first = rest.next().expect("a path has a first segment");
+            let mut segments = std
+                .split("::")
+                .map(|name| item::type_ref::Segment {
+                    name: item::Name {
+                        text: name.into(),
+                        span: first.name.span,
+                    },
+                    arguments: Box::default(),
+                    span: first.span,
+                })
+                .collect::<Vec<_>>();
+            if let Some(last) = segments.last_mut() {
+                last.arguments = first.arguments;
+            }
+            segments.extend(rest);
+            Ok(item::type_ref::Path {
+                segments: segments.into_boxed_slice(),
+                span: path.span,
+                global: false,
+            })
+        }
+        Some(_) => Ok(path),
+        None => match super::std_path::unbound_type(
+            &first.name.text,
+            path.segments.len() > 1,
+            first.name.span,
+        ) {
+            Some(error) => Err(error),
+            None => Ok(path),
+        },
+    }
+}
+
+/// What the scope `types` names `name`: a type of the program or a crate's,
+/// a parameter or an alias. Never a std type a `use` binds, which a path
+/// through it names in full (`through_scope`).
+fn declared<'t>(types: &'t BTreeMap<ImmutableString, Target>, name: &str) -> Option<&'t Target> {
+    types
+        .get(name)
+        .filter(|target| !matches!(target, Target::Std(_)))
 }
 
 /// The facade trait a bound names (iced's `Widget<Message>`), if any.
