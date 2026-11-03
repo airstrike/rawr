@@ -116,6 +116,12 @@ pub struct Signature {
     /// arguments, after the ones it captures.
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     opaques: Box<[Opaque]>,
+    /// The inputs, by position, whose borrows the output keeps for as long
+    /// as it lives, as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
+    /// keeps `items`: a shared reference to crate values at a lifetime the
+    /// output names.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    lends: Box<[u32]>,
 }
 
 /// The associated types an opaque `impl Trait` type binds, each at the
@@ -124,14 +130,31 @@ pub struct Signature {
 pub struct Opaque {
     definition: [u8; 32],
     associated: Box<[(Associated, u32)]>,
+    /// Its trait besides auto traits, at the bound's arguments after
+    /// `Self`, as `Show` of `impl Show + 'a`: the trait object a value of
+    /// it is held as where it borrows what its call takes (#846).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    principal: Option<super::convert::Type>,
 }
 
 impl Opaque {
-    pub(crate) const fn new(definition: [u8; 32], associated: Box<[(Associated, u32)]>) -> Self {
+    pub(crate) const fn new(
+        definition: [u8; 32],
+        associated: Box<[(Associated, u32)]>,
+        principal: Option<super::convert::Type>,
+    ) -> Self {
         Self {
             definition,
             associated,
+            principal,
         }
+    }
+
+    /// Its trait besides auto traits, at the bound's arguments after
+    /// `Self`, when it has one Rawr can write.
+    #[must_use]
+    pub const fn principal(&self) -> Option<&super::convert::Type> {
+        self.principal.as_ref()
     }
 
     /// The opaque type, by its definition identity.
@@ -436,6 +459,7 @@ impl Signature {
             instance: None,
             through: None,
             opaques: Box::new([]),
+            lends: Box::new([]),
         }
     }
 
@@ -508,6 +532,17 @@ impl Signature {
     #[must_use]
     pub const fn scope(&self) -> Option<Scope> {
         self.scope
+    }
+
+    pub(crate) fn with_lends(mut self, lends: Box<[u32]>) -> Self {
+        self.lends = lends;
+        self
+    }
+
+    /// The inputs, by position, whose borrows the output keeps.
+    #[must_use]
+    pub fn lends(&self) -> &[u32] {
+        &self.lends
     }
 
     pub(crate) fn with_guard(mut self, guard: Option<Guard>) -> Self {

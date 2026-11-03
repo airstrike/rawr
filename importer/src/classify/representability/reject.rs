@@ -61,6 +61,10 @@ pub enum Kind {
     /// parameter, as iced's `Task::sip` takes `impl FnMut(S::Item) -> T`:
     /// the type the call fixes `S` to decides it (#568).
     ProjectedClosureInput,
+    /// The function gives an `impl Trait` that borrows its arguments, which
+    /// Rawr holds as a trait object beside them, and its trait can't be one
+    /// (#846).
+    OpaqueObject,
     /// A signature names a std type rawr doesn't take from or give to a
     /// crate yet (D711 step 5, D712.1).
     StdNotRun(crate::classify::std_binding::Unrun),
@@ -123,6 +127,10 @@ impl Kind {
             Self::MacroRules => "it is a `macro_rules!` macro",
             Self::ProjectedClosureInput => {
                 "it takes a closure whose input is an associated type of a type parameter"
+            }
+            Self::OpaqueObject => {
+                "it gives an `impl Trait` that borrows its arguments, and its trait can't be \
+                 made into a trait object"
             }
             Self::StdNotRun(unrun) => unrun.describe(),
         }

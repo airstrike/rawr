@@ -407,6 +407,14 @@ impl Parser<'_> {
         self.models.std_traits.contains("Drop")
     }
 
+    /// Whether the lowering keeps its locals' drop scopes: for the glue of
+    /// the crate's `impl Drop`, or for the borrow checker's drop uses of an
+    /// imported `impl Trait` value, which may run code of its own when it
+    /// drops (`drop_use`).
+    pub(super) fn drop_scoped(&self) -> bool {
+        cfg!(feature = "rust-import") || self.drops()
+    }
+
     /// Whether a value of `ty` may have drop glue: a type with `impl Drop`,
     /// or one holding such a type in a field, payload or element. A generic
     /// parameter, a trait object or a type still inferred may, and its glue
@@ -504,11 +512,10 @@ impl Parser<'_> {
         }
     }
 
-    /// Which of the borrows a value of `ty` holds its drop uses.
+    /// Which of the borrows a value of `ty` holds its drop uses. Without an
+    /// `impl Drop` of the program's own, only an imported `impl Trait`
+    /// value's drop does, as rustc assumes of every opaque type.
     pub(super) fn drop_use(&self, ty: &Ty) -> DropUse {
-        if !self.drops() {
-            return DropUse::None;
-        }
         match self.drop_uses_in(ty, &mut Vec::new()) {
             (false, _) => DropUse::None,
             (true, false) => DropUse::All,
@@ -529,6 +536,13 @@ impl Parser<'_> {
         };
         match &self.inference.resolve(ty) {
             Ty::Reference { .. } => (false, true),
+            // An imported `impl Trait` may have a `Drop` of its own.
+            #[cfg(feature = "rust-import")]
+            Ty::Host { proof, .. }
+                if rawr_import::surface::opaque::declared(&proof.definition.path()) =>
+            {
+                (true, false)
+            }
             Ty::Script(id, arguments) => {
                 if self.models.has_drop(*id) {
                     return (true, false);
@@ -572,7 +586,9 @@ impl Parser<'_> {
                 .iter()
                 .map(|member| self.drop_uses_in(member, visiting))),
             // A generic or a trait object may have a `Drop` of its own.
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown => {
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown
+                if self.drops() =>
+            {
                 (true, false)
             }
             _ => (false, true),
@@ -598,7 +614,7 @@ impl Parser<'_> {
     /// only some is noted here.
     pub(super) fn block_drop_uses(&mut self) -> Vec<Span> {
         let mut uses = Vec::new();
-        if !self.drops() {
+        if !self.drop_scoped() {
             return uses;
         }
         let Some(scope) = self.drop_scopes.last() else {
@@ -620,7 +636,7 @@ impl Parser<'_> {
     /// A jump out of the scopes above `depth`: the uses the drops of their
     /// locals make, innermost first.
     pub(super) fn exit_drop_uses(&self, depth: usize) {
-        if !self.drops() {
+        if !self.drop_scoped() {
             return;
         }
         for scope in self.drop_scopes.iter().skip(depth).rev() {
@@ -746,7 +762,7 @@ impl Parser<'_> {
 
     /// Open the scope of a block, arm, body or iteration.
     pub(super) fn open_drops(&mut self) {
-        if self.drops() {
+        if self.drop_scoped() {
             self.drop_scopes.push(Scope::default());
         }
     }
@@ -762,7 +778,7 @@ impl Parser<'_> {
         declaration: Span,
         ty: &Ty,
     ) -> Result<Option<String>, Error> {
-        if !self.drops() || self.drop_scopes.len() <= self.drop_base {
+        if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
             return Ok(None);
         }
         let copies = self.shadow_copies(std::slice::from_ref(name))?;
@@ -851,7 +867,7 @@ impl Parser<'_> {
 
     /// Close the innermost scope: the drops of its locals, as statements.
     pub(super) fn close_drops(&mut self) -> Result<String, Error> {
-        if !self.drops() {
+        if !self.drop_scoped() {
             return Ok(String::new());
         }
         let Some(scope) = self.drop_scopes.pop() else {
@@ -963,7 +979,7 @@ impl Parser<'_> {
         &mut self,
         parameters: impl IntoIterator<Item = (ImmutableString, Span)>,
     ) -> Result<(), Error> {
-        if !self.drops() {
+        if !self.drop_scoped() {
             return Ok(());
         }
         self.drop_base = self.drop_scopes.len();
@@ -1012,7 +1028,7 @@ impl Parser<'_> {
         // The body's locals and parameters end, each after its drop, in
         // reverse order of declaration: a loan of one that a later one's
         // drop uses is rustc's E0597.
-        if self.drops() && self.drop_scopes.len() > self.drop_base {
+        if self.drop_scoped() && self.drop_scopes.len() > self.drop_base {
             let uses = self.block_drop_uses();
             let declared: Vec<Span> = self
                 .drop_scopes

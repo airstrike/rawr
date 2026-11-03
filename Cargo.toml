@@ -58,6 +58,9 @@ num-traits = { version = "0.2.14", default-features = false, features = ["std"] 
 # feature added here makes a second once_cell.
 once_cell = { version = "1.20.1", default-features = false, features = ["std"] }
 bitflags = { version = "2.3.3", default-features = false }
+# A crate's result that borrows the values a runner lends it lives beside
+# them in one value (#846).
+self_cell = "1.2"
 futures-core = { version = "0.3.31", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
 smartstring = { version = "1.0.0", default-features = false, features = ["std"] }
