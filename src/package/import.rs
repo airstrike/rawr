@@ -2999,11 +2999,20 @@ fn opaque_types(
             {
                 continue;
             }
-            // Each parameter is named by its position, as the facade names
-            // it (`surface::facade`), so every item that names the type
-            // declares it alike.
-            let names = (0..arguments.len())
-                .map(|position| format!("T{position}").into_boxed_str())
+            let names = arguments
+                .iter()
+                .enumerate()
+                .map(|(position, argument)| match argument {
+                    representability::convert::Type::Parameter(index) => signature
+                        .parameters()
+                        .iter()
+                        .find(|parameter| parameter.index() == *index)
+                        .map_or_else(
+                            || format!("T{position}").into_boxed_str(),
+                            |parameter| parameter.name().into(),
+                        ),
+                    _ => format!("T{position}").into_boxed_str(),
+                })
                 .collect();
             // The associated types it binds, each one of its arguments.
             let bound = signature

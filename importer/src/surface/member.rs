@@ -18,6 +18,13 @@ pub fn path(trait_path: &str, member: &str) -> String {
     format!("{trait_path}::__rawr_self::{member}")
 }
 
+/// Whether `path` is one a facade declares a method of a trait over its
+/// `Self` under (`path`).
+#[must_use]
+pub fn declared(path: &str) -> bool {
+    path.rsplit("::").nth(1) == Some("__rawr_self")
+}
+
 /// Whether `implementation` holds the methods of the trait whose identity
 /// is `trait_identity` over its `Self`.
 #[must_use]

@@ -840,9 +840,7 @@ type OpaqueUse = ([u8; 32], Box<[Box<str>]>);
 
 impl Type {
     /// Each type among `opaque` this type names, with the names of its
-    /// parameters: each by its position, so every item that names the
-    /// type declares it alike, as each type's `Widget::explain` names the
-    /// one opaque type its trait's default body gives.
+    /// parameters: those of the item's parameters its arguments are.
     fn opaque(&self, opaque: &std::collections::BTreeSet<[u8; 32]>, found: &mut Vec<OpaqueUse>) {
         match self {
             Self::Nominal {
@@ -850,8 +848,13 @@ impl Type {
                 arguments,
             } => {
                 if opaque.contains(identity) {
-                    let names = (0..arguments.len())
-                        .map(|position| format!("T{position}").into())
+                    let names = arguments
+                        .iter()
+                        .enumerate()
+                        .map(|(position, argument)| match argument {
+                            Self::Parameter(name) => name.clone(),
+                            _ => format!("T{position}").into(),
+                        })
                         .collect();
                     found.push((*identity, names));
                 }
@@ -1345,12 +1348,28 @@ impl Plan {
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();
-                for item in facade.items.iter() {
+                // The opaque type a trait's method gives is declared once,
+                // beside the method over the trait's `Self`, as Rawr
+                // declares it (`surface::member`), though each type the
+                // trait applies to has the method, as iced's
+                // `Widget::explain` is each widget's.
+                let self_members = facade
+                    .items
+                    .iter()
+                    .filter(|item| super::member::declared(&item.path));
+                let others = facade
+                    .items
+                    .iter()
+                    .filter(|item| !super::member::declared(&item.path));
+                for item in self_members.chain(others) {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque, &mut found);
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
                         let path = super::opaque::path(&item.path, index);
-                        if types.iter().any(|ty| *ty.path == *path) {
+                        if types
+                            .iter()
+                            .any(|ty| *ty.path == *path || (ty.opaque && ty.identity == identity))
+                        {
                             continue;
                         }
                         let associated = item
