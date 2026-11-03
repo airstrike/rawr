@@ -1004,6 +1004,9 @@ enum Error {
     /// A value an iced view borrows, in the application's home, that
     /// can't be reached, as the home says (D568).
     Home(String),
+    /// A value a field borrowed from it is reached through that can't be
+    /// reached, as its reach says.
+    Unreached(String),
 }
 
 impl std::fmt::Debug for Error {
@@ -1031,7 +1034,7 @@ impl std::fmt::Debug for Error {
                 "cannot move out of a value behind a shared reference: `{ty}` doesn't implement `Copy` or `Clone` (E0507)"
             ),
             Self::Lent(ty, error) => write!(f, "`{ty}`: {error}"),
-            Self::Home(reason) => f.write_str(reason),
+            Self::Home(reason) | Self::Unreached(reason) => f.write_str(reason),
         }
     }
 }
@@ -1077,6 +1080,7 @@ impl Error {
             Self::NotClone(_) => 13,
             Self::Lent(..) => 14,
             Self::Home(_) => 15,
+            Self::Unreached(_) => 16,
         }
     }
 }
@@ -1820,6 +1824,8 @@ fn install_arena(epoch: [u8; 32]) {
     __rawr_internal::host::display::register::<NativeHandle>();
     __rawr_internal::host::debug::register::<__rawr_internal::scope::Scoped>();
     __rawr_internal::host::display::register::<__rawr_internal::scope::Scoped>();
+    __rawr_internal::host::debug::register::<__rawr_internal::scope::Projected>();
+    __rawr_internal::host::display::register::<__rawr_internal::scope::Projected>();
     NATIVE_ARENA.with(|arena| *arena.borrow_mut() = Some(Arena::new(epoch)));
     // A new program's arena: the handles the last one gave out are stale.
     EXPORTED.with_borrow_mut(Vec::clear);
@@ -2310,6 +2316,36 @@ fn reach_place<P: __rawr_internal::place::Policy>(
 enum Lender {
     Handle(NativeHandle),
     Lent(__rawr_internal::scope::Lent),
+    /// A field a pattern borrowed from another value (#783).
+    Projected(__rawr_internal::scope::Projected),
+}
+
+#[allow(dead_code)]
+impl Lender {
+    /// The lender `value` names: a value in an arena slot, one native code
+    /// lent, or a field borrowed from another value.
+    fn of(value: &Dynamic) -> Result<Self, Error> {
+        if let Some(lent) = value.read_lock::<__rawr_internal::scope::Lent>() {
+            return Ok(Self::Lent(*lent));
+        }
+        if let Some(projected) = value.read_lock::<__rawr_internal::scope::Projected>() {
+            return Ok(Self::Projected(projected.clone()));
+        }
+        value
+            .read_lock::<NativeHandle>()
+            .map(|handle| Self::Handle(handle.clone()))
+            .ok_or(Error::TypeMismatch)
+    }
+}
+
+/// What a reach of a lender failed with, as the adapter that reached it
+/// reports it.
+#[allow(dead_code)]
+fn unreached(error: Box<__rawr_internal::EvalAltResult>) -> Error {
+    match *error {
+        __rawr_internal::EvalAltResult::ErrorRuntime(message, _) => Error::Unreached(message.to_string()),
+        error => Error::Unreached(error.to_string()),
+    }
 }
 
 #[allow(dead_code)]
@@ -2354,6 +2390,9 @@ fn reach_lender<T: 'static>(
     visit: &mut dyn FnMut(&T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
     let handle = match lender {
+        Lender::Projected(projected) => {
+            return projected.open(&mut |lent| reach_lender(&Lender::Lent(lent), visit));
+        }
         Lender::Lent(lent) => {
             let failed = |error| place_error(Error::Lent(lent.name(), error));
             let access: fn(u64, &mut dyn FnMut(&T)) -> Result<(), u8> = lent.accessor(false).map_err(failed)?;
@@ -2406,6 +2445,9 @@ fn reach_lender_mut<T: 'static>(
     visit: &mut dyn FnMut(&mut T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
 ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
     let handle = match lender {
+        Lender::Projected(projected) => {
+            return Err(place_error(Error::Lent(projected.name(), __rawr_internal::scope::Error::ReadOnly)));
+        }
         Lender::Lent(lent) => {
             let failed = |error| place_error(Error::Lent(lent.name(), error));
             let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
@@ -7533,12 +7575,13 @@ fn render_moved_fields(
 }
 
 /// The fields of the variant `name` of the value the first argument holds,
-/// lent for the rest of the scope that binds them, as a pattern through
-/// `&T` binds them: a scope frame that, opened, lends each crate value
-/// field by its own type, as native code lends a value (D558.3), and
-/// copies each field Rawr holds as its own value, as Rust reads it in
-/// place. The value stays where it is, shared, while the frame lends its
-/// fields. The pattern's test has already chosen the variant.
+/// lent as a pattern binds them: through `&T` as `render_projected_fields`
+/// borrows them, and through `&mut T` or as `ref mut` by a scope frame for
+/// the rest of the scope that binds them, which, opened, lends each crate
+/// value field mutably by its own type, as native code lends a value
+/// (D558.3), and copies each field Rawr holds as its own value, as Rust
+/// reads it in place. The value stays where it is while the frame lends
+/// its fields. The pattern's test has already chosen the variant.
 fn render_lent_fields(
     plan: &Plan,
     name: &str,
@@ -7547,13 +7590,12 @@ fn render_lent_fields(
     mutable: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    if !mutable {
+        return render_projected_fields(plan, name, form, fields, output);
+    }
     let path = rust_path(plan);
     let pattern = variant_pattern(&path, name, form, fields);
-    let matcher = if mutable {
-        Matcher::LendMut
-    } else {
-        Matcher::Lend
-    };
+    let matcher = Matcher::LendMut;
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
@@ -7616,12 +7658,80 @@ fn render_lent_fields(
     .map_err(request::unwritable)
 }
 
+/// The fields of the variant `name` of the value the first argument holds,
+/// borrowed as a pattern through `&T` binds them (#782, #783): each crate
+/// value field as a projection that reaches it through the value at each
+/// use (`render_projection`), so the borrow lives past the arm as rustc's
+/// does, and each field Rawr holds as its own value copied, as Rust reads
+/// it in place. The pattern's test has already chosen the variant.
+fn render_projected_fields(
+    plan: &Plan,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let path = rust_path(plan);
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();
+    let witness = output_witness();",
+        Matcher::Lend.name(plan)
+    )
+    .map_err(request::unwritable)?;
+    let mut values = String::new();
+    let mut copied = false;
+    for (index, field) in fields.iter().enumerate() {
+        let ty = field.ty();
+        if lendable(ty) {
+            render_projection(plan, name, form, fields, index, output)?;
+            values.push_str(&format!(
+                "\n        let value_{index} = Dynamic::from(__rawr_internal::scope::Projected::new(parent.clone(), &PROJECTION_{index}, witness.as_ref().and_then(|witness| witness.argument_witness({index}))));"
+            ));
+        } else {
+            let mut converted = String::new();
+            render_to_dynamic(ty, "copied", 0, &mut converted)?;
+            values.push_str(&format!(
+                "\n        let value_{index} = {{ let copied = Clone::clone(&*field_{index}); {converted} }}.map_err(place_error)?;"
+            ));
+            copied = true;
+        }
+    }
+    let array = (0..fields.len())
+        .map(|index| format!("value_{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Only a copy reads the value now; a projection reads it at its uses.
+    if !copied {
+        return writeln!(
+            output,
+            "    {{{values}\n        Ok(Dynamic::from_array(vec![{array}]))\n    }}\n}}\n"
+        )
+        .map_err(request::unwritable);
+    }
+    // The copies are read with the call's arena lent, as a projection of
+    // the value reaches it.
+    let pattern = variant_pattern(&path, name, form, fields);
+    writeln!(
+        output,
+        "    let lender = Lender::of(&parent)?;
+    lend(arguments.arena, || reach_lender::<{path}>(&lender, &mut |input| {{
+        #[allow(irrefutable_let_patterns, unused_variables)]
+        let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};{values}
+        Ok(Dynamic::from_array(vec![{array}]))
+    }}))
+    .map_err(unreached)
+}}
+"
+    )
+    .map_err(request::unwritable)
+}
+
 /// The field at `index` of the variant `name` of the value the first
-/// argument holds, lent for the rest of the scope that reads it, as a
-/// pattern below the variant's reads it: a scope frame that, opened, lends
-/// the field by its own type, as `render_lent_fields` lends each field.
-/// The value stays where it is, shared, while the frame lends the field.
-/// The pattern's test has already chosen the variant.
+/// argument holds, borrowed as a pattern below the variant's reads it: a
+/// projection, as `render_projected_fields` borrows each field. The
+/// pattern's test has already chosen the variant.
 fn render_borrowed_field(
     plan: &Plan,
     name: &str,
@@ -7630,37 +7740,103 @@ fn render_borrowed_field(
     field: u32,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
-    let path = rust_path(plan);
     let index = field as usize;
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();",
+        Matcher::Borrow(field).name(plan)
+    )
+    .map_err(request::unwritable)?;
+    render_projection(plan, name, form, fields, index, output)?;
+    writeln!(
+        output,
+        "    Ok(Dynamic::from(__rawr_internal::scope::Projected::new(parent, &PROJECTION_{index}, output_witness())))
+}}
+"
+    )
+    .map_err(request::unwritable)
+}
+
+/// The projection `PROJECTION_{index}` of the field at `index` of the
+/// variant `name`: it reaches the value the projection holds, shared, and
+/// lends the field by its own type for one use, as native code lends a
+/// value (D558.3), and gives the field's `Debug` and `Display` text and a
+/// clone of it.
+fn render_projection(
+    plan: &Plan,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    index: usize,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let path = rust_path(plan);
     let rust = fields
         .get(index)
         .and_then(|field| concrete_type(field.ty()))
         .ok_or_else(|| request::drift("a lent field's concrete type"))?;
     let pattern = field_pattern(&path, name, form, fields, index);
+    render_field_family(index, &rust, false, output)?;
     writeln!(
         output,
-        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
-        Matcher::Borrow(field).name(plan)
-    )
-    .map_err(request::unwritable)?;
-    render_field_family(0, &rust, false, output)?;
-    writeln!(
-        output,
-        "    let lender = match lent_value(arguments, 0) {{
-        Some(lent) => Lender::Lent(lent),
-        None => Lender::Handle(native_handle(arguments, 0, false)?),
-    }};
-    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
-        reach_lender::<{path}>(&lender, &mut |input| {{
+        "    fn open_{index}(
+        parent: &Dynamic,
+        body: &mut dyn FnMut(__rawr_internal::scope::Lent) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+    ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+        reach_lender::<{path}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
-            {} rest({}))
+            __rawr_internal::scope::lend_ref::<Field{index}, _>(field_0, |nonce| {{
+                body(__rawr_internal::scope::Lent::new(nonce, {rust:?}, None, Some(&SHARED_{index} as __rawr_internal::scope::Accessor)))
+            }})
         }})
-    }})))
-}}
-",
-        lend_field(0, false),
-        lent_field(0, &rust, false),
+    }}
+    fn text_{index}(parent: &Dynamic, display: bool) -> Option<String> {{
+        #[allow(unused_imports)]
+        use crate::{{ViaDebug as _, ViaDisplay as _, WithoutDebug as _, WithoutDisplay as _}};
+        let mut text = None;
+        reach_lender::<{path}>(&Lender::of(parent).ok()?, &mut |input| {{
+            #[allow(irrefutable_let_patterns)]
+            let {pattern} = input else {{ return Ok(Dynamic::UNIT); }};
+            let format = if display {{
+                (&debug_probe(field_0)).native_display()
+            }} else {{
+                (&debug_probe(field_0)).native_debug()
+            }};
+            text = format.and_then(|format| format(field_0));
+            Ok(Dynamic::UNIT)
+        }})
+        .ok()?;
+        text
+    }}
+    fn clone_{index}(
+        parent: &Dynamic,
+        witness: Option<&__rawr_internal::host::runtime::Witness>,
+    ) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {{
+        let mut copied = None;
+        reach_lender::<{path}>(&Lender::of(parent).map_err(place_error)?, &mut |input| {{
+            #[allow(irrefutable_let_patterns)]
+            let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
+            copied = Some(guard_copy!(field_0));
+            Ok(Dynamic::UNIT)
+        }})?;
+        let copied = copied.ok_or_else(|| place_error(Error::TypeMismatch))?.map_err(place_error)?;
+        with_arena(|arena| {{
+            let handle = insert_native!(arena, copied)?;
+            if let Some(witness) = witness {{
+                arena.attest(handle.clone(), witness.clone())?;
+            }}
+            Ok(Dynamic::from(handle))
+        }})
+        .map_err(place_error)
+    }}
+    static PROJECTION_{index}: __rawr_internal::scope::Projection = __rawr_internal::scope::Projection {{
+        name: {rust:?},
+        open: open_{index},
+        text: text_{index},
+        clone: clone_{index},
+    }};"
     )
     .map_err(request::unwritable)
 }

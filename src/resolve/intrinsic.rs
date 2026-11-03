@@ -213,7 +213,10 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, invocation, equal, access);
+        // A field a pattern borrows is lent to the call alone.
+        let result = crate::scope::opened(args, &mut |args| {
+            runtime.invoke(requirement, args, invocation, equal, access)
+        });
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =
