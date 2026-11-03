@@ -2,7 +2,7 @@ use crate::p5;
 
 #[test]
 fn demanded_profile_projection_is_rooted_in_generated_runner_source() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = p5::Project::new("profile-generation");
     let mut supervisor = rawr_import::supervisor::Owner::new();
     let revision = supervisor.revision().expect("the first revision exists");

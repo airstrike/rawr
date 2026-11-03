@@ -5,8 +5,8 @@ use rawr_import::surface::instance::Arguments;
 
 #[test]
 fn equal_instances_dedupe_but_distinct_types_remain_distinct() {
-    let _turn = rawr_import::store::test_turn();
-    let (_project, contract, limits) = p4::contract();
+    let contract = p4::shared();
+    let limits = rawr_import::cargo::Limits::standard();
     let outcome = contract
         .outcomes()
         .find(|outcome| outcome.export().path().eq(["identity"]))

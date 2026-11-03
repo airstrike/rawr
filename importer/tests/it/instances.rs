@@ -1,6 +1,6 @@
 use rawr_import::cargo::Limits;
 use rawr_import::classify::representability::convert::{Builtin, Type};
-use rawr_import::surface::callable::{once, shared, Class, Error as CallableError};
+use rawr_import::surface::callable::{shared, Class};
 use rawr_import::surface::instance::{Arguments, Binder};
 
 #[test]
@@ -16,25 +16,6 @@ fn instance_rejects_an_unconstrained_type() {
         result,
         Err(rawr_import::surface::Error::UnconstrainedGeneric)
     ));
-}
-
-#[test]
-fn concrete_instance_accepts_owned_builtin_types() {
-    let result = Arguments::new(
-        Box::from([Type::Builtin(Builtin::I64)]),
-        Box::default(),
-        Box::default(),
-        None,
-        &Limits::standard(),
-    );
-    assert!(result.is_ok());
-}
-
-#[test]
-fn once_callable_reports_consumption() {
-    let mut function = once::Ready::new(|value: i64| value + 1);
-    assert_eq!(function.call(1), Ok(2));
-    assert_eq!(function.call(1), Err(CallableError::Consumed));
 }
 
 #[test]

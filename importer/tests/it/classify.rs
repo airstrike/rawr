@@ -3,12 +3,11 @@ use crate::p2;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rawr_import::classify::representability::Representability;
-use rawr_import::classify::Policy;
 
 #[test]
 fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
-    let _turn = rawr_import::store::test_turn();
-    let graph = p2::graph();
+    let contract = p2::contract();
+    let graph = contract.raw_graph();
     let export_count = graph.exports().len();
     let definition_count = graph.definitions().len();
     // `Record::ZERO: Self` is a constant of the crate's own type, which the
@@ -38,9 +37,6 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
                 .associated()
                 .any(|id| id == rejected_associated.id())
     }));
-    let contract = graph
-        .classify(&Policy::standard(), &rawr_import::cargo::Limits::standard())
-        .expect("the real extracted graph classifies");
 
     assert_eq!(contract.outcomes().len(), export_count);
     assert_eq!(
@@ -54,15 +50,15 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
     assert_eq!(plan_ids.len(), contract.definition_plans().len());
     assert_eq!(contract.definition_plans().len(), definition_count);
 
-    let top_level = p2::outcome(&contract, "facade_a", &["const_bound"]);
+    let top_level = p2::outcome(contract, "facade_a", &["const_bound"]);
     assert!(matches!(
         top_level.identity().selector(),
         rawr_import::surface::identity::Selector::Function { item }
             if Some(item) == top_level.identity().definition().as_ref()
     ));
 
-    let first = p2::outcome(&contract, "facade_a", &["RenamedNode"]);
-    let second = p2::outcome(&contract, "facade_b", &["RenamedNode"]);
+    let first = p2::outcome(contract, "facade_a", &["RenamedNode"]);
+    let second = p2::outcome(contract, "facade_b", &["RenamedNode"]);
     assert_eq!(
         first.identity().definition(),
         second.identity().definition()
@@ -71,7 +67,7 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
     assert_ne!(first.identity().as_bytes(), second.identity().as_bytes());
 
     let mut associated_by_impl = BTreeMap::new();
-    for implementation in p2::outcome(&contract, "facade_a", &["ImplSurface"]).implementations() {
+    for implementation in p2::outcome(contract, "facade_a", &["ImplSurface"]).implementations() {
         let associated = implementation.associated().collect::<Vec<_>>();
         assert!(!associated.is_empty());
         assert!(associated.iter().all(|outcome| outcome.origin().is_some()));
@@ -109,7 +105,7 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
         "the real graph retains implementation-role recursive support"
     );
 
-    let record = p2::outcome(&contract, "facade_a", &["Record"]);
+    let record = p2::outcome(contract, "facade_a", &["Record"]);
     let (implementation, zero) = record
         .implementations()
         .find_map(|implementation| {
@@ -166,8 +162,8 @@ fn real_exports_share_definition_plans_and_nest_associated_outcomes() {
 
 #[test]
 fn real_grammar_and_private_constructor_proofs_are_closed() {
-    let _turn = rawr_import::store::test_turn();
-    let graph = p2::graph();
+    let contract = p2::contract();
+    let graph = contract.raw_graph();
     let opaque_definition = graph
         .definitions()
         .find(|definition| definition.display_path().last() == Some("OpaqueFields"))
@@ -202,11 +198,8 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
                 && variants[0].field_set().form()
                     == rawr_import::api::model::FieldForm::Tuple
     ));
-    let contract = graph
-        .classify(&Policy::standard(), &rawr_import::cargo::Limits::standard())
-        .expect("the real extracted graph classifies");
 
-    let opaque = p2::outcome(&contract, "facade_a", &["OpaqueFields"]);
+    let opaque = p2::outcome(contract, "facade_a", &["OpaqueFields"]);
     // The private field keeps the struct unbuildable. Its public field stays.
     assert!(matches!(
         opaque.representability(),
@@ -216,14 +209,14 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
                 && plan.constructor().is_none()
     ));
     assert!(matches!(
-        p2::outcome(&contract, "facade_a", &["ImplSurface"]).representability(),
+        p2::outcome(contract, "facade_a", &["ImplSurface"]).representability(),
         Representability::Struct(plan)
             if plan.form() == rawr_import::api::model::FieldForm::Unit
                 && plan.constructible()
                 && plan.constructor().is_some()
     ));
     // A public alias names its target, so the target's shape is available.
-    let external_alias = p2::outcome(&contract, "facade_a", &["ExternalAlias"]);
+    let external_alias = p2::outcome(contract, "facade_a", &["ExternalAlias"]);
     assert!(matches!(
         external_alias.representability(),
         Representability::Struct(plan)
@@ -234,7 +227,7 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
     // crate's bindings (D702), so the enum and the struct hold it and can
     // be built.
     assert!(matches!(
-        p2::outcome(&contract, "facade_a", &["VariantSurface"]).representability(),
+        p2::outcome(contract, "facade_a", &["VariantSurface"]).representability(),
         Representability::Enum(plan)
             if plan.variants().len() == 1
                 && plan.variants()[0].name() == "Leaf"
@@ -242,7 +235,7 @@ fn real_grammar_and_private_constructor_proofs_are_closed() {
                 && plan.variants()[0].constructible()
     ));
     assert!(matches!(
-        p2::outcome(&contract, "facade_a", &["FieldSurface"]).representability(),
+        p2::outcome(contract, "facade_a", &["FieldSurface"]).representability(),
         Representability::Struct(plan)
             if plan.fields().len() == 1
                 && plan.constructible()

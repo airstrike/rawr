@@ -43,7 +43,7 @@ impl Project {
 
 #[test]
 fn a_wholesale_reexport_is_an_alias_export_that_is_not_walked() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     let graph = extract(&project, &[("outer", "outer-api")]);
 
@@ -80,7 +80,7 @@ fn a_wholesale_reexport_is_an_alias_export_that_is_not_walked() {
 
 #[test]
 fn a_reexported_crate_selected_as_its_own_root_gives_one_definition() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     let graph = extract(&project, &[("outer", "outer-api"), ("inner", "inner-api")]);
 
@@ -110,7 +110,7 @@ fn a_reexported_crate_selected_as_its_own_root_gives_one_definition() {
 
 #[test]
 fn a_path_named_through_the_alias_selects_that_item() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let demand: &[&[&str]] = &[&["outer", "inner_api", "nested", "deeper"]];
     let project = Project::new();
     let graph = extract_demanding(&project, &[("outer", "outer-api")], demand);
@@ -154,7 +154,7 @@ fn a_path_named_through_the_alias_selects_that_item() {
 /// into a dependency (D702), and the other facade still declares it.
 #[test]
 fn an_item_naming_another_facades_type_resolves_through_that_facade() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let graph = extract(&project, &[("split", "split-api"), ("leaf", "leaf-api")]);

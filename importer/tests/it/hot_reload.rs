@@ -2,7 +2,6 @@ use crate::p3;
 
 #[test]
 fn same_surface_hot_admits_and_changed_surface_returns_one_cold_continuation() {
-    let _turn = rawr_import::store::test_turn();
     let project = rawr_import::store::TestProject::new("rawr-p4-hot");
     let root = project.path().to_path_buf();
     let cache = rawr_import::cache::Writer::new(&root).expect("the cache binds");
@@ -13,11 +12,13 @@ fn same_surface_hot_admits_and_changed_surface_returns_one_cold_continuation() {
     let generated = initial
         .generate(&rawr_import::cargo::Limits::standard())
         .expect("the initial surface generates");
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is free");
     let built = generated
         .build(&cargo, &cache)
         .expect("the initial surface builds exactly once");
     drop(cargo);
+    drop(lane);
 
     let process = rawr_import::process::Owner::new(&root).expect("the process owner binds");
     let mut supervisor = rawr_import::supervisor::Owner::new();
@@ -58,11 +59,13 @@ fn same_surface_hot_admits_and_changed_surface_returns_one_cold_continuation() {
     let generated = changed
         .generate(&rawr_import::cargo::Limits::standard())
         .expect("the sole cold continuation generates");
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is serialized");
     let changed = generated
         .build(&cargo, &cache)
         .expect("the coalesced miss builds once");
     drop(cargo);
+    drop(lane);
     let replacement = supervisor
         .bootstrap(changed, changed_snapshot, &process)
         .expect("the miss admits only through a fresh epoch");

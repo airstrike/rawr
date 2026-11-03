@@ -164,8 +164,22 @@ impl<B> super::Manifest<super::Generated, B> {
         })?;
         let target = entry.join("target");
         let mut command = Command::new(cargo());
+        command.args(["build", "--offline", "--locked"]);
+        match shared_build_directory() {
+            // One Cargo build at a time holds a shared build directory, so
+            // Cargo's own job count applies.
+            Some(build) => {
+                let value = toml_edit::Value::from(build.to_string_lossy().as_ref());
+                command
+                    .arg("--config")
+                    .arg(format!("build.build-dir={value}"));
+            }
+            None => {
+                command.arg("-j1");
+            }
+        }
         command
-            .args(["build", "--offline", "--locked", "-j1", "--manifest-path"])
+            .arg("--manifest-path")
             .arg(entry.join("Cargo.toml"))
             .env("CARGO_TARGET_DIR", &target)
             // The program's stdin is the program's (D500.1).
@@ -270,6 +284,30 @@ fn cargo() -> PathBuf {
     std::env::var_os("CARGO")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"))
+}
+
+/// The Cargo build directory every fixed-path runner build in a test process
+/// shares, so `rawr` and its dependencies compile once per test suite rather
+/// than once per test.
+#[cfg(feature = "test-fixtures")]
+static SHARED_BUILD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Share `directory` as the build directory of every fixed-path runner build
+/// in this process. The first call wins.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub fn share_build_directory(directory: PathBuf) {
+    let _ = SHARED_BUILD.set(directory);
+}
+
+#[cfg(feature = "test-fixtures")]
+fn shared_build_directory() -> Option<&'static Path> {
+    SHARED_BUILD.get().map(PathBuf::as_path)
+}
+
+#[cfg(not(feature = "test-fixtures"))]
+const fn shared_build_directory() -> Option<&'static Path> {
+    None
 }
 
 /// Generated runner build or cache failure.

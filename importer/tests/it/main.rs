@@ -1,16 +1,30 @@
 //! The importer's integration tests, as one binary rather than one per file,
 //! each linking its own copy of Rawr and the importer.
 //!
-//! Tests that reach the native Cargo lane hold
-//! `rawr_import::store::test_turn()` for their whole body: the lane admits one
-//! owner per process, so tests from different files now take turns on it.
+//! Tests run in parallel. The native Cargo lane admits one owner per process,
+//! so a test holds [`shared::lane`] only around the calls that take it.
+//! Everything a test builds goes to one shared Cargo build directory, and
+//! each fixture a test only reads is extracted once per process:
+//!
+//! - `p2::contract`: the symbolic facade under two aliases (classify,
+//!   demand, fingerprints, symbolic_contract);
+//! - `p3::generated`: the runner generated from it (generate, manifest,
+//!   monomorphic_execution);
+//! - `p4::shared`: the generic fixture (callable_*, surface_identity);
+//! - the facade fixture's graph and `widget::Button`'s demand (support,
+//!   on_demand).
+//!
+//! A test that changes what it built, or counts cache misses, keeps a project
+//! of its own: the runner tests (artifact, cache, process, runner_invoke,
+//! runner_snapshot, hot_reload) a fresh project cache, and runner_dag a fresh
+//! Rawr home as well.
 
-mod cleanliness;
 mod instances;
 mod limits;
 mod no_profile;
 mod protocol;
 mod resolution;
+mod shared;
 
 // Shared fixtures, one instance each, so their counters and project
 // directories stay unique across the whole binary.

@@ -5,8 +5,7 @@ use rawr_import::surface::callable::{once, Class, Error};
 
 #[test]
 fn real_fn_once_uses_private_consumed_state() {
-    let _turn = rawr_import::store::test_turn();
-    let (_project, contract, _limits) = p4::contract();
+    let contract = p4::shared();
     let outcome = contract
         .outcomes()
         .find(|outcome| outcome.export().path().eq(["once"]))

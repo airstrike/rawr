@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,6 +8,7 @@ use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
 use rawr_import::extract::Policy;
 use rawr_import::process::Native;
+use sha2::{Digest as _, Sha256};
 
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -37,8 +39,9 @@ impl Drop for Project {
 
 #[test]
 fn declared_build_inputs_and_default_fallback_publish_deterministically() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("determinism");
+    let fixtures = fixture_files();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let first = extract(&native, &project, environment("set"), &limits)
@@ -68,11 +71,16 @@ fn declared_build_inputs_and_default_fallback_publish_deterministically() {
         unset.freshness_fingerprint()
     );
     assert_ne!(first.freshness_fingerprint(), unset.freshness_fingerprint());
+    assert_eq!(
+        fixture_files(),
+        fixtures,
+        "extraction leaves the fixtures it compiles in place unchanged"
+    );
 }
 
 #[test]
 fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("authoritative-build");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
@@ -109,7 +117,7 @@ fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars
 
 #[test]
 fn declared_path_shapes_each_change_the_freshness_fingerprint() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("path-shapes");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
@@ -169,7 +177,7 @@ fn declared_path_shapes_each_change_the_freshness_fingerprint() {
 
 #[test]
 fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("generated-output");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
@@ -204,7 +212,7 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
 
 #[test]
 fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("environment");
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
@@ -276,7 +284,7 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
 
 #[test]
 fn pinned_cargo_package_file_set_honors_include_and_exclude() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("package-files");
     let copied = project.0.join("fallback-copy");
     copy_directory(&fixture("fallback-api"), &copied);
@@ -356,7 +364,6 @@ fn pinned_cargo_package_file_set_honors_include_and_exclude() {
 
 #[test]
 fn undeclared_external_state_never_yields_a_warm_reuse_decision() {
-    let _turn = rawr_import::store::test_turn();
     assert_eq!(
         cache::undeclared_external(Undeclared::InvokeCargo)
             .expect("the conservative policy can delegate"),
@@ -490,6 +497,28 @@ fn fixture(name: &str) -> PathBuf {
             .join(name),
     )
     .expect("the unchanged freshness fixture exists")
+}
+
+/// Every file under the two fixtures [`request`] compiles in place, with its
+/// SHA-256. Extraction runs their build scripts but must leave them as they
+/// were: no output, lockfile or target directory written beside them.
+fn fixture_files() -> BTreeMap<PathBuf, [u8; 32]> {
+    fn collect(path: &Path, files: &mut BTreeMap<PathBuf, [u8; 32]>) {
+        for entry in fs::read_dir(path).expect("the fixture directory is readable") {
+            let path = entry.expect("the fixture entry is readable").path();
+            if path.is_dir() {
+                collect(&path, files);
+            } else {
+                let bytes = fs::read(&path).expect("the fixture file is readable");
+                files.insert(path, Sha256::digest(bytes).into());
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    for name in ["freshness-api", "fallback-api"] {
+        collect(&fixture(name), &mut files);
+    }
+    files
 }
 
 fn copy_directory(source: &Path, destination: &Path) {

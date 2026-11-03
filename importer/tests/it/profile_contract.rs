@@ -4,7 +4,7 @@ use rawr_import::profile;
 
 #[test]
 fn synthetic_profile_contract_retains_only_exact_graph_evidence() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = p5::Project::new("profile-contract");
     let (_definition, contract) = p5::profile_contract(&project, p5::Mode::Success, None);
     let evidence = contract.evidence().collect::<Vec<_>>();

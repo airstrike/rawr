@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
@@ -20,6 +21,14 @@ impl Drop for Project {
     }
 }
 
+/// The generic fixture's contract, extracted and classified once per
+/// process, for tests that only read it.
+pub fn shared() -> &'static rawr_import::Contract<rawr_import::Classified> {
+    static CONTRACT: OnceLock<rawr_import::Contract<rawr_import::Classified>> = OnceLock::new();
+    CONTRACT.get_or_init(|| contract().1)
+}
+
+/// A contract of its own, for a test that consumes it into a native proof.
 pub fn contract() -> (
     Project,
     rawr_import::Contract<rawr_import::Classified>,
@@ -34,10 +43,12 @@ pub fn contract() -> (
     let project = Project(fs::canonicalize(root).expect("the P4 project is canonical"));
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
+    let lane = crate::shared::lane();
     let graph = request(&project.0, &limits)
         .resolve(&native, &limits)
         .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
         .expect("real generic API evidence canonicalizes");
+    drop(lane);
     let contract = graph
         .classify(&rawr_import::classify::Policy::standard(), &limits)
         .expect("real generic API evidence classifies");

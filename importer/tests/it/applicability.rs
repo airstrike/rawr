@@ -8,7 +8,7 @@ use rawr_import::process::Native;
 
 #[test]
 fn independent_intrinsic_domains_keep_full_predicates_and_associated_links() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     rawr_import::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");

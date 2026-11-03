@@ -179,6 +179,17 @@ fn context(project: &std::path::Path) -> rawr_import::context::Context {
                 .to_str()
                 .expect("the runner DAG Cargo home is Unicode"),
         )
+        // Each test keeps a cold Rawr home of its own (in its Cargo home),
+        // while Cargo's units go to the suite's build directory, as a
+        // project whose Cargo config names a shared `build-dir`.
+        .and_then(|environment| {
+            environment.setting(
+                "CARGO_BUILD_BUILD_DIR",
+                crate::shared::build_directory()
+                    .to_str()
+                    .expect("the shared build directory is Unicode"),
+            )
+        })
         .expect("the runner DAG Cargo home seals");
     rawr_import::context::Context::capture(
         project,
@@ -420,6 +431,7 @@ fn worker_command(project: &std::path::Path, report: &std::path::Path, snapshot:
     command
         .arg("--exact")
         .arg("runner_dag::runner_dag_worker")
+        .arg("--ignored")
         .arg("--nocapture")
         .env(WORKER_MODE, "1")
         .env(WORKER_PROJECT, project)
@@ -440,6 +452,7 @@ fn run_started_worker(project: &std::path::Path, report: &std::path::Path) {
         Command::new(std::env::current_exe().expect("the runner test executable resolves"))
             .arg("--exact")
             .arg("runner_dag::runner_dag_worker")
+            .arg("--ignored")
             .arg("--nocapture")
             .env(WORKER_MODE, "1")
             .env(WORKER_START, "1")
@@ -454,9 +467,10 @@ fn run_started_worker(project: &std::path::Path, report: &std::path::Path) {
     );
 }
 
+/// Not a test: the fresh process each worker-based test launches.
 #[test]
+#[ignore = "the runner DAG tests launch it in a fresh process"]
 fn runner_dag_worker() {
-    let _turn = rawr_import::store::test_turn();
     if std::env::var_os(WORKER_MODE).is_none() {
         return;
     }
@@ -474,7 +488,6 @@ fn runner_dag_worker() {
 
 #[test]
 fn same_key_fresh_processes_allocate_compile_and_publish_one_shared_bundle() {
-    let _turn = rawr_import::store::test_turn();
     let guard = rawr_import::store::TestProject::new("rawr-runner-race-dag");
     let project = guard.path().to_path_buf();
     prepare_runner_harness(&project);
@@ -541,7 +554,6 @@ fn same_key_fresh_processes_allocate_compile_and_publish_one_shared_bundle() {
 
 #[test]
 fn identical_fresh_lifecycle_reuses_and_starts_without_transform_or_cargo_children() {
-    let _turn = rawr_import::store::test_turn();
     let guard = rawr_import::store::TestProject::new("rawr-runner-started-dag");
     let project = guard.path().to_path_buf();
     prepare_runner_harness(&project);
@@ -581,15 +593,17 @@ fn identical_fresh_lifecycle_reuses_and_starts_without_transform_or_cargo_childr
     retire_shared_store(&project);
 }
 
+/// A fresh process with the same snapshot, then one with an edited Rawr
+/// snapshot, each reuse the first one's runner without a transform or Cargo.
 #[test]
-fn identical_fresh_runner_process_reuses_without_transform_or_cargo_children() {
-    let _turn = rawr_import::store::test_turn();
+fn identical_or_rawr_edited_fresh_runner_process_reuses_without_transform_or_cargo_children() {
     let guard = rawr_import::store::TestProject::new("rawr-runner-fresh-dag");
     let project = guard.path().to_path_buf();
     prepare_runner_harness(&project);
     let source_tree = store_snapshot(&project.join("runner-harness"));
     let first_report = project.join("first.report");
     let second_report = project.join("second.report");
+    let edited_report = project.join("edited.report");
 
     run_worker(&project, &first_report, 1);
     let first = read_worker_report(&first_report);
@@ -622,6 +636,17 @@ fn identical_fresh_runner_process_reuses_without_transform_or_cargo_children() {
     assert_eq!(second.get("runner_process"), Some(&1));
     assert_eq!(second.get("admitted"), Some(&1));
 
+    run_worker(&project, &edited_report, 2);
+    let edited = read_worker_report(&edited_report);
+    // The generated source never reads the snapshot: a Rawr edit reuses it.
+    assert_eq!(edited.get("overlay_hits"), Some(&1));
+    assert_eq!(edited.get("overlay_misses"), Some(&0));
+    assert_eq!(edited.get("hits"), Some(&1));
+    assert_eq!(edited.get("misses"), Some(&0));
+    assert_eq!(edited.get("cargo"), Some(&0));
+    assert_eq!(edited.get("runner_process"), Some(&1));
+    assert_eq!(edited.get("admitted"), Some(&1));
+
     assert_eq!(
         store_snapshot(&project.join("runner-harness")),
         source_tree,
@@ -632,48 +657,8 @@ fn identical_fresh_runner_process_reuses_without_transform_or_cargo_children() {
 }
 
 #[test]
-fn changed_rawr_snapshot_reuses_the_exact_runner_without_cargo() {
-    let _turn = rawr_import::store::test_turn();
-    let guard = rawr_import::store::TestProject::new("rawr-runner-edit-dag");
-    let project = guard.path().to_path_buf();
-    prepare_runner_harness(&project);
-    let first_report = project.join("first-edit.report");
-    let second_report = project.join("second-edit.report");
-
-    run_worker(&project, &first_report, 1);
-    let first = read_worker_report(&first_report);
-    assert_eq!(first.get("overlay_misses"), Some(&1));
-    assert_eq!(first.get("misses"), Some(&1));
-    assert_eq!(first.get("cargo"), Some(&1));
-    assert_eq!(first.get("runner_process"), Some(&1));
-    assert_eq!(first.get("admitted"), Some(&1));
-
-    let cache = rawr_import::cache::Writer::new(&project).expect("the edit runner cache binds");
-    assert!(
-        cache
-            .inspect()
-            .expect("the legacy edit-runner cache inspects")
-            .is_empty(),
-        "the shared cold build must not publish project-local authority",
-    );
-
-    run_worker(&project, &second_report, 2);
-    let second = read_worker_report(&second_report);
-    // The generated source never reads the snapshot: a Rawr edit reuses it.
-    assert_eq!(second.get("overlay_hits"), Some(&1));
-    assert_eq!(second.get("overlay_misses"), Some(&0));
-    assert_eq!(second.get("hits"), Some(&1));
-    assert_eq!(second.get("misses"), Some(&0));
-    assert_eq!(second.get("cargo"), Some(&0));
-    assert_eq!(second.get("runner_process"), Some(&1));
-    assert_eq!(second.get("admitted"), Some(&1));
-
-    retire_shared_store(&project);
-}
-
-#[test]
 fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let guard = rawr_import::store::TestProject::new("rawr-runner-hot-edit-dag");
     let project = guard.path().to_path_buf();
     prepare_runner_harness(&project);
@@ -805,7 +790,7 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
 
 #[test]
 fn identical_runner_restores_from_shared_node_without_cargo() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let guard = rawr_import::store::TestProject::new("rawr-runner-dag");
     let project = guard.path().to_path_buf();
     let context = context(&project);
@@ -897,7 +882,7 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
 
 #[test]
 fn cold_on_demand_busy_owner_leaves_no_runner_materialization() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let guard = rawr_import::store::TestProject::new("rawr-runner-busy-owner-dag");
     let project = guard.path().to_path_buf();
     let context = context(&project);

@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use rawr_import::api::identity::Definition as Id;
 use rawr_import::api::ledger::Lookup;
@@ -43,43 +44,40 @@ impl Project {
 
 #[test]
 fn a_named_type_extracts_only_its_closure() {
-    let _turn = rawr_import::store::test_turn();
-    let project = Project::new();
-    let graph = extract(&project, &[&["app", "widget", "Button"]]);
+    let graph = button();
 
-    let button = imported(&graph, &["widget", "Button"]).expect("the named type is exported");
-    let button = definition(&graph, button.target());
+    let button = imported(graph, &["widget", "Button"]).expect("the named type is exported");
+    let button = definition(graph, button.target());
     assert!(
-        inherent_member(&graph, button.id(), "new").is_some(),
+        inherent_member(graph, button.id(), "new").is_some(),
         "the named type brings its inherent impl table"
     );
     assert!(
-        implementations_of(&graph, button.id()).any(|implementation| trait_named(
-            &graph,
+        implementations_of(graph, button.id()).any(|implementation| trait_named(
+            graph,
             implementation,
             "Clone"
         )),
         "the named type brings its trait impl table"
     );
     assert!(
-        named(&graph, "Element"),
+        named(graph, "Element"),
         "a `From` impl in the type's table brings its target's shape"
     );
     for unnamed in ["Slider", "Unnamed", "slider", "button"] {
         assert!(
-            !named(&graph, unnamed),
+            !named(graph, unnamed),
             "`{unnamed}` is not named, so it is not extracted"
         );
     }
     assert!(
-        imported(&graph, &["widget", "Unnamed"]).is_none(),
+        imported(graph, &["widget", "Unnamed"]).is_none(),
         "an unextracted item has no export"
     );
 }
 
 #[test]
 fn a_new_demanded_item_is_extracted_and_demand_order_is_irrelevant() {
-    let _turn = rawr_import::store::test_turn();
     let project = Project::new();
     let first = extract(&project, &[&["app", "widget", "Button"]]);
     assert!(imported(&first, &["widget", "slider"]).is_none());
@@ -125,7 +123,6 @@ fn a_new_demanded_item_is_extracted_and_demand_order_is_irrelevant() {
 
 #[test]
 fn a_demanded_type_keeps_its_cross_crate_from_impls() {
-    let _turn = rawr_import::store::test_turn();
     let project = Project::new();
     let graph = extract(&project, &[&["app", "Element"]]);
 
@@ -169,7 +166,6 @@ fn a_demanded_type_keeps_its_cross_crate_from_impls() {
 /// the trait's declaration, which every such application shares.
 #[test]
 fn a_blanket_implementation_member_applies_through_its_trait() {
-    let _turn = rawr_import::store::test_turn();
     let project = Project::new();
     let graph = extract(&project, &[&["app", "Label", "to_string"]]);
     let label = imported(&graph, &["Label"]).expect("the named type is exported");
@@ -191,9 +187,7 @@ fn a_blanket_implementation_member_applies_through_its_trait() {
 /// child of its module.
 #[test]
 fn the_name_index_covers_every_public_path_and_a_glob_selects_children() {
-    let _turn = rawr_import::store::test_turn();
-    let project = Project::new();
-    let graph = extract(&project, &[&["app", "widget", "Button"]]);
+    let graph = button();
     let index = graph
         .name_index()
         .find(|index| index.root_alias() == "app")
@@ -215,7 +209,7 @@ fn the_name_index_covers_every_public_path_and_a_glob_selects_children() {
         }
     );
 
-    let glob = extract(&project, &[&["app", "widget", "*"]]);
+    let glob = extract(&Project::new(), &[&["app", "widget", "*"]]);
     for child in ["Button", "Unnamed", "button", "slider", "Slider"] {
         assert!(imported(&glob, &["widget", child]).is_some(), "{child}");
     }
@@ -276,6 +270,13 @@ fn definition<'a>(graph: &'a Graph, id: &Id) -> &'a model::Definition {
         .expect("an exported target has its definition")
 }
 
+/// The fixture with only `widget::Button` demanded, extracted once per
+/// process.
+fn button() -> &'static Graph {
+    static GRAPH: OnceLock<Graph> = OnceLock::new();
+    GRAPH.get_or_init(|| extract(&Project::new(), &[&["app", "widget", "Button"]]))
+}
+
 fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
     rawr_import::store::isolate_for_tests();
     let limits = Limits::standard();
@@ -303,6 +304,7 @@ fn extract(project: &Project, demand: &[&[&str]]) -> Graph {
     for path in demand {
         request = request.demand(path.iter().copied());
     }
+    let _lane = crate::shared::lane();
     let resolution = request
         .build()
         .expect("the on-demand request seals")
