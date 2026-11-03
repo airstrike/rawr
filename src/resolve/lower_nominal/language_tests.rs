@@ -12759,6 +12759,21 @@ fn language_unstable_std_items_are_rustcs_e0658() {
     );
 }
 
+/// `io::Error`'s methods live in core and alloc under unstable modules,
+/// but each is marked stable itself, so a std program calls them on
+/// stable (#838).
+#[test]
+fn language_io_error_methods_are_stable_through_std() {
+    for source in [
+        "use std::io; fn main() { let e = io::Error::new(io::ErrorKind::Other, \"x\"); println!(\"{e}\"); }",
+        "fn main() { let e = std::io::Error::new(std::io::ErrorKind::Other, \"x\"); println!(\"{e}\"); }",
+        "fn main() { let e = std::io::Error::other(\"x\"); println!(\"{e} {:?}\", e.kind()); }",
+    ] {
+        let shown = printed(&format!("{source}\nmain();"));
+        assert!(shown.starts_with("x"), "{source}\n{shown}");
+    }
+}
+
 #[test]
 fn language_std_items_rawr_cannot_run_fail_at_their_use() {
     // The `use` resolves: std has the item, and nothing names it.

@@ -1,42 +1,47 @@
-# Release the ?play bot: build the image, push it to Cloudflare's registry,
-# deploy the Worker and site, then wait for the bot and run the site's snippets.
-# The `web` job builds rawr-web, the playground's "Run in browser" module, on a
-# runner of its own while `image` builds and pushes the image. `image` then
-# waits for rawr-web, puts it in the Worker's assets as /web and deploys, on
-# the same runner, so the deploy needs no second checkout and npm install.
+# Release rawr to the web in stages, each one a reusable workflow that also
+# runs on its own. Each stage starts only after the one before it succeeded
+# (or was skipped), and a failure stops every stage after it.
+#
+#   1. binaries (binaries.yml): the GitHub release's prebuilt archives. Off
+#      unless the `binaries` input is ticked: patch releases have no tags of
+#      their own yet. It does nothing when the version already has archives.
+#   2. playground (playground.yml): rawr-web, built into this run's `web`
+#      artifact. About 3 minutes with its cache.
+#   3. bot (bot.yml): the ?play image, built and pushed only when its inputs
+#      changed since the image Cloudflare runs (`bot: auto`), always
+#      (`always`) or never (`skip`). Skipped, the deploy keeps the running
+#      image. Built, about 10-15 minutes with its cache (see bot.yml).
+#   4. site (site.yml): one deploy of the Worker and site with this run's
+#      rawr-web and the new image (or the running one), then the wait for the
+#      bot and the site's snippets against the server that has just gone
+#      live. About 3 minutes, plus up to 5 for a new image's rollout.
+#
+# Stages 2 and 3 publish only (an artifact, a registry image); the site
+# stage makes the one deploy, so the site never goes live ahead of its bot,
+# and a failed stage leaves the live site as it was. A Worker settings or
+# code change needs none of this: site.yml deploys it on its own on push.
+#
 # It needs the CLOUDFLARE_API_TOKEN and PLAY_SMOKE_TOKEN secrets and the
 # CLOUDFLARE_ACCOUNT_ID variable (see "Release from GitHub Actions" in
-# play/README.md). The image tag is the commit;
-# the committed wrangler.jsonc is rewritten in the job only, never pushed.
-name: Release ?play
+# play/README.md).
+name: Release
 
 on:
   workflow_dispatch:
-  # Switch this on after the first good manual run.
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - "play/**"
-  #     - "site/**"
-  #     - "src/**"
-  #     - "cli/**"
-  #     - "canonical/**"
-  #     - "codegen/**"
-  #     - "directory/**"
-  #     - "importer/**"
-  #     - "location/**"
-  #     - "macros/**"
-  #     - "toml/**"
-  #     - "watch/**"
-  #     - "build.rs"
-  #     - "build.template"
-  #     - "Cargo.toml"
-  #     - "Cargo.lock"
-  #     - ".dockerignore"
-  #     - ".github/workflows/release.yml"
+    inputs:
+      binaries:
+        description: Build the GitHub release's prebuilt archives first (binaries.yml).
+        type: boolean
+        default: false
+      bot:
+        description: "Build the ?play image: `auto` when its inputs changed, `always`, or `skip`."
+        type: choice
+        options: [auto, always, skip]
+        default: auto
 
-# One release or site deploy (site.yml) at a time. `queue: max` keeps every
-# waiting run in order, so a queued one never cancels another.
+# One release or deploy at a time: every stage workflow run on its own takes
+# this group too. `queue: max` keeps every waiting run in order, so a queued
+# one never cancels another.
 concurrency:
   group: release-play
   cancel-in-progress: false
@@ -44,196 +49,38 @@ concurrency:
 
 permissions:
   contents: read
-  # `image` reads this run's artifacts and jobs while it waits for rawr-web.
   actions: read
 
 jobs:
-  # rawr-web for wasm32 (web/build.sh): the module, with a brotli copy, and
-  # its JS glue. Its target dir (with wasm-bindgen-cli at the Cargo.lock
-  # version) and the cargo registry live in the Actions cache, saved once per
-  # Cargo.lock, so a run rebuilds the workspace crates and the LTO link only.
-  # It runs beside `image`, which takes longer.
-  web:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      CARGO_INCREMENTAL: 0
-    steps:
-      - uses: actions/checkout@v5
+  binaries:
+    if: inputs.binaries
+    uses: ./.github/workflows/binaries.yml
+    permissions:
+      contents: write
+    secrets: inherit
 
-      # The runner's Rust can trail the workspace's rust-version.
-      - name: Install stable Rust for wasm32
-        run: |
-          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown --no-self-update
-          rustup default stable
+  playground:
+    needs: binaries
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/playground.yml
+    with:
+      deploy: false
+    secrets: inherit
 
-      - name: Restore the wasm build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/wasm
-          key: web-${{ hashFiles('Cargo.lock') }}
-          restore-keys: web-
+  bot:
+    needs: playground
+    if: ${{ !failure() && !cancelled() && inputs.bot != 'skip' }}
+    uses: ./.github/workflows/bot.yml
+    with:
+      build: ${{ inputs.bot }}
+      deploy: false
+    secrets: inherit
 
-      - name: Build rawr-web
-        run: time web/build.sh target/web
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web
-          path: target/web
-          # site.yml deploys this rawr-web again with the image until the
-          # next release replaces both.
-          retention-days: 90
-
-  image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/checkout@v5
-
-      # The runner has about 85 GB free on / (the build needs about 20), so
-      # nothing is deleted. Four rustc jobs on 16 GB of RAM peak above it
-      # during rawr's thin-LTO link, so the build gets 24 GB of swap on the
-      # runner's second disk as a cushion.
-      - name: Add swap
-        run: |
-          df -h / /mnt
-          sudo swapoff -a
-          sudo rm -f /mnt/swapfile
-          sudo fallocate -l 24G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile >/dev/null
-          sudo swapon /mnt/swapfile
-          free -h
-
-      - name: Name the image
-        id: image
-        run: |
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "set the CLOUDFLARE_ACCOUNT_ID repository variable" >&2; exit 1; }
-          sha="$(git rev-parse --short=12 HEAD)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "ref=registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/rawr-play:$sha" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-
-      # build.mjs builds the site (an Astro package with its own lock file).
-      - name: Install the site's dependencies
-        working-directory: site
-        run: npm ci --no-audit --no-fund
-
-      # The lock file is not committed yet, so this is `npm install`, not `npm ci`.
-      - name: Install the Worker's dependencies
-        working-directory: play/deploy/cloudflare
-        run: npm install --no-audit --no-fund
-
-      # The site and the Worker's tests take a minute and the image takes
-      # many, so a broken site stops the release before an image is built or
-      # pushed. deploy.sh runs the same tests again on the deployed tree; its
-      # build reuses this site/dist (SITE_BUILT) and only merges rawr-web in.
-      - name: Build and test the site
-        working-directory: play/deploy/cloudflare
-        run: |
-          node build.mjs
-          npm test
-          npm --prefix ../../../site test
-
-      - uses: docker/setup-buildx-action@v3
-
-      # Built once and loaded into the local docker, then pushed: the
-      # registry's credentials last only 15 minutes and a cold build takes far
-      # longer. The cooked dependencies live in the GitHub Actions cache, so
-      # later runs rebuild only the workspace crates. CARGO_BUILD_JOBS sets
-      # build speed only: the profile (opt-level 3, thin LTO) is the Dockerfile's.
-      - name: Build the image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: play/Dockerfile
-          platforms: linux/amd64
-          build-args: |
-            PLAY_VERSION=${{ steps.image.outputs.sha }}
-            CARGO_BUILD_JOBS=4
-          tags: ${{ steps.image.outputs.ref }}
-          load: true
-          provenance: false
-          cache-from: type=gha,scope=play
-          cache-to: type=gha,scope=play,mode=max
-
-      - name: Show the image's size
-        run: |
-          docker image ls "${{ steps.image.outputs.ref }}"
-          docker history --format '{{.Size}}\t{{.CreatedBy}}' "${{ steps.image.outputs.ref }}" | cut -c1-120
-
-      - name: Push the image
-        working-directory: play/deploy/cloudflare
-        env:
-          IMAGE: ${{ steps.image.outputs.ref }}
-        run: |
-          credentials="$(npx wrangler containers registries credentials registry.cloudflare.com --push --json)"
-          field() { printf '%s' "$credentials" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)[process.argv[1]]))" "$1"; }
-          password="$(field password)"
-          echo "::add-mask::$password"
-          printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
-          docker push "$IMAGE"
-
-      # The `web` job usually finishes first. If not, wait for its artifact,
-      # and stop if the job ended without one. A failed API call is asked
-      # again on the next turn rather than ending the release.
-      - name: Wait for rawr-web
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          for _ in $(seq 1 180); do
-            found="$(gh api "$run/artifacts" --jq '[.artifacts[] | select(.name == "web")] | length')" || found=0
-            [ "$found" -gt 0 ] && exit 0
-            ended="$(gh api "$run/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "web") | .conclusion // empty')" || ended=""
-            case "$ended" in
-              "" | success) ;;
-              *) echo "the web job ended ($ended) without rawr-web" >&2; exit 1 ;;
-            esac
-            sleep 20
-          done
-          echo "rawr-web did not arrive within an hour" >&2
-          exit 1
-
-      # build.mjs merges public/, with web/ in it, into the Worker's assets.
-      - uses: actions/download-artifact@v4
-        with:
-          name: web
-          path: play/deploy/cloudflare/public/web
-
-      # The job's own copy of wrangler.jsonc names the image and its tag as
-      # PLAY_VERSION, which tells the bot to restart.
-      - name: Point wrangler.jsonc at the image
-        working-directory: play/deploy/cloudflare
-        env:
-          IMAGE: ${{ steps.image.outputs.ref }}
-        run: ./pin-image.sh "$IMAGE"
-
-      # PLAY_SMOKE_TOKEN lets the smoke test skip /play/run's per-IP limit.
-      - name: Test, deploy and check the site
-        working-directory: play/deploy/cloudflare
-        env:
-          PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}
-          SITE_BUILT: 1
-        run: ./deploy.sh
-
-      - name: Show the logs
-        if: failure()
-        run: |
-          for log in target/logs/*.log; do
-            [ -f "$log" ] || continue
-            echo "::group::$log"
-            cat "$log"
-            echo "::endgroup::"
-          done
+  site:
+    needs: [playground, bot]
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/site.yml
+    with:
+      image: ${{ needs.bot.outputs.image }}
+      web: artifact
+    secrets: inherit

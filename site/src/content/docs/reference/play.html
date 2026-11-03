@@ -30,8 +30,8 @@
 <h2 id="limits">Limits</h2>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
-  <tr><td>Time budget</td><td>60 seconds of real time for a run on the server.</td></tr>
-  <tr><td>Whole run</td><td>120 seconds. The process is stopped after that.</td></tr>
+  <tr><td>Time budget</td><td>None while no other snippet waits for the server, up to 10 minutes of real time. Once another snippet waits, the run has 60 more seconds of real time.</td></tr>
+  <tr><td>Whole run</td><td>120 seconds after another snippet begins to wait. The process is stopped after that.</td></tr>
   <tr><td>Memory</td><td>256 MB of address space per run.</td></tr>
   <tr><td>Operations</td><td>1,000,000 per run on the server.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
@@ -91,11 +91,11 @@
 <p>A compile error gets the report that <code>rawr check</code> would print. These replies come from <code>?play</code> itself.</p>
 <table>
   <tr><th>Reply</th><th>Meaning</th></tr>
-  <tr><td><code>time limit exceeded</code></td><td>The program ran past its time budget.</td></tr>
+  <tr><td><code>time limit exceeded</code></td><td>The program ran past its time budget: 60 seconds after another snippet began to wait, or 10 minutes in all.</td></tr>
   <tr><td><code>operation limit exceeded: more than 1000000 operations (an endless loop?)</code></td><td>The run took more than 1,000,000 operations.</td></tr>
   <tr><td><code>call depth limit exceeded: deeper than 32 calls (endless recursion?)</code></td><td>Calls nested more than 32 deep.</td></tr>
   <tr><td><code>size limit exceeded: .. (strings up to 65536 bytes, arrays and maps up to 65536 items)</code></td><td>A string, array, vector or map grew past its limit.</td></tr>
-  <tr><td><code>the run timed out after 120000 ms</code></td><td>The whole run took more than 120 seconds, so its process was stopped.</td></tr>
+  <tr><td><code>the run timed out after .. ms</code></td><td>The whole run went on for more than 120 seconds after another snippet began to wait, so its process was stopped.</td></tr>
   <tr><td><code>?play stopped: out of memory or crashed</code></td><td>The process ran out of its 256 MB, or it crashed without a message.</td></tr>
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The run panicked. The line after it is the panic&rsquo;s message.</td></tr>
   <tr><td><code>the playground is busy; try again in a moment</code></td><td>The server stayed busy for too long. Discord runs go first.</td></tr>
