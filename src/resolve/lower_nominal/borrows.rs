@@ -1620,9 +1620,10 @@ impl Parser<'_> {
             | Ty::Ordering
             | Ty::Time(_)
             | Ty::ParseError(_) => false,
-            Ty::Array { element, .. } | Ty::Option(element) | Ty::Range(element) => {
-                self.may_hold_borrow(&element)
-            }
+            Ty::Array { element, .. }
+            | Ty::Option(element)
+            | Ty::Range(element)
+            | Ty::InclusiveOf(element) => self.may_hold_borrow(&element),
             Ty::Tuple(members) => members.iter().any(|member| self.may_hold_borrow(member)),
             Ty::Result(ok, error) => self.may_hold_borrow(&ok) || self.may_hold_borrow(&error),
             Ty::Keyed(_, arguments) => arguments
