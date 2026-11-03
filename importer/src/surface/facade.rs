@@ -3536,13 +3536,36 @@ fn item(path: &str, outcome: crate::classify::Outcome<'_>) -> Result<Option<Item
         Representability::Invocation(plan) => plan.item().values(),
         _ => None,
     };
+    let mut values = values.map(item_signature).transpose()?;
+    // A callable no closure or slot fills leaves only the form a value
+    // fills, as iced's `selector::find(S)` takes a widget `Id` through
+    // `Selector`, which iced also implements for `FnMut` closures.
+    let signature = match (outcome.representability(), values.take()) {
+        (Representability::FunctionItem(plan), Some(form)) if unfilled_callable(plan) => form,
+        (_, form) => {
+            values = form;
+            signature
+        }
+    };
     Ok(Some(Item {
         path: copy(path)?,
         kind,
         selector: outcome.identity().selector().try_clone()?,
         signature,
-        values: values.map(item_signature).transpose()?,
+        values,
     }))
+}
+
+/// Whether `plan` takes a callable that neither a script closure nor a
+/// script function's slot fills.
+fn unfilled_callable(plan: &representability::callable::Item) -> bool {
+    plan.call().is_none()
+        && plan.crossings().is_empty()
+        && plan
+            .signature()
+            .parameters()
+            .iter()
+            .any(|parameter| parameter.kind() == representability::signature::Kind::Callable)
 }
 
 /// The signature of a generic item: a closure it takes is the closure's
