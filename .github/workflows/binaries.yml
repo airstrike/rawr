@@ -14,13 +14,9 @@
 # Windows archive holds rawr and cargo-rawr, and its build is best effort.
 name: Release binaries
 
+# Started by hand while patch releases have no tags of their own.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "Cargo.toml"
-      - ".github/workflows/binaries.yml"
 
 concurrency:
   group: binaries-${{ github.sha }}
