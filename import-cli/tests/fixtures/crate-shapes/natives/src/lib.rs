@@ -452,4 +452,41 @@ pub mod deref {
     pub fn shout(text: &str) -> String {
         text.to_uppercase()
     }
+
+    /// A byte buffer that derefs to `[u8]`, as iced's `Bytes` does.
+    #[derive(Clone)]
+    pub struct Bytes(Vec<u8>);
+
+    impl Deref for Bytes {
+        type Target = [u8];
+
+        fn deref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct Size {
+        pub width: u32,
+        pub height: u32,
+    }
+
+    /// A struct with a `Deref` field and a `Copy` one, as iced's
+    /// `Screenshot` has.
+    pub struct Shot {
+        pub rgba: Bytes,
+        pub size: Size,
+    }
+
+    impl Shot {
+        pub fn new() -> Self {
+            Shot {
+                rgba: Bytes(vec![1, 2, 3, 4]),
+                size: Size {
+                    width: 2,
+                    height: 1,
+                },
+            }
+        }
+    }
 }

@@ -1198,7 +1198,9 @@ impl Parser<'_> {
 
     /// `<ty as Deref>::Target` of a crate's type `ty`, or `DerefMut`'s with
     /// `mutable`: the target of the borrow guard its facade's `deref` (or
-    /// `deref_mut`) gives (D554). `None` when the facade has none.
+    /// `deref_mut`) gives (D554), or of the shared reference a `deref` to a
+    /// slice of scalars or a `str` gives as Rawr's own value. `None` when
+    /// the facade has none.
     #[cfg(feature = "rust-import")]
     fn host_deref_target(&mut self, ty: &Ty, mutable: bool) -> Option<Ty> {
         let (name, guard) = if mutable {
@@ -1206,24 +1208,61 @@ impl Parser<'_> {
         } else {
             ("deref", crate::host::item::Guard::Shared)
         };
-        let owner = self.host_member_owner(ty, name)?;
+        let Some(owner) = self.host_member_owner(ty, name) else {
+            // The type may implement `Deref` all the same, as a member miss
+            // finds (#762): a pass that fails demands its `deref` with what
+            // else it missed, so a coercion through it is checked again.
+            if let Some(definition) = ty
+                .host_alias()
+                .filter(|definition| definition.identity().imported().is_some())
+            {
+                self.recovered.push(Error::UnknownMember {
+                    owner: definition.path().into(),
+                    member: name.into(),
+                    reference: Span::NONE,
+                });
+            }
+            return None;
+        };
         let items = self
             .models
             .host_items(&format!("{}::{name}", owner.path()))?
             .to_vec();
-        if !items
-            .iter()
-            .all(|item| item.guard() == Some(guard) && item.signature().parameters().is_empty())
+        // A `deref_mut` changes the value where it is, through its guard.
+        let guarded = items.iter().all(|item| item.guard() == Some(guard));
+        let read = !mutable && items.iter().all(|item| item.guard().is_none());
+        if !(guarded || read)
+            || items
+                .iter()
+                .any(|item| !item.signature().parameters().is_empty())
         {
             return None;
         }
         let checkpoint = self.inference.checkpoint();
         let selected = self.select_host_signature(&items, Some(ty), &mut [], false, Span::NONE);
-        let target = selected
+        let output = selected
             .ok()
             .map(|(_, signature)| self.inference.resolve(&signature.output));
         self.inference.commit(checkpoint);
-        target
+        match output? {
+            Ty::Reference { target, .. } if read => Some(*target),
+            Ty::Str if read => Some(Ty::UnsizedStr),
+            _ if read => None,
+            target => Some(target),
+        }
+    }
+
+    /// Whether `field.member(..)` of a crate struct's field of type `ty`
+    /// borrows the field shared, as rustc's autoref does: a `&self` method
+    /// of its own, or one of its `Deref` target's.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn borrows_for_method(&mut self, ty: &Ty, member: &str) -> bool {
+        if self.host_own_member(ty, member) {
+            return self.member_receiver(ty, member) == Some(receiver::Mode::Shared);
+        }
+        self.host_deref_target(ty, false).is_some_and(|target| {
+            self.member_receiver(&target, member) == Some(receiver::Mode::Shared)
+        })
     }
 
     /// Whether the crate's type `ty` has a field or method `member` of its
