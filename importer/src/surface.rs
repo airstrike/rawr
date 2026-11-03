@@ -662,12 +662,16 @@ impl<B> Compiler<'_, B> {
             return Err(Error::ForeignIdentity);
         }
         let outcome = self.contract.outcome(base).ok_or(Error::ForeignIdentity)?;
-        // A generic struct's constructor at the types its use infers.
+        // A generic struct's constructor at the types its use infers, and
+        // a generic enum's variant at the types of the value it matches.
         let structure = matches!(
             (outcome.representability(), &selector),
             (
                 crate::classify::representability::Representability::Struct(_),
                 identity::Selector::StructConstructor(_) | identity::Selector::StructField(_)
+            ) | (
+                crate::classify::representability::Representability::Enum(_),
+                identity::Selector::EnumVariant { .. }
             )
         );
         if (!structure || instance.types().is_empty())
@@ -2016,6 +2020,7 @@ mod tests {
                 name,
                 form: crate::api::model::FieldForm::Tuple,
                 fields,
+                ..
             } if parameters.is_empty() && name.as_ref() == "Count" && fields.len() == 1
         )));
         assert!(demand.adapter_plans().iter().any(|plan| matches!(

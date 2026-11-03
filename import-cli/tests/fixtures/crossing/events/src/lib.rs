@@ -17,6 +17,7 @@ pub mod grid;
 pub mod keyed;
 pub mod matched;
 pub mod named;
+pub mod ordered;
 pub mod plane;
 pub mod pointers;
 pub mod results;

@@ -523,6 +523,17 @@ impl Arguments {
             {
                 plan.parameters()
             }
+            // A generic enum's variant matched at the instance its value
+            // has, as iced's `Key<&str>` from `Key::as_ref`.
+            (_, representability::Representability::Enum(plan))
+                if !self.types.is_empty()
+                    && self.constants.is_empty()
+                    && self.binders.is_empty()
+                    && self.callable.is_none()
+                    && self.slots.is_empty() =>
+            {
+                plan.parameters()
+            }
             _ if self.types.is_empty()
                 && self.constants.is_empty()
                 && self.binders.is_empty()

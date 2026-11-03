@@ -732,6 +732,8 @@ fn build(
                     ty.partial_eq(),
                     ty.eq(),
                     ty.hash(),
+                    ty.partial_ord(),
+                    ty.ord(),
                     ty.iterator(),
                 ]),
                 parameters,

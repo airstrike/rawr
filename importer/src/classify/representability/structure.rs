@@ -67,6 +67,13 @@ pub struct Plan {
     /// by its `next` (D558 slice 2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     iterator: bool,
+    /// The crate implements `PartialOrd` for the type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    partial_ord: bool,
+    /// The crate implements `Ord` for the type: a value of it keys a
+    /// B-tree map or set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    ord: bool,
     /// The first public field rawr can't hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     unsupported: Option<Unsupported>,
@@ -154,6 +161,8 @@ impl Plan {
             lifetimes: 0,
             covariant: false,
             iterator: false,
+            partial_ord: false,
+            ord: false,
             unsupported: None,
         }
     }
@@ -240,6 +249,25 @@ impl Plan {
     #[must_use]
     pub const fn hash(&self) -> bool {
         self.hash
+    }
+
+    /// The plan, with the crate's `PartialOrd` and `Ord` for the type.
+    pub(crate) const fn with_order(mut self, partial_ord: bool, ord: bool) -> Self {
+        self.partial_ord = partial_ord;
+        self.ord = ord;
+        self
+    }
+
+    /// Whether the crate implements `PartialOrd` for the type.
+    #[must_use]
+    pub const fn partial_ord(&self) -> bool {
+        self.partial_ord
+    }
+
+    /// Whether the crate implements `Ord` for the type.
+    #[must_use]
+    pub const fn ord(&self) -> bool {
+        self.ord
     }
 
     pub(crate) const fn with_borrowing(

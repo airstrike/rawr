@@ -60,6 +60,10 @@ pub(crate) enum Operation {
         name: Box<str>,
         form: model::FieldForm,
         fields: Box<[Field]>,
+        /// The types a generic enum's value is matched at, as iced's
+        /// `Key<&str>`.
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        instance: Box<[convert::Type]>,
     },
     Function {
         signature: signature::Signature,
@@ -389,7 +393,8 @@ impl Plan {
     pub(crate) fn structural_instance(&self) -> &[convert::Type] {
         match &self.operation {
             Operation::StructConstructor { instance, .. }
-            | Operation::StructField { instance, .. } => instance,
+            | Operation::StructField { instance, .. }
+            | Operation::EnumVariant { instance, .. } => instance,
             _ => &[],
         }
     }
@@ -646,11 +651,11 @@ fn operation_bytes(
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
             parameter_slice_bytes(plan.parameters())
         }
-        (representability::Representability::Enum(plan), selected) => {
+        (representability::Representability::Enum(plan), selector) => {
             let variant = plan
                 .variants()
                 .iter()
-                .find(|variant| variant.selector() == selected)
+                .find(|variant| variant.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "enum selector is absent from its exact plan",
                 })?;
@@ -768,19 +773,22 @@ fn clone_operation(
                 parameters: clone_parameters(plan.parameters())?,
             })
         }
-        (representability::Representability::Enum(plan), selected) => {
+        (representability::Representability::Enum(plan), selector) => {
             let variant = plan
                 .variants()
                 .iter()
-                .find(|variant| variant.selector() == selected)
+                .find(|variant| variant.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "enum selector is absent from its exact plan",
                 })?;
+            let instance = clone_types(selected.types())?;
+            let at = parameters_at(plan.parameters(), &instance);
             Ok(Operation::EnumVariant {
                 parameters: clone_parameters(plan.parameters())?,
                 name: clone_str(variant.name())?,
                 form: variant.form(),
-                fields: clone_fields(variant.fields())?,
+                fields: defaulted_fields(clone_fields(variant.fields())?, &at),
+                instance,
             })
         }
         (
