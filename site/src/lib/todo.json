@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"`Vec<T>`, `[T]`, `[T; N]` and `VecDeque<T>` are four types, as in Rust. A `&Vec<T>` or `&[T; N]` coerces to `&[T]` through std's `Deref`, a range of a `Vec` and a crate's `&[T]` are slices, and calling another sequence type's method (`push` on a `&mut [T]`, `push_back` on a `Vec`, `sort` on a `VecDeque`) is rustc's E0599.","issues":[769]},
-        {"text":"`VecDeque` has std's own methods and borrow summaries. rawr runs `push_front`, `pop_front`, `push_back`, `pop_back`, `front`, `back`, their `_mut` forms and the methods it shares with `Vec`; its other std methods give the not-yet error.","issues":[769]}
+        {"text":"`VecDeque` has std's own methods and borrow summaries. rawr runs `push_front`, `pop_front`, `push_back`, `pop_back`, `front`, `back`, their `_mut` forms and the methods it shares with `Vec`; its other std methods give the not-yet error.","issues":[769]},
+        {"text":"A `match`, `if let` or `let`-`else` on a crate enum binds the variant's fields as rustc does: by value it moves fields such as an `io::Error` out instead of cloning them, and through `&T` it lends a field without `Clone` to the arm, where `&self` methods and `&T` parameters reach it while the matched value is read too. Testing a variant no longer reads its fields.","issues":[678]}
       ]
     },
     "releases": [
@@ -1794,7 +1795,7 @@
     {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
     {"issue":676,"title":"Type::from(value) of a crate type's own value is core's reflexive From","state":"closed","category":"No glue (D593)","release":"0.3.87"},
     {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"closed","category":"No glue (D593)","release":"0.3.90"},
-    {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"open","category":"Divergences from rustc"},
+    {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"closed","category":"Divergences from rustc"},
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
     {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"closed","category":"Health"},
@@ -1897,7 +1898,12 @@
     {"issue":778,"title":"rawr-import's integration suite runs at importer merges and in the health sweep","state":"closed","category":"Health","release":"0.3.113"},
     {"issue":779,"title":"Run std's remaining VecDeque methods","state":"open","category":"Divergences from rustc"},
     {"issue":780,"title":"Name VecDeque in a crate's signature","state":"open","category":"No glue (D593)"},
-    {"issue":781,"title":"A program's impls for [T] and Vec<T> share one runtime owner","state":"open","category":"Divergences from rustc"}
+    {"issue":781,"title":"A program's impls for [T] and Vec<T> share one runtime owner","state":"open","category":"Divergences from rustc"},
+    {"issue":782,"title":"A borrow of a crate variant's Clone field through `&T` is a copy, not a borrow","state":"open","category":"Divergences from rustc"},
+    {"issue":783,"title":"A field lent by a variant pattern expires at the end of its arm","state":"open","category":"Divergences from rustc"},
+    {"issue":784,"title":"A std value rawr holds as its own, such as `io::Error`, can't be lent from inside a crate value","state":"open","category":"Divergences from rustc"},
+    {"issue":785,"title":"The copying variant matcher copies every field, so a nested pattern or a Copy binding fails beside a field without Clone","state":"open","category":"Divergences from rustc"},
+    {"issue":786,"title":"`ref mut` bindings and matches through `&mut T` copy crate variant fields","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
