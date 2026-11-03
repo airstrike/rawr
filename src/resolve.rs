@@ -2846,6 +2846,7 @@ fn resolve_methods(
                 &item.owner,
                 &item.functions,
                 &associated,
+                &seen,
                 &parameters,
                 name.span,
             )
@@ -4060,6 +4061,56 @@ fn substitute_self(
     }
 }
 
+/// `ty` with each projection of `owner` (`Self::Name`, `Owner::Name`) of a
+/// trait `implemented` accepts written as the type the impl's
+/// `associated` gives it.
+fn given_projections(
+    ty: &type_ref::Type,
+    owner: &type_ref::Type,
+    associated: &[(crate::item::Name, type_ref::Type)],
+    implemented: impl Fn(&ImmutableString) -> bool + Copy,
+) -> type_ref::Type {
+    let given = |ty| given_projections(ty, owner, associated, implemented);
+    match ty {
+        type_ref::Type::Path(path)
+            if let type_ref::Target::Projection(base, projected) = &path.target
+                && (is_self(base) || canonical_type_name(base) == canonical_type_name(owner))
+                && projected.as_ref().is_none_or(implemented)
+                && let Some((_, bound)) =
+                    associated.iter().find(|(name, _)| name.text == path.name) =>
+        {
+            bound.clone()
+        }
+        type_ref::Type::Path(path) => type_ref::Type::Path(type_ref::Path {
+            arguments: path
+                .arguments
+                .iter()
+                .map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => type_ref::Argument::Type(given(ty)),
+                    type_ref::Argument::Lifetime(span) => type_ref::Argument::Lifetime(*span),
+                })
+                .collect(),
+            ..path.clone()
+        }),
+        type_ref::Type::Tuple { members, span } => type_ref::Type::Tuple {
+            members: members.iter().map(given).collect(),
+            span: *span,
+        },
+        type_ref::Type::Reference {
+            mutable,
+            lifetime,
+            target,
+            span,
+        } => type_ref::Type::Reference {
+            mutable: *mutable,
+            lifetime: *lifetime,
+            target: Box::new(given(target)),
+            span: *span,
+        },
+        type_ref::Type::Unit(span) => type_ref::Type::Unit(*span),
+    }
+}
+
 /// `ty` with each trait parameter in `parameters` replaced by its argument:
 /// `T` by `i64` in `impl Convert<i64> for C`.
 fn substitute_parameters(
@@ -4133,12 +4184,15 @@ fn substitute_parameters(
 /// one a member of the trait with the trait's signature (`Self` being the
 /// owner), every required one present, and each provided one the impl does
 /// not override taken from the trait's default (`true`: from the trait).
+/// `associated` holds the impl's associated types and those of its
+/// `supertraits`' impls for the owner.
 fn trait_impl_functions(
     declared: &item::Trait,
     owner_name: &str,
     owner: &type_ref::Type,
     functions: &[item::Function],
     associated: &[(crate::item::Name, type_ref::Type)],
+    supertraits: &std::collections::BTreeSet<ImmutableString>,
     parameters: &[(ImmutableString, type_ref::Type)],
     span: Span,
 ) -> Result<Vec<(item::Function, bool)>, Error> {
@@ -4178,7 +4232,11 @@ fn trait_impl_functions(
             if from_trait {
                 canonical_type_name(&substitute(ty))
             } else {
-                canonical_type_name(ty)
+                // `&mut Self::Target` in a `DerefMut` impl is the type the
+                // owner's `Deref` impl gives, as rustc normalizes it.
+                canonical_type_name(&given_projections(ty, owner, associated, |trait_name| {
+                    *trait_name == declared.name.text || supertraits.contains(trait_name)
+                }))
             }
         };
         let parameters = function

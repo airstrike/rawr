@@ -197,3 +197,241 @@ fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
         );
     }
 }
+
+#[test]
+fn language_a_deref_mut_impl_may_name_self_target() {
+    // `DerefMut`'s `Self::Target` is its `Deref` impl's, as rustc
+    // normalizes it (#858).
+    let output = printed(
+        r#"
+use std::ops::{Deref, DerefMut};
+
+struct W(Vec<i32>);
+
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+fn main() {
+    let mut w = W(vec![1]);
+    w.push(2);
+    println!("{:?} {}", w.0, w.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2] 2\n");
+    // A type other than the `Target` is still refused (rustc's E0053).
+    let report = refused(
+        r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i32>, String);
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut String {
+        &mut self.1
+    }
+}
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        report.contains("has an incompatible type for trait `DerefMut`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_deref_of_a_program_type_goes_through_its_deref() {
+    // `*w` is `*Deref::deref(&w)`, and `*DerefMut::deref_mut(&mut w)`
+    // where it is assigned (#859).
+    let output = printed(
+        r#"
+use std::ops::{Deref, DerefMut};
+
+struct W(Vec<i32>);
+
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Vec<i32> {
+        println!("deref");
+        &self.0
+    }
+}
+
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut Vec<i32> {
+        println!("deref_mut");
+        &mut self.0
+    }
+}
+
+struct N(i32);
+
+impl Deref for N {
+    type Target = i32;
+    fn deref(&self) -> &i32 {
+        &self.0
+    }
+}
+
+impl DerefMut for N {
+    fn deref_mut(&mut self) -> &mut i32 {
+        &mut self.0
+    }
+}
+
+fn main() {
+    let mut w = W(vec![1]);
+    println!("{:?}", *w);
+    *w = vec![5, 6];
+    println!("{:?}", w.0);
+    let mut n = N(2);
+    *n += 3;
+    let m = *n + 1;
+    println!("{} {}", n.0, m);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "deref\n[1]\nderef_mut\n[5, 6]\n5 6\n");
+    // rustc's E0594 with no `DerefMut`, and E0507 for a move out of it.
+    let program = |body: &str| {
+        format!(
+            r#"
+use std::ops::Deref;
+struct R(String);
+impl Deref for R {{
+    type Target = String;
+    fn deref(&self) -> &String {{
+        &self.0
+    }}
+}}
+fn main() {{
+    let r = R(String::from("a"));
+    {body}
+}}
+main();
+"#
+        )
+    };
+    for (body, expected) in [
+        (
+            r#"*r = String::from("x");"#,
+            "error[E0594]: cannot assign to data in dereference of `R`\n",
+        ),
+        (
+            r#"let s = *r; println!("{s}");"#,
+            "error[E0507]: cannot move out of dereference of `R`\n",
+        ),
+    ] {
+        let report = refused(&program(body));
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn language_text_into_takes_the_type_inference_gives_it() {
+    // A branch's `.into()` takes the type the other branch, the return
+    // type or a block's `let` gives it, as rustc infers it (#860).
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+
+fn f(b: bool) -> Cow<'static, str> {
+    if b { "x".into() } else { Cow::Owned(String::new()) }
+}
+
+fn g() -> Cow<'static, str> {
+    "y".into()
+}
+
+fn h(b: bool) -> Cow<'static, str> {
+    match b {
+        true => "t".into(),
+        false => {
+            "f".into()
+        }
+    }
+}
+
+fn s(b: bool) -> String {
+    if b { "s".into() } else { String::new() }
+}
+
+fn main() {
+    println!("{:?} {:?} {:?} {:?} {}", f(true), f(false), g(), h(false), s(true));
+    let c: Cow<str> = if true { "a".into() } else { "b".into() };
+    let d: Cow<str> = {
+        let t = "blk";
+        t.into()
+    };
+    let x: Cow<str> = match 1 {
+        1 => "one".into(),
+        _ => Cow::Borrowed("other"),
+    };
+    println!("{c} {d} {x}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "\"x\" \"\" \"y\" \"f\" s\na blk one\n");
+}
+
+#[test]
+fn language_a_script_value_of_a_cow_shows_its_payload() {
+    // A `Cow`'s `Debug` and `Display` are its payload's, as std's are, for
+    // a script's final value as for `{:?}` (#861).
+    let value = Engine::new()
+        .eval::<crate::Dynamic>(
+            "use std::borrow::Cow;\nlet c: Cow<str> = Cow::Borrowed(\"a\");\nc\n",
+        )
+        .unwrap();
+    assert_eq!(format!("{value:?} {value}"), "\"a\" a");
+}
+
+#[test]
+fn language_return_of_an_assignment_is_unit() {
+    // An assignment expression is `()` (#862).
+    let output = printed(
+        r#"
+#[derive(Default, Debug)]
+struct P {
+    x: i32,
+}
+
+fn reset(p: &mut P) {
+    return *p = P::default()
+}
+
+fn main() {
+    let mut p = P { x: 3 };
+    reset(&mut p);
+    println!("{:?} {}", p, p.x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "P { x: 0 } 0\n");
+    // In a function returning `i32`, a mismatch, as rustc's E0308 is.
+    let report = refused("fn bump(n: &mut i32) -> i32 { return *n = 3 }\nfn main() {}\nmain();\n");
+    assert!(
+        report.contains("type mismatch: expected `i32`, found `()`"),
+        "{report}"
+    );
+}

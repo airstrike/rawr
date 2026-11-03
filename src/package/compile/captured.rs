@@ -6,7 +6,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 mod native_tests;
 
-use crate::{host, package, reload, resolve, Engine, Scope};
+use crate::{diagnostic, host, package, reload, resolve, Engine, Scope, Span};
 use rawr_import::runner::manifest::{self, coverage};
 use sha2::{Digest as _, Sha256};
 
@@ -15,6 +15,9 @@ use sha2::{Digest as _, Sha256};
 pub(crate) struct Output {
     pub(crate) candidate: reload::Candidate,
     pub(crate) imported: resolve::lower_nominal::ImportedOutput,
+    /// The snapshot's sources, which a use the carrier misses is reported
+    /// against.
+    sources: Box<[diagnostic::Source]>,
 }
 
 /// The intact compiler output joined to exact native inventory metadata.
@@ -27,7 +30,8 @@ pub(crate) struct Matched {
 
 pub(crate) enum Coverage {
     Matched(Box<Matched>),
-    NeedsPreparation,
+    /// The first use the carrier doesn't cover.
+    Uncovered(Box<Unbound>),
 }
 
 /// Only a terminal lookup with native provenance may request preparation.
@@ -110,6 +114,7 @@ impl Output {
         Ok(Self {
             candidate,
             imported,
+            sources,
         })
     }
 
@@ -121,13 +126,21 @@ impl Output {
         digest.update(b"rawr.resident.compiled-uses/v1");
         digest.update(carrier.identity());
         digest.update(carrier.coverage_digest());
+        // The script functions each adapter holds: one adapter holds one
+        // function at each slot, so two uses that pass two need two.
+        let mut held = std::collections::BTreeMap::new();
         for used in &self.imported.uses {
+            // A dependency crate's item from that crate's root, as the
+            // carrier names it: `iced::__rawr_crate_iced_widget_<id>::Column`
+            // is `iced_widget::Column`.
+            let path = host::path::public(&used.path);
             let matched = carrier.cover(
                 coverage::Use {
-                    path: &used.path,
+                    path: &*path,
                     selector: &used.selector,
                     endpoint: None,
                     types: &used.types,
+                    slots: &used.slots,
                 },
                 used.functions.iter().map(|function| coverage::Function {
                     position: function.position,
@@ -139,8 +152,21 @@ impl Output {
                     seal: &mapper.seal,
                 }),
             );
-            let Some(matched) = matched else {
-                return Coverage::NeedsPreparation;
+            let shared = matched
+                .as_ref()
+                .and_then(coverage::Matched::entry)
+                .filter(|_| !used.fillers.is_empty())
+                .is_some_and(|entry| {
+                    **held.entry(*entry.identity()).or_insert(&*used.fillers) != *used.fillers
+                });
+            let Some(matched) = matched.filter(|_| !shared) else {
+                return Coverage::Uncovered(Box::new(Unbound {
+                    at: self
+                        .sources
+                        .get(used.source.index())
+                        .map(|source| (source.clone(), used.span)),
+                    miss: None,
+                }));
             };
             digest.update(matched.digest());
         }
@@ -149,6 +175,58 @@ impl Output {
             carrier: *carrier.identity(),
             coverage: digest.finalize().into(),
         }))
+    }
+}
+
+/// A use of a crate this compiler has no binding for: a lookup with native
+/// provenance that missed, or a use at types the carrier doesn't cover.
+/// Only a universe runner reports it (`rawr_import::universe`), which binds
+/// what its own program uses and prepares nothing more, as the program's
+/// error where the program makes the use. Any other runner prepares it.
+pub(crate) struct Unbound {
+    at: Option<(diagnostic::Source, Span)>,
+    /// The lookup's own error, reported when it has no position.
+    miss: Option<package::Error>,
+}
+
+impl Unbound {
+    /// A lookup with native provenance that missed, at the position its
+    /// own error reports.
+    pub(crate) fn missed(error: package::Error) -> Self {
+        let at = error.report().ok().and_then(|report| {
+            report
+                .labels()
+                .iter()
+                .find(|label| label.kind() == diagnostic::LabelKind::Primary)
+                .map(|label| (label.source().clone(), label.span()))
+        });
+        Self {
+            at,
+            miss: Some(error),
+        }
+    }
+
+    /// The program's error at the use.
+    pub(crate) fn error(self) -> package::Error {
+        let Some((source, span)) = self.at else {
+            return self.miss.unwrap_or_else(|| {
+                package::Error::diagnostic(diagnostic::Error::EmptySourceIdentity)
+            });
+        };
+        let report = diagnostic::Report::error(
+            diagnostic::code::RESOLVE_HOST_OPERATION,
+            "this use of a crate isn't among the universe's bindings",
+        )
+        .primary(
+            source,
+            span,
+            Some("the universe's program doesn't make it".into()),
+        )
+        .map(diagnostic::Builder::finish);
+        match report {
+            Ok(report) => package::Error::import_diagnostic(report),
+            Err(error) => package::Error::diagnostic(error),
+        }
     }
 }
 

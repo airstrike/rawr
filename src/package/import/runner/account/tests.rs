@@ -24,7 +24,7 @@ pub(crate) fn carrier_bytes(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
         bytes.extend_from_slice(&arguments.to_le_bytes());
     }
     bytes.extend_from_slice(&20_u64.to_le_bytes());
-    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
     bytes.extend_from_slice(&0_u64.to_le_bytes());
     bytes.extend_from_slice(&0_u64.to_le_bytes());
     bytes.extend_from_slice(&0_u64.to_le_bytes());
