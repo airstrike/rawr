@@ -7,65 +7,45 @@
 //! native one passes through whole. The generated runner's own runtime
 //! tests run last. Build the driver first, as for `plain`.
 
-use std::fs;
-use std::path::Path;
 use std::process::Command;
 
-use crate::support::copy;
+use crate::support::fixture::Lease;
+use crate::support::Fixture;
 
-/// `rawr-import run` on the `erasure` fixture with `main` as its program:
-/// whether it succeeded, its stdout and its stderr. The cases share one
-/// root, so the native crate builds once.
-fn run(main: &str) -> (bool, String, String) {
-    run_at("erasure", main)
-}
+static ERASURE: Fixture = Fixture::new("erasure");
 
-/// [`run`] in its own root, `name`, so a test of its own doesn't share the
-/// one the cases above run in one after another.
-fn run_at(name: &str, main: &str) -> (bool, String, String) {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
-    let directory = crate::support::scratch();
-    let root = directory.join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/erasure"),
-        &root,
-    );
-    fs::write(root.join("src/main.rs"), format!("// rawr\n{main}")).unwrap();
+/// `rawr-import run` on a lane of the `erasure` fixture with `main` as its
+/// program: the lane, whether it succeeded, its stdout and its stderr.
+fn run(main: &str) -> (Lease, bool, String, String) {
+    let root = ERASURE.lease(&[("src/main.rs", &format!("// rawr\n{main}"))]);
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
         .output()
         .unwrap();
     (
+        root,
         run.status.success(),
         String::from_utf8_lossy(&run.stdout).into_owned(),
         String::from_utf8_lossy(&run.stderr).into_owned(),
     )
 }
 
-/// A case that must run and print `expected`.
-fn runs(main: &str, expected: &str) {
-    let (success, stdout, stderr) = run(main);
+/// A case that must run and print `expected`: the lane it ran in.
+fn runs(main: &str, expected: &str) -> Lease {
+    let (root, success, stdout, stderr) = run(main);
     assert!(success, "{main}\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(stdout, expected, "{main}\nstderr:\n{stderr}");
+    root
 }
 
 /// A case that must stop, saying `said` and printing nothing.
 fn refused(main: &str, said: &str) {
-    let (success, stdout, stderr) = run(main);
+    let (_, success, stdout, stderr) = run(main);
     assert!(!success, "{main}\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(
         !stdout.contains("wrong"),
@@ -92,7 +72,7 @@ struct Order {
 }
 ";
 
-// The cases run in one test, one after another, on one root.
+// The cases run in one test, one after another.
 #[test]
 fn a_script_type_filling_a_native_generic_keeps_its_type() {
     // Review 1: a script type crosses as its own Rust type (D594), so a
@@ -276,7 +256,7 @@ fn main() {
 ",
         "main thread true\n",
     );
-    let (success, stdout, stderr) = run("
+    let (_, success, stdout, stderr) = run("
 fn main() {
     let text = String::from(\"boom\");
     let size = text.len() as i64;
@@ -332,7 +312,7 @@ fn main() {
     // default method with `impl<H: FnMut(D) + 'static, D> From<H> for
     // EventHandler<D>`: a closure that takes a native event, and one that
     // changes a native count, fire when native code presses the element.
-    runs(
+    let root = runs(
         "
 use natives::*;
 
@@ -360,7 +340,6 @@ fn main() {
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native
     // call holds it, returns to its slot (review 6, 7).
-    let root = crate::support::scratch().join("erasure");
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([
@@ -396,9 +375,7 @@ fn main() {
 /// native calls reach the arena the update lends.
 #[test]
 fn a_method_that_gives_a_borrow_guard_is_read_and_written_through_it() {
-    let (success, stdout, stderr) = run_at(
-        "guards",
-        "
+    let (_, success, stdout, stderr) = run("
 use natives::*;
 
 struct Point {
@@ -448,8 +425,7 @@ fn main() {
     *point.write() += Point { x: 4 };
     println!(\"point {}\", point.read().x);
 }
-",
-    );
+");
     assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(
         stdout, "meter 3\ntally 17 after 4 guards\ncount 7\nbumped 25\ntext abc 3\npoint 7\n",
@@ -466,9 +442,7 @@ fn main() {
 /// shape, or a float or integer `T` converts from.
 #[test]
 fn a_method_taking_impl_into_a_native_type_takes_what_converts_into_it() {
-    let (success, stdout, stderr) = run_at(
-        "builders",
-        "
+    let (_, success, stdout, stderr) = run("
 use natives::*;
 
 fn main() {
@@ -486,8 +460,7 @@ fn main() {
         .color((1, 2, 3, 0.5));
     println!(\"{}\", other.styled());
 }
-",
-    );
+");
     assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(
         stdout,

@@ -7,20 +7,12 @@
 //! rawr can't bind says why. Build the driver first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::support::copy;
+use crate::support::Fixture;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/native-shapes");
-
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    let _ = fs::remove_dir_all(root.join("shapes"));
-    copy(Path::new(FIXTURE), &root);
-    root
-}
+static SHAPES: Fixture = Fixture::new("native-shapes");
 
 fn rawr_import(command: &str, root: &Path) -> Output {
     let directory = crate::support::scratch();
@@ -41,7 +33,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn upstream_example_shapes_run_and_print_what_cargo_run_prints() {
-    let root = fixture("native-shapes");
+    let root = SHAPES.lease(&[]);
     let native = Command::new("cargo")
         .args(["run", "--quiet"])
         .current_dir(&root)
@@ -73,7 +65,7 @@ fn upstream_example_shapes_run_and_print_what_cargo_run_prints() {
 
 #[test]
 fn an_item_rawr_cant_bind_says_why() {
-    let root = fixture("native-shapes-unbound");
+    let root = SHAPES.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nuse shapes::checksum;\n\nfn main() {\n    let mut bytes: Vec<u8> = vec![1, 2];\n    println!(\"{}\", checksum(&bytes));\n    shapes::clear(&mut bytes);\n}\n",

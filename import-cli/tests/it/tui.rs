@@ -13,16 +13,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::support::{copy, start_with};
+use crate::support::{copy, start_with, Fixture};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/islands-tui");
-
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
-    root
-}
+static ISLANDS: Fixture = Fixture::new("islands-tui");
 
 fn edit(path: &Path, from: &str, to: &str) {
     let text = fs::read_to_string(path).unwrap();
@@ -35,7 +28,7 @@ fn edit(path: &Path, from: &str, to: &str) {
 /// next frame, and the app's state and the native `ListState` carry on.
 #[test]
 fn a_test_backend_frame_shows_a_body_edit_with_its_state_unbroken() {
-    let root = fixture("islands-tui-headless");
+    let root = ISLANDS.lease(&[]);
     let app = root.join("src/app.rs");
     let mut run = start_with(
         &root,
@@ -511,7 +504,7 @@ impl Drop for Terminal {
 /// a restart, `stty -g` is what it was before the run.
 #[test]
 fn a_terminal_program_repaints_on_a_save_and_leaves_the_terminal_as_it_found_it() {
-    let root = fixture("islands-tui-terminal");
+    let root = ISLANDS.lease(&[]);
     let app = root.join("src/app.rs");
     let terminal = Terminal::start(&root);
     let before = terminal.stty();

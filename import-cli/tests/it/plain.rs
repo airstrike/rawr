@@ -135,10 +135,10 @@ fn rawr_import_within(
     limit: std::time::Duration,
 ) -> Output {
     use std::process::Stdio;
-    let directory = crate::support::scratch();
-    let name = root.file_name().unwrap().to_string_lossy().into_owned();
-    let stdout = directory.join(format!("{name}.stdout"));
-    let stderr = directory.join(format!("{name}.stderr"));
+    // Beside the project: several tests name theirs `app`, and they run at
+    // once.
+    let stdout = root.with_extension("stdout");
+    let stderr = root.with_extension("stderr");
     let mut child = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .args(arguments)
         .arg(root)

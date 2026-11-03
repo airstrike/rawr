@@ -12,12 +12,11 @@
 //! first, as for `plain`.
 
 use std::fs;
-use std::path::Path;
 use std::process::Command;
 
-use crate::support::copy;
+use crate::support::Fixture;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/panes");
+static PANES: Fixture = Fixture::new("panes");
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -25,9 +24,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
-    let root = crate::support::scratch().join("panes");
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
+    let root = PANES.lease(&[]);
     let native = Command::new("cargo")
         .args(["run", "--quiet"])
         .current_dir(&root)
@@ -46,7 +43,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -72,9 +69,7 @@ fn a_generic_state_of_script_panes_reads_and_writes_as_cargo_run_does() {
 /// with rustc's E0502, before anything runs (D572).
 #[test]
 fn a_lent_str_keeps_its_value_borrowed() {
-    let root = crate::support::scratch().join("panes-lent");
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
+    let root = PANES.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nuse natives::label::Label;\n\nfn main() {\n    let mut label = Label::new(\"left\");\n    println!(\"start\");\n    let text = label.text();\n    label.set(\"right\");\n    println!(\"{text}\");\n}\n",
@@ -83,7 +78,7 @@ fn a_lent_str_keeps_its_value_borrowed() {
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")

@@ -7,12 +7,12 @@
 //! the driver first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
-use crate::support::copy;
+use crate::support::Fixture;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/scope-parsers");
+static PARSERS: Fixture = Fixture::new("scope-parsers");
 
 /// The fixture's modules besides `main.rs`.
 const MODULES: [&str; 5] = [
@@ -22,13 +22,6 @@ const MODULES: [&str; 5] = [
     "html.rs",
     "reader.rs",
 ];
-
-fn fixture(name: &str) -> PathBuf {
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
-    root
-}
 
 fn rawr_import(root: &Path) -> Output {
     let directory = crate::support::scratch();
@@ -53,7 +46,7 @@ fn text(bytes: &[u8]) -> String {
 /// `cargo run` prints.
 #[test]
 fn borrowing_parsers_in_scope_frames_print_what_cargo_run_prints() {
-    let root = fixture("scope-parsers");
+    let root = PARSERS.lease(&[]);
     let native = Command::new("cargo")
         .args(["run", "--quiet"])
         .current_dir(&root)
@@ -92,7 +85,7 @@ fn borrowing_parsers_in_scope_frames_print_what_cargo_run_prints() {
 /// Rawr prints what `cargo run` prints.
 #[test]
 fn push_html_takes_the_parser_a_frame_holds_and_writes_the_string_it_borrows() {
-    let root = fixture("scope-parsers-html");
+    let root = PARSERS.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nmod html;\n\nfn main() {\n    html::main();\n}\n",
@@ -140,7 +133,7 @@ fn push_html_takes_the_parser_a_frame_holds_and_writes_the_string_it_borrows() {
 /// gives rustc's E0599. It never runs with another meaning.
 #[test]
 fn a_member_of_one_instance_on_another_fails_loudly() {
-    let root = fixture("scope-parsers-instance");
+    let root = PARSERS.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nuse quick_xml::reader::Reader;\n\nfn main() {\n    let mut reader = Reader::from_reader(String::from(\"<a/>\"));\n    let event = reader.read_event();\n    println!(\"read {event:?}\");\n}\n",
@@ -166,7 +159,7 @@ fn a_member_of_one_instance_on_another_fails_loudly() {
 /// the statement, naming its line, rather than run them out of order.
 #[test]
 fn a_call_before_a_frame_in_its_statement_is_refused() {
-    let root = fixture("scope-parsers-order");
+    let root = PARSERS.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nuse pulldown_cmark::Parser;\n\nfn note(text: &str) -> usize {\n    println!(\"note\");\n    text.len()\n}\n\nfn main() {\n    let text = String::from(\"*a*\");\n    let total = note(&text) + Parser::new(&text).count();\n    println!(\"total {total}\");\n}\n",
@@ -195,7 +188,7 @@ fn a_call_before_a_frame_in_its_statement_is_refused() {
 /// parser is used, with rustc's E0502, before anything runs (D572).
 #[test]
 fn a_parser_keeps_its_text_borrowed() {
-    let root = fixture("scope-parsers-borrowed");
+    let root = PARSERS.lease(&[]);
     fs::write(
         root.join("src/main.rs"),
         "// rawr\nuse pulldown_cmark::Parser;\n\nfn main() {\n    let mut text = String::from(\"*a*\");\n    println!(\"start\");\n    let parser = Parser::new(&text);\n    text.push_str(\"b\");\n    println!(\"events {}\", parser.count());\n}\n",
