@@ -2121,6 +2121,8 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.partial_ord(),
+                    plan.ord(),
                     plan.iterator(),
                 ]),
             ),
@@ -2135,6 +2137,8 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.partial_ord(),
+                    plan.ord(),
                     plan.iterator(),
                 ]),
             ),
@@ -3795,7 +3799,7 @@ fn names(
 /// The traits a crate implements for a type, in the order `copy`,
 /// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
 /// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
+pub(crate) fn implemented(traits: [bool; 10]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -3805,6 +3809,8 @@ pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
         Kind::PartialEq,
         Kind::Eq,
         Kind::Hash,
+        Kind::PartialOrd,
+        Kind::Ord,
         Kind::Iterator,
     ]
     .into_iter()

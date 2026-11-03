@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 38;
+const SCHEMA: u32 = 39;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -515,6 +515,11 @@ pub struct TypeDefinition {
     eq: bool,
     #[serde(default)]
     hash: bool,
+    /// Whether the native type implements `PartialOrd` and `Ord`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    partial_ord: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    ord: bool,
     /// How many lifetime parameters the native type declares (D558 tier 1).
     #[serde(default, skip_serializing_if = "is_zero")]
     lifetimes: u32,
@@ -1357,6 +1362,8 @@ impl Plan {
                             partial_eq: false,
                             eq: false,
                             hash: false,
+                            partial_ord: false,
+                            ord: false,
                             lifetimes: 0,
                             covariant: false,
                             iterator: false,
@@ -1830,6 +1837,8 @@ pub(crate) fn iced_semantic_fixture() -> Box<[u8]> {
         partial_eq: false,
         eq: false,
         hash: false,
+        partial_ord: false,
+        ord: false,
         lifetimes: 0,
         covariant: false,
         iterator: false,
@@ -1908,6 +1917,8 @@ pub(crate) fn iced_text_module_fixture(bytes: &[u8]) -> Box<[u8]> {
                 partial_eq: false,
                 eq: false,
                 hash: false,
+                partial_ord: false,
+                ord: false,
                 lifetimes: 0,
                 covariant: false,
                 iterator: false,
@@ -1954,6 +1965,8 @@ pub(crate) fn iced_projection_fixture() -> Box<[u8]> {
         partial_eq: false,
         eq: false,
         hash: false,
+        partial_ord: false,
+        ord: false,
         lifetimes: 0,
         covariant: false,
         iterator: false,
@@ -2043,6 +2056,8 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
         partial_eq: false,
         eq: false,
         hash: false,
+        partial_ord: false,
+        ord: false,
         lifetimes: 0,
         covariant: false,
         iterator: false,
@@ -3123,6 +3138,14 @@ impl TypeDefinition {
     pub const fn hash(&self) -> bool {
         self.hash
     }
+    /// Return whether the native type implements `PartialOrd`.
+    pub const fn partial_ord(&self) -> bool {
+        self.partial_ord
+    }
+    /// Return whether the native type implements `Ord`.
+    pub const fn ord(&self) -> bool {
+        self.ord
+    }
     /// Return whether the native type implements `Debug`.
     pub const fn debug(&self) -> bool {
         self.debug
@@ -3349,7 +3372,13 @@ fn type_definition(
                 plan.default(),
                 plan.debug(),
                 plan.cloneable(),
-                [plan.partial_eq(), plan.eq(), plan.hash()],
+                [
+                    plan.partial_eq(),
+                    plan.eq(),
+                    plan.hash(),
+                    plan.partial_ord(),
+                    plan.ord(),
+                ],
                 Shape::Struct {
                     form: form(plan.form()),
                     constructor: plan
@@ -3382,7 +3411,13 @@ fn type_definition(
                     plan.default(),
                     plan.debug(),
                     plan.cloneable(),
-                    [plan.partial_eq(), plan.eq(), plan.hash()],
+                    [
+                        plan.partial_eq(),
+                        plan.eq(),
+                        plan.hash(),
+                        plan.partial_ord(),
+                        plan.ord(),
+                    ],
                     Shape::Enum {
                         variants: variants.into_boxed_slice(),
                     },
@@ -3409,6 +3444,8 @@ fn type_definition(
         partial_eq: compare[0],
         eq: compare[1],
         hash: compare[2],
+        partial_ord: compare[3],
+        ord: compare[4],
         lifetimes: borrowing.0,
         covariant: borrowing.2,
         iterator: borrowing.1,

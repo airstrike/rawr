@@ -1472,6 +1472,22 @@ fn maps_and_sets_cross_as_rawrs_keyed_collections() {
     );
 }
 
+/// A crate type's derived `Ord` keys a `BTreeMap` in the crate's order,
+/// not its hash's (#363), and a method that gives the same enum at a type
+/// borrowing its receiver, as iced's `Key::as_ref(&self) -> Key<&str>`,
+/// is matched at that type, a `&str` literal against the borrowed
+/// character (#345). The output is `cargo run`'s.
+#[test]
+fn a_crate_order_keys_a_btree_map_and_a_borrowed_instance_matches() {
+    let (rawr, cargo) = both_printed("crossing-ordered", "ordered.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "windows [\"third\", \"second\", \"first\"]\nfirst Id(8) third\n\
+         Some(\"toggle\")\nSome(\"reset\")\nother q\nNone\nNone\nNone"
+    );
+}
+
 /// std's types in a crate's signature are its own in every position (D711
 /// step 5, #707): a tuple taken and given, `&String`, `&Vec<T>`,
 /// `Range<usize>` taken and given, `&Path` and a `Box<i64>` taken, given

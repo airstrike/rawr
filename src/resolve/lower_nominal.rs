@@ -7172,8 +7172,18 @@ impl ImportedOperation {
         use crate::host::structural::Kind;
         let owner = match self.kind {
             Kind::Constructor => Some(&self.output),
-            Kind::Field { .. } | Kind::Store => self.operands.first().map(|(ty, ..)| ty),
-            _ => None,
+            // A variant's matchers, of the enum value they read, as a
+            // match on iced's `Key<&str>` reads it.
+            Kind::Field { .. }
+            | Kind::Store
+            | Kind::Match
+            | Kind::Test
+            | Kind::Take
+            | Kind::Lend
+            | Kind::LendMut
+            | Kind::Read { .. }
+            | Kind::Borrow { .. } => self.operands.first().map(|(ty, ..)| ty),
+            Kind::Variant => None,
         };
         let Some(owner) = owner else {
             return Box::default();
@@ -14204,13 +14214,15 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(_) if is_iterator_trait(trait_name) => true,
-            // An imported type the crate implements `Iterator` for.
+            // An imported type the crate implements `Iterator`,
+            // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
-                if trait_name == "Iterator"
-                    && proof
-                        .definition
-                        .capabilities()
-                        .contains(capability::Kind::Iterator) =>
+                if match trait_name {
+                    "Iterator" => Some(capability::Kind::Iterator),
+                    "PartialOrd" | "Ord" => capability::Kind::from_derive(trait_name),
+                    _ => None,
+                }
+                .is_some_and(|kind| proof.definition.capabilities().contains(kind)) =>
             {
                 true
             }
@@ -33815,6 +33827,11 @@ impl<'a> Parser<'a> {
         let ord = match &ty {
             Ty::Script(id, _) if self.models.std_impl(*id, "Ord", "cmp").is_some() => true,
             Ty::Param(_) | Ty::Projection(..) => self.type_implements(&ty, "Ord"),
+            // An imported type orders by the crate's `Ord`.
+            Ty::Host { proof, .. } => proof
+                .definition
+                .capabilities()
+                .contains(capability::Kind::Ord),
             ty => self.std_ordered(ty, false),
         };
         ord.then_some(ty)

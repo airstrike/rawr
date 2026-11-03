@@ -519,9 +519,40 @@ impl<T> WithoutHash for &DebugProbe<T> {
     }
 }
 
-/// A stored value's `PartialEq` and `Hash`, when its type has them.
+/// The order of two stored values of one type, for a type that
+/// implements `PartialOrd`.
+type OrderValues = fn(&dyn Any, &dyn Any) -> Option<std::cmp::Ordering>;
+
+fn order_values<T: PartialOrd + 'static>(lhs: &dyn Any, rhs: &dyn Any) -> Option<std::cmp::Ordering> {
+    lhs.downcast_ref::<T>()?.partial_cmp(rhs.downcast_ref::<T>()?)
+}
+
+#[allow(dead_code)]
+trait ViaOrder {
+    fn native_order(&self) -> Option<OrderValues>;
+}
+
+impl<T: PartialOrd + 'static> ViaOrder for DebugProbe<T> {
+    fn native_order(&self) -> Option<OrderValues> {
+        Some(order_values::<T>)
+    }
+}
+
+#[allow(dead_code)]
+trait WithoutOrder {
+    fn native_order(&self) -> Option<OrderValues>;
+}
+
+impl<T> WithoutOrder for &DebugProbe<T> {
+    fn native_order(&self) -> Option<OrderValues> {
+        None
+    }
+}
+
+/// A stored value's `PartialEq`, `Hash` and `PartialOrd`, when its type
+/// has them.
 #[derive(Clone, Copy, Default)]
-struct Relations { equal: Option<EqualValues>, hash: Option<HashValue> }
+struct Relations { equal: Option<EqualValues>, hash: Option<HashValue>, order: Option<OrderValues> }
 
 /// Store `value` in the arena, remembering its `Debug` text and its
 /// `Clone` when its type has them.
@@ -531,8 +562,8 @@ macro_rules! insert_native {
         #[allow(unused_imports)]
         use $crate::{
             ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
-            WithoutClone as _, WithoutDebug as _, WithoutDisplay as _, WithoutEqual as _,
-            WithoutHash as _,
+            ViaOrder as _, WithoutClone as _, WithoutDebug as _, WithoutDisplay as _,
+            WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
         };
         let value = $value;
         let debug = (&$crate::debug_probe(&value)).native_debug();
@@ -541,6 +572,7 @@ macro_rules! insert_native {
         let relations = $crate::Relations {
             equal: (&$crate::debug_probe(&value)).native_equal(),
             hash: (&$crate::debug_probe(&value)).native_hash(),
+            order: (&$crate::debug_probe(&value)).native_order(),
         };
         let handle = $arena.insert_debug(value, debug, clone);
         if let Ok(handle) = &handle {
@@ -831,16 +863,17 @@ fn give_pointed<P: Pointer>(
     Ok(__rawr_internal::crossing::counted(Dynamic::from(handle), pointer_count::<P>))
 }
 
-/// [`give_pointed`] with the `Debug`, `Display`, `Clone`, `PartialEq` and
-/// `Hash` of the value the pointer holds, when its type has them.
+/// [`give_pointed`] with the `Debug`, `Display`, `Clone`, `PartialEq`,
+/// `Hash` and `PartialOrd` of the value the pointer holds, when its type
+/// has them.
 #[allow(unused_macros)]
 macro_rules! give_pointer {
     ($arena:expr, $pointer:expr) => {{
         #[allow(unused_imports)]
         use $crate::{
             ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
-            WithoutClone as _, WithoutDebug as _, WithoutDisplay as _, WithoutEqual as _,
-            WithoutHash as _,
+            ViaOrder as _, WithoutClone as _, WithoutDebug as _, WithoutDisplay as _,
+            WithoutEqual as _, WithoutHash as _, WithoutOrder as _,
         };
         let pointer = $pointer;
         let debug = (&$crate::debug_probe(&*pointer)).native_debug();
@@ -849,6 +882,7 @@ macro_rules! give_pointer {
         let relations = $crate::Relations {
             equal: (&$crate::debug_probe(&*pointer)).native_equal(),
             hash: (&$crate::debug_probe(&*pointer)).native_hash(),
+            order: (&$crate::debug_probe(&*pointer)).native_order(),
         };
         $crate::give_pointed($arena, pointer, debug, display, clone, relations)
     }};
@@ -1435,6 +1469,11 @@ impl Arena {
         let (right, rhs) = self.live(rhs)?;
         if lhs.type_id() != rhs.type_id() {
             return None;
+        }
+        // A type with `PartialOrd` keys a B-tree collection in its own
+        // order; values it can't order key a hashed one in their hash's.
+        if let Some(ordering) = left.relations.order.and_then(|order| order(lhs, rhs)) {
+            return Some(ordering);
         }
         let hash = left.relations.hash?;
         match hash(lhs)?.cmp(&hash(rhs)?) {
@@ -7288,20 +7327,25 @@ impl Matcher {
     }
 }
 
-/// The matchers of a variant of a non-generic enum: one that copies its
-/// fields and its test, and, with fields, one that moves them, one that
-/// lends them, one that lends them mutably, and for each field one that
-/// copies it and one that lends it. The set depends on the plan alone, so
+/// The matchers of a variant of a non-generic enum, or of a generic one at
+/// its instance: one that copies its fields and its test, and, with
+/// fields, one that moves them, one that lends them, one that lends them
+/// mutably, and for each field one that copies it and one that lends it. The set depends on the plan alone, so
 /// the runner's manifest and its rows name the same adapters; how each
 /// reaches the fields is decided where it is rendered (`render_matcher`).
 fn matchers(plan: &Plan) -> Vec<Matcher> {
     let Operation::EnumVariant {
-        parameters, fields, ..
+        parameters,
+        fields,
+        instance,
+        ..
     } = plan.operation()
     else {
         return Vec::new();
     };
-    if !parameters.is_empty() {
+    // A generic enum's matchers are its instance's, as a match on iced's
+    // `Key<&str>` reads it.
+    if !parameters.is_empty() && instance.is_empty() {
         return Vec::new();
     }
     if fields.is_empty() {
@@ -7322,10 +7366,13 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
 
 /// Whether the value of the variant `plan` builds is held where its fields
 /// can be moved or lent: in an arena slot, or lent by native code, not in a
-/// scope frame's region with a lifetime its fields may carry.
+/// scope frame's region with a lifetime its fields may carry. A generic
+/// enum's fields are copied as the copying matcher reads them.
 fn reaches_fields(plan: &Plan) -> bool {
     let path = rust_path(plan);
-    !carries_lifetimes(&path) && container_family(&path, &path).is_none()
+    plan.structural_instance().is_empty()
+        && !carries_lifetimes(&path)
+        && container_family(&path, &path).is_none()
 }
 
 /// Whether a variant's field of type `ty` is lent where a pattern borrows
@@ -7412,6 +7459,8 @@ fn render_matcher(
     };
     let lent = |field: &crate::surface::adapter::Field| lendable(field.ty());
     let path = rust_path(plan);
+    // The value's type, at a generic enum's instance.
+    let ty = structural_type(plan);
     let (pattern, fields) = match matcher {
         Matcher::Copy => (variant_pattern(&path, name, *form, fields), &**fields),
         Matcher::Test => (variant_pattern(&path, name, *form, &[]), &[][..]),
@@ -7471,7 +7520,7 @@ fn render_matcher(
             // `copied` can't take, which are `Clone` as Rust reads them.
             if shared_field(field.ty())
                 || carries_lifetimes(&path)
-                || container_family(&path, &path).is_some()
+                || container_family(&path, &ty).is_some()
             {
                 format!("Clone::clone({local})")
             } else {
@@ -7493,7 +7542,7 @@ fn render_matcher(
     .map_err(request::unwritable)?;
     // A value in a scope frame's region (D558 tier 1): its fields that
     // carry the region's lifetime stay there.
-    if let Some(family) = container_family(&path, &path) {
+    if let Some(family) = container_family(&path, &ty) {
         let found = if reads {
             "values.into_iter().next().ok_or(Error::TypeMismatch)"
         } else {
@@ -7526,6 +7575,13 @@ fn render_matcher(
     }}"
         )
         .map_err(request::unwritable)?;
+        // A generic enum at an instance that borrows, as iced's `Key<&str>`
+        // from `Key::as_ref`, is only ever a frame's value.
+        if !plan.structural_instance().is_empty() && !carries_lifetimes(&path) {
+            return output
+                .write_all(b"    Err(Error::TypeMismatch)\n}\n\n")
+                .map_err(request::unwritable);
+        }
     }
     // A value native code lent the script function that matches it, as a
     // canvas program's `update` takes `&Event` (D558.3), is reached through
@@ -7537,7 +7593,7 @@ fn render_matcher(
             output,
             "    let handle = native_handle(arguments, 0, false)?;
     #[allow(unreachable_patterns)]
-    let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
+    let output = arguments.arena.shared::<{ty}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
     let Some(fields) = output else {{ return {missed}; }};
     let fields = fields?;"
         )
@@ -7548,7 +7604,7 @@ fn render_matcher(
             "    #[allow(unreachable_patterns)]
     let output = match lent_value(arguments, 0) {{
         Some(lent) => {{
-            let access: fn(u64, &mut dyn FnMut(&{path})) -> Result<(), u8> = lent
+            let access: fn(u64, &mut dyn FnMut(&{ty})) -> Result<(), u8> = lent
                 .accessor(false)
                 .map_err(|error| Error::Lent(lent.name(), error))?;
             let mut output = None;
@@ -7560,7 +7616,7 @@ fn render_matcher(
         }}
         None => {{
             let handle = native_handle(arguments, 0, false)?;
-            arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
+            arguments.arena.shared::<{ty}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
         }}
     }};
     let Some(fields) = output else {{ return {missed}; }};
@@ -8977,7 +9033,9 @@ fn render_adapter_body(
             name, form, fields, ..
         } => {
             render_fields(fields, 0, output)?;
-            write!(output, "    let output = {path}::{name}").map_err(request::unwritable)?;
+            // A generic enum's variant, at its instance's types.
+            let ty = structural_type(plan);
+            write!(output, "    let output: {ty} = {path}::{name}").map_err(request::unwritable)?;
             render_constructor(*form, fields, output)?;
             output
                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
