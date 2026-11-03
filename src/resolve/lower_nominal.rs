@@ -28151,7 +28151,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 // The condition's scope ends with each iteration.
-                if self.drops() {
+                if self.drop_scoped() {
                     self.loop_drop_depth = Some(depth);
                 }
                 if !condition.after.is_empty() {
@@ -28313,7 +28313,7 @@ impl<'a> Parser<'a> {
         let mut body = body?;
         // The iteration's pattern bindings drop at the end of each one.
         let mut iteration = String::new();
-        while self.drops() && self.drop_scopes.len() > drop_depth {
+        while self.drop_scoped() && self.drop_scopes.len() > drop_depth {
             iteration.push_str(&self.close_drops()?);
         }
         if !iteration.is_empty() {
@@ -29080,7 +29080,7 @@ impl<'a> Parser<'a> {
         // end, and at a `break` or `continue`.
         let depth = self.drop_scopes.len();
         self.open_drops();
-        if self.drops() {
+        if self.drop_scoped() {
             self.loop_drop_depth = Some(depth);
         }
         self.bindings.insert(
@@ -43982,7 +43982,7 @@ impl<'a> Parser<'a> {
                     kind: BindingKind::Local,
                 },
             );
-            if self.drops() && name.as_str() != ASYNC_RESUME {
+            if self.drop_scoped() && name.as_str() != ASYNC_RESUME {
                 self.note_drop_here(name, *declaration, ty)?;
             }
         }
