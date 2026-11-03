@@ -2282,9 +2282,14 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
-        if let Some(item) = item.filter(|_| names_declared(entry.outcome, resolved)) {
-            builder.imported_item(item)?;
+        // The values form stands alone where no closure fills the callable
+        // form, as iced's `selector::find(S)` takes a widget `Id` through
+        // `Selector`, which iced also implements for `FnMut` closures.
+        if names_declared(entry.outcome, resolved) {
+            let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
+            if let Some(item) = item {
+                builder.imported_item(item)?;
+            }
             if let Some(values) =
                 imported_values(&types, entry.relative.as_ref(), entry.outcome, allocation)?
             {
