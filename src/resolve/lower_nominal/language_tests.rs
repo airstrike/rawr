@@ -2877,9 +2877,51 @@ fn language_inner_attributes() {
     );
     let error = rejected("pub fn run() -> i64 { 1 }\n#![allow(unused)]\nrun()");
     assert!(
-        error.contains("only permitted at the top of a file"),
+        error.contains("only permitted before a file's first item"),
         "{error}"
     );
+}
+
+#[test]
+fn language_crate_attributes_and_cfg_attr() {
+    // The reported file: the marker, then a `cfg_attr` that does not hold
+    // under `rawr run`, which builds with debug assertions.
+    let value = run(r#"// rawr
+        #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+        pub fn run() -> i64 { 3 }
+        run()
+    "#);
+    assert_eq!(value, 3);
+    // Build settings and documentation are ignored; a `cfg_attr` that holds
+    // applies its attributes.
+    let value = run(r#"//! A crate.
+        #![doc = include_str!("README.md")]
+        #![windows_subsystem = "windows"]
+        #![crate_name = "demo"]
+        #![crate_type = "bin"]
+        #![recursion_limit = "256"]
+        #![type_length_limit = "1048576"]
+        #![cfg_attr(debug_assertions, allow(dead_code), doc = "debug")]
+        #![cfg_attr(feature = "nightly", feature(never_type))]
+        pub fn run() -> i64 { 4 }
+        run()
+    "#);
+    assert_eq!(value, 4);
+    // A prelude- or language-changing attribute is refused by name, also
+    // when a `cfg_attr` that holds applies it.
+    let error = rejected("#![no_main]\npub fn run() -> i64 { 1 } run()");
+    assert!(
+        error.contains("unsupported inner attribute `#![no_main]`"),
+        "{error}"
+    );
+    let error = rejected(
+        "#![cfg_attr(debug_assertions, feature(never_type))]\npub fn run() -> i64 { 1 } run()",
+    );
+    assert!(
+        error.contains("unsupported inner attribute `#![feature]`"),
+        "{error}"
+    );
+    assert!(!error.contains("top of a file"), "{error}");
 }
 
 #[test]
