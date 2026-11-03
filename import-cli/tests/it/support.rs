@@ -75,29 +75,12 @@ pub fn scratch() -> PathBuf {
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
 
-/// Clear `base`, where a test keeps its own projects and `home`, a
-/// `RAWR_HOME` of its own, so the test starts cold, but for rawr's runtime
-/// and host sources in `home`, which no such test is about: a later run
-/// reuses them, as one of the suite's shared home does.
-pub fn renew(base: &Path, home: &Path) {
-    clear(base, &[home.join("runtime"), home.join("hosts")]);
-}
-
-/// Remove everything under `directory` but `kept`.
-fn clear(directory: &Path, kept: &[PathBuf]) {
-    for entry in fs::read_dir(directory).into_iter().flatten() {
-        let path = entry.unwrap().path();
-        if kept.contains(&path) {
-            continue;
-        }
-        if kept.iter().any(|keep| keep.starts_with(&path)) {
-            clear(&path, kept);
-        } else if path.is_dir() {
-            fs::remove_dir_all(&path).unwrap();
-        } else {
-            fs::remove_file(&path).unwrap();
-        }
-    }
+/// The suite's one `RAWR_RUNTIME_HOME`, the shared `RAWR_HOME`: a test
+/// with a home of its own still starts cold, but for rawr's host sources
+/// and compiled runtime, which no such test is about and which would
+/// otherwise compile again for each such home.
+pub fn runtime_home() -> PathBuf {
+    scratch().join("rawr-home")
 }
 
 /// `rawr-import run root`, with `variables` in its environment.

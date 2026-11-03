@@ -757,7 +757,7 @@ fn runtimes() -> Result<PathBuf, node::Error> {
         ))?)
         .join(".cargo"),
     };
-    Ok(crate::store::home(&cargo_home).join("runtime"))
+    Ok(crate::store::runtime_home(&cargo_home).join("runtime"))
 }
 
 /// The entry for `key`, compiled first when it has none, and leased.
@@ -1095,7 +1095,7 @@ fn hex(bytes: &[u8]) -> String {
 /// `rawr cache clean`: remove idle runtimes beyond the most recently used.
 pub fn clean(cargo_home: &Path) {
     prune(
-        &crate::store::home(cargo_home).join("runtime"),
+        &crate::store::runtime_home(cargo_home).join("runtime"),
         &[],
         IDLE,
         KEPT,

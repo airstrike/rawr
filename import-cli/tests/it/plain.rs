@@ -37,6 +37,7 @@ fn rawr_import_with_home(root: &Path, arguments: &[&str], home: &Path) -> Output
         .args(arguments)
         .arg(root)
         .env("RAWR_HOME", home)
+        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -143,6 +144,7 @@ fn rawr_import_within(
         .args(arguments)
         .arg(root)
         .env("RAWR_HOME", home)
+        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
@@ -361,7 +363,7 @@ fn a_trait_method_resolves_in_each_lexical_scope_through_a_proved_application() 
     let base = crate::support::scratch().join("lexical-applications");
     let home = base.join("home");
     let crates = base.join("crates");
-    crate::support::renew(&base, &home);
+    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -499,7 +501,7 @@ fn a_new_member_of_an_unchanged_graph_is_proved_with_no_nightly_run() {
     let home = base.join("home");
     let crates = base.join("crates");
     let root = base.join("app");
-    crate::support::renew(&base, &home);
+    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -619,7 +621,7 @@ fn an_immutable_crates_intrinsic_entry_is_shared_per_machine() {
     let base = crate::support::scratch().join("shared-inventories");
     let home = base.join("home");
     let crates = base.join("crates");
-    crate::support::renew(&base, &home);
+    let _ = fs::remove_dir_all(&base);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../importer/tests/fixtures");
     for name in ["a", "b", "c"] {
         copy(
@@ -1863,8 +1865,8 @@ fn run_ok(root: &Path, home: &Path) -> String {
 #[test]
 fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
     let base = crate::support::scratch().join("nightly-path-crates");
+    let _ = fs::remove_dir_all(&base);
     let home = base.join("home");
-    crate::support::renew(&base, &home);
     let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    println!(\"{} {}\", events::word(), Version::new(1, 2, 3));\n}\n";
     let [first, second] = ["first", "second"].map(|name| base.join(name));
@@ -1925,8 +1927,8 @@ fn a_same_named_path_crate_of_another_project_never_stands_in_for_this_ones() {
 #[test]
 fn identical_closures_share_the_nightly_build_and_read_no_stale_results() {
     let base = crate::support::scratch().join("nightly-identical");
+    let _ = fs::remove_dir_all(&base);
     let home = base.join("home");
-    crate::support::renew(&base, &home);
     let nightly = nightly_directory(&home);
     let main = "// rawr\nuse semver::Version;\n\nfn main() {\n    let version = Version::parse(\"1.2.3\").unwrap();\n    println!(\"{version} {}\", version.major);\n}\n";
     let [first, second] = ["first", "second"].map(|name| base.join(name));
