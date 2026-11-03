@@ -2,8 +2,8 @@
 // iced's changelog: `markdown::view<'a>(items: &'a [Item], settings,
 // theme) -> impl Widget<Uri, ..> + 'a` borrows the state's items for the
 // view's lifetime. The items aren't `Clone` and count their draws, so each
-// view draws the one value of each item the state holds, which `update`
-// then adds to once no view borrows them.
+// view draws the one value of each item the state holds, while `update`
+// changes the rest of the state.
 
 use events::controls::markdown;
 use events::widgets::{button, column, Framed, Widget};
@@ -25,14 +25,14 @@ impl Default for Notes {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Add,
+    Reset,
     LinkClicked(markdown::Uri),
 }
 
 impl Notes {
     fn update(&mut self, message: Message) {
         match message {
-            Message::Add => self.items.extend(markdown::parse("third")),
+            Message::Reset => self.clicked = None,
             Message::LinkClicked(uri) => self.clicked = Some(uri),
         }
     }
@@ -40,7 +40,7 @@ impl Notes {
     fn view(&self) -> impl Widget<Message> {
         let size = if self.clicked.is_some() { 12.0 } else { 16.0 };
         column![
-            button("Add").on_press(Message::Add),
+            button("Reset").on_press(Message::Reset),
             markdown::view(
                 &self.items,
                 markdown::Settings::with_text_size(size),

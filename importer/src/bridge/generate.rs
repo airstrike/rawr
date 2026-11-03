@@ -121,7 +121,7 @@ impl Drop for Release {
         });
     }
 }
-struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, name: &'static str, keeps: Vec<std::rc::Rc<dyn Any>> }
+struct NativeSlot { generation: u64, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, leased: bool, debug: Option<DebugText>, display: Option<DebugText>, clone: Option<CloneValue>, relations: Relations, witness: Option<__rawr_internal::host::runtime::Witness>, project: Option<Project>, mapper: Option<[u8; 16]>, default_of: Option<[u8; 32]>, opaque: Option<OpaqueTable>, name: &'static str }
 
 /// A native value an iced view borrows lives in the application's home
 /// (D568): its slot reaches it there, and holds no value of its own.
@@ -654,8 +654,9 @@ impl<T: 'static> Drop for SliceLent<T> {
 }
 
 thread_local! {
-    /// The slices calls borrow now (`SliceLent`), by their slots in order:
-    /// a view made again while the last one borrows them borrows the same.
+    /// The slices outputs borrow now (`SliceLent`), by their slots in
+    /// order: a view made again while the last one's pins hold them borrows
+    /// the same slice.
     #[allow(clippy::type_complexity)]
     static LENT_SLICES: RefCell<Vec<(Box<[([u8; 32], u32, u64)]>, std::rc::Weak<dyn Any>)>> = const { RefCell::new(Vec::new()) };
 }
@@ -689,35 +690,6 @@ fn lend_slice<T: 'static>(arena: &mut Arena, handles: Vec<NativeHandle>) -> Resu
     let erased: std::rc::Rc<dyn Any> = lent.clone();
     LENT_SLICES.with_borrow_mut(|slices| slices.push((keys, std::rc::Rc::downgrade(&erased))));
     Ok(lent)
-}
-
-/// The values of `lent` for as long as the output of the running call
-/// lives: the call carries `lent` to that output, which keeps it
-/// (`Arena::keep`).
-#[allow(dead_code)]
-fn kept_slice<T: 'static>(arena: &mut Arena, lent: std::rc::Rc<SliceLent<T>>) -> &'static [T] {
-    let items: *const [T] = lent.items.as_slice();
-    arena.carried.push(lent);
-    // SAFETY: the values live in the `Rc`'s allocation, which the arena
-    // keeps while anything made from them may borrow them: the call's
-    // output, any value a later call makes from it, or the pins of the
-    // region such a value is in, which outlive the region's values, and
-    // else the runner's pins (`Arena::keep`). A slot drops its value before
-    // what it keeps. Nothing writes the values while they are shared:
-    // `SliceLent` moves them only when it drops, with the last `Rc`.
-    unsafe { &*items }
-}
-
-/// Run `invoke`, and give what the values it took keep to its output,
-/// which may borrow them (`kept_slice`).
-fn invoke_keeping(invoke: Invoke, arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {
-    let outer = std::mem::take(&mut arguments.arena.carried);
-    let output = invoke(arguments);
-    let carried = std::mem::replace(&mut arguments.arena.carried, outer);
-    if !carried.is_empty() && let Ok(output) = &output {
-        arguments.arena.keep(output, carried);
-    }
-    output
 }
 
 /// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
@@ -965,10 +937,7 @@ impl std::fmt::Debug for NativeHandle {
         }
     }
 }
-/// The native values script code holds, by slot. `carried` holds what the
-/// values the running call took keep (`SliceLent`), till its output
-/// keeps it (`Arena::keep`).
-struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32>, carried: Vec<std::rc::Rc<dyn Any>> }
+struct Arena { epoch: [u8; 32], slots: Vec<NativeSlot>, free: Vec<u32> }
 
 thread_local! {
     static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
@@ -1244,7 +1213,7 @@ fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::ops::
 
 impl Arena {
     fn new(epoch: [u8; 32]) -> Self {
-        Self { epoch, slots: Vec::new(), free: Vec::new(), carried: Vec::new() }
+        Self { epoch, slots: Vec::new(), free: Vec::new() }
     }
 
     fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
@@ -1259,7 +1228,7 @@ impl Arena {
                 if self.slots.len() >= 1_000_000 { return Err(Error::ArenaFull); }
                 self.slots.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
                 let slot = u32::try_from(self.slots.len()).map_err(|_| Error::ArenaFull)?;
-                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, name: "", keeps: Vec::new() });
+                self.slots.push(NativeSlot { generation: 1, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, name: "" });
                 slot
             }
         };
@@ -1279,35 +1248,8 @@ impl Arena {
         entry.mapper = None;
         entry.default_of = None;
         entry.opaque = None;
-        entry.keeps.clear();
         let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
-    }
-
-    /// Keep `kept` for as long as `output`, which may borrow it, lives: its
-    /// slot keeps it, or, for a value in a view's region, that region's
-    /// pins do. Anything else is kept for the runner's life.
-    fn keep(&mut self, output: &Dynamic, kept: Vec<std::rc::Rc<dyn Any>>) {
-        if let Some(handle) = output.read_lock::<NativeHandle>().map(|handle| handle.clone())
-            && handle.epoch == self.epoch
-            && let Some(entry) = self.slots.get_mut(handle.slot as usize)
-            && entry.generation == handle.generation
-        {
-            entry.keeps.extend(kept);
-            return;
-        }
-        let kept = std::rc::Rc::new(kept);
-        if output.is::<__rawr_internal::scope::Scoped>()
-            && let Some(anchor) = __rawr_internal::scope::anchor()
-            && let Ok(Some(())) = __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(anchor, |region| {
-                region.pins().map(|pins| {
-                    pins.hold(kept.clone());
-                })
-            })
-        {
-            return;
-        }
-        static_pins().hold(kept);
     }
 
     /// Give the value at `handle`, whose type holds an opaque `impl Trait`
@@ -1630,8 +1572,6 @@ impl Arena {
         if shared && let Some(clone) = self.slots[index].clone {
             let value = self.slots[index].value.as_deref().ok_or(Error::StaleHandle)?;
             let value = clone(value).ok_or(Error::TypeMismatch)?;
-            // The copy borrows what the value does.
-            self.carried.extend(self.slots[index].keeps.iter().cloned());
             return value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch);
         }
         let reusable = self.slots[index].generation.checked_add(1);
@@ -1639,9 +1579,6 @@ impl Arena {
             self.free.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
         }
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
-        // What it borrows goes with it, to the call's output.
-        let keeps = std::mem::take(&mut self.slots[index].keeps);
-        self.carried.extend(keeps);
         self.slots[index].witness = None;
         self.slots[index].project = None;
         self.slots[index].mapper = None;
@@ -1676,10 +1613,6 @@ impl Arena {
             self.free.try_reserve_exact(1).map_err(|_| runtime_error(Error::Allocation))?;
         }
         let value = self.slots[index].value.take().ok_or_else(|| runtime_error(Error::StaleHandle))?;
-        // No call's output takes what it borrows here: the runner keeps it.
-        for kept in std::mem::take(&mut self.slots[index].keeps) {
-            static_pins().hold(std::rc::Rc::new(kept));
-        }
         self.slots[index].witness = None;
         self.slots[index].project = None;
         self.slots[index].mapper = None;
@@ -1800,7 +1733,6 @@ impl Arena {
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            let mut kept = Vec::new();
             for (_, slot, generation) in batch {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
@@ -1810,7 +1742,6 @@ impl Arena {
                 }
                 dropped.push(entry.value.take());
                 homed.push(entry.homed.take());
-                kept.push(std::mem::take(&mut entry.keeps));
                 entry.leased = false;
                 entry.witness = None;
                 entry.project = None;
@@ -1825,8 +1756,6 @@ impl Arena {
             }
             drop(dropped);
             drop(homed);
-            // What the values borrowed outlives them.
-            drop(kept);
         }
     }
 
@@ -2929,7 +2858,7 @@ fn invoke_adapter(key: &[u8; 32], mut payload: &[u8]) -> Result<Vec<u8>, Error> 
     let mut references: Vec<&mut Dynamic> = values.iter_mut().collect();
     let value = with_arena(|arena| {
         let mut arguments = Arguments { values: &mut references, arena };
-        invoke_keeping(adapter.invoke, &mut arguments)
+        (adapter.invoke)(&mut arguments)
     })?;
     let mut output = Vec::new();
     output.try_reserve_exact(77).map_err(|_| Error::Allocation)?;
@@ -3134,7 +3063,7 @@ fn invoke_in_arena(
             .and_then(|value| value.read_lock::<NativeHandle>().map(|value| value.clone()))
             .and_then(|handle| arena.witness(handle).cloned());
         let mut arguments = Arguments { values, arena };
-        let output = invoke_keeping(adapter.invoke, &mut arguments)?;
+        let output = (adapter.invoke)(&mut arguments)?;
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
             Ok(pending) => {
@@ -8805,9 +8734,13 @@ fn opaque_table_source(
     };
     let mut entries = Vec::new();
     for consumer in opaque_consumers(cohort, &key)? {
-        let Some((position, _, _)) = opaque_operand(consumer)? else {
+        let Some((position, _, operand)) = opaque_operand(consumer)? else {
             continue;
         };
+        // An operand that holds the table's opaque type, where the table's
+        // type is that opaque type itself, is taken at the type that holds
+        // it (`shape_witnesses`).
+        let holding = same_opaque(&returned, &key) && !same_opaque(&operand, &key);
         // A call that gives a value of another opaque type, as iced's
         // `Application::subscription` gives another `impl Program`, makes
         // that value's own table here, where rustc knows its type. One that
@@ -8870,6 +8803,11 @@ fn opaque_table_source(
             &format!("take_native(arguments, {position})"),
             &format!("take_like(arguments, {position}, _w)"),
         );
+        let body = if holding {
+            shape_witnesses(&body, position)
+        } else {
+            body
+        };
         entries.push(format!(
             "|arguments: &mut Arguments<'_, '_, '_>, table: OpaqueTable, _w| -> Result<Dynamic, Error> {{\n    let _ = (&table, &_w);\n{body}\n}}"
         ));
@@ -8907,6 +8845,56 @@ fn opaque_table_source(
     }}",
         entries.join(",\n")
     )))
+}
+
+/// `body` with each operand at `position` taken at a type that holds the
+/// table's opaque type, as `boxed` takes the `Map<impl Widget, ..>` that
+/// `map` gave, taken at that type: the witness of the opaque type, made
+/// the witness of the type that holds it where `_` spells the opaque type.
+fn shape_witnesses(body: &str, position: usize) -> String {
+    let take = format!(" = take_like(arguments, {position}, _w)?;");
+    let mut shaped = String::with_capacity(body.len());
+    for line in body.split_inclusive('\n') {
+        let held = line
+            .trim_start()
+            .strip_prefix("let ")
+            .and_then(|rest| rest.split_once(": "))
+            .and_then(|(_, rest)| rest.split_once(&take))
+            .map(|(ty, _)| ty)
+            .filter(|ty| *ty != "_");
+        let Some(ty) = held else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holes = opaque_holes(ty);
+        let [hole] = holes[..] else {
+            shaped.push_str(line);
+            continue;
+        };
+        let holding = format!("{}T{}", &ty[..hole], &ty[hole + 1..]);
+        shaped.push_str(&line.replacen(
+            &take,
+            &format!(
+                " = take_like(arguments, {position}, {{ fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<{holding}> {{ std::marker::PhantomData }} shape(_w) }})?;"
+            ),
+            1,
+        ));
+    }
+    shaped
+}
+
+/// The offsets of each `_` in the Rust type `ty` that stands for a whole
+/// type, as in `Map<_, F, M>`, and not inside a name.
+fn opaque_holes(ty: &str) -> Vec<usize> {
+    let bytes = ty.as_bytes();
+    let name = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (0..bytes.len())
+        .filter(|&at| {
+            bytes[at] == b'_'
+                && (at == 0 || !name(bytes[at - 1]))
+                && bytes.get(at + 1).is_none_or(|&next| !name(next))
+        })
+        .collect()
 }
 
 /// The signature, substitutions and argument offset of a call: a
@@ -12995,6 +12983,12 @@ fn function_argument_list(
                 write!(output, "argument_{position}").map_err(request::unwritable)?;
             }
             _ if VIEWED_ARGUMENTS.get()
+                && lent_slice_element(&substituted(ty, signature, substitutions)?).is_some() =>
+            {
+                write!(output, "pins.hold(argument_{position}).items.as_slice()")
+                    .map_err(request::unwritable)?;
+            }
+            _ if VIEWED_ARGUMENTS.get()
                 && viewed_native(&substituted(ty, signature, substitutions)?).is_some() =>
             {
                 if matches!(
@@ -13180,6 +13174,30 @@ fn render_take_input(
     profile: Option<&crate::profile::Proof>,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
+    // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
+    // each value moved out of its slot into one slice, and back once nothing
+    // borrows it (`SliceLent`). An output that may borrow it has the call's
+    // pins hold it (`views_natives`); else it goes back after the call.
+    let lent = substituted(ty, signature, substitutions)?;
+    if let Some(element) = lent_slice_element(&lent)
+        && !LENT_ARGUMENTS.get()
+    {
+        let item = concrete_type(element)
+            .ok_or_else(|| request::drift("a lent slice's element type"))?;
+        let (name, borrow) = if VIEWED_ARGUMENTS.get() {
+            (format!("argument_{local}"), String::new())
+        } else {
+            (
+                format!("argument_{local}_lent"),
+                format!("\n    let argument_{local}: &[{item}] = &argument_{local}_lent.items;"),
+            )
+        };
+        return writeln!(
+            output,
+            "    let {name} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }};{borrow}"
+        )
+        .map_err(request::unwritable);
+    }
     // A crate value the output borrows past the call: the value moved into
     // an `Rc` its slot shares, which the call's pins hold (`views_natives`).
     if VIEWED_ARGUMENTS.get() {
@@ -13268,36 +13286,6 @@ fn render_take_input(
         return writeln!(
             output,
             "{witness}    let mut argument_{local}_copy = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    #[allow(unused_variables)]\n    let argument_{local} = &mut argument_{local}_copy;"
-        )
-        .map_err(request::unwritable);
-    }
-    // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
-    // each value moved out of its slot into one slice for the call, and
-    // back after (`SliceLent`). An output that may borrow them keeps the
-    // slice for as long as it lives (`kept_slice`).
-    if let convert::Type::Borrowed {
-        mutable: false,
-        ty: lent,
-    } = ty
-        && let convert::Type::Sequence {
-            element,
-            length: None,
-            ..
-        } = &**lent
-        && lendable(element)
-        && !LENT_ARGUMENTS.get()
-    {
-        let item = concrete_type(element)
-            .ok_or_else(|| request::drift("a lent slice's element type"))?;
-        let returned = substituted(signature.output(), signature, substitutions)?;
-        let borrow = if carries_lifetime(&returned) || holds_opaque(&returned) {
-            format!("kept_slice(arguments.arena, argument_{local}_lent)")
-        } else {
-            format!("&argument_{local}_lent.items")
-        };
-        return writeln!(
-            output,
-            "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let handles = value.into_array().map_err(|_| Error::TypeMismatch)?.into_iter().map(|item| item.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)).collect::<Result<Vec<_>, Error>>()?; lend_slice::<{item}>(arguments.arena, handles)? }};\n    let argument_{local}: &[{item}] = {borrow};"
         )
         .map_err(request::unwritable);
     }
@@ -15863,8 +15851,9 @@ fn viewed_native(ty: &convert::Type) -> Option<&convert::Type> {
     }
 }
 
-/// Whether the call's output carries a lifetime and an input is a `&T` of
-/// a crate value, or an `Option` of one (`viewed_native`): the output may
+/// Whether the call's output carries a lifetime, or is opaque, and an input
+/// is a `&T` of a crate value, or an `Option` of one (`viewed_native`), or
+/// a `&[T]` of them (`lent_slice_element`): the output may
 /// borrow the value for as long as it lives, so the adapter shares it with
 /// the pins of the view's region, or of the runner out of any region,
 /// instead of lending it for the call alone (D568).
@@ -15873,15 +15862,39 @@ fn views_natives(
     substitutions: &[convert::Type],
 ) -> Result<bool, request::Error> {
     let returned = substituted(signature.output(), signature, substitutions)?;
-    if !matches!(returned, convert::Type::Nominal { .. }) || !carries_lifetime(&returned) {
+    let borrows = match &returned {
+        convert::Type::Nominal { definition, .. } => {
+            carries_lifetime(&returned) || is_opaque(definition)
+        }
+        _ => false,
+    };
+    if !borrows {
         return Ok(false);
     }
     for input in signature.inputs() {
-        if viewed_native(&substituted(input, signature, substitutions)?).is_some() {
+        let input = substituted(input, signature, substitutions)?;
+        if viewed_native(&input).is_some() || lent_slice_element(&input).is_some() {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// The crate type of the elements of a `&[T]` a call takes, as iced's
+/// `markdown::view(&items, ..)` does: values the runner's arena holds,
+/// which the call borrows in one slice (`SliceLent`).
+fn lent_slice_element(ty: &convert::Type) -> Option<&convert::Type> {
+    let convert::Type::Borrowed { mutable: false, ty } = ty else {
+        return None;
+    };
+    match &**ty {
+        convert::Type::Sequence {
+            element,
+            length: None,
+            ..
+        } if lendable(element) => Some(element),
+        _ => None,
+    }
 }
 
 /// Takes an adapter's `&str` arguments pinned for the runner's life while

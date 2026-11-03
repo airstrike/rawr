@@ -1301,20 +1301,20 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 }
 
 /// iced's changelog: `markdown::view<'a>(items: &'a [Item], ..) -> impl
-/// Widget<Uri, ..> + 'a` borrows the state's items for the view's lifetime.
-/// The items aren't `Clone` and count their draws, so the counts show each
-/// view borrows the one value of each item, and `update` adds to them once
-/// no view borrows them. The output is `cargo run`'s.
+/// Widget<Uri, ..> + 'a` borrows the state's items for the view's lifetime,
+/// and `map` and `column!` take the opaque widget. The items aren't `Clone`
+/// and count their draws, so the counts show each view borrows the one
+/// value of each item, while `update` changes the rest of the state. The
+/// output is `cargo run`'s.
 #[test]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
-    let (rawr, cargo) = both_printed("crossing-notes", "notes.rs", "first,Add");
+    let (rawr, cargo) = both_printed("crossing-notes", "notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.contains("1 view pad 0 [Add] map md first@16 draw 1 md second@16 draw 1")
-            && rawr.contains("2 view pad 0 [Add] map md first@12 draw 2 md second@12 draw 2")
-            && rawr.ends_with(
-                "last view pad 0 [Add] map md first@12 draw 3 md second@12 draw 3 md third@12 draw 1"
-            ),
+        rawr.contains("1 view pad 0 [Reset] map md first@16 draw 1 md second@16 draw 1")
+            && rawr.contains("1 message LinkClicked(\"first\")")
+            && rawr.contains("2 view pad 0 [Reset] map md first@12 draw 2 md second@12 draw 2")
+            && rawr.ends_with("last view pad 0 [Reset] map md first@16 draw 3 md second@16 draw 3"),
         "{rawr}"
     );
 }
