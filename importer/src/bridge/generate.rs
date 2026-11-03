@@ -16152,6 +16152,11 @@ fn lent_cell(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
 ) -> Result<Option<Owned>, request::Error> {
+    // Only an output the classifier read as borrowing its inputs, whose
+    // trait it found can be a trait object (`Signature::lends`).
+    if signature.lends().is_empty() {
+        return Ok(None);
+    }
     let returned = substituted(signature.output(), signature, substitutions)?;
     let convert::Type::Nominal {
         definition,
