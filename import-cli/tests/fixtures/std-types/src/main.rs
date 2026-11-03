@@ -3,12 +3,19 @@
 //! program and in the crate it uses: a crate struct's `PathBuf` field, a
 //! crate function taking `&Path` or giving an `io::Error`, and `?` from an
 //! `io::Result` into the crate's error, which converts as thiserror's
-//! `#[from]` writes it.
+//! `#[from]` writes it. A crate function taking `&mut PathBuf` changes the
+//! program's own path, and a crate method giving `&io::Error` lends the
+//! error its value holds (#680).
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use files::{Entry, Error};
+use files::{Entry, Error, Failure};
+
+struct Job {
+    name: String,
+    path: PathBuf,
+}
 
 fn load(path: &Path) -> Result<String, Error> {
     let text = std::fs::read_to_string(path)?;
@@ -79,4 +86,32 @@ fn main() {
     );
     let wrapped: Error = own.into();
     println!("wrapped {}", wrapped);
+
+    let mut grown = PathBuf::from("data");
+    files::extend(&mut grown, "notes");
+    files::extend(&mut grown, "b.txt");
+    println!("extended {} {}", grown.display(), files::depth(&grown));
+
+    let mut job = Job {
+        name: String::from("job"),
+        path: PathBuf::from("jobs"),
+    };
+    files::extend(&mut job.path, "first");
+    println!("job {} {}", job.name, job.path.display());
+    files::reserve(&mut grown, 200);
+    files::reserve(&mut job.path, 200);
+    println!(
+        "roomy {} {}",
+        files::roomy(&mut grown),
+        files::roomy(&mut job.path)
+    );
+
+    let failure = Failure::new(PathBuf::from("lost.txt"));
+    let error = failure.error();
+    println!("error {} {:?}", error, error.kind());
+    let cause = failure.error();
+    println!("cause {:?} {}", files::kind(cause), failure.path.display());
+    failure.append_to(&mut grown);
+    failure.append_to(&mut job.path);
+    println!("appended {} {}", grown.display(), job.path.display());
 }

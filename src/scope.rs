@@ -1147,6 +1147,108 @@ pub fn settle(value: crate::Dynamic) -> crate::RawrResult {
     value.cast::<Opening>().open(&mut |made| Ok(made))
 }
 
+/// How a [`Projected`] reaches its field, as a variant's generated lender
+/// makes one for each field it lends through `&T`.
+pub struct Projection {
+    /// The Rust name of the field's type.
+    pub name: &'static str,
+    /// Reach the field through the value `parent` holds and lend it to
+    /// `body`, shared, for `body`'s length.
+    pub open: fn(&crate::Dynamic, &mut dyn FnMut(Lent) -> crate::RawrResult) -> crate::RawrResult,
+    /// The field's `Debug` text, or its `Display` text when `display`, when
+    /// its type has it.
+    pub text: fn(&crate::Dynamic, bool) -> Option<String>,
+    /// A value of its own cloned from the field by its type's `Clone`,
+    /// attested by the field's witness when it has one.
+    pub clone: fn(&crate::Dynamic, Option<&crate::host::runtime::Witness>) -> crate::RawrResult,
+}
+
+/// A field a pattern through `&T` borrows from a crate value (#782, #783):
+/// the value it is reached through and how. It holds no reference to the
+/// field. Each operation reaches the value, claims it and lends the field
+/// for that operation alone, as a place projects into its root (D651). So
+/// the borrow lives as long as Rust's borrow of the field may, past the arm
+/// that bound it, and expires with the value it is reached through. The
+/// borrow checker keeps that value from moving or changing while the
+/// borrow lives.
+#[derive(Clone)]
+pub struct Projected {
+    parent: crate::Dynamic,
+    projection: &'static Projection,
+    witness: Option<crate::host::runtime::Witness>,
+}
+
+impl Projected {
+    /// The field `projection` reaches through `parent`, of the type
+    /// `witness` attests, when the call that made it has one.
+    #[must_use]
+    pub const fn new(
+        parent: crate::Dynamic,
+        projection: &'static Projection,
+        witness: Option<crate::host::runtime::Witness>,
+    ) -> Self {
+        Self {
+            parent,
+            projection,
+            witness,
+        }
+    }
+
+    /// The Rust name of the field's type.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.projection.name
+    }
+
+    /// Run `body` with the field lent, shared, for its length.
+    pub fn open(&self, body: &mut dyn FnMut(Lent) -> crate::RawrResult) -> crate::RawrResult {
+        (self.projection.open)(&self.parent, body)
+    }
+
+    /// A value of its own cloned from the field, as `.clone()` of a `&T`
+    /// gives a `T`.
+    pub fn cloned(&self) -> crate::RawrResult {
+        (self.projection.clone)(&self.parent, self.witness.as_ref())
+    }
+}
+
+impl std::fmt::Debug for Projected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.projection.text)(&self.parent, false) {
+            Some(text) => f.write_str(&text),
+            None => write!(f, "lent `{}`", self.name()),
+        }
+    }
+}
+
+impl std::fmt::Display for Projected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.projection.text)(&self.parent, true) {
+            Some(text) => f.write_str(&text),
+            None => write!(f, "lent `{}`", self.name()),
+        }
+    }
+}
+
+/// Run `call` with each [`Projected`] among `args` lent for the call alone,
+/// as the [`Lent`] native code reaches it by, and the arguments as they were
+/// after it.
+pub fn opened(
+    args: &mut [&mut crate::Dynamic],
+    call: &mut dyn FnMut(&mut [&mut crate::Dynamic]) -> crate::RawrResult,
+) -> crate::RawrResult {
+    let Some(at) = args.iter().position(|value| value.is::<Projected>()) else {
+        return call(args);
+    };
+    let projected = args[at].clone_cast::<Projected>();
+    projected.open(&mut |lent| {
+        let held = std::mem::replace(&mut *args[at], crate::Dynamic::from(lent));
+        let result = opened(args, call);
+        *args[at] = held;
+        result
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;

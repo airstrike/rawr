@@ -34,7 +34,9 @@ pub(crate) enum Kind {
         field: u32,
     },
     /// One field of a value of the variant, lent for the rest of the scope
-    /// that reads it, as a pattern below the variant's reads it.
+    /// that reads it, as a pattern below the variant's reads it; or, under
+    /// a field's selector, that field of a struct, as `&value.field` reads
+    /// it.
     Borrow {
         field: u32,
     },
@@ -249,7 +251,15 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, None, None, &crate::Access::NONE);
+        // A field a pattern borrows is lent to the call alone, but a lender
+        // of its own fields projects through it.
+        let result = if self.definition.kind().lends() {
+            runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+        } else {
+            crate::scope::opened(args, &mut |args| {
+                runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+            })
+        };
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =

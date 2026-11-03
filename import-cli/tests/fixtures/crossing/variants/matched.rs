@@ -1,5 +1,5 @@
 // rawr
-use events::matched::{self, Outcome, Wrapped};
+use events::matched::{self, Door, Outcome, Shelf, Tag, Wrapped};
 
 fn by_value(outcome: Outcome) -> String {
     match outcome {
@@ -65,6 +65,28 @@ fn renamed(outcome: &mut Outcome, name: &str) {
     }
 }
 
+fn door_of(outcome: &Outcome) -> &Door {
+    match outcome {
+        Outcome::Opened(door) => door,
+        _ => panic!("no door"),
+    }
+}
+
+fn inner(wrapped: &Wrapped) -> Option<&Door> {
+    match wrapped {
+        Wrapped::Held(Outcome::Opened(door), _) => Some(door),
+        Wrapped::Counted { door, .. } => Some(door),
+        _ => None,
+    }
+}
+
+fn tag_of(shelf: &Shelf) -> Option<&Tag> {
+    match shelf {
+        Shelf::Stocked(tag) => Some(tag),
+        Shelf::Empty => None,
+    }
+}
+
 fn main() {
     println!("{}", checked(Ok(4)));
     println!("{}", checked(Err(matched::open("vent"))));
@@ -115,4 +137,32 @@ fn main() {
         door.rename("barn");
     }
     println!("{}", peeked(&shed));
+    let kept = matched::open("kept");
+    let lent = door_of(&kept);
+    println!("{} {}", lent.name(), matched::holds(lent, &kept));
+    let inline = match &kept {
+        Outcome::Opened(door) => door,
+        _ => panic!("no door"),
+    };
+    println!("{} {}", matched::describe(inline), matched::state(&kept));
+    let loft = matched::held(matched::open("loft"), "up");
+    let door = inner(&loft).unwrap();
+    println!("{} {}", door.name(), matched::describe(door));
+    let shelf = matched::stocked("blue");
+    if let Shelf::Stocked(tag) = &shelf {
+        println!("{tag:?} {} {}", tag.label(), matched::shelved(tag, &shelf));
+    }
+    let found = tag_of(&shelf).unwrap();
+    println!("{} {}", found.label(), matched::shelved(found, &shelf));
+    let Shelf::Stocked(tag) = &shelf else {
+        return;
+    };
+    let owned: Tag = tag.clone();
+    println!(
+        "{} {} {}",
+        tag.label(),
+        matched::shelved(tag, &shelf),
+        matched::shelved(&owned, &shelf)
+    );
+    println!("{}", tag_of(&Shelf::Empty).is_none());
 }

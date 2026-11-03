@@ -79,6 +79,14 @@ fn a_crate_types_deref_gives_its_targets_members() {
     runs_as_cargo_does("deref", "clicks 2 0\n4\n6 FERRIS FERRIS\n3 Some(3) 6\n");
 }
 
+/// A borrow of a crate struct's field that derefs to `[u8]`, as iced's
+/// `&screenshot.rgba`, is the `&[u8]` a function or a `let` takes, and a
+/// borrow of the struct, whose other fields are read after.
+#[test]
+fn a_borrowed_crate_field_derefs_without_moving_its_owner() {
+    runs_as_cargo_does("deref_field", "7\n4 2\n4 Some(1)\n4\n");
+}
+
 /// A crate's `pub use Alignment::Center;` re-exports the variant, as
 /// `iced::Center` is, and `use Enum::Variant;` imports one: each name is
 /// the variant in expressions and patterns.

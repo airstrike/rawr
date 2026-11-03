@@ -1182,3 +1182,76 @@ where
 {
     qr_code::QRCode::new(data)
 }
+
+/// A searchable choice, as iced's `combo_box`.
+pub mod choose {
+    use crate::widgets::Widget;
+    use std::fmt::Display;
+
+    /// The options to choose from, as iced's `combo_box::State`.
+    pub struct State<T> {
+        options: Vec<T>,
+    }
+
+    impl<T: Display + Clone> State<T> {
+        /// The state of `options`.
+        pub fn new(options: Vec<T>) -> Self {
+            Self { options }
+        }
+    }
+
+    /// A choice that borrows its state, as iced's `ComboBox`.
+    pub struct Choose<'a, T, Message, Theme = crate::Theme> {
+        pub(super) state: &'a State<T>,
+        pub(super) placeholder: &'a str,
+        pub(super) selection: Option<String>,
+        pub(super) on_selected: Box<dyn Fn(T) -> Message + 'a>,
+        pub(super) theme: std::marker::PhantomData<Theme>,
+    }
+
+    impl<T, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for Choose<'_, T, Message, Theme>
+    where
+        T: Display + Clone,
+    {
+        fn labels(&self, labels: &mut Vec<String>) {
+            let options = self
+                .state
+                .options
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            let shown = self.selection.as_deref().unwrap_or(self.placeholder);
+            labels.push(format!("<{shown}? {}>", options.join("|")));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            self.state
+                .options
+                .iter()
+                .find(|option| option.to_string() == label)
+                .map(|option| (self.on_selected)(option.clone()))
+        }
+    }
+}
+
+/// A choice among `state`'s options, `selection` shown, as iced's
+/// `combo_box(state, placeholder, selection, on_selected)`: the selection
+/// is borrowed for the call alone, at a late-bound lifetime.
+pub fn choose<'a, T, Message, Theme>(
+    state: &'a choose::State<T>,
+    placeholder: impl IntoLabel<'a>,
+    selection: Option<&T>,
+    on_selected: impl Fn(T) -> Message + 'a,
+) -> choose::Choose<'a, T, Message, Theme>
+where
+    T: std::fmt::Display + Clone,
+    Theme: 'a,
+{
+    choose::Choose {
+        state,
+        placeholder: placeholder.into_label(),
+        selection: selection.map(ToString::to_string),
+        on_selected: Box::new(on_selected),
+        theme: std::marker::PhantomData,
+    }
+}
