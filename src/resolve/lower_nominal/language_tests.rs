@@ -12528,6 +12528,100 @@ fn language_std_arities_take_their_defaults() {
 }
 
 #[test]
+fn language_bare_std_types_need_a_use() {
+    // rustc 1.96: a std type outside the prelude is in scope only through
+    // a `use`. In a type it is E0425, at the head of a path E0433.
+    for (source, name, expected) in [
+        (
+            "fn take(m: HashMap<i64, i64>) {}\npub fn run() -> i64 { 0 } run()",
+            "HashMap",
+            "E0425",
+        ),
+        (
+            "struct S { cell: RefCell<i64> }\npub fn run() -> i64 { 0 } run()",
+            "RefCell",
+            "E0425",
+        ),
+        (
+            "pub fn run() -> i64 { let m: HashMap<i64, i64> = std::collections::HashMap::new(); 0 } run()",
+            "HashMap",
+            "E0425",
+        ),
+        (
+            "pub fn run() -> i64 { let m = std::collections::HashMap::<i64, i64>::new(); let s = HashSet::<i64>::new(); 0 } run()",
+            "HashSet",
+            "E0433",
+        ),
+        (
+            "pub fn run() -> i64 { Duration::from_secs(1).as_secs() as i64 } run()",
+            "Duration",
+            "E0433",
+        ),
+        (
+            "pub fn run() -> i64 { match 1.cmp(&2) { Ordering::Less => 1, _ => 0 } } run()",
+            "Ordering",
+            "E0433",
+        ),
+        (
+            "pub fn run() -> i64 { let c: Vec<Rc<i64>> = Vec::new(); 0 } run()",
+            "Rc",
+            "E0425",
+        ),
+    ] {
+        let error = Engine::new()
+            .compile(source)
+            .expect_err("rustc refuses a std type's bare name with no `use`");
+        let crate::ParseErrorType::Resolution(crate::resolve::Error::StdPath {
+            code, message, ..
+        }) = error.err_type()
+        else {
+            panic!("{source}: {error}");
+        };
+        assert_eq!(
+            (*code, message.as_str()),
+            (expected, format!("cannot find type `{name}` in this scope").as_str()),
+            "{source}"
+        );
+    }
+    // Through a `use`, a glob of its module, and std's prelude.
+    let value = run(r#"
+        use std::collections::HashMap;
+        fn count(m: &HashMap<i64, i64>) -> i64 { m.len() as i64 }
+        pub fn run() -> i64 {
+            let mut m = HashMap::new();
+            m.insert(1, 2);
+            count(&m)
+        }
+        run()
+    "#);
+    assert_eq!(value, 1);
+    let value = run(r#"
+        use std::collections::*;
+        fn count(m: &BTreeMap<i64, i64>) -> i64 { m.len() as i64 }
+        pub fn run() -> i64 {
+            let mut m = BTreeMap::new();
+            m.insert(1, 2);
+            let mut s: HashSet<i64> = HashSet::new();
+            s.insert(3);
+            count(&m) + s.len() as i64 * 10
+        }
+        run()
+    "#);
+    assert_eq!(value, 11);
+    let value = run(r#"
+        struct Bag { items: Vec<String>, first: Option<Box<i64>> }
+        fn size(bag: &Bag) -> i64 { bag.items.len() as i64 + **bag.first.as_ref().unwrap() }
+        pub fn run() -> i64 {
+            let items: Vec<String> = Vec::new();
+            let bag = Bag { items, first: Some(Box::new(String::from("ab").len() as i64)) };
+            size(&bag)
+        }
+        run()
+    "#);
+    assert_eq!(value, 2);
+}
+
+#[test]
 fn language_core_paths_rustc_refuses_are_refused() {
     // rustc 1.96: core has no `collections`, `thread`, `rc` or `string`,
     // and `Instant` and `Arc` are std's alone.

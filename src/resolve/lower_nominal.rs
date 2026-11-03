@@ -25474,6 +25474,9 @@ impl<'a> Parser<'a> {
             self.next();
             segments.push(self.expect_qualified_name()?);
         }
+        if let [(head, head_span), _, ..] = segments.as_slice() {
+            self.unbound_std_type(head, true, *head_span)?;
+        }
         // A path into a `.rs` module, `echo::Event::Connected`, is spelled
         // through the app crate, as the same path is in an expression.
         if segments.len() >= 2 {
@@ -33316,6 +33319,24 @@ impl<'a> Parser<'a> {
             && (path != "Ordering" || self.models.get("Ordering").is_none())
     }
 
+    /// rustc's error for a std type's bare `name` that nothing in scope
+    /// binds: no generic parameter, declaration, alias or `use`, and not
+    /// std's prelude (`std_path::unbound_type`). `head` when it heads a
+    /// path, as `HashMap::new()`.
+    fn unbound_std_type(&self, name: &str, head: bool, reference: Span) -> Result<(), Error> {
+        if self.generics.contains_key(name)
+            || self.models.get(name).is_some()
+            || self.models.alias(name).is_some()
+            || self.models.import(name).is_some()
+        {
+            return Ok(());
+        }
+        match crate::resolve::std_path::unbound_type(name, head, reference) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// `Duration::from_secs` or `std::time::Instant::now` after its first
     /// segment `first`, in a program whose facades do not name std's
     /// `time` (`resolve::std_reexport`): the type, the member, the number
@@ -36961,6 +36982,9 @@ impl<'a> Parser<'a> {
         }
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
+        }
+        if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
+            self.unbound_std_type(&name, true, name_span)?;
         }
 
         // `Type::<A>::member`: the path without its arguments, its value
@@ -47768,6 +47792,8 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        let head = matches!(self.peek(), Token::DoubleColon);
+        self.unbound_std_type(&name, head, name_span)?;
         // `dyn Fn(A) -> B` and `dyn Trait`.
         if name.as_str() == "dyn" && !self.models.get(&name).is_some() {
             // `dyn for<'a> Fn(&'a T)`.

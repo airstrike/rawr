@@ -303,19 +303,40 @@ pub(crate) fn glob(module: &str) -> Option<Vec<ImmutableString>> {
     Some(names)
 }
 
-/// The std type a `use` that binds `qualified` brings in, when rawr has no
-/// representation for it: the path, which its uses name in rawr's
-/// not-yet error.
-pub(crate) fn unrepresented_type(qualified: &str) -> Option<ImmutableString> {
+/// The std type a `use` that binds `qualified` brings in: the path, which a
+/// path through the name stands for.
+pub(crate) fn bound_type(qualified: &str) -> Option<ImmutableString> {
     let segments = std_segments(qualified)?;
     match std_table::resolve(&segments, Namespace::Type).ok()? {
-        Resolved::Path(path)
-            if path.is_type() && !TYPES.iter().any(|(known, _)| *known == path.definition) =>
-        {
-            Some(qualified.into())
-        }
+        Resolved::Path(path) if path.is_type() => Some(qualified.into()),
         _ => None,
     }
+}
+
+/// rustc's error for the bare `name` of a std type rawr represents, which
+/// nothing in scope binds: no declaration, no `use` and not std's prelude.
+/// E0425 where it names a type; E0433 where it heads a path (`head`), as
+/// `HashMap::new()`. `None` for any other name. The caller has looked
+/// `name` up in its scope.
+pub(crate) fn unbound_type(name: &str, head: bool, reference: Span) -> Option<Error> {
+    let represented = TYPES.iter().any(|(definition, _)| {
+        !definition.starts_with("core::fmt::") && definition.rsplit("::").next() == Some(name)
+    });
+    if !represented || qualified(name, None).is_some() {
+        return None;
+    }
+    let (code, label) = if head {
+        ("E0433", format!("use of undeclared type `{name}`"))
+    } else {
+        ("E0425", "not found in this scope".to_owned())
+    };
+    Some(Error::StdPath {
+        code,
+        message: format!("cannot find type `{name}` in this scope").into(),
+        label: Some(label.into()),
+        note: None,
+        reference,
+    })
 }
 
 /// rawr's error for a use of the std path `path`, which it resolves but
