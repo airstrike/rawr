@@ -2714,12 +2714,45 @@ fn imported_item(
 }
 
 /// The inputs of `signature`, by bit, whose borrows the output keeps for
-/// as long as it lives (`Signature::lends`).
+/// as long as it lives (`Signature::lends`). An opaque output also keeps
+/// those of each input whose type is a type parameter it captures, as
+/// `wrap(shown: impl Show) -> impl Show` keeps what `shown` borrows (#856).
 fn lends(signature: &representability::signature::Signature) -> u32 {
+    use representability::convert::Type;
+    fn names(ty: &Type, parameter: u32) -> bool {
+        match ty {
+            Type::Parameter(index) => *index == parameter,
+            Type::Nominal { arguments, .. } | Type::Tuple(arguments) => {
+                arguments.iter().any(|ty| names(ty, parameter))
+            }
+            Type::Option(inner)
+            | Type::Range(inner)
+            | Type::Borrowed { ty: inner, .. }
+            | Type::Sequence { element: inner, .. } => names(inner, parameter),
+            Type::Result(ok, error) => names(ok, parameter) || names(error, parameter),
+            _ => false,
+        }
+    }
+    let output = signature.output();
+    let opaque = matches!(output, Type::Nominal { definition, .. }
+        if signature
+            .opaques()
+            .iter()
+            .any(|opaque| opaque.definition() == definition.as_bytes()));
+    let captured = signature
+        .inputs()
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| {
+            opaque && matches!(input, Type::Parameter(parameter) if names(output, *parameter))
+        })
+        .filter_map(|(index, _)| u32::try_from(index).ok());
     signature
         .lends()
         .iter()
-        .filter(|index| **index < 32)
+        .copied()
+        .chain(captured)
+        .filter(|index| *index < 32)
         .fold(0, |bits, index| bits | 1 << index)
 }
 
