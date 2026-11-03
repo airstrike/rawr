@@ -319,6 +319,15 @@ impl Carrier {
         if bytes.len() > crate::protocol::DIAGNOSTIC_BYTES || take(&mut bytes, 8)? != b"RAWRGM01" {
             return Err(Error::Carrier);
         }
+        // The versions end the carrier: one made by another generator says
+        // so before its body is read in a format it may not share.
+        let versions =
+            original.rchunks_exact(4).take(5).rev().map(|version| {
+                u32::from_le_bytes([version[0], version[1], version[2], version[3]])
+            });
+        if original.len() < 8 + 20 || !versions.eq(carrier_versions()) {
+            return Err(Error::Schema);
+        }
         let _build = take(&mut bytes, 32)?;
         let files = take_length(&mut bytes)?;
         if files > crate::protocol::DIAGNOSTIC_BYTES {
@@ -518,7 +527,18 @@ mod tests {
         let mut bytes = carrier(&[]);
         let schema = bytes.len() - 20;
         bytes[schema..schema + 4].copy_from_slice(&6_u32.to_le_bytes());
-        assert!(Carrier::transform(&bytes).is_err());
+        assert!(matches!(
+            Carrier::transform(&bytes),
+            Err(super::Error::Schema)
+        ));
+
+        let mut bytes = carrier(&[]);
+        let generator = bytes.len() - 12;
+        bytes[generator] ^= 1;
+        assert!(matches!(
+            Carrier::transform(&bytes),
+            Err(super::Error::Schema)
+        ));
 
         let mut bytes = carrier(&[]);
         // Header, build, file count, entry count, inventory byte count.

@@ -972,11 +972,15 @@ impl Drop for CallArena {
 
 /// `call` with this thread's arena: the one in its cell, or else the one a
 /// native call running on this thread lends. `None` when neither is free.
+/// A thread that ends has no arena: a handle its last values drop finds none.
 fn arena_access<R>(call: impl FnOnce(&mut Arena) -> R) -> Option<R> {
-    NATIVE_ARENA.with(|cell| match cell.try_borrow_mut() {
-        Ok(mut arena) => Some(call(arena.as_mut()?)),
-        Err(_) => __rawr_internal::island::lend::with(call),
-    })
+    NATIVE_ARENA
+        .try_with(|cell| match cell.try_borrow_mut() {
+            Ok(mut arena) => Some(call(arena.as_mut()?)),
+            Err(_) => __rawr_internal::island::lend::with(call),
+        })
+        .ok()
+        .flatten()
 }
 
 enum Error {
@@ -1627,10 +1631,11 @@ impl Arena {
         for (handle, value) in restores {
             self.restore(handle, value);
         }
-        for (handle, homed) in REHOMES.with_borrow_mut(std::mem::take) {
+        // A thread that ends has nothing left to give back.
+        for (handle, homed) in REHOMES.try_with(RefCell::take).unwrap_or_default() {
             self.rehome(handle, homed);
         }
-        for (handle, value) in RELENDS.with_borrow_mut(std::mem::take) {
+        for (handle, value) in RELENDS.try_with(RefCell::take).unwrap_or_default() {
             self.restore(handle, value);
         }
         // Another live arena's releases wait for it: the owner's for the
