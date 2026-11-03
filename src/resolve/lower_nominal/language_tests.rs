@@ -10284,8 +10284,8 @@ fn main() {
     let os = OsString::from("a");
     let path = PathBuf::from(os.clone()).join(&os).join(String::from("b.txt"));
     println!("{}", path.display());
-    let borrowed: &Path = Path::new(&os);
-    println!("{:?} {:?}", borrowed.to_str(), OsString::from(&path).to_str());
+    let borrowed: &Path = Path::new("a");
+    println!("{:?} {:?}", borrowed.to_str(), OsString::from(path.clone()).to_str());
     let missing = std::fs::read_to_string(&path).unwrap_err();
     let same = io::Error::from(missing);
     println!("{:?}", same.kind());
