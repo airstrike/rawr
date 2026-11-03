@@ -6009,6 +6009,62 @@ fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
     table
 }
 
+/// Whether the harness's `lock` reaches the path package `name` from its
+/// root through path packages alone: then the package is a member of the
+/// runner's workspace without a dependency of its own.
+fn path_reached(lock: &[u8], name: &str) -> bool {
+    let Some(document) = std::str::from_utf8(lock)
+        .ok()
+        .and_then(|text| text.parse::<DocumentMut>().ok())
+    else {
+        return false;
+    };
+    let Some(packages) = document.get("package").and_then(Item::as_array_of_tables) else {
+        return false;
+    };
+    // Path packages have no source, so an edge names one by its name and,
+    // when two share it, its version.
+    let paths = packages
+        .iter()
+        .filter(|package| !package.contains_key("source"))
+        .filter_map(|package| {
+            let name = package.get("name").and_then(Item::as_str)?;
+            let version = package.get("version").and_then(Item::as_str)?;
+            let edges = package
+                .get("dependencies")
+                .and_then(Item::as_array)
+                .map(|edges| edges.iter().filter_map(|edge| edge.as_str()).collect())
+                .unwrap_or_else(Vec::new);
+            Some((name, version, edges))
+        })
+        .collect::<Vec<_>>();
+    let mut reached = paths
+        .iter()
+        .filter(|(package, _, _)| *package == "rawr-resolution-harness")
+        .collect::<Vec<_>>();
+    let mut index = 0;
+    while let Some((_, _, edges)) = reached.get(index) {
+        index += 1;
+        for edge in edges {
+            let mut parts = edge.split(' ');
+            let (target, version) = (parts.next(), parts.next());
+            if parts.next().is_some() {
+                // `name version (source)`: not a path package.
+                continue;
+            }
+            for path in &paths {
+                if Some(path.0) == target
+                    && version.is_none_or(|version| version == path.1)
+                    && !reached.iter().any(|seen| std::ptr::eq(*seen, path))
+                {
+                    reached.push(path);
+                }
+            }
+        }
+    }
+    reached.iter().any(|(package, _, _)| *package == name)
+}
+
 #[cfg(test)]
 fn runner_manifest(
     bytes: &[u8],
@@ -6149,6 +6205,7 @@ fn runner_manifest_aliased(
             .get_mut("dependencies")
             .and_then(Item::as_table_like_mut)
             .ok_or_else(|| request::misread("final-form harness has no dependencies table"))?;
+        let mut excluded = Vec::new();
         for hidden in hidden {
             // `hidden_crate` found exactly one locked package of this name,
             // so a project dependency on it is the same package.
@@ -6166,6 +6223,36 @@ fn runner_manifest_aliased(
                 &hidden.segment,
                 Item::Value(toml_edit::Value::InlineTable(hidden_dependency(hidden))),
             );
+            // A path dependency under the runner's root is a workspace
+            // member, which Cargo's lockfile resolves with all its
+            // features. One the runner reaches only through another source,
+            // as the target of a `[patch]`, stays out of the workspace as
+            // it is in the project's, so the runner resolves no more than
+            // the project did.
+            if let Some(directory) = hidden.source.strip_prefix("path+file://")
+                && !path_reached(lock, &hidden.package)
+            {
+                excluded.push(directory.to_owned());
+            }
+        }
+        if !excluded.is_empty() {
+            let workspace = document
+                .get_mut("workspace")
+                .and_then(Item::as_table_like_mut)
+                .ok_or_else(|| request::misread("final-form harness workspace is not a table"))?;
+            let exclude = workspace
+                .entry("exclude")
+                .or_insert(toml_edit::value(toml_edit::Array::new()))
+                .as_array_mut()
+                .ok_or_else(|| request::misread("final-form harness exclude is not a list"))?;
+            for directory in excluded {
+                if !exclude
+                    .iter()
+                    .any(|present| present.as_str() == Some(&directory))
+                {
+                    exclude.push(directory);
+                }
+            }
         }
     }
     // The binary is the script crate's name; its bundle keeps the executable
@@ -18373,6 +18460,46 @@ mod tests {
                 .map(|(name, _)| name)
                 .collect::<Vec<_>>(),
             ["__rawr_internal", "zeta"]
+        );
+    }
+
+    /// A path crate a macro's `$crate` names, which the project reaches only
+    /// as the target of its `[patch]`, is no member of the runner's
+    /// workspace: as a member, Cargo's lockfile would resolve it with every
+    /// feature, which the project never resolved (?play's shell has `debug`,
+    /// which pulls `bincode`). One the root reaches through path packages
+    /// is a member either way.
+    #[test]
+    fn a_hidden_path_crate_reached_only_through_a_patch_stays_out_of_the_workspace() {
+        let harness = b"[workspace]\n\n[package]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[patch.\"https://example.com/ui\"]\nui_shell = { path = \"/app/ui_shell\" }\n\n[dependencies]\nui = { git = \"https://example.com/ui\" }\nlocal = { path = \"/app/local\" }\n";
+        let lock = b"version = 4\n\n[[package]]\nname = \"rawr-resolution-harness\"\nversion = \"0.0.0\"\ndependencies = [\n \"local\",\n \"ui\",\n]\n\n[[package]]\nname = \"local\"\nversion = \"0.1.0\"\ndependencies = [\n \"local_macros\",\n]\n\n[[package]]\nname = \"local_macros\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"ui\"\nversion = \"0.1.0\"\nsource = \"git+https://example.com/ui#0123\"\ndependencies = [\n \"ui_shell\",\n]\n\n[[package]]\nname = \"ui_shell\"\nversion = \"0.1.0\"\n";
+        let hidden = |package: &str| super::HiddenCrate {
+            segment: format!("__rawr_crate_{package}_0123456789abcdef"),
+            package: package.to_owned(),
+            version: "0.1.0".to_owned(),
+            source: format!("path+file:///app/{package}"),
+        };
+        let (manifest, _) = super::runner_manifest_aliased(
+            harness,
+            None,
+            &[hidden("ui_shell"), hidden("local_macros")],
+            lock,
+        )
+        .unwrap();
+        let document = std::str::from_utf8(&manifest)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        let exclude = document["workspace"]["exclude"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(exclude, ["/app/ui_shell"]);
+        assert_eq!(
+            document["dependencies"]["__rawr_crate_ui_shell_0123456789abcdef"]["path"].as_str(),
+            Some("/app/ui_shell")
         );
     }
 
