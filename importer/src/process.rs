@@ -720,7 +720,8 @@ impl Native {
         })
     }
 
-    /// Discover the pinned installation from one already sealed import context.
+    /// Discover the adopted toolchain's installation (`toolchain::active`)
+    /// from one already sealed import context.
     pub(crate) fn pinned_in(
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,

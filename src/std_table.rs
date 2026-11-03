@@ -1049,6 +1049,27 @@ pub(crate) fn definition_of(path: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// A toolchain's table, here a copy of the embedded one so the other
+    /// tests read the same, is installed once; another is refused.
+    #[test]
+    fn a_process_checks_against_one_installed_table() {
+        let directory = std::env::temp_dir().join(format!("rawr-std-table-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, text) in [
+            ("paths.tsv", EMBEDDED.paths),
+            ("items.tsv", EMBEDDED.items),
+            ("impls.tsv", EMBEDDED.impls),
+        ] {
+            std::fs::write(directory.join(name), text).unwrap();
+        }
+        install(&directory).unwrap();
+        install(&directory).unwrap();
+        assert_eq!(Table::get().directory.as_deref(), Some(directory.as_path()));
+        assert!(path("std::collections::HashMap", Namespace::Type).is_some());
+        assert!(install(&directory.join("other")).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn std_table_paths_resolve_through_reexports() {
         let map = path("std::collections::HashMap", Namespace::Type).expect("HashMap");
