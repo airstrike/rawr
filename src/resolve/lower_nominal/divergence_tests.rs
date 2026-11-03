@@ -197,3 +197,62 @@ fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
         );
     }
 }
+
+#[test]
+fn language_a_deref_mut_impl_may_name_self_target() {
+    // `DerefMut`'s `Self::Target` is its `Deref` impl's, as rustc
+    // normalizes it (#858).
+    let output = printed(
+        r#"
+use std::ops::{Deref, DerefMut};
+
+struct W(Vec<i32>);
+
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+fn main() {
+    let mut w = W(vec![1]);
+    w.push(2);
+    println!("{:?} {}", w.0, w.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2] 2\n");
+    // A type other than the `Target` is still refused (rustc's E0053).
+    let report = refused(
+        r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i32>, String);
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut String {
+        &mut self.1
+    }
+}
+fn main() {}
+main();
+"#,
+    );
+    assert!(
+        report.contains("has an incompatible type for trait `DerefMut`"),
+        "{report}"
+    );
+}
+

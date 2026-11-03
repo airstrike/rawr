@@ -102,6 +102,7 @@ pub(super) fn fold_reference_impls(items: &mut Vec<item::Shell>) -> Result<(), L
             &implementation.owner,
             &implementation.functions,
             &implementation.associated,
+            &std::collections::BTreeSet::new(),
             &[],
             type_span(&implementation.owner),
         )
