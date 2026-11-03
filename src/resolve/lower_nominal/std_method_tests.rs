@@ -233,6 +233,62 @@ main();
 }
 
 #[test]
+fn language_an_iterators_methods_are_iterators() {
+    // Iterator's own, `DoubleEndedIterator`'s and `Peekable`'s, each read
+    // from std's declaration.
+    let source = r#"
+fn main() {
+    let v = vec![3, 1, 4, 1, 5];
+    let mut it = v.iter().peekable();
+    let first = it.peek().copied();
+    let rest: Vec<i64> = it.map(|x| x * 2).collect();
+    let pairs: Vec<(usize, &i64)> = v.iter().enumerate().filter(|(_, x)| **x > 1).collect();
+    let both: Vec<&i64> = v.iter().chain(v.iter().rev()).take(6).collect();
+    println!("{:?} {:?} {:?} {:?}", first, rest, pairs, both);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "Some(3) [6, 2, 8, 2, 10] [(0, 3), (2, 4), (4, 5)] [3, 1, 4, 1, 5, 5]\n"
+    );
+    // What an adapter's items borrow, as its declaration says: rustc's
+    // E0502.
+    let report = refused(
+        r#"
+fn main() {
+    let mut v = vec![1, 2];
+    let w = vec![3];
+    let items: Vec<&i64> = w.iter().chain(v.iter()).collect();
+    v.push(4);
+    println!("{:?}", items);
+}
+main();
+"#,
+    );
+    assert!(report.starts_with("error[E0502]"), "{report}");
+    // `next` takes `&mut self`.
+    let report = refused("fn main() { let v = vec![1]; let it = v.iter(); it.next(); }\nmain();\n");
+    assert!(report.starts_with("error[E0596]"), "{report}");
+    // A method std declares that rawr doesn't run yet, never an unknown
+    // member.
+    for (call, path) in [
+        ("rposition(|x| *x > 1)", "Iterator::rposition"),
+        ("next_back()", "DoubleEndedIterator::next_back"),
+    ] {
+        let report = refused(&format!(
+            "fn main() {{ let v = vec![1, 2]; let mut it = v.iter(); let _ = it.{call}; }}\nmain();\n"
+        ));
+        assert!(
+            report.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{report}"
+        );
+    }
+    let report = refused("fn main() { let v = vec![1]; let _ = v.iter().mapp(|x| x); }\nmain();\n");
+    assert!(!report.contains("doesn't run"), "{report}");
+}
+
+#[test]
 fn language_clone_from_and_try_into_go_through_method_lookup() {
     // `clone_from` is `Clone`'s provided method, on a std type and a
     // program's (#759); `try_into` takes the target's `TryFrom` (#757).

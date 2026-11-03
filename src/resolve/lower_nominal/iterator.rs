@@ -106,56 +106,6 @@ enum Source {
 /// items are made by; one between the surrogates fails.
 pub(super) const CHAR_OF_CODE: &str = "15";
 
-/// The iterator methods Rawr provides on an iterator value.
-const ITERATOR_METHODS: &[&str] = &[
-    "map",
-    "filter",
-    "filter_map",
-    "enumerate",
-    "zip",
-    "rev",
-    "take",
-    "skip",
-    "take_while",
-    "skip_while",
-    "step_by",
-    "chain",
-    "flat_map",
-    "flatten",
-    "inspect",
-    "cloned",
-    "copied",
-    "into_iter",
-    "clone",
-    "collect",
-    "sum",
-    "product",
-    "count",
-    "fold",
-    "any",
-    "all",
-    "find",
-    "find_map",
-    "position",
-    "last",
-    "nth",
-    "next",
-    "for_each",
-    "partition",
-    "min",
-    "max",
-    "min_by_key",
-    "max_by_key",
-    "min_by",
-    "max_by",
-    "len",
-    "peekable",
-    "peek",
-    "next_if",
-    "next_if_eq",
-    "unzip",
-];
-
 impl Parser<'_> {
     /// The item of a range's source at `at`: its integer, or for a char
     /// range its char.
@@ -169,28 +119,42 @@ impl Parser<'_> {
     }
 
     /// Whether `member` is an iterator method on a value of type `ty`:
-    /// an iterator, or a range (`(0..=n).map(f)`).
+    /// an iterator, or a range (`(0..=n).map(f)`), of a trait std declares
+    /// it in that the value implements (`Iterator`, `DoubleEndedIterator`,
+    /// `ExactSizeIterator`, `IntoIterator`).
     pub(super) fn iterator_receiver(&self, ty: &Ty, member: &str) -> bool {
         match self.inference.resolve(ty) {
             Ty::Iter(_) => true,
-            Ty::InclusiveRange => {
-                ITERATOR_METHODS.contains(&member) && !matches!(member, "into_iter" | "clone")
+            ty @ Ty::InclusiveRange => {
+                let Some((definition, _)) = std_impl::std_definition(&ty) else {
+                    return false;
+                };
+                std_method::iterator(member, |trait_| {
+                    crate::std_table::impls(trait_, definition).next().is_some()
+                })
+                .is_some()
             }
             // A crate type's `impl Iterator`: the adaptors its own methods
             // do not name.
             ty @ Ty::Script(id, _) => {
-                ITERATOR_METHODS.contains(&member)
-                    && !matches!(member, "next" | "clone")
+                member != "next"
                     && self.models.method(id, member).is_none()
                     && self.type_implements(&ty, "Iterator")
+                    && std_method::iterator(member, |trait_| {
+                        self.type_implements(&ty, std_method::trait_name(trait_))
+                    })
+                    .is_some()
             }
             // An imported type the crate implements `Iterator` for, as
             // quick-xml's `Attributes` (D558 slice 2): the adaptors its own
             // methods do not name.
             ty @ Ty::Host { .. } => {
-                ITERATOR_METHODS.contains(&member)
-                    && !matches!(member, "next" | "clone")
+                member != "next"
                     && self.type_implements(&ty, "Iterator")
+                    && std_method::iterator(member, |trait_| {
+                        self.type_implements(&ty, std_method::trait_name(trait_))
+                    })
+                    .is_some()
                     && ty.host_alias().is_none_or(|definition| {
                         self.models
                             .host_items(&format!("{}::{member}", definition.path()))
@@ -1802,12 +1766,23 @@ impl Parser<'_> {
                 let best = if borrowed { best } else { element };
                 (source, Ty::Option(Box::new(best)))
             }
+            // A method std declares that rawr doesn't run yet (D712.1):
+            // `ExactSizeIterator`'s only while the chain is one.
             _ => {
+                let exact = pipeline.exact;
+                if let Some(found) = std_method::iterator(&member, |trait_| {
+                    std_method::trait_name(trait_) != "ExactSizeIterator" || exact
+                }) {
+                    return Err(Error::NotYet {
+                        path: std_method::path(&found).into(),
+                        reference: member_span,
+                    });
+                }
                 return Err(Error::UnknownMember {
                     owner: Ty::Iter(Box::new(item)).name(&self.models),
                     member,
                     reference: member_span,
-                })
+                });
             }
         };
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))

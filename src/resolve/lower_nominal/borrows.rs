@@ -1150,7 +1150,7 @@ impl Parser<'_> {
             // std's inherent method's, from its declaration (D711 step
             // 4), else a std trait method's rawr binds.
             None => super::std_method::summary(&receiver.ty, &output, member)
-                .or_else(|| builtin_summary(&receiver.ty, &output, member))
+                .or_else(|| builtin_summary(&receiver.ty, member))
                 .unwrap_or_else(Summary::unknown),
         };
         // A `&mut self` call whose lowering recorded no borrow of its place
@@ -1714,16 +1714,15 @@ struct CallInputs<'a> {
 }
 
 /// What a std trait method rawr binds (`clone`, `as_ref`, `into_iter`,
-/// `extend`, an iterator's adapters) on a builtin value of type
-/// `receiver`, whose value has type `output`, keeps of its receiver and
-/// arguments, position by position, as its signature says, or
-/// `None` for one not listed. An inherent method's comes from its
-/// declaration (`std_method::summary`, D711 step 4). A method whose value
-/// holds no borrow needs no entry unless it stores its arguments.
+/// `extend`) on a builtin value of type `receiver` keeps of its receiver
+/// and arguments, position by position, as its signature says, or `None`
+/// for one not listed. An inherent method's and an iterator's come from
+/// their declarations (`std_method::summary`, D711 step 4). A method whose
+/// value holds no borrow needs no entry unless it stores its arguments.
 ///
 /// The receiver is as the method takes it: for `&self`, `[Own]` is the
 /// borrow and `Self` is below `[Arg(0)]`.
-fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> {
+fn builtin_summary(receiver: &Ty, member: &str) -> Option<Summary> {
     use signature::Receiver::{Mutable, Owned, Shared};
     const O: Step = Step::Own;
     const A0: Step = Step::Arg(0);
@@ -1740,7 +1739,6 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
     };
     let own = |at: &[Step]| Source::Input(Input::Receiver, path(at));
     let argument = |index: usize, at: &[Step]| Source::Input(Input::Argument(index), path(at));
-    let call = Source::Call;
     let entry =
         |mode, output: Vec<Tap>, stores: Vec<Tap>| Some(Summary::taps(Some(mode), output, stores));
     // All of the receiver, borrow and all, at every position: a value
@@ -1809,87 +1807,6 @@ fn builtin_summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summary> 
                 // A map's `(K, V)` items are where its arguments are.
                 "into_iter" if map => entry(Owned, vec![tap(&[A0], own(&[]))], Vec::new()),
                 "into_iter" => entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new()),
-                _ => None,
-            }
-        }
-        // An adapter holds the iterator it takes, and its closure; a method
-        // whose value is an item holds the item's regions only.
-        Ty::Iter(_) => {
-            let closure = |item: Vec<Tap>| {
-                let mut taps = vec![tap(&[O], own(&[O])), tap(&[O], argument(0, &[O]))];
-                taps.extend(item);
-                taps
-            };
-            match member {
-                "rev" | "skip" | "take" | "step_by" | "peekable" | "fuse" | "cycle"
-                | "into_iter" => entry(Owned, vec![tap(&[], own(&[]))], Vec::new()),
-                "by_ref" => entry(Mutable, vec![tap(&[], own(&[]))], Vec::new()),
-                "enumerate" => entry(
-                    Owned,
-                    vec![tap(&[O], own(&[O])), tap(&[A0, A1], own(&[A0]))],
-                    Vec::new(),
-                ),
-                "copied" | "cloned" => entry(
-                    Owned,
-                    vec![tap(&[O], own(&[O])), tap(&[A0], own(&[A0, A0]))],
-                    Vec::new(),
-                ),
-                "filter" | "take_while" | "skip_while" | "inspect" => {
-                    entry(Owned, closure(vec![tap(&[A0], own(&[A0]))]), Vec::new())
-                }
-                "map" | "filter_map" | "flat_map" | "map_while" => {
-                    entry(Owned, closure(vec![tap(&[A0], call(0))]), Vec::new())
-                }
-                "flatten" => entry(Owned, vec![tap(&[], own(&[O]))], Vec::new()),
-                "zip" => entry(
-                    Owned,
-                    vec![
-                        tap(&[O], own(&[O])),
-                        tap(&[O], argument(0, &[O])),
-                        tap(&[A0, A0], own(&[A0])),
-                        tap(&[A0, A1], argument(0, &[O])),
-                    ],
-                    Vec::new(),
-                ),
-                "chain" => entry(
-                    Owned,
-                    vec![
-                        tap(&[O], own(&[O])),
-                        tap(&[O], argument(0, &[O])),
-                        tap(&[A0], own(&[A0])),
-                        tap(&[A0], argument(0, &[O])),
-                    ],
-                    Vec::new(),
-                ),
-                "scan" => entry(
-                    Owned,
-                    vec![
-                        tap(&[], own(&[O])),
-                        tap(&[], argument(0, &[O])),
-                        tap(&[], argument(1, &[O])),
-                    ],
-                    Vec::new(),
-                ),
-                "next" | "next_back" | "nth" | "nth_back" | "find" => {
-                    entry(Mutable, vec![tap(&[A0], own(&[A0, A0]))], Vec::new())
-                }
-                "find_map" => entry(Mutable, vec![tap(&[A0], call(0))], Vec::new()),
-                "peek" => entry(Mutable, reference(&[A0], &[A0]), Vec::new()),
-                "last" | "max" | "min" | "max_by_key" | "min_by_key" | "max_by" | "min_by" => {
-                    entry(Owned, vec![tap(&[A0], own(&[A0]))], Vec::new())
-                }
-                "collect" => {
-                    let taps = match output {
-                        Ty::Array { .. } => vec![tap(&[A0], own(&[A0]))],
-                        Ty::Keyed(_, arguments) if map(arguments) => {
-                            vec![tap(&[A0], own(&[A0, A0])), tap(&[A1], own(&[A0, A1]))]
-                        }
-                        Ty::Keyed(..) => vec![tap(&[A0], own(&[A0]))],
-                        // Made of the items, wherever they are in it.
-                        _ => vec![tap(&[], own(&[A0, O]))],
-                    };
-                    entry(Owned, taps, Vec::new())
-                }
                 _ => None,
             }
         }
