@@ -18,9 +18,11 @@ pub mod keyed;
 pub mod keys;
 pub mod matched;
 pub mod named;
+pub mod ordered;
 pub mod plane;
 pub mod pointers;
 pub mod results;
+pub mod selector;
 pub mod sequences;
 pub mod signatures;
 
@@ -603,39 +605,30 @@ pub mod widgets {
         }
 
         /// The widget with each message it sends turned by `f`, as iced's
-        /// `Widget::map`, whose output names the callable's type.
-        fn map<F, B>(self, f: F) -> Map<Self, F, Message>
+        /// `Widget::map`, whose output names the callable's type. `Map` is
+        /// `parts`'s, which this crate doesn't re-export, as iced's
+        /// `Widget::map` gives iced_core's `widget::Map`.
+        fn map<F, B>(self, f: F) -> parts::widget::Map<Self, F, Message>
         where
             Self: Sized,
             F: Fn(Message) -> B,
         {
-            Map {
-                widget: self,
-                mapper: f,
-                input: std::marker::PhantomData,
-            }
+            parts::widget::Map::new(self, f)
         }
     }
 
-    /// A widget whose messages `F` turns, as iced's `widget::Map`.
-    pub struct Map<W, F, A> {
-        widget: W,
-        mapper: F,
-        input: std::marker::PhantomData<A>,
-    }
-
-    impl<W, A, B, F, Theme, Renderer> Widget<B, Theme, Renderer> for Map<W, F, A>
+    impl<W, A, B, F, Theme, Renderer> Widget<B, Theme, Renderer> for parts::widget::Map<W, F, A>
     where
         W: Widget<A, Theme, Renderer>,
         F: Fn(A) -> B,
     {
         fn labels(&self, labels: &mut Vec<String>) {
             labels.push("map".to_owned());
-            self.widget.labels(labels);
+            self.widget().labels(labels);
         }
 
         fn press(&self, label: &str) -> Option<B> {
-            self.widget.press(label).map(&self.mapper)
+            self.widget().press(label).map(self.mapper())
         }
     }
 

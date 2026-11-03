@@ -194,6 +194,22 @@ fn a_boot_function_giving_the_state_and_a_task_runs() {
     );
 }
 
+/// iced's delineate: `selector::find(id)` is generic over `Selector`, a
+/// trait with an associated output that the crate also implements for
+/// `FnMut` closures, and takes the widget `Id` with no closure. Its task's
+/// `Option<Target>` maps into a message. iced's scrollable: a palette
+/// field's `Color`, which the program names by no path, converts into a
+/// `Background` by `.into()` through `From`. The output is `cargo run`'s.
+#[test]
+fn a_selector_finds_by_id_and_a_fields_color_converts_into_a_background() {
+    let (rawr, cargo) = both_printed("crossing-found", "found.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("Some(50.0) Color(Color { r: 3, g: 4, b: 5 })"),
+        "{rawr}"
+    );
+}
+
 /// iced's system_information: `Task::map(Message::InformationReceived)`
 /// calls the variant on another thread, as iced's executor does, with a
 /// crate value native code made. The message is made where it is
@@ -1300,6 +1316,21 @@ fn a_widget_borrows_a_crate_value_of_the_state_for_the_views_lifetime() {
     );
 }
 
+/// iced's combo_box: `combo_box(&'a state, .., selection: Option<&T>, ..)`
+/// lends its selection at a late-bound lifetime for the call alone. The
+/// output is `cargo run`'s.
+#[test]
+fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
+    let (rawr, cargo) = both_printed("crossing-chosen", "chosen.rs", "Elm,Rust");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 <Type a language...? Rust|Elm>")
+            && rawr.contains("2 view pad 0 <Elm? Rust|Elm>")
+            && rawr.ends_with("last view pad 0 <Rust? Rust|Elm>"),
+        "{rawr}"
+    );
+}
+
 /// iced's canvas examples: the program's own type implements the crate's
 /// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
 /// crate calls the impl's `draw` back while it lays the view out, lending
@@ -1345,7 +1376,12 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 /// tests its field lent to it and moves or lends what it binds, and a
 /// `Copy` field is copied beside a field without `Clone`. Through `&mut`
 /// and as `ref mut` it lends a `Door` mutably (#786), so a `&mut self`
-/// method changes the matched value. The output is `cargo run`'s.
+/// method changes the matched value. A field bound through a reference is
+/// borrowed where it is, a `Clone` one too (#782), so a crate function sees
+/// the very field the value holds, and the borrow outlives its arm (#783):
+/// a function returns it, a `match` gives it to a `let`, and a `let`-`else`
+/// keeps it for the statements after; `.clone()` of it is a value of its
+/// own. The output is `cargo run`'s.
 #[test]
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("crossing-matched", "matched.rs", "");
@@ -1357,7 +1393,9 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
          gate closed gate\nclosed hatch\nidle\n\
          below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
          above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
-         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3"
+         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
+         kept true\ndoor kept open\nloft door loft\n\
+         Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue"
     );
 }
 
@@ -1477,6 +1515,22 @@ fn maps_and_sets_cross_as_rawrs_keyed_collections() {
         "total 7\nkept 3 2\ncheapest nib nib\nprices {\"a\": 1, \"b\": 2}\n\
          catalog [\"cup\", \"mug\"] 5\ntags 8\nevens {0, 2, 4, 6}\n\
          letters ['a', 'b', 'c']\ninvert {1: \"one\", 2: \"two\"}"
+    );
+}
+
+/// A crate type's derived `Ord` keys a `BTreeMap` in the crate's order,
+/// not its hash's (#363), and a method that gives the same enum at a type
+/// borrowing its receiver, as iced's `Key::as_ref(&self) -> Key<&str>`,
+/// is matched at that type, a `&str` literal against the borrowed
+/// character (#345). The output is `cargo run`'s.
+#[test]
+fn a_crate_order_keys_a_btree_map_and_a_borrowed_instance_matches() {
+    let (rawr, cargo) = both_printed("crossing-ordered", "ordered.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "windows [\"third\", \"second\", \"first\"]\nfirst Id(8) third\n\
+         Some(\"toggle\")\nSome(\"reset\")\nother q\nNone\nNone\nNone"
     );
 }
 

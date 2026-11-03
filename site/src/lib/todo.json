@@ -1,16 +1,29 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.116",
+  "version": "0.3.117",
   "examples": {
-    "running": 25,
+    "running": 31,
     "total": 56,
-    "note": "25 pass rawr check (the 0.3.57 batch's 15, then table, bezier_tool, arc, qr_code, clock, the_matrix, download_progress, geometry, color_palette and gallery); the rest stop at recorded gaps"
+    "note": "31 pass rawr check: the 25 before plus bezier_tool back, lazy, solar_system, sierpinski_triangle and combo_box, with qr_code's regression fixed; stopwatch, multi_window, delineate, modal and gradient pass on branches not yet merged"
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.117",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"A crate enum's field bound through `&T` is borrowed where it is, a `Clone` field too, and the borrow lives as long as Rust's: a function can return it, a `match` can give it to a `let`, and a `let else` keeps it.","issues":[783,782]},
+          {"text":"A crate function or method taking `&mut PathBuf` changes the program's own path with no copy, and a crate method giving `&io::Error` gives a borrow of the error its value holds.","issues":[680]},
+          {"text":"The std facade's `path`, `ffi`, `io`, `env`, `fs` and `process` items have std's own signatures, read from std's table: a parameter bounded by `AsRef<Path>` takes a `&str`, `String`, `OsString` or `PathBuf`, `read_line` takes `&mut String`, and each type has exactly std's capabilities.","issues":[747]},
+          {"text":"`&value.field` of a crate struct lends the field in place instead of moving the struct, so `save(&screenshot.rgba, screenshot.size.width)` runs as in Rust, and a `&Bytes` coerces to the `&[u8]` its `Deref` gives.","issues":[228]},
+          {"text":"A crate type that a signature gives but that has no public path in the crate you import, such as iced's `widget::Map` from `Widget::map`, works as in Rust; iced's bezier_tool checks again.","issues":[334]},
+          {"text":"`Option`'s `clone` borrows its receiver again, so `self.t.clone()` through `&self` no longer gives a false E0507; iced's qr_code checks again.","issues":[826]},
+          {"text":"A crate function that lends an `Option<&T>` at its own lifetime crosses, as iced's `combo_box(&state, .., self.selected.as_ref(), ..)` does, and a late-bound lifetime a function's output borrows at is read as rustc reads it at a call.","issues":[827]}
+        ]
+      },
       {
         "version": "0.3.116",
         "date": "2026-11-03",
@@ -1381,7 +1394,7 @@
     {"issue":225,"title":"changelog stops at `markdown::parse(..)`, which returns an opaque `impl Iterator` the importer…","state":"open","category":"No glue (D593)"},
     {"issue":226,"title":"color_palette stops at `Slider::new(range, value, closure)`, \"its signature names a type…","state":"open","category":"No glue (D593)"},
     {"issue":227,"title":"multitouch stops at `Polygon::points(&self) -> &[C]`: a slice whose element type is a type…","state":"open","category":"No glue (D593)"},
-    {"issue":228,"title":"Reading a non-`Copy` field of an imported struct counts as moving the whole value, because the…","state":"open","category":"No glue (D593)"},
+    {"issue":228,"title":"Reading a non-`Copy` field of an imported struct counts as moving the whole value, because the…","state":"closed","category":"No glue (D593)","release":"0.3.117"},
     {"issue":229,"title":"`&[T]` and `&(A, B)` inputs to native calls are built as Rust values and lent for the call: a…","state":"open","category":"No glue (D593)"},
     {"issue":230,"title":"A crate named only by path, with no `use` of it (`shapes::clear(..)`), gives \"unknown type `shapes`\"","state":"open","category":"No glue (D593)"},
     {"issue":231,"title":"One `rawr check` of color_palette failed once with \"invalid stored baseline: complete current…","state":"open","category":"No glue (D593)"},
@@ -1487,7 +1500,7 @@
     {"issue":331,"title":"A method's opaque `impl Trait` output gets no members","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":332,"title":"A method from a generic struct's trait impl isn't found (warp's `And<F>::value`)","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":333,"title":"An uncallable method shows no \"no binding\" note when it's called with method syntax","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":334,"title":"No-glue stops after #313","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":334,"title":"No-glue stops after #313","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.117"},
     {"issue":335,"title":"events: `rawr check` passes, but the runner build fails on…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.15"},
     {"issue":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.14"},
     {"issue":337,"title":"arc, delineate: `.theme(Theme::Dark)` fails, because `ThemeFn` is read only as a callable, not…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.43"},
@@ -1833,7 +1846,7 @@
     {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"closed","category":"No glue (D593)","release":"0.3.90"},
     {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"closed","category":"Divergences from rustc","release":"0.3.114"},
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
-    {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
+    {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
     {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"closed","category":"Health"},
     {"issue":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":683,"title":"A module function taking a dependency's type checks","state":"open","category":"Divergences from rustc"},
@@ -1900,7 +1913,7 @@
     {"issue":744,"title":"Impls on native types come from the std table: one Deref rule, PartialEq (D711 step 3)","state":"closed","category":"Divergences from rustc","release":"0.3.107"},
     {"issue":745,"title":"Inherent methods and lifetime summaries come from the std table, type by type (D711 step 4)","state":"closed","category":"Divergences from rustc","release":"0.3.110"},
     {"issue":746,"title":"The importer's std matchers and STD_TYPES come from the std table (D711 step 5)","state":"closed","category":"Divergences from rustc","release":"0.3.112"},
-    {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"open","category":"Divergences from rustc"},
+    {"issue":747,"title":"The std facade keeps only its binds (D711 step 6)","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
     {"issue":748,"title":"Box, Rc and Arc are real pointers at rawr's runtime (D712.2)","state":"closed","category":"Divergences from rustc","release":"0.3.111"},
     {"issue":749,"title":"The first `&mut String` / `&mut Vec<T>` lend of a script value doesn't convert it","state":"open","category":"Divergences from rustc"},
     {"issue":750,"title":"A &str inside a tuple or Option input is a &str in the runner as in the checker","state":"closed","category":"Divergences from rustc","release":"0.3.103"},
@@ -1935,8 +1948,8 @@
     {"issue":779,"title":"Run std's remaining VecDeque methods","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
     {"issue":780,"title":"Name VecDeque in a crate's signature","state":"open","category":"No glue (D593)"},
     {"issue":781,"title":"A program's impls for [T] and Vec<T> share one runtime owner","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
-    {"issue":782,"title":"A borrow of a crate variant's Clone field through `&T` is a copy, not a borrow","state":"open","category":"Divergences from rustc"},
-    {"issue":783,"title":"A field lent by a variant pattern expires at the end of its arm","state":"open","category":"Divergences from rustc"},
+    {"issue":782,"title":"A borrow of a crate variant's Clone field through `&T` is a copy, not a borrow","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
+    {"issue":783,"title":"A field lent by a variant pattern expires at the end of its arm","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
     {"issue":784,"title":"A std value rawr holds as its own, such as `io::Error`, can't be lent from inside a crate value","state":"open","category":"Divergences from rustc"},
     {"issue":785,"title":"The copying variant matcher copies every field, so a nested pattern or a Copy binding fails beside a field without Clone","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
     {"issue":786,"title":"`ref mut` bindings and matches through `&mut T` copy crate variant fields","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
@@ -1978,7 +1991,27 @@
     {"issue":822,"title":"Sign and notarize the macOS release binaries","state":"open","category":"Health"},
     {"issue":823,"title":"Verify rawr on Windows","state":"open","category":"Health"},
     {"issue":824,"title":"Run rawr-import on Windows","state":"open","category":"Health"},
-    {"issue":825,"title":"Generated runtime: thread-local teardown safety for future::owns and with_host","state":"open","category":"Health"}
+    {"issue":825,"title":"Generated runtime: thread-local teardown safety for future::owns and with_host","state":"open","category":"Health"},
+    {"issue":826,"title":"Option's clone moves its receiver: std table drops Clone for Option","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
+    {"issue":827,"title":"Lend an Option<&T> at a late-bound lifetime; read output-named late lifetimes as early","state":"closed","category":"No glue (D593)","release":"0.3.117"},
+    {"issue":828,"title":"markdown::view: a function whose opaque output borrows a &[CrateType] input","state":"open","category":"No glue (D593)"},
+    {"issue":829,"title":"A free function whose & output borrows its one borrowed input","state":"open","category":"No glue (D593)"},
+    {"issue":830,"title":"`&mut` of a crate struct's field is a place","state":"open","category":"No glue (D593)"},
+    {"issue":831,"title":"A call on a borrowed variant field whose output is a scope frame expires with the call","state":"open","category":"Divergences from rustc"},
+    {"issue":832,"title":"A field lent through `&mut T` by a variant pattern expires at the end of its arm","state":"open","category":"Divergences from rustc"},
+    {"issue":833,"title":"A crate field lend lasts to the end of its statement or block, and is refused after an earlier call in the statement","state":"open","category":"Divergences from rustc"},
+    {"issue":834,"title":"A by-value read, a nested or self receiver, or a generic struct's crate field still takes the whole struct","state":"open","category":"Divergences from rustc"},
+    {"issue":835,"title":"A crate-value field the lender can't lend falls back to the reader, which takes the struct","state":"open","category":"Divergences from rustc"},
+    {"issue":836,"title":"An associated function's borrowed held argument doesn't select its form","state":"open","category":"Divergences from rustc"},
+    {"issue":837,"title":"The std facade declares a held type's unbound std members as not yet run","state":"open","category":"Divergences from rustc"},
+    {"issue":838,"title":"The std table marks io::Error's methods unstable","state":"open","category":"Divergences from rustc"},
+    {"issue":839,"title":"The std facade expands generic parameters into one form per argument type","state":"open","category":"Health"},
+    {"issue":840,"title":"A from-source rawr-import with no driver downloads a release that may not exist","state":"open","category":"Health"},
+    {"issue":841,"title":"modal: `keyboard::Key::Named(..)` leaves Key's defaulted type parameter unknown","state":"open","category":"No glue (D593)"},
+    {"issue":842,"title":"gradient: `Radians::RANGE` is refused for its generic argument","state":"open","category":"No glue (D593)"},
+    {"issue":843,"title":"scrollable: `Color::into` is not found","state":"open","category":"No glue (D593)"},
+    {"issue":844,"title":"delineate: `selector::find` is not found, with no reason","state":"open","category":"No glue (D593)"},
+    {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -2446,7 +2479,7 @@
             {"number":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open"},
             {"number":314,"title":"No-glue, smaller groups: sipper's `impl Straw` from a native-module function (download_progress…","state":"open"},
             {"number":328,"title":"lazy's runner fails on E0521 (`_boxed` in a region), the `lazy(..)` closure's lifetime, and…","state":"open"},
-            {"number":334,"title":"No-glue stops after #313","state":"open"},
+            {"number":334,"title":"No-glue stops after #313","state":"closed"},
             {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
           ],
           "milestone": "0.4"

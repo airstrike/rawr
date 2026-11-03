@@ -173,8 +173,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
             let lowered = parser.parse_function_body(definition);
             (lowered, std::mem::take(&mut parser.recovered))
         };
-        let (lowered, _) = lower(false, &mut allocation_failure);
-        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let first = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(first, || lower(true, &mut None));
         let Some(lowered) = body(
             lowered,
             more,
@@ -230,8 +230,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
             let lowered = parser.parse_method_body(definition);
             (lowered, std::mem::take(&mut parser.recovered))
         };
-        let (lowered, _) = lower(false, &mut allocation_failure);
-        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let first = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(first, || lower(true, &mut None));
         let Some(lowered) = body(
             lowered,
             more,
@@ -274,8 +274,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         let lowered = parser.parse();
         (lowered, std::mem::take(&mut parser.recovered))
     };
-    let (lowered, _) = lower(false, &mut allocation_failure);
-    let (lowered, more) = again(lowered, || lower(true, &mut None));
+    let first = lower(false, &mut allocation_failure);
+    let (lowered, more) = again(first, || lower(true, &mut None));
     let lowered = body(
         lowered,
         more,
@@ -449,8 +449,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             });
                             (result, std::mem::take(&mut parser.recovered))
                         };
-                    let (result, _) = lower(false, &mut allocation_failure);
-                    let (result, more) = again(result, || lower(true, &mut None));
+                    let first = lower(false, &mut allocation_failure);
+                    let (result, more) = again(first, || lower(true, &mut None));
                     recovered = more;
                     (shell.source, result)
                 }
@@ -496,8 +496,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             });
                             (result, std::mem::take(&mut parser.recovered))
                         };
-                    let (result, _) = lower(false, &mut allocation_failure);
-                    let (result, more) = again(result, || lower(true, &mut None));
+                    let first = lower(false, &mut allocation_failure);
+                    let (result, more) = again(first, || lower(true, &mut None));
                     recovered = more;
                     (definition.source(), result)
                 }
@@ -1444,10 +1444,12 @@ fn body<T>(
 /// doesn't know is lowered once more, going on past each miss
 /// (`recover_miss`), for what else it misses (#662). Only the first
 /// lowering decides: going on past a miss would also take a candidate
-/// that the first lowering tried and set aside.
+/// that the first lowering tried and set aside. A first lowering that
+/// failed otherwise keeps what it missed on the way, as the `deref` a
+/// coercion through a crate type looked for.
 #[cfg(feature = "rust-import")]
 fn again<T>(
-    lowered: Result<T, Error>,
+    (lowered, missed): (Result<T, Error>, Vec<Error>),
     recover: impl FnOnce() -> (Result<T, Error>, Vec<Error>),
 ) -> (Result<T, Error>, Vec<Error>) {
     match lowered {
@@ -1457,6 +1459,7 @@ fn again<T>(
             more.retain(|other| *other != error);
             (Err(error), more)
         }
+        Err(error) => (Err(error), missed),
         lowered => (lowered, Vec::new()),
     }
 }
@@ -6183,6 +6186,9 @@ impl PreludeOp {
                 }
             }
             Self::ValueClone => {
+                if let Some(projected) = args[0].read_lock::<crate::scope::Projected>() {
+                    return projected.cloned();
+                }
                 return match crate::place::get(args[0]) {
                     Some(place) => place.invoke(crate::place::Operation::Clone, &mut []),
                     None => Ok(args[0].clone()),
@@ -7178,9 +7184,20 @@ impl ImportedOperation {
     fn instance(&self, inference: &Inference) -> Box<[Ty]> {
         use crate::host::structural::Kind;
         let owner = match self.kind {
-            Kind::Constructor => Some(&self.output),
-            Kind::Field { .. } | Kind::Store => self.operands.first().map(|(ty, ..)| ty),
-            _ => None,
+            // A generic enum's variant is made at the instance its fields
+            // and use infer, as a struct is.
+            Kind::Constructor | Kind::Variant => Some(&self.output),
+            // A variant's matchers, of the enum value they read, as a
+            // match on iced's `Key<&str>` reads it.
+            Kind::Field { .. }
+            | Kind::Store
+            | Kind::Match
+            | Kind::Test
+            | Kind::Take
+            | Kind::Lend
+            | Kind::LendMut
+            | Kind::Read { .. }
+            | Kind::Borrow { .. } => self.operands.first().map(|(ty, ..)| ty),
         };
         let Some(owner) = owner else {
             return Box::default();
@@ -7805,6 +7822,7 @@ impl ExecutableOp {
 /// slice 2), as quick-xml's `read_event_into(&mut buf)` takes its buffer
 /// and pulldown-cmark's `push_html(&mut s, ..)` its string: the arguments
 /// whose input is `&mut [T]`, `&mut Vec<T>` or `&mut String`, in order.
+/// A `&mut PathBuf` moves in and back out (`moved_input`).
 fn copied_places(
     inference: &Inference,
     inputs: &[Ty],
@@ -7819,13 +7837,46 @@ fn copied_places(
 }
 
 /// Whether a host call copies an input of `ty` in and back out
-/// (`copied_places`): a `&mut` array or string.
+/// (`copied_places`): a `&mut` array or string, or one of std's values
+/// (`moved_input`).
 fn copied_input(inference: &Inference, ty: &Ty) -> bool {
+    moved_input(inference, ty)
+        || matches!(
+            inference.resolve(ty),
+            Ty::Reference { mutable: true, target }
+                if matches!(*target, Ty::Array { .. } | Ty::String)
+        )
+}
+
+/// Whether a host call takes an input of `ty` moved in and gives it back
+/// after its value (#680): a `&mut` of one of std's types Rawr's std holds
+/// as its Rust value (`crossing::Std`), as a crate's `fn f(path: &mut
+/// PathBuf)` takes. The call changes the program's value itself, and none
+/// is copied, as rustc's borrow copies none.
+fn moved_input(inference: &Inference, ty: &Ty) -> bool {
     matches!(
         inference.resolve(ty),
         Ty::Reference { mutable: true, target }
-            if matches!(*target, Ty::Array { .. } | Ty::String)
+            if matches!(&*target, Ty::Host { proof, .. }
+                if proof
+                    .definition
+                    .path()
+                    .strip_prefix(crate::std_facade::ROOT)
+                    .and_then(|path| path.strip_prefix("::"))
+                    .is_some_and(crate::std_facade::crosses))
     )
+}
+
+/// Each argument of a host call that `moved_input` takes, moved out of its
+/// place for the call (`copied_call` stores it back).
+fn move_into_call(inference: &Inference, inputs: &[Ty], arguments: &mut [ParsedExpr]) {
+    for (input, argument) in inputs.iter().zip(arguments.iter_mut()) {
+        if moved_input(inference, input) && argument.lvalue.is_some() {
+            argument.source =
+                origin::Fragment::call(crate::engine::KEYWORD_MOVE, [argument.rendered_source()]);
+            argument.prelude = origin::Fragment::default();
+        }
+    }
 }
 
 /// The dispatch type of an operand. A sequence or string may be a typed
@@ -11308,7 +11359,8 @@ struct HostPart {
     /// one that lends what `reader` moves.
     guard: Option<origin::Fragment>,
     /// The reader where the bindings leave their scope, or `None` where
-    /// the part lends what it reads and its bindings read copies instead.
+    /// the part lends what it reads mutably for that scope alone and its
+    /// bindings read copies instead.
     escaping: Option<origin::Fragment>,
     /// Whether reading the part moves the fields out of the value.
     #[cfg_attr(
@@ -11338,7 +11390,7 @@ impl HostPart {
         let moves = guard.is_some();
         Self {
             name,
-            escaping: moves.then(|| reader.clone()),
+            escaping: (!mutable).then(|| reader.clone()),
             reader,
             guard,
             moves,
@@ -11715,6 +11767,10 @@ struct Parser<'a> {
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
+    /// Where the operand of the `&` being read starts: a crate struct's
+    /// field read there, as all of the operand, is lent, not taken
+    /// (`read_imported_field`).
+    lent_field: Option<Position>,
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
@@ -12082,6 +12138,7 @@ impl<'a> Parser<'a> {
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
             mutable_borrow: None,
+            lent_field: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
             pending_iter_mut: None,
@@ -14189,13 +14246,15 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(_) if is_iterator_trait(trait_name) => true,
-            // An imported type the crate implements `Iterator` for.
+            // An imported type the crate implements `Iterator`,
+            // `PartialOrd` or `Ord` for.
             Ty::Host { proof, .. }
-                if trait_name == "Iterator"
-                    && proof
-                        .definition
-                        .capabilities()
-                        .contains(capability::Kind::Iterator) =>
+                if match trait_name {
+                    "Iterator" => Some(capability::Kind::Iterator),
+                    "PartialOrd" | "Ord" => capability::Kind::from_derive(trait_name),
+                    _ => None,
+                }
+                .is_some_and(|kind| proof.definition.capabilities().contains(kind)) =>
             {
                 true
             }
@@ -17604,18 +17663,14 @@ impl<'a> Parser<'a> {
                 }
                 let item_path = item.path();
                 let output = self.proven_type(&output, &item_path, span)?;
-                // An imported call gives back each `&mut` array and string
-                // it copies in after its value (`copied_places`).
-                let copies = if item.imported_identity().is_some() {
-                    operands
-                        .iter()
-                        .filter(|(ty, _, receiver)| !receiver && copied_input(&self.inference, ty))
-                        .count()
-                        .try_into()
-                        .unwrap_or(u8::MAX)
-                } else {
-                    0
-                };
+                // A host call gives back each `&mut` array and string it
+                // copies in after its value (`copied_places`).
+                let copies = operands
+                    .iter()
+                    .filter(|(ty, _, receiver)| !receiver && copied_input(&self.inference, ty))
+                    .count()
+                    .try_into()
+                    .unwrap_or(u8::MAX);
                 #[cfg(feature = "rust-import")]
                 let instance = self.imported_instance_key(
                     &item,
@@ -20298,7 +20353,6 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let summary = self.host_summary(&item, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
-        let imported = item.imported_identity().is_some();
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -20308,11 +20362,8 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
-        let places = if imported {
-            copied_places(&self.inference, &signature.inputs, &arguments)
-        } else {
-            Vec::new()
-        };
+        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let runtime_arguments = arguments
             .into_iter()
             .filter(|argument| !argument.ty.is_imported_static_operand());
@@ -21119,17 +21170,16 @@ impl<'a> Parser<'a> {
             (Vec::new(), member_span.end())
         } else {
             self.hint_closures(&items, Some(&receiver.ty));
-            // A std reader appends to its `&mut String` argument.
-            // So does an imported method that borrows a value mutably, as
-            // `render_stateful_widget` takes `&mut state` (D558.5).
+            // A method that borrows a value mutably, as std's
+            // `read_line(&mut buf)` and `render_stateful_widget(&mut
+            // state)` do (D558.5).
             if items.first().is_some_and(|item| {
-                crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
-                    || item.signature().parameters().iter().any(|parameter| {
-                        matches!(
-                            parameter.shape(),
-                            crate::host::type_ref::Shape::Reference { mutable: true, .. }
-                        )
-                    })
+                item.signature().parameters().iter().any(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Reference { mutable: true, .. }
+                    )
+                })
             }) {
                 self.parse_borrowing_arguments("host method arguments")?
             } else {
@@ -21664,21 +21714,6 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
-        if let Some(item) = items.first()
-            && arguments.len() == 1
-            && crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
-        {
-            return self.appending_host_method(
-                receiver,
-                definition,
-                items,
-                owner,
-                scoped,
-                member_span,
-                arguments,
-                call,
-            );
-        }
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
             self.select_host_signature(items, Some(&receiver.ty), &mut arguments, false, call)?;
@@ -21769,11 +21804,8 @@ impl<'a> Parser<'a> {
         let shared = item.receiver() == Some(receiver::Mode::Shared);
         let guard = item.guard();
         let opens = item.opens();
-        let places = if item.imported_identity().is_some() {
-            copied_places(&self.inference, &signature.inputs, &arguments)
-        } else {
-            Vec::new()
-        };
+        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -22021,69 +22053,6 @@ impl<'a> Parser<'a> {
         parsed
     }
 
-    /// `stdin.read_line(&mut buf)`, a std reader that appends to a
-    /// `&mut String` (`std_facade::io::APPENDING`): the facade's method
-    /// takes no argument and gives `(result, text)`, and the text is
-    /// appended to the place the argument borrows.
-    #[allow(clippy::too_many_arguments)]
-    fn appending_host_method(
-        &mut self,
-        receiver: ParsedExpr,
-        definition: &crate::host::type_def::Definition,
-        items: &[crate::host::item::Definition],
-        owner: Option<crate::host::facade::Dependency>,
-        scoped: bool,
-        member_span: Span,
-        arguments: Vec<ParsedExpr>,
-        call: Span,
-    ) -> Result<ParsedExpr, Error> {
-        let mut buffer = self
-            .mutable_arguments(&arguments, [0])?
-            .pop()
-            .expect("one `&mut` argument was checked");
-        let Some(lvalue) = buffer.lvalue.clone() else {
-            unreachable!("a `&mut` place has an lvalue");
-        };
-        self.require_mutable_binding(lvalue.binding(), buffer.span)?;
-        let Ty::Reference { target, .. } = self.inference.resolve(&buffer.ty) else {
-            unreachable!("a `&mut` place is a reference");
-        };
-        buffer.ty = *target;
-        self.coerce_expr(&Ty::String, &mut buffer)?;
-        let pair = self.finish_host_method(
-            receiver,
-            definition,
-            items,
-            owner,
-            scoped,
-            member_span,
-            Vec::new(),
-            call,
-        )?;
-        let Ty::Tuple(members) = self.inference.resolve(&pair.ty) else {
-            unreachable!("an appending reader gives `(result, text)`");
-        };
-        let read = self.temporary("read");
-        let mut appended = buffer.rendered_source().surrounded("(", ")");
-        appended.push_text(format!(" + {read}[1]"));
-        let store = self.store_lvalue(&lvalue, appended)?;
-        let mut source = origin::Fragment::plain(format!("{{ let {read} = "));
-        source.push(pair.rendered_source());
-        source.push_text("; ");
-        source.push(store);
-        source.push_text(format!(" {read}[0] }}"));
-        Ok(ParsedExpr {
-            prelude: origin::Fragment::default(),
-            source,
-            ty: members[0].clone(),
-            span: call,
-            lvalue: None,
-            outcome: pair.outcome,
-            evaluation: pair.evaluation,
-        }
-        .retain_origin())
-    }
-
     /// The statement storing `value` into `lvalue`.
     fn store_lvalue(
         &mut self,
@@ -22131,6 +22100,12 @@ impl<'a> Parser<'a> {
         // `to_string()` is Rust's blanket `ToString`, through `Display`
         // (`parse_host_method`).
         if method && member == "to_string" && self.imported_member_owner(ty, member).is_none() {
+            return None;
+        }
+        // `into()` is std's blanket `Into` over the target's `From`, which
+        // the use site picks (`parse_host_into`), whatever alias names the
+        // type.
+        if method && member == "into" && matches!(self.peek(), Token::Unit) {
             return None;
         }
         // Every alias names the same Rust type: a method any alias has is
@@ -23500,6 +23475,30 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Whether the field of type `ty` read from `receiver` is borrowed
+    /// where it is read, as rustc borrows it: the whole operand of a `&`,
+    /// or the receiver of a method that takes it `&self`, its own or its
+    /// `Deref` target's.
+    #[cfg(feature = "rust-import")]
+    fn borrows_field(&mut self, receiver: &ParsedExpr, ty: &Ty) -> bool {
+        match self.peek() {
+            Token::Period => {
+                let mut ahead = self.input.clone();
+                ahead.next();
+                let (
+                    Some((Token::Identifier(member), _)),
+                    Some((Token::LeftParen | Token::Unit, _)),
+                ) = (ahead.next(), ahead.next())
+                else {
+                    return false;
+                };
+                self.borrows_for_method(ty, member.as_str())
+            }
+            Token::LeftParen | Token::Unit | Token::LeftBracket => false,
+            _ => self.lent_field == Some(receiver.span.start()),
+        }
+    }
+
     #[cfg(feature = "rust-import")]
     fn read_imported_field(
         &mut self,
@@ -23557,6 +23556,38 @@ impl<'a> Parser<'a> {
         // `font.family`; a by-value use moves only the field (`move_local`).
         // Any other field takes the struct.
         let shared = self.type_provides(&ty, capability::Kind::Copy) || self.plain_value(&ty);
+        // `&shot.rgba`, and `shot.rgba.len()` through a `&self` method: the
+        // field lent where it is, for the statement, or for the rest of the
+        // block of a `let`, as Rust borrows it, and the struct stays whole
+        // (D683.1). A crate value field is lent by its own type; a `Vec` or
+        // a box of one is still read by the reader.
+        if !shared
+            && matches!(self.inference.resolve(&ty), Ty::Host { .. })
+            && definition.parameters().is_empty()
+            && receiver.prelude.is_empty()
+            && variable_name(receiver.source.as_str()).is_some()
+            && !self.frames.is_empty()
+            && self.borrows_field(&receiver, &ty)
+        {
+            let lend = ImportedOperation {
+                kind: crate::host::structural::Kind::Borrow { field: 0 },
+                operands: vec![(receiver.ty.clone(), receiver.span, true)].into_boxed_slice(),
+                output: ty.clone(),
+                receiver: Some(crate::receiver::Mode::Shared),
+            };
+            let helper =
+                self.push_imported_op(&path, field.imported_identity(), Some(lend), operation)?;
+            let lent = ParsedExpr {
+                prelude: receiver.prelude,
+                source: origin::Fragment::call(&helper, [receiver.source]),
+                ty,
+                span: operation,
+                lvalue: None,
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            };
+            return self.scoped_call(lent, true, &[]);
+        }
         if shared {
             self.shared_field_reads.insert(operation);
         } else {
@@ -30088,37 +30119,31 @@ impl<'a> Parser<'a> {
         }
         // A binding of a field Rawr can't read in place, as an `io::Error`,
         // takes the field as rustc does: by value it moves the variant's
-        // fields out, through `&T` it borrows them where a copy can't stand
-        // in for the borrow, and through `&mut T` or as `ref mut` it borrows
-        // them mutably (#786). Other fields are read in place, as Rust reads
-        // a `Copy` field and Rawr its own values. A pattern below that moves
-        // or mutably borrows reads its field from the variant's fields moved
-        // or mutably borrowed alike.
+        // fields out, through `&T` or as `ref` it borrows them where they
+        // are, a `Clone` field too (#782), and through `&mut T` or as `ref
+        // mut` it borrows them mutably (#786). Other fields are read in
+        // place, as Rust reads a `Copy` field and Rawr its own values. A
+        // pattern below that moves or mutably borrows reads its field from
+        // the variant's fields moved or mutably borrowed alike.
         let native = |this: &Self, ty: &Ty| {
             !this.type_provides(ty, capability::Kind::Copy) && !this.plain_value(ty)
         };
-        let unclonable = |this: &Self, ty: &Ty| {
-            native(this, ty) && !this.type_provides(ty, capability::Kind::Clone)
-        };
         let outer = self.host_binding_mode.get();
-        let binds = |wanted: &dyn Fn(&PatternSyntax, Option<bool>, &Ty) -> bool| {
-            members.iter().any(|(index, member)| match member {
-                PatternSyntax::Binding { .. } => wanted(member, outer, &fields[*index]),
-                PatternSyntax::Ref { mutable, .. } => {
-                    wanted(member, Some(*mutable), &fields[*index])
-                }
-                _ => false,
+        // Whether a binding of a native field has the binding mode `wanted`:
+        // `None` by value, else `Some` of whether it is mutable.
+        let binds = |wanted: Option<bool>| {
+            members.iter().any(|(index, member)| {
+                let mode = match member {
+                    PatternSyntax::Binding { .. } => outer,
+                    PatternSyntax::Ref { mutable, .. } => Some(*mutable),
+                    _ => return false,
+                };
+                mode == wanted && native(self, &fields[*index])
             })
         };
-        let mutable = binds(&|_, mode, ty| mode == Some(true) && native(self, ty))
-            || nested.iter().any(|(.., below)| below.lends_mutably());
-        let moves = binds(&|_, mode, ty| mode.is_none() && native(self, ty))
-            || nested.iter().any(|(.., below)| below.moves());
-        let lends = binds(&|member, mode, ty| {
-            mode == Some(false)
-                && (unclonable(self, ty)
-                    || (matches!(member, PatternSyntax::Ref { .. }) && native(self, ty)))
-        });
+        let mutable = binds(Some(true)) || nested.iter().any(|(.., below)| below.lends_mutably());
+        let moves = binds(None) || nested.iter().any(|(.., below)| below.moves());
+        let lends = binds(Some(false));
         let kind = if mutable {
             Some(crate::host::structural::Kind::LendMut)
         } else if moves {
@@ -30168,7 +30193,7 @@ impl<'a> Parser<'a> {
                 }
                 // What it binds reads the field from the variant's part
                 // when the part moves the fields or lends them mutably, and
-                // lent alone, or copied where it leaves its scope, else.
+                // borrowed alone else, past the scope too (#783).
                 let held = part.filter(|part| out.parts[*part].holds());
                 let field = match held {
                     Some(held) => {
@@ -30184,14 +30209,17 @@ impl<'a> Parser<'a> {
                             mutable: source.mutable,
                         }
                     }
-                    None => HostPart {
-                        name,
-                        reader: reader(self, index, true)?,
-                        guard: None,
-                        escaping: Some(reader(self, index, false)?),
-                        moves: false,
-                        mutable: false,
-                    },
+                    None => {
+                        let borrowed = reader(self, index, true)?;
+                        HostPart {
+                            name,
+                            reader: borrowed.clone(),
+                            guard: None,
+                            escaping: Some(borrowed),
+                            moves: false,
+                            mutable: false,
+                        }
+                    }
                 };
                 out.part(field);
                 for binding in &below.binds {
@@ -33854,6 +33882,11 @@ impl<'a> Parser<'a> {
         let ord = match &ty {
             Ty::Script(id, _) if self.models.std_impl(*id, "Ord", "cmp").is_some() => true,
             Ty::Param(_) | Ty::Projection(..) => self.type_implements(&ty, "Ord"),
+            // An imported type orders by the crate's `Ord`.
+            Ty::Host { proof, .. } => proof
+                .definition
+                .capabilities()
+                .contains(capability::Kind::Ord),
             ty => self.std_ordered(ty, false),
         };
         ord.then_some(ty)
@@ -35238,7 +35271,11 @@ impl<'a> Parser<'a> {
                 operand.span = whole;
                 return Ok(operand.retain_origin());
             }
-            let mut operand = self.parse_operand()?;
+            let operand_start = self.position();
+            let lent = self.lent_field.replace(operand_start);
+            let operand = self.parse_operand();
+            self.lent_field = lent;
+            let mut operand = operand?;
             let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
@@ -48082,19 +48119,9 @@ impl<'a> Parser<'a> {
                 construction: member_span,
             });
         }
-        // A generic enum is made only where every parameter has a default,
-        // as iced's `Key<C = SmolStr>`: the instance its path names.
-        let defaults = definition.defaults();
-        if defaults.len() != definition.parameters().len() || defaults.iter().any(Option::is_none) {
-            return Err(Error::InvalidConstruction {
-                owner: path,
-                reason: "generic imported construction requires a sealed Phase 4 substitution"
-                    .into(),
-                construction: member_span,
-            });
-        }
-        // Its fields and context infer the parameters, and a default fills
-        // each one they leave unknown, as rustc's fallback does.
+        // A generic enum's fields and context infer its parameters, and a
+        // default fills each one they leave unknown, as iced's `Key<C =
+        // SmolStr>` has.
         let instance = definition
             .parameters()
             .iter()
@@ -50501,8 +50528,9 @@ impl<'a> Parser<'a> {
         // The operand's local is the call's alone: a value that moves goes
         // into the call, as Rust moves it, and the local keeps no copy of
         // it (#698). A `vec![Family::new(..)]` given to a crate function
-        // then gives the function the families themselves.
-        if self.moves_by_value(&operand.ty) {
+        // then gives the function the families themselves. So does a
+        // `&mut PathBuf` a crate's call takes moved in (`moved_input`).
+        if self.moves_by_value(&operand.ty) || moved_input(&self.inference, &operand.ty) {
             return origin::Fragment::call(
                 crate::engine::KEYWORD_MOVE,
                 [origin::Fragment::plain(temporary)],

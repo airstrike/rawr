@@ -298,7 +298,7 @@ impl crate::Engine {
                             Some((path, through_alias, member)) => error
                                 .with_rust_demand(&path, through_alias, member)
                                 .with_rust_misses(misses),
-                            None => error,
+                            None => error.with_rust_misses(misses),
                         }));
                     }
                     let error = super::Error::compilation(sources.clone(), evidence, error);
@@ -306,7 +306,7 @@ impl crate::Engine {
                         Some((path, through_alias, member)) => error
                             .with_rust_demand(&path, through_alias, member)
                             .with_rust_misses(misses),
-                        None => error,
+                        None => error.with_rust_misses(misses),
                     }));
                 }
             };
@@ -2121,6 +2121,8 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.partial_ord(),
+                    plan.ord(),
                     plan.iterator(),
                 ]),
             ),
@@ -2135,6 +2137,8 @@ fn build(
                     plan.partial_eq(),
                     plan.eq(),
                     plan.hash(),
+                    plan.partial_ord(),
+                    plan.ord(),
                     plan.iterator(),
                 ]),
             ),
@@ -2282,9 +2286,14 @@ fn build(
     }
 
     for entry in &facade.entries {
-        let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
-        if let Some(item) = item.filter(|_| names_declared(entry.outcome, resolved)) {
-            builder.imported_item(item)?;
+        // The values form stands alone where no closure fills the callable
+        // form, as iced's `selector::find(S)` takes a widget `Id` through
+        // `Selector`, which iced also implements for `FnMut` closures.
+        if names_declared(entry.outcome, resolved) {
+            let item = imported_item(&types, entry.relative.as_ref(), entry.outcome, allocation)?;
+            if let Some(item) = item {
+                builder.imported_item(item)?;
+            }
             if let Some(values) =
                 imported_values(&types, entry.relative.as_ref(), entry.outcome, allocation)?
             {
@@ -3795,7 +3804,7 @@ fn names(
 /// The traits a crate implements for a type, in the order `copy`,
 /// `default`, `debug`, `clone`, `partial_eq`, `eq` and `hash`, as the
 /// capabilities they give it.
-pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
+pub(crate) fn implemented(traits: [bool; 10]) -> Vec<crate::capability::Kind> {
     use crate::capability::Kind;
     [
         Kind::Copy,
@@ -3805,6 +3814,8 @@ pub(crate) fn implemented(traits: [bool; 8]) -> Vec<crate::capability::Kind> {
         Kind::PartialEq,
         Kind::Eq,
         Kind::Hash,
+        Kind::PartialOrd,
+        Kind::Ord,
         Kind::Iterator,
     ]
     .into_iter()

@@ -60,6 +60,10 @@ pub(crate) enum Operation {
         name: Box<str>,
         form: model::FieldForm,
         fields: Box<[Field]>,
+        /// The types a generic enum's value is matched at, as iced's
+        /// `Key<&str>`.
+        #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+        instance: Box<[convert::Type]>,
     },
     Function {
         signature: signature::Signature,
@@ -389,7 +393,8 @@ impl Plan {
     pub(crate) fn structural_instance(&self) -> &[convert::Type] {
         match &self.operation {
             Operation::StructConstructor { instance, .. }
-            | Operation::StructField { instance, .. } => instance,
+            | Operation::StructField { instance, .. }
+            | Operation::EnumVariant { instance, .. } => instance,
             _ => &[],
         }
     }
@@ -646,11 +651,11 @@ fn operation_bytes(
         (representability::Representability::Enum(plan), identity::Selector::Declaration) => {
             parameter_slice_bytes(plan.parameters())
         }
-        (representability::Representability::Enum(plan), selected) => {
+        (representability::Representability::Enum(plan), selector) => {
             let variant = plan
                 .variants()
                 .iter()
-                .find(|variant| variant.selector() == selected)
+                .find(|variant| variant.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "enum selector is absent from its exact plan",
                 })?;
@@ -768,29 +773,22 @@ fn clone_operation(
                 parameters: clone_parameters(plan.parameters())?,
             })
         }
-        (representability::Representability::Enum(plan), selected) => {
+        (representability::Representability::Enum(plan), selector) => {
             let variant = plan
                 .variants()
                 .iter()
-                .find(|variant| variant.selector() == selected)
+                .find(|variant| variant.selector() == selector)
                 .ok_or(Error::AdapterPlan {
                     reason: "enum selector is absent from its exact plan",
                 })?;
-            // A variant of an enum whose parameters all have defaults, as
-            // iced's `Key<C = SmolStr>`, holds its fields at them, and the
-            // generator matches it at them.
-            let mut parameters = clone_parameters(plan.parameters())?;
-            for (parameter, declared) in parameters.iter_mut().zip(plan.parameters()) {
-                if let Some(default) = declared.default() {
-                    *parameter = parameter.clone().with_default(Some(clone_type(default)?));
-                }
-            }
-            let fields = defaulted_fields(clone_fields(variant.fields())?, plan.parameters());
+            let instance = clone_types(selected.types())?;
+            let at = parameters_at(plan.parameters(), &instance);
             Ok(Operation::EnumVariant {
-                parameters,
+                parameters: clone_parameters(plan.parameters())?,
                 name: clone_str(variant.name())?,
                 form: variant.form(),
-                fields,
+                fields: defaulted_fields(clone_fields(variant.fields())?, &at),
+                instance,
             })
         }
         (
@@ -1075,9 +1073,8 @@ fn clone_field(field: &representability::structure::Field) -> Result<Field, Erro
     })
 }
 
-/// A generic struct's or enum variant's fields at the defaults in
-/// `parameters`, which an explicit instance replaces with its arguments
-/// (`parameters_at`).
+/// A generic struct's fields at the defaults in `parameters`, which an
+/// explicit instance replaces with its arguments (`parameters_at`).
 fn defaulted_fields(fields: Box<[Field]>, parameters: &[signature::Parameter]) -> Box<[Field]> {
     if parameters.is_empty() {
         return fields;

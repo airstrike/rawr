@@ -1573,6 +1573,13 @@ impl Signature {
         self
     }
 
+    /// The signature with `binders` as its own late-bound lifetimes.
+    #[must_use]
+    pub(crate) fn with_binders(mut self, binders: Box<[Binder]>) -> Self {
+        self.binders = binders;
+        self
+    }
+
     fn collect_references(&self, references: &mut dyn FnMut(&identity::Definition)) {
         match &self.receiver {
             Receiver::None => {}
