@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.122",
+  "version": "0.3.123",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,18 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.123",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"`*w` on your type with `Deref` reads through its `deref`, `*w = x` writes through its `deref_mut` (rustc's E0594 without one, E0507 for a move out), and a `DerefMut` impl may write `&mut Self::Target`.","issues":[858,859]},
+          {"text":"A text `.into()` becomes the type its use needs once inference has it, such as a `Cow<str>` from the other branch of an `if`, and `return *p = P::default()` is accepted as rustc accepts it.","issues":[860,862]},
+          {"text":"A `Cow` that ends a ?play snippet prints its text, not a Rust type name.","issues":[861]},
+          {"text":"A path through a crate module a `use` binds reaches the modules nested under it at any depth and through re-exports, as `operation::scrollable::snap_to(..)` after `use iced::widget::operation;`.","issues":[851]},
+          {"text":"A crate function that takes a borrowing `impl Trait` result by value, as `fn wrap(shown: impl Show) -> impl Show`, takes it with the values it borrows, which stay borrowed as long as its result lives, as rustc has it.","issues":[856]},
+          {"text":"?play refuses a call its universe doesn't bind when it checks the snippet, with an ordinary error at the call, instead of panicking at run time, and its universe now covers spacing, text of a `String`, sliders including `Radians::RANGE`, `pick_list`, `keyboard::Key` matching and a subscription with a scale factor.","issues":[863]}
+        ]
+      },
       {
         "version": "0.3.122",
         "date": "2026-11-03",
@@ -2057,19 +2069,19 @@
     {"issue":848,"title":"`&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc"},
     {"issue":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"closed","category":"No glue (D593)","release":"0.3.121"},
     {"issue":850,"title":"A method giving a crate enum that borrows its receiver keeps the receiver borrowed","state":"closed","category":"No glue (D593)"},
-    {"issue":851,"title":"scrollable: a function in a nested module of an imported module","state":"open","category":"No glue (D593)"},
+    {"issue":851,"title":"scrollable: a function in a nested module of an imported module","state":"closed","category":"No glue (D593)","release":"0.3.123"},
     {"issue":852,"title":"Ranges over crate values: `a..=b` and RangeInclusive methods","state":"open","category":"Divergences from rustc"},
     {"issue":853,"title":"A borrowing instance of a generic enum copies its variant fields","state":"open","category":"Divergences from rustc"},
     {"issue":854,"title":"The ?play image's universe runner pulls a [patch] crate into its workspace and can't settle offline","state":"closed","category":"Health","release":"0.3.119"},
     {"issue":855,"title":"Runner workspace membership follows the project's beyond hidden crates","state":"open","category":"Health"},
-    {"issue":856,"title":"A crate call that takes a borrowing `impl Trait` result by value runs","state":"open","category":"No glue (D593)"},
+    {"issue":856,"title":"A crate call that takes a borrowing `impl Trait` result by value runs","state":"closed","category":"No glue (D593)","release":"0.3.123"},
     {"issue":857,"title":"A named result type that borrows crate values lives beside them instead of in pins","state":"open","category":"No glue (D593)"},
-    {"issue":858,"title":"A DerefMut impl using Self::Target is refused as a signature mismatch","state":"open","category":"Divergences from rustc"},
-    {"issue":859,"title":"`*x` on a program type with Deref is unsupported","state":"open","category":"Divergences from rustc"},
-    {"issue":860,"title":"`.into()` to Cow in an if branch is typed as String","state":"open","category":"Divergences from rustc"},
-    {"issue":861,"title":"?play prints a Cow tail value as a Rust type name","state":"open","category":"Divergences from rustc"},
-    {"issue":862,"title":"`return place = value` is a false type mismatch","state":"open","category":"Divergences from rustc"},
-    {"issue":863,"title":"?play universe: iced calls outside the universe panic at run time instead of failing to compile","state":"open","category":"No glue (D593)"},
+    {"issue":858,"title":"A DerefMut impl using Self::Target is refused as a signature mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.123"},
+    {"issue":859,"title":"`*x` on a program type with Deref is unsupported","state":"closed","category":"Divergences from rustc","release":"0.3.123"},
+    {"issue":860,"title":"`.into()` to Cow in an if branch is typed as String","state":"closed","category":"Divergences from rustc","release":"0.3.123"},
+    {"issue":861,"title":"?play prints a Cow tail value as a Rust type name","state":"closed","category":"Divergences from rustc","release":"0.3.123"},
+    {"issue":862,"title":"`return place = value` is a false type mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.123"},
+    {"issue":863,"title":"?play universe: iced calls outside the universe panic at run time instead of failing to compile","state":"closed","category":"No glue (D593)","release":"0.3.123"},
     {"issue":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed","category":"Health","release":"0.3.120"},
     {"issue":865,"title":"Read Cargo's new build-dir layout","state":"open","category":"Health"},
     {"issue":866,"title":"Check nightlies inside the driver window, not only its edges","state":"open","category":"Health"},
@@ -2078,7 +2090,13 @@
     {"issue":869,"title":"Read a crate trait's associated const through a generic parameter","state":"open","category":"Divergences from rustc"},
     {"issue":870,"title":"Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc"},
     {"issue":871,"title":"Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)"},
-    {"issue":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed","category":"Health","release":"0.3.122"}
+    {"issue":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed","category":"Health","release":"0.3.122"},
+    {"issue":873,"title":"(*w).method() through DerefMut picks deref","state":"open","category":"Divergences from rustc"},
+    {"issue":874,"title":"Calling a crate function item bound to a local","state":"open","category":"Divergences from rustc"},
+    {"issue":875,"title":"A borrowing result passed by value to a callee that bounds it by Send or Sync","state":"open","category":"No glue (D593)"},
+    {"issue":876,"title":"Moving a borrowing result whose trait has generic or borrowing methods into a crate call","state":"open","category":"No glue (D593)"},
+    {"issue":877,"title":"?play universe: a snippet that passes two different script functions to one call shape doesn't compile","state":"open","category":"No glue (D593)"},
+    {"issue":878,"title":"rawr-play plain-path lib tests exceed their time budget in a debug build","state":"open","category":"Health"}
   ],
   "groups": [
     {

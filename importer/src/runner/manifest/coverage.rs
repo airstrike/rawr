@@ -13,10 +13,15 @@ use sha2::{Digest as _, Sha256};
 use crate::classify::representability::convert;
 use crate::surface::{adapter, identity};
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// Borrowed compiler facts for one use, without diagnostic source locations.
-#[derive(Clone, Copy, Serialize)]
+/// A selector that names its item is the use's identity: the path, which
+/// differs between the compiler's facade path and the generator's export
+/// for an item of a dependency crate (`iced_widget::Column` and
+/// `iced::__rawr_crate_iced_widget_..::Column`), is compared only for a
+/// selector that names no item.
+#[derive(Clone, Copy)]
 pub struct Use<'a, P = &'a str> {
     /// Canonical imported path, including the imported root.
     pub path: P,
@@ -26,10 +31,15 @@ pub struct Use<'a, P = &'a str> {
     pub endpoint: Option<&'a [u8; 32]>,
     /// Ordered concrete substitutions inferred by executable lowering.
     pub types: &'a [convert::Type],
+    /// The script functions that fill its callable parameters (D594): two
+    /// uses that differ only in them are two instances, as two Rust
+    /// function items are two types.
+    pub slots: &'a [crate::surface::instance::Slot],
 }
 
-/// Borrowed exact static function operand at one formal position.
-#[derive(Clone, Copy, Serialize)]
+/// Borrowed exact static function operand at one formal position, its path
+/// compared as a [`Use`]'s is.
+#[derive(Clone, Copy)]
 pub struct Function<'a, P = &'a str> {
     /// Position in the original native signature, including static operands.
     pub position: u32,
@@ -130,6 +140,51 @@ where
     }
 }
 
+impl<P: Serialize> Serialize for Use<'_, P> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut fields = serializer.serialize_struct("Use", 5)?;
+        fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
+        fields.serialize_field("selector", self.selector)?;
+        fields.serialize_field("endpoint", &self.endpoint)?;
+        fields.serialize_field("types", self.types)?;
+        fields.serialize_field("slots", self.slots)?;
+        fields.end()
+    }
+}
+
+impl<P: Serialize> Serialize for Function<'_, P> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut fields = serializer.serialize_struct("Function", 3)?;
+        fields.serialize_field("position", &self.position)?;
+        fields.serialize_field("path", &unnamed(self.selector).then_some(&self.path))?;
+        fields.serialize_field("selector", self.selector)?;
+        fields.end()
+    }
+}
+
+/// The crate a `__rawr_crate_<name>_<16 hex digits>` segment names.
+fn hidden_crate(segment: &str) -> Option<&str> {
+    let (name, id) = segment
+        .strip_prefix(crate::api::ledger::CRATE_SEGMENT)?
+        .rsplit_once('_')?;
+    (!name.is_empty() && id.len() == 16 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then_some(name)
+}
+
+/// Whether `selector` names no item, so that a use's path tells it apart.
+fn unnamed(selector: &identity::Selector) -> bool {
+    !matches!(
+        selector,
+        identity::Selector::Function { .. }
+            | identity::Selector::Constant { .. }
+            | identity::Selector::Method { .. }
+            | identity::Selector::AssociatedFunction { .. }
+            | identity::Selector::AssociatedConstant { .. }
+    )
+}
+
 impl Serialize for Path<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
@@ -140,8 +195,19 @@ impl fmt::Display for Path<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Native(plan) => {
-                formatter.write_str(plan.export().root_alias())?;
-                for segment in plan.export().path() {
+                // An item of a dependency crate is named from that crate's
+                // root, as the compiler names it:
+                // `iced::__rawr_crate_iced_widget_<id>::Column` is
+                // `iced_widget::Column`.
+                let mut segments = plan.export().path().peekable();
+                match segments.peek().copied().and_then(hidden_crate) {
+                    Some(name) => {
+                        formatter.write_str(name)?;
+                        segments.next();
+                    }
+                    None => formatter.write_str(plan.export().root_alias())?,
+                }
+                for segment in segments {
                     write!(formatter, "::{segment}")?;
                 }
                 if matches!(
@@ -312,6 +378,12 @@ impl Projection<'_> {
                 (substitutions.as_ref(), &[][..], &[][..])
             }
             adapter::Operation::Builder { .. } => return None,
+            // A generic type's variant or field is bound at the instance its
+            // use infers, as `Key<&str>::Named` is: its types are the
+            // identity's own.
+            adapter::Operation::EnumVariant { .. }
+            | adapter::Operation::StructConstructor { .. }
+            | adapter::Operation::StructField { .. } => (identity.types(), &[][..], &[][..]),
             _ => (&[][..], &[][..], &[][..]),
         };
         if types != identity.types()
@@ -410,6 +482,7 @@ impl Selected<'_> {
                 selector: self.identity.selector(),
                 endpoint: None,
                 types: self.identity.types(),
+                slots: self.identity.slots(),
             },
             functions: Sequence(
                 self.functions
@@ -512,6 +585,8 @@ where
     for _ in 0..native_count {
         let index = super::take_length(&mut bytes).ok()?;
         let encoded = fact_bytes(&mut bytes).ok()?;
+        // Two adapters a use fits, as two calls that pass different script
+        // functions have, are two Rust types: the use names neither.
         if equal(&facts, encoded) {
             if found.is_some() {
                 return None;
@@ -634,6 +709,7 @@ fn endpoint_facts(
             selector: &identity::Selector::Unavailable,
             endpoint: Some(endpoint.site().selector()),
             types: &[],
+            slots: &[],
         },
         functions: Sequence(std::iter::empty::<Function<'_>>()),
         mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
@@ -875,6 +951,7 @@ mod tests {
             selector: &identity::Selector::Declaration,
             endpoint: None,
             types: &[],
+            slots: &[],
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -952,6 +1029,7 @@ mod tests {
             selector: consumer.identity().selector(),
             endpoint: None,
             types: &[],
+            slots: &[],
         };
         let moved_functions = moved.entries[0]
             .identity()
@@ -1050,6 +1128,7 @@ mod tests {
             selector: selected.identity().selector(),
             endpoint: None,
             types: &types,
+            slots: &[],
         };
         let matched = carrier
             .cover(used, std::iter::empty(), std::iter::empty())
@@ -1080,6 +1159,8 @@ mod tests {
                 std::iter::empty()
             )
             .is_none());
+        // The selector names the item: another path to it, as a
+        // dependency crate's item is reached, is the same use.
         assert!(carrier
             .cover(
                 Use {
@@ -1089,7 +1170,19 @@ mod tests {
                 std::iter::empty(),
                 std::iter::empty()
             )
-            .is_none());
+            .is_some());
+    }
+
+    /// A dependency crate's segment is that crate's root, as the compiler
+    /// writes a path through it.
+    #[test]
+    fn a_hidden_crate_segment_names_its_crate() {
+        assert_eq!(
+            super::hidden_crate("__rawr_crate_iced_widget_845f34e290b9c9a5"),
+            Some("iced_widget")
+        );
+        assert_eq!(super::hidden_crate("__rawr_crate_iced_widget_84"), None);
+        assert_eq!(super::hidden_crate("widget"), None);
     }
 
     fn encoded_carrier(facts: &impl serde::Serialize) -> manifest::Carrier {
@@ -1136,6 +1229,7 @@ mod tests {
             selector: &selector,
             endpoint: None,
             types: &types,
+            slots: &[],
         };
         let facts = Facts {
             used,
@@ -1151,9 +1245,10 @@ mod tests {
             path: "fixture::different",
             ..functions[0]
         }];
+        // The function's selector names it, at any path.
         assert!(carrier
             .cover(used, changed_path.iter().copied(), mappers.iter().copied())
-            .is_none());
+            .is_some());
         let changed_selector = [Function {
             selector: &selector,
             ..functions[0]
@@ -1210,6 +1305,7 @@ mod tests {
                 selector: &selector,
                 endpoint: None,
                 types: &[],
+                slots: &[],
             },
             functions: Sequence(std::iter::empty::<Function<'_>>()),
             mappers: Sequence(std::iter::empty::<Mapper<'_>>()),

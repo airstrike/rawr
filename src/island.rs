@@ -499,19 +499,14 @@ fn script_identity(value: &Dynamic) -> Option<&type_def::Identity> {
     }
 }
 
-/// The function that writes a lifted closure, by package, module path and
-/// name: its closures are named `{name}{closure#N}`. `None` for any other
-/// item.
+/// The function that writes a lifted closure, by its path, or a method's
+/// owner and name: its closures are named `{name}{closure#N}`. `None` for
+/// any other item.
 #[cfg(feature = "sync")]
 fn enclosing(key: &item::Key) -> Option<String> {
-    let at = key.name().find("{closure#")?;
-    let mut path = String::from(key.package());
-    for module in key.modules() {
-        path.push_str("::");
-        path.push_str(module);
-    }
-    path.push_str("::");
-    path.push_str(&key.name()[..at]);
+    let mut path = key.to_string();
+    let at = path.find("{closure#")?;
+    path.truncate(at);
     Some(path)
 }
 

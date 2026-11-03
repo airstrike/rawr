@@ -15,6 +15,10 @@ use super::Error;
 pub(crate) struct Plan {
     identity: EntryIdentity,
     selector: Option<[u8; 32]>,
+    /// The definition the selector selects in, which every export alias
+    /// of it shares: a field's or variant's type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    definition: Option<identity::Definition>,
     export: api::Export,
     name: Box<str>,
     origin: representability::origin::Set,
@@ -263,6 +267,7 @@ impl Plan {
         Ok(Self {
             identity: EntryIdentity(*builder.as_bytes()),
             selector: None,
+            definition: None,
             export: clone_export(last.plan.export())?,
             name: clone_str(last.plan.name())?,
             origin: clone_origin(SelectedOrigin {
@@ -316,6 +321,7 @@ impl Plan {
         Ok(Self {
             identity: EntryIdentity(*selected.as_bytes()),
             selector: Some(selected.selector().fingerprint()),
+            definition: selected.definition(),
             export: clone_export(outcome.export())?,
             name: clone_str(outcome.name())?,
             origin: clone_origin(origin)?,
@@ -335,6 +341,7 @@ impl Plan {
         Self {
             identity: EntryIdentity(invocation.identity),
             selector: None,
+            definition: None,
             export: invocation.export.clone(),
             name: invocation.call.name.clone(),
             origin: invocation.origin.clone(),
@@ -372,6 +379,11 @@ impl Plan {
 
     pub(crate) const fn selector(&self) -> Option<&[u8; 32]> {
         self.selector.as_ref()
+    }
+
+    /// The definition the selector selects in, at any of its paths.
+    pub(crate) const fn definition(&self) -> Option<identity::Definition> {
+        self.definition
     }
 
     pub(crate) const fn export(&self) -> &api::Export {

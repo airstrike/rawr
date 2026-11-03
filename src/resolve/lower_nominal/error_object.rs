@@ -166,8 +166,8 @@ impl Parser<'_> {
         let into = self
             .text_into
             .iter()
-            .find(|(at, ..)| *at == value.span)
-            .map(|(.., target)| target.clone());
+            .find(|into| into.span == value.span)
+            .map(|into| into.target.clone());
         if let Some(target) = &into
             && let Ty::Infer(_) = self.inference.resolve(target)
         {

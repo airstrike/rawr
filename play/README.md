@@ -63,8 +63,29 @@ frame.
 A universe runner names a script type by its index in the program's
 definition order (`__RawrScript0`, ..), never by its name, so a snippet
 whose native calls are the universe program's runs whatever its types are
-called. A snippet that makes a native call the universe program doesn't
-make fails to compile, as a program whose native call is missing does.
+called. A snippet's native calls are checked against the uses the runner
+was built for, by path and by the types each call takes. One that the
+universe program doesn't make, such as `text` of an `f64` where the program
+takes text of an `i64`, a `&str` and a `String`, fails to compile where the
+snippet makes it: `this use of a crate isn't among the universe's bindings`.
+So does a crate item the program doesn't use at all. Neither reaches the
+runner's bindings.
+
+The universe program (`play/universe/src/main.rs`) makes the calls iced's
+examples make: the counter, `row!` and `column!` with spacing, text of a
+number, a `&str` and a `String`, a slider of an `f32` and one of `Radians`
+over `Radians::RANGE`, a pick list of a script enum, keys matched in a
+`keyboard::listen` subscription, and an application with a subscription
+and a scale factor in either order. A snippet's first three types meet its
+`Counter`, `Message` and `Language`. The script functions a call takes,
+such as the `view` an `iced::application` takes or a slider's message, may
+have any names: a universe runner keys a function's slot by its place
+alone (`Slot::served`), and the adapter holds whichever function the
+snippet passes. One adapter holds one function at each place, so a snippet
+that passes two different functions to calls of one shape, such as two
+`f32` sliders with two messages, doesn't compile there. To
+cover another call, make it in that program; the runner binds what its
+program uses.
 
 Locally, after `RAWR_UNIVERSE_RUNNER=1 rawr-import run play/universe`:
 

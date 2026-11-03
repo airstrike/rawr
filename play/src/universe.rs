@@ -84,7 +84,7 @@ impl Universe {
     /// the text a program wrote, and the frame an iced program drew.
     pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
         match &self.socket {
-            Some(socket) => run_on(socket, source, limits),
+            Some(socket) => run_on(&self.root, socket, source, limits),
             None => self.serve()?.run(source, limits),
         }
     }
@@ -113,7 +113,11 @@ impl Universe {
         let mut line = String::new();
         let stdout = child.stdout.take().expect("stdout is piped");
         let read = std::io::BufReader::new(stdout).read_line(&mut line);
-        let server = Server { child, socket };
+        let server = Server {
+            child,
+            root: self.root.clone(),
+            socket,
+        };
         match read {
             Ok(_) if line.trim_end() == rawr::play::READY => Ok(server),
             Ok(_) => Err(failed(std::io::Error::other(
@@ -128,6 +132,7 @@ impl Universe {
 #[derive(Debug)]
 pub struct Server {
     child: Child,
+    root: PathBuf,
     socket: PathBuf,
 }
 
@@ -145,7 +150,7 @@ impl Server {
 
     /// Run `source` on it, as [`Universe::run`] does.
     pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
-        run_on(&self.socket, source, limits)
+        run_on(&self.root, &self.socket, source, limits)
     }
 }
 
@@ -193,8 +198,9 @@ impl Served {
     }
 }
 
-/// Run `source` on the server at `socket`.
-fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayError> {
+/// Run `source` on the server at `socket`, which serves the universe at
+/// `root`.
+fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayError> {
     let frame = Frame::new();
     // The run's deadline counts from its fork, a little after this.
     let deadline = std::time::SystemTime::now() + limits.time;
@@ -208,8 +214,9 @@ fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayEr
     if let Some(file) = &limits.deadline {
         env.push((DEADLINE_FILE.into(), file.clone().into()));
     }
+    let wrapped = program(source);
     let request = rawr::play::Request {
-        source: program(source),
+        source: wrapped.clone(),
         env,
         time: limits.time,
         deadline: limits.deadline.clone(),
@@ -221,7 +228,9 @@ fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayEr
     let stderr = String::from_utf8_lossy(&ran.stderr);
     // A program that did not compile exits 1 having printed nothing.
     if ran.status == 1 && !ran.limit && stdout.is_empty() {
-        return Err(PlayError::Compile(stderr.trim_end().to_owned()));
+        let entry = root.join("src").join("main.rs");
+        let report = unmarked(&stderr, &entry.to_string_lossy(), &wrapped, source);
+        return Err(PlayError::Compile(report.trim_end().to_owned()));
     }
     let mut output = Output::default();
     output.write(Stream::Stdout, &stdout);
@@ -236,6 +245,50 @@ fn run_on(socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayEr
         .filter(|image| output.status == 0 && crate::plain::image_kind(image).is_some());
     Ok(output)
 }
+
+/// A report the runner rendered for `program`, the snippet compiled as the
+/// universe's `entry`, as the snippet as written shows it: in `play.rs`,
+/// counting without the marker's line, and with what the wrapping added
+/// cut, as a report on a plain run is.
+fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
+    let wrapped = program.strip_prefix(MARKER).unwrap_or(program);
+    let name = rawr_snippet::SOURCE_NAME;
+    // The line before, in the snippet: the marker is line 1.
+    let earlier = |line: &str| match line.parse::<usize>() {
+        Ok(number) => number.saturating_sub(1).max(1).to_string(),
+        Err(_) => line.to_owned(),
+    };
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let located = [" --> ", " ::: "].into_iter().find_map(|arrow| {
+            let location = line.strip_prefix(arrow)?.strip_prefix(entry)?;
+            Some((arrow, location.strip_prefix(':')?))
+        });
+        if let Some((arrow, location)) = located {
+            let location = location
+                .split('-')
+                .map(|point| match point.split_once(':') {
+                    Some((line, column)) => format!("{}:{column}", earlier(line)),
+                    None => point.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join("-");
+            out.push_str(&format!("{arrow}{name}:{location}"));
+        } else if let Some((gutter, rest)) = line.split_once(" | ")
+            && gutter.trim().parse::<usize>().is_ok()
+        {
+            let width = gutter.len() - 1;
+            out.push_str(&format!(" {:>width$} | {rest}", earlier(gutter.trim())));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    rawr_snippet::report(&out, wrapped, source)
+}
+
+/// The line that marks the snippet as Rawr code for the runner.
+const MARKER: &str = "// rawr\n";
 
 /// The file one run's frame is written to, removed when dropped.
 struct Frame(PathBuf);
@@ -261,7 +314,7 @@ impl Drop for Frame {
 /// a snippet of statements wrapped as `?play` wraps it.
 #[must_use]
 pub fn program(source: &str) -> String {
-    format!("// rawr\n{}", rawr_snippet::plain::program(source))
+    format!("{MARKER}{}", rawr_snippet::plain::program(source))
 }
 
 #[cfg(test)]
@@ -273,5 +326,24 @@ mod tests {
             "// rawr\nfn main() {\n    println!(\"hi\");\n}\n"
         );
         assert!(super::program("1 + 2").starts_with("// rawr\nfn main() {"));
+    }
+
+    /// The runner's report counts the marker's line and names the
+    /// universe's entry; the snippet's names `play.rs` and counts its own.
+    #[test]
+    fn a_compile_error_points_into_the_snippet_as_written() {
+        let source = "fn main() {\n    let x = 1;\n    nothing(x);\n}\n";
+        let program = super::program(source);
+        let rendered = "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings\n \
+             --> /universe/src/main.rs:4:5-4:12\n \
+             4 |     nothing(x);\n   \
+             |     ^^^^^^^ the universe's program doesn't make it\n";
+        assert_eq!(
+            super::unmarked(rendered, "/universe/src/main.rs", &program, source),
+            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings\n \
+             --> play.rs:3:5-3:12\n \
+             3 |     nothing(x);\n   \
+             |     ^^^^^^^ the universe's program doesn't make it\n"
+        );
     }
 }

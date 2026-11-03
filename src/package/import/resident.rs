@@ -76,24 +76,51 @@ impl Engine {
         &self,
         snapshot: &package::snapshot::Snapshot,
     ) -> Result<Outcome, Error> {
+        Ok(match self.compile_covered(snapshot)? {
+            Ok(compiled) => Outcome::Compiled(compiled),
+            Err(_) => Outcome::NeedsPreparation,
+        })
+    }
+
+    /// Compile the snapshot against this compiler's retained carrier alone,
+    /// as a universe runner compiles a snippet: it prepares nothing, so a
+    /// native use the carrier doesn't cover is the program's own error,
+    /// reported where the program makes it.
+    #[doc(hidden)]
+    pub fn compile_package_snapshot_covered(
+        &self,
+        snapshot: &package::snapshot::Snapshot,
+    ) -> Result<Compiled, Error> {
+        self.compile_covered(snapshot)?
+            .map_err(|unbound| Error::Source(unbound.error()))
+    }
+
+    /// The compiled program, or the first native miss: a lookup with
+    /// native provenance, or a use the carrier doesn't cover.
+    fn compile_covered(
+        &self,
+        snapshot: &package::snapshot::Snapshot,
+    ) -> Result<Result<Compiled, captured::Unbound>, Error> {
         let native = self.imported_native.as_ref().ok_or(Error::Unowned)?;
         let mut attempt = account::support::Pending::transform(native.attempt()?);
         let output = captured::Output::transform_plain(self, snapshot, &mut attempt);
         let output = match output {
             Ok(output) => output,
-            Err(captured::Error::NativeMiss(_)) => return Ok(Outcome::NeedsPreparation),
+            Err(captured::Error::NativeMiss(error)) => {
+                return Ok(Err(captured::Unbound::missed(error)));
+            }
             Err(captured::Error::Source(error)) => return Err(Error::Source(error)),
             Err(captured::Error::Resource(error)) => return Err(Error::Resource(error)),
         };
         let covered = match output.cover(native.carrier()) {
-            captured::Coverage::NeedsPreparation => return Ok(Outcome::NeedsPreparation),
+            captured::Coverage::Uncovered(unbound) => return Ok(Err(*unbound)),
             captured::Coverage::Matched(covered) => *covered,
         };
         let (output, carrier, coverage) = covered.into_parts();
         // Complete the one contribution retained by this exact executable and
         // every copy of its closure-captured compiler support before publication.
         let candidate = output.candidate.retain_imported(attempt.finish());
-        Ok(Outcome::Compiled(Compiled {
+        Ok(Ok(Compiled {
             candidate,
             carrier,
             coverage,

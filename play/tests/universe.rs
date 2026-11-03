@@ -365,3 +365,213 @@ pub fn main() -> iced::Result {{
     assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
+
+/// A snippet's state, message and enum, named otherwise than the
+/// universe program's, as iced's gradient, pick_list and stopwatch write
+/// theirs (#863); [`CONTROLS`] and [`KEYS`] add a view and a `main`.
+const APP_TYPES: &str = r#"use iced::keyboard::{self, key};
+use iced::widget::{button, column, pick_list, row, slider, text, Widget};
+use iced::{window, Center, Radians, Subscription};
+
+#[derive(Default)]
+struct App {
+    count: i64,
+    volume: f32,
+    fruit: Option<Fruit>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Msg {
+    Up,
+    Down,
+    Volume(f32),
+    Angle(Radians),
+    Pick(Fruit),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Fruit {
+    #[default]
+    Apple,
+    Pear,
+}
+
+impl Fruit {
+    const ALL: &[Fruit] = &[Fruit::Apple, Fruit::Pear];
+}
+
+impl std::fmt::Display for Fruit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl App {
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Up => self.count += 1,
+            Msg::Down => self.count -= 1,
+            Msg::Volume(volume) => self.volume = volume,
+            Msg::Angle(angle) => self.volume = angle.0,
+            Msg::Pick(fruit) => self.fruit = Some(fruit),
+        }
+    }
+"#;
+
+/// Text of a `String`, a row, spacing, sliders of an `f32` and of
+/// `Radians`, and a pick list.
+const CONTROLS: &str = r#"
+    fn view(&self) -> impl Widget<Msg> {
+        let angle = Radians(self.volume);
+        column![
+            text(format!("{} and {:.2} rad", self.count, angle.0)),
+            text("Pick a fruit").size(24),
+            row![
+                button("-").on_press(Msg::Down),
+                text(self.count),
+                button("+").on_press(Msg::Up),
+            ]
+            .spacing(8)
+            .align_y(Center),
+            slider(0.0..=100.0, self.volume, Msg::Volume),
+            slider(Radians::RANGE, angle, Msg::Angle).step(0.01),
+            pick_list(self.fruit, Fruit::ALL, Fruit::to_string)
+                .on_select(Msg::Pick)
+                .placeholder("Fruit..."),
+        ]
+        .spacing(16)
+        .padding(20)
+        .align_x(Center)
+    }
+}
+
+fn main() -> iced::Result {
+    iced::run(App::update, App::view)
+}
+"#;
+
+/// Keys matched from `keyboard::listen`, batched with frames, in an
+/// application with a subscription and a scale factor.
+const KEYS: &str = r#"
+    fn view(&self) -> impl Widget<Msg> {
+        column![
+            text(format!("{} (press space)", self.count)),
+            row![button("-").on_press(Msg::Down), button("+").on_press(Msg::Up)].spacing(8),
+        ]
+        .spacing(16)
+        .padding(20)
+        .align_x(Center)
+    }
+
+    fn subscription(&self) -> Subscription<Msg> {
+        let frames = if self.count < 3 {
+            window::frames().map(|_| Msg::Up)
+        } else {
+            Subscription::none()
+        };
+        let keys = keyboard::listen().filter_map(|event| {
+            let keyboard::Event::KeyPressed { key, .. } = event else {
+                return None;
+            };
+            match key.as_ref() {
+                keyboard::Key::Named(key::Named::Space) => Some(Msg::Up),
+                keyboard::Key::Character("d") => Some(Msg::Down),
+                _ => None,
+            }
+        });
+        Subscription::batch(vec![frames, keys])
+    }
+
+    fn scale_factor(&self) -> f32 {
+        1.5
+    }
+}
+
+fn main() -> iced::Result {
+    iced::application(App::default, App::update, App::view)
+        .subscription(App::subscription)
+        .scale_factor(App::scale_factor)
+        .run()
+}
+"#;
+
+/// The calls iced's recent examples make draw on the universe (#863).
+#[test]
+#[ignore = "needs the universe runner"]
+fn text_rows_sliders_and_a_pick_list_answer_with_their_frame() {
+    let output = output(&run(&format!("{APP_TYPES}{CONTROLS}")).stdout);
+    assert_eq!(output.status, 0, "{}", output.text());
+    let png = output.frame.expect("the controls drew a frame");
+    assert_eq!(rawr_play::plain::image_kind(&png), Some("png"));
+    assert_eq!(png_size(&png), (1024, 768));
+}
+
+/// A subscription of keys and frames, with a scale factor after it (#863).
+#[test]
+#[ignore = "needs the universe runner"]
+fn keys_and_frames_with_a_scale_factor_answer_with_a_gif() {
+    let output = output(&run(&format!("{APP_TYPES}{KEYS}")).stdout);
+    assert_eq!(output.status, 0, "{}", output.text());
+    let image = output.frame.expect("the counter drew");
+    assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+    let decoder = gif::DecodeOptions::new()
+        .read_info(image.as_slice())
+        .unwrap();
+    assert_eq!((decoder.width(), decoder.height()), (1536, 1152));
+}
+
+/// A call the universe program doesn't make, at the types it makes it or
+/// at all, fails to compile where the snippet makes it, and never reaches
+/// the runner's bindings (#863).
+#[test]
+#[ignore = "needs the universe runner"]
+fn a_call_the_universe_does_not_make_does_not_compile() {
+    let server = server();
+    for (view, message) in [
+        // `text` of an `f64`: the universe takes text of an `i64`, a
+        // `&str` and a `String`.
+        (
+            "column![text(self.volume as f64), button(\"Up\").on_press(Msg::Up)]",
+            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings",
+        ),
+        // A widget it doesn't use is not in its bindings at all, as rustc
+        // says of a missing item.
+        (
+            "column![iced::widget::checkbox(self.count > 0)]",
+            "error[E0425]: cannot find function `checkbox` in module `iced::widget`",
+        ),
+        // A method it doesn't call.
+        (
+            "column![text(self.count)].max_width(300)",
+            "error[E0599]: no method named `max_width` found for `Column`",
+        ),
+        // Two functions where the universe's one adapter holds one: a
+        // second slider of an `f32` with another message.
+        (
+            "column![slider(0.0..=1.0, self.volume, Msg::Volume), \
+             slider(0.0..=1.0, self.volume, |volume| Msg::Volume(volume / 2.0))]",
+            "error[RAWR-RESOLVE-HOST-OPERATION]: this use of a crate isn't among the universe's bindings",
+        ),
+    ] {
+        let source = format!(
+            "{APP_TYPES}
+    fn view(&self) -> impl Widget<Msg> {{
+        {view}
+    }}
+}}
+
+fn main() -> iced::Result {{
+    iced::run(App::update, App::view)
+}}
+"
+        );
+        let line = source.lines().position(|line| line.contains(view)).unwrap() + 1;
+        let rawr_play::PlayError::Compile(error) = server
+            .run(&source, &limits(30_000))
+            .expect_err("a call outside the universe compiles");
+        assert!(
+            error.starts_with(message) && error.contains(&format!(" --> play.rs:{line}:")),
+            "{error}"
+        );
+    }
+}

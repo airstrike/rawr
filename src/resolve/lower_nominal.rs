@@ -1900,8 +1900,12 @@ pub(crate) struct ImportedUse {
     /// The item takes a script closure for its `F: FnOnce` parameter.
     pub(crate) callable: bool,
     /// The script functions that fill its callable parameters as slots
-    /// (D594).
+    /// (D594), as its instance keys them ([`Slot::served`]).
+    ///
+    /// [`Slot::served`]: rawr_import::surface::instance::Slot::served
     pub(crate) slots: Box<[rawr_import::surface::instance::Slot]>,
+    /// The same slots by the functions that fill them.
+    pub(crate) fillers: Box<[rawr_import::surface::instance::Slot]>,
     /// The proof-backed application this use calls, when it is one.
     pub(crate) application: Option<[u8; 32]>,
     pub(crate) span: Span,
@@ -10830,6 +10834,24 @@ fn format_placeholder(index: usize) -> String {
     format!("{head:_<PENDING_FORMAT_WIDTH$}")
 }
 
+/// A `text.into()` whose target the use site gives once inference has it:
+/// a `String`, or a std type of std's `From` of text (`Cow<str>`), written
+/// over the placeholder before the text's `(text)`.
+struct TextInto {
+    span: Span,
+    source: Ty,
+    target: Ty,
+    placeholder: String,
+}
+
+/// The placeholder of the `text.into()` numbered `index`.
+fn text_into_placeholder(index: usize) -> String {
+    // One more than any helper name, for the `(` written after it.
+    let head = format!("__rawr_nominal_text_into_{index:010}");
+    let width = head.len() + 1;
+    format!("{head:_<width$}")
+}
+
 struct PendingConversion {
     placeholder: String,
     source: Ty,
@@ -11868,10 +11890,9 @@ struct Parser<'a> {
     pending_parses: Vec<(Ty, Ty, Span, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
-    /// The `text.into()` calls, each one's span, the text's type and the
-    /// target, which `Err(..)` may box as `dyn Error` (`error_object.rs`)
-    /// and the use site gives.
-    text_into: Vec<(Span, Ty, Ty)>,
+    /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
+    /// Error` (`error_object.rs`) and the use site gives.
+    text_into: Vec<TextInto>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -17196,28 +17217,35 @@ impl<'a> Parser<'a> {
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
         // A `text.into()` no use gives a target: rustc's E0283, as std has
-        // many `From<String>` impls. A target other than the text's own
-        // type or a `String` is one rawr doesn't convert into.
-        for (at, source, target) in std::mem::take(&mut self.text_into) {
-            match self.inference.resolve(&target) {
+        // many `From<String>` impls. Its target is the text's own type, a
+        // `String`, or a std type of std's `From` of text, which an `if`'s
+        // other branch may give (`Cow<str>`); another is a mismatch.
+        for into in std::mem::take(&mut self.text_into) {
+            let helper = match self.inference.resolve(&into.target) {
                 Ty::Infer(_) => {
                     return Err(Error::StdPath {
                         code: "E0283",
                         message: "type annotations needed".into(),
                         label: Some("type must be known at this point".into()),
                         note: None,
-                        reference: at,
+                        reference: into.span,
                     });
                 }
-                target if target == Ty::String || target == source => {}
-                target => {
-                    return Err(Error::TypeMismatch {
-                        expected: target.name(&self.models),
-                        actual: Ty::String.name(&self.models),
-                        expression: at,
-                    });
-                }
-            }
+                target if target == Ty::String || target == into.source => String::new(),
+                target => match self.std_conversion(&target, &into.source) {
+                    Some(op) => op
+                        .map(|op| self.push_op(Op::Prelude(op)))
+                        .unwrap_or_default(),
+                    None => {
+                        return Err(Error::TypeMismatch {
+                            expected: target.name(&self.models),
+                            actual: Ty::String.name(&self.models),
+                            expression: into.span,
+                        });
+                    }
+                },
+            };
+            self.write_over(&into.placeholder, &format!("{helper}("));
         }
         self.finish_formats()?;
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
@@ -17675,13 +17703,17 @@ impl<'a> Parser<'a> {
                 let instance = self.imported_instance_key(
                     &item,
                     &requirements,
-                    &self.crossing_slots(
-                        &item,
-                        operands
-                            .iter()
-                            .filter(|(_, _, receiver)| !*receiver)
-                            .map(|(ty, _, _)| ty.clone()),
-                    ),
+                    &self
+                        .crossing_slots(
+                            &item,
+                            operands
+                                .iter()
+                                .filter(|(_, _, receiver)| !*receiver)
+                                .map(|(ty, _, _)| ty.clone()),
+                        )
+                        .iter()
+                        .map(|slot| slot.served())
+                        .collect::<Box<[_]>>(),
                 );
                 let operands = operands
                     .iter()
@@ -28582,7 +28614,11 @@ impl<'a> Parser<'a> {
             }
         } else {
             let block_like = self.peek_block_like();
-            let value = self.parse_expr_expecting(Some(&output))?;
+            let mut value = self.parse_expr_expecting(Some(&output))?;
+            // `return *p = P::default()`: the assignment is the value, `()`.
+            if assignment_token(&self.peek()) {
+                value = self.parse_assignment_expr(value)?;
+            }
             let mut value = self.returned_place(value, block_like)?;
             end = value.span;
             self.coerce_expr(&output, &mut value)?;
@@ -28606,6 +28642,18 @@ impl<'a> Parser<'a> {
         self.exit_drop_uses(self.drop_base);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
+    }
+
+    /// `place = value` or a compound assignment after `place`, as an
+    /// expression: Rust's assignment expression, whose type is `()`.
+    fn parse_assignment_expr(&mut self, place: ParsedExpr) -> Result<ParsedExpr, Error> {
+        let start = place.span;
+        let (rendered, end) = self.parse_assignment(place)?;
+        Ok(self.operator_expr(
+            rendered.surrounded("{ ", " }"),
+            Ty::Unit,
+            span(start.start(), end.end()),
+        ))
     }
 
     /// What a function copying `&mut` parameters back out returns for
@@ -35316,10 +35364,14 @@ impl<'a> Parser<'a> {
         }
         if matches!(self.peek(), Token::Multiply) {
             let start = self.next().1;
-            let mut operand = self.parse_operand()?;
+            let operand = self.parse_operand()?;
             // `*r` reads what the holder `r` refers to: its use's place.
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
+            // `*w` of a program type is `*Deref::deref(&w)`, and
+            // `*DerefMut::deref_mut(&mut w)` where it is assigned, as
+            // rustc's place deref is.
+            let (mut operand, dereferenced) = self.program_deref(operand)?;
             let resolved = self.inference.resolve(&operand.ty);
             let target = match resolved.clone() {
                 Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => target,
@@ -35397,17 +35449,19 @@ impl<'a> Parser<'a> {
             // A move out of `*r` or `*rc` is rustc's E0507; a `Box` gives
             // its value up.
             let behind = match self.inference.resolve(&base.1) {
-                Ty::Reference { mutable: true, .. } => Some("behind a mutable reference"),
-                Ty::Reference { .. } => Some("behind a shared reference"),
-                Ty::Counted(Counter::Rc, _) => Some("of an `Rc`"),
-                Ty::Counted(Counter::Arc, _) => Some("of an `Arc`"),
+                _ if let Some(owner) = &dereferenced => Some(format!("dereference of `{owner}`")),
+                Ty::Reference { mutable: true, .. } => {
+                    Some("a value behind a mutable reference".into())
+                }
+                Ty::Reference { .. } => Some("a value behind a shared reference".into()),
+                Ty::Counted(Counter::Rc, _) => Some("a value of an `Rc`".into()),
+                Ty::Counted(Counter::Arc, _) => Some("a value of an `Arc`".into()),
                 _ => None,
             };
-
             if let Some(behind) = behind {
                 self.unmovable.insert(
                     operand.span,
-                    ("E0507", format!("cannot move out of a value {behind}")),
+                    ("E0507", format!("cannot move out of {behind}")),
                 );
             }
             // `*x` of a `&&T` is the `&T` it refers to.
@@ -44067,13 +44121,7 @@ impl<'a> Parser<'a> {
                     }
                     return Ok(value);
                 }
-                let start = value.span;
-                let (rendered, end) = self.parse_assignment(value)?;
-                Ok(self.operator_expr(
-                    rendered.surrounded("{ ", " }"),
-                    Ty::Unit,
-                    span(start.start(), end.end()),
-                ))
+                self.parse_assignment_expr(value)
             })
             // A place the body changes through a field (`|x| p.b.push(x)`)
             // is reached in the body, at each call, not where the closure
@@ -44332,12 +44380,7 @@ impl<'a> Parser<'a> {
         let ty = match &self.callable {
             Some(callable) => {
                 self.closure_count += 1;
-                let key = crate::item::Key::new(
-                    callable.package().into(),
-                    callable.modules().into(),
-                    format!("{}{{closure#{}}}", callable.name(), self.closure_count).into(),
-                    crate::item::Kind::Function,
-                );
+                let key = crate::item::Key::closure(callable, self.closure_count);
                 // Passed to the host, the closure is its generated function
                 // with each capture's value bound where it is written.
                 let mut lifted_parameters = Vec::new();
@@ -47399,6 +47442,20 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Whether `owner` is a path through a crate's module a `use`
+        // binds: what it names, or misses, is the crate's by that path.
+        #[cfg(feature = "rust-import")]
+        let through_module = qualified_model.is_none()
+            && segments.len() > 1
+            && self.models.import(&segments[0].0).is_some_and(|binding| {
+                matches!(
+                    binding.target,
+                    item::Import::Module | item::Import::ModuleItem { .. }
+                ) && matches!(
+                    self.models.host.entry(&binding.qualified),
+                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                )
+            });
         // An imported type named through an imported module, as
         // `pane_grid::Axis` after `use iced::widget::pane_grid;`, is the
         // type at the module's path.
@@ -47430,6 +47487,12 @@ impl<'a> Parser<'a> {
                     // as the_matrix's `canvas::Cache::with_group`: that
                     // type's, as `Cache::with_group` is after `use` (T327).
                     definition.path().as_str().into()
+                } else if through_module {
+                    // A module nested under the imported one, at any depth,
+                    // as `operation::scrollable::snap_to` after `use
+                    // iced::widget::operation;` (#851): the path through
+                    // the module, as rustc resolves it.
+                    through.into()
                 } else {
                     owner
                 }
@@ -47564,7 +47627,7 @@ impl<'a> Parser<'a> {
             let native = segments.first().is_some_and(|(root, _)| {
                 self.native_site().is_some_and(|site| {
                     site.missing_binding(&self.models.host, &format!("{owner}::{member}"))
-                }) && self.models.import(root).is_none()
+                }) && (through_module || self.models.import(root).is_none())
                     && self.models.get(root).is_none()
                     && self.models.function(root).is_none()
                     && !self.bindings.contains_key(root)
@@ -47628,15 +47691,16 @@ impl<'a> Parser<'a> {
             // `$crate::module::function` is: the whole path is unresolved,
             // so the importer is asked for all of it.
             #[cfg(feature = "rust-import")]
-            let crate_path = segments.first().is_some_and(|(root, _)| {
-                matches!(
-                    self.models.host.entry(root),
-                    Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
-                ) && self.models.import(root).is_none()
-                    && self.models.get(root).is_none()
-                    && self.models.function(root).is_none()
-                    && !self.bindings.contains_key(root)
-            });
+            let crate_path = through_module
+                || segments.first().is_some_and(|(root, _)| {
+                    matches!(
+                        self.models.host.entry(root),
+                        Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                    ) && self.models.import(root).is_none()
+                        && self.models.get(root).is_none()
+                        && self.models.function(root).is_none()
+                        && !self.bindings.contains_key(root)
+                });
             #[cfg(feature = "rust-import")]
             let error = match error {
                 Error::UnknownType { name, .. }
@@ -50046,10 +50110,22 @@ impl<'a> Parser<'a> {
         }
         // Text converts into a `String`, through `From<&str>` or
         // `From<T> for T` (or into a boxed error, `box_returned_error`):
-        // the target the use site gives, which rustc needs (E0283).
+        // the target the use site gives, which rustc needs (E0283), or
+        // one inference gives later: `placeholder(text))`, the
+        // placeholder written as the conversion once it is known.
         if source.is_text() {
             let target = self.inference.fresh();
-            self.text_into.push((value.span, source, target.clone()));
+            let placeholder = text_into_placeholder(self.text_into.len());
+            let mut rendered = origin::Fragment::call(&placeholder, [value.rendered_source()]);
+            rendered.push_text(")");
+            value.source = rendered;
+            value.prelude = origin::Fragment::default();
+            self.text_into.push(TextInto {
+                span: value.span,
+                source,
+                target: target.clone(),
+                placeholder,
+            });
             value.ty = target;
         }
         Ok(value.retain_origin())
@@ -51168,6 +51244,7 @@ impl<'a> Parser<'a> {
             mappers: Box::default(),
             callable: false,
             slots: Box::default(),
+            fillers: Box::default(),
             application: None,
             span,
         });
@@ -51524,7 +51601,8 @@ impl<'a> Parser<'a> {
             functions: functions.into_boxed_slice(),
             mappers: mappers.into_boxed_slice(),
             callable: item.signature().takes_callable(),
-            slots,
+            slots: slots.iter().map(|slot| slot.served()).collect(),
+            fillers: slots,
             application: item.application().copied(),
             span,
         });

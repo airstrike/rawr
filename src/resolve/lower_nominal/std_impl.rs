@@ -964,6 +964,51 @@ impl Parser<'_> {
         target.map(|target| (target, call))
     }
 
+    /// `*value` of a program type with `Deref`: `value` becomes the
+    /// reference its `deref` returns, or its `deref_mut` (a place below
+    /// `value`) when an assignment follows, as rustc's place deref is
+    /// `*Deref::deref(&value)` or `*DerefMut::deref_mut(&mut value)`, with
+    /// the type's name; `value` itself for another type.
+    pub(super) fn program_deref(
+        &mut self,
+        value: ParsedExpr,
+    ) -> Result<(ParsedExpr, Option<ImmutableString>), Error> {
+        let ty = self.inference.resolve(&value.ty);
+        let Ty::Script(id, _) = ty else {
+            return Ok((value, None));
+        };
+        if !matches!(
+            self.deref_target(&ty, false),
+            Some((_, DerefCall::Program(_)))
+        ) {
+            return Ok((value, None));
+        }
+        let name: ImmutableString = self.models.definition(id).name().into();
+        let assigned = assignment_token(&self.peek());
+        if assigned && self.deref_target(&ty, true).is_none() {
+            return Err(Error::BorrowConflict {
+                code: "E0594",
+                message: format!("cannot assign to data in dereference of `{name}`").into(),
+                access: value.span,
+                borrow: Span::NONE,
+            });
+        }
+        let member = if assigned { "deref_mut" } else { "deref" };
+        let at = value.span;
+        match self.call_owner_method(
+            value,
+            id,
+            name.clone(),
+            &member.into(),
+            at,
+            Vec::new(),
+            at.end(),
+        )? {
+            Ok(called) => Ok((called, Some(name))),
+            Err(_) => unreachable!("`Deref` has `deref` and `DerefMut` `deref_mut`"),
+        }
+    }
+
     /// One deref step of the reference `reference`: `&Target` of `&T`,
     /// shared when `shared` (rustc's reborrow of a `&mut T` before it
     /// derefs), with the call it makes.
