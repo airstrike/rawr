@@ -393,3 +393,15 @@ main();
     assert_eq!(output, "\"x\" \"\" \"y\" \"f\" s\na blk one\n");
 }
 
+#[test]
+fn language_a_script_value_of_a_cow_shows_its_payload() {
+    // A `Cow`'s `Debug` and `Display` are its payload's, as std's are, for
+    // a script's final value as for `{:?}` (#861).
+    let value = Engine::new()
+        .eval::<crate::Dynamic>(
+            "use std::borrow::Cow;\nlet c: Cow<str> = Cow::Borrowed(\"a\");\nc\n",
+        )
+        .unwrap();
+    assert_eq!(format!("{value:?} {value}"), "\"a\" a");
+}
+

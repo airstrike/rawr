@@ -1,6 +1,7 @@
 //! Helper module which defines the [`Dynamic`] data type.
 
 use super::nominal;
+use crate::resolve::lower_nominal::cow::Value as Cow;
 use crate::{ExclusiveRange, FnPtr, ImmutableString, InclusiveRange, INT};
 use std::{
     any::{type_name, Any, TypeId},
@@ -544,6 +545,11 @@ impl fmt::Display for Dynamic {
                     };
                 }
 
+                // A `Cow` displays as its payload, as std's impl does.
+                if let Some(cow) = _value_any.downcast_ref::<Cow>() {
+                    return fmt::Display::fmt(cow.payload(), f);
+                }
+
                 // An imported value its type prints with Rust's `Display`.
                 if let Some(text) = crate::host::display::text(_value_any) {
                     return f.write_str(&text);
@@ -689,6 +695,11 @@ impl fmt::Debug for Dynamic {
                     } else {
                         write!(f, "{}..={}", range.start(), range.end())
                     };
+                }
+
+                // A `Cow`'s `Debug` is its payload's, as std's impl is.
+                if let Some(cow) = _value_any.downcast_ref::<Cow>() {
+                    return fmt::Debug::fmt(cow.payload(), f);
                 }
 
                 // A host type its facade prints with Rust's `Debug`.
