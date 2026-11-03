@@ -112,8 +112,8 @@ impl Identity {
     /// outside the window `window.rs` names.
     fn supported(&self, source: &Source) -> Result<()> {
         let fix = format!(
-            "Name a nightly from {} in the project's `rust-toolchain.toml`, or name none to \
-             read with rawr-import's pinned `{}`",
+            "Name a nightly from {} in the project's `rust-toolchain.toml`, or a stable \
+             release or none to read with rawr-import's pinned `{}`",
             super::window::RANGE,
             super::CHANNEL
         );

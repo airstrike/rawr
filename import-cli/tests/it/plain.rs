@@ -1216,11 +1216,7 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         .arg("run")
         .arg(&project)
         .env("RAWR_HOME", &home)
-        // rustup's default toolchain, as `cargo` passes it on: the project
-        // names none, so rawr reads its API with the pinned nightly, and
-        // the runner builds on stable.
         .env("RUSTUP_TOOLCHAIN", "stable")
-        .env("RUSTUP_TOOLCHAIN_SOURCE", "default")
         .env_remove("RUSTC")
         .env_remove("CARGO_BUILD_RUSTC")
         .env_remove("CARGO_TARGET_DIR")

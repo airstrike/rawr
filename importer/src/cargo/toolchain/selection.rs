@@ -5,8 +5,10 @@
 //! the commands it runs (rustup marks one it chose by default with
 //! `RUSTUP_TOOLCHAIN_SOURCE=default`, and that one names nothing); then,
 //! from the project's directory up, a `rustup override set` directory and a
-//! `rust-toolchain` or `rust-toolchain.toml` file. A project that names none
-//! reads with the pinned nightly, not rustup's default.
+//! `rust-toolchain` or `rust-toolchain.toml` file. A project that names none,
+//! or names a stable or beta release, reads with the pinned nightly, not
+//! rustup's default: only a nightly has rustc's private crates. Its own code
+//! still builds on the toolchain it names.
 
 use std::fs;
 use std::io;
@@ -73,14 +75,24 @@ impl Selection {
             .strip_suffix(host)
             .and_then(|name| name.strip_suffix('-'))
             .unwrap_or(name);
+        let release = name.starts_with(|first: char| first.is_ascii_digit())
+            || ["stable", "beta"]
+                .iter()
+                .any(|channel| name == *channel || name.starts_with(&format!("{channel}-")));
+        if release {
+            return Self {
+                name: super::CHANNEL.into(),
+                source: Source::Pinned,
+            };
+        }
         Self {
             name: name.into(),
             source,
         }
     }
 
-    /// The pinned nightly, which a project that names no toolchain reads
-    /// with.
+    /// The pinned nightly, which a project that names no toolchain, or a
+    /// release, reads with.
     #[cfg(test)]
     pub(crate) fn pinned() -> Self {
         Self {
@@ -279,6 +291,24 @@ mod tests {
                     ("RUSTUP_TOOLCHAIN", "stable-aarch64-apple-darwin"),
                     ("RUSTUP_TOOLCHAIN_SOURCE", "default"),
                 ],
+            ),
+            Selection::pinned()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_stable_or_beta_project_reads_with_the_pinned_nightly() {
+        let root = scratch("release");
+        let file = root.join("workspace/project/rust-toolchain.toml");
+        for channel in ["stable", "beta", "1.95.0", "1.96", "stable-2026-10-30"] {
+            fs::write(&file, format!("[toolchain]\nchannel = \"{channel}\"\n")).unwrap();
+            assert_eq!(resolve(&root, &[]), Selection::pinned(), "{channel}");
+        }
+        assert_eq!(
+            resolve(
+                &root,
+                &[("RUSTUP_TOOLCHAIN", "stable-aarch64-apple-darwin")]
             ),
             Selection::pinned()
         );
