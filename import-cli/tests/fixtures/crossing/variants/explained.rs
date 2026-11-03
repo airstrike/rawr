@@ -4,8 +4,7 @@
 // result sits in `column!` as it is, as ferris's image does, and another
 // is boxed, as layout's `.explain(color).boxed()`.
 
-use events::controls::slider;
-use events::widgets::{button, column, text, Framed, Widget};
+use events::widgets::{button, column, rule, text, Framed, Widget};
 
 #[derive(Default)]
 struct Counter {
@@ -16,7 +15,6 @@ struct Counter {
 enum Message {
     Increment,
     Decrement,
-    Slid(u8),
 }
 
 impl Counter {
@@ -24,20 +22,19 @@ impl Counter {
         match message {
             Message::Increment => self.value += 1,
             Message::Decrement => self.value -= 1,
-            Message::Slid(_) => {}
         }
     }
 
     fn view(&self) -> impl Widget<Message> {
         let explained = if self.value > 1 {
-            slider(1..=100, 50, Message::Slid).explain(0x0000ff_u32).boxed()
+            rule(2, Message::Decrement).explain(0x0000ff_u32).boxed()
         } else {
-            slider(1..=100, 50, Message::Slid).boxed()
+            rule(2, Message::Decrement).boxed()
         };
         column![
             button("Increment").on_press(Message::Increment),
             text(self.value).size(50),
-            slider(1..=10, 5, Message::Slid).explain(0xffffff_u32),
+            rule(1, Message::Increment).explain(0xffffff_u32),
             explained,
             button("Decrement").on_press(Message::Decrement),
         ]

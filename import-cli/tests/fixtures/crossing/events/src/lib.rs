@@ -633,6 +633,28 @@ pub mod widgets {
         }
     }
 
+    /// A line `width` wide that sends a message when pressed, a widget at
+    /// the crate's theme and renderer.
+    pub struct Rule<Message> {
+        width: u16,
+        on_press: Message,
+    }
+
+    /// A line `width` wide that sends `on_press` when pressed.
+    pub fn rule<Message>(width: u16, on_press: Message) -> Rule<Message> {
+        Rule { width, on_press }
+    }
+
+    impl<Message: Clone> Widget<Message> for Rule<Message> {
+        fn labels(&self, labels: &mut Vec<String>) {
+            labels.push(format!("rule {}", self.width));
+        }
+
+        fn press(&self, label: &str) -> Option<Message> {
+            (label == "rule").then(|| self.on_press.clone())
+        }
+    }
+
     /// The widget `Framed::explain` gives, which no public path names.
     mod explained {
         pub struct Explain<W> {
