@@ -90,6 +90,28 @@ fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
     if placed.is_empty() {
         return None;
     }
+    // A package the runner keeps out of its workspace is kept out at the
+    // path its dependency now names.
+    if let Some(exclude) = document
+        .get_mut("workspace")
+        .and_then(|workspace| workspace.get_mut("exclude"))
+        .and_then(Item::as_array_mut)
+    {
+        for entry in exclude.iter_mut() {
+            let Some(path) = entry
+                .as_str()
+                .map(Path::new)
+                .filter(|path| path.is_absolute())
+            else {
+                continue;
+            };
+            let relative = under(&normalize(path))
+                .or_else(|| fs::canonicalize(path).ok().and_then(|path| under(&path)));
+            if let Some(relative) = relative {
+                *entry = slashed(&relative).into();
+            }
+        }
+    }
 
     // Every package Cargo reaches from those through relative paths, and
     // the workspace's own dependencies, must be placed too.
@@ -320,6 +342,36 @@ mod tests {
         );
         // A second pass changes nothing.
         assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A package the runner keeps out of its workspace, such as the target
+    /// of the project's `[patch]`, is excluded at the path its dependency
+    /// names through the link.
+    #[test]
+    fn an_excluded_path_is_named_through_the_link_too() {
+        let root = scratch("exclude");
+        let project = root.join("app");
+        write(
+            &project.join("Cargo.toml"),
+            "[package]\nname = \"app\"\n\n[workspace]\n",
+        );
+        write(
+            &project.join("shell/Cargo.toml"),
+            "[package]\nname = \"shell\"\n",
+        );
+        let runner = project.join("target/rawr/runner");
+        let shell = project.join("shell");
+        let manifest = format!(
+            "[workspace]\nexclude = [\"{0}\"]\n\n[dependencies]\nshell = {{ path = \"{0}\" }}\n",
+            shell.display()
+        );
+        let mirrored = super::mirror(&project, &runner, &manifest);
+        assert!(mirrored.contains("exclude = [\"shell\"]"), "{mirrored}");
+        assert!(
+            mirrored.contains("shell = { path = \"shell\" }"),
+            "{mirrored}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
