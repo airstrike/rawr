@@ -8,6 +8,18 @@
   },
   "releases": [
     {
+      "version": "0.3.123",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"`*w` on your type with `Deref` reads through its `deref`, `*w = x` writes through its `deref_mut` (rustc's E0594 without one, E0507 for a move out), and a `DerefMut` impl may write `&mut Self::Target`.","issues":[858,859]},
+        {"text":"A text `.into()` becomes the type its use needs once inference has it, such as a `Cow<str>` from the other branch of an `if`, and `return *p = P::default()` is accepted as rustc accepts it.","issues":[860,862]},
+        {"text":"A `Cow` that ends a ?play snippet prints its text, not a Rust type name.","issues":[861]},
+        {"text":"A path through a crate module a `use` binds reaches the modules nested under it at any depth and through re-exports, as `operation::scrollable::snap_to(..)` after `use iced::widget::operation;`.","issues":[851]},
+        {"text":"A crate function that takes a borrowing `impl Trait` result by value, as `fn wrap(shown: impl Show) -> impl Show`, takes it with the values it borrows, which stay borrowed as long as its result lives, as rustc has it.","issues":[856]},
+        {"text":"?play refuses a call its universe doesn't bind when it checks the snippet, with an ordinary error at the call, instead of panicking at run time, and its universe now covers spacing, text of a `String`, sliders including `Radians::RANGE`, `pick_list`, `keyboard::Key` matching and a subscription with a scale factor.","issues":[863]}
+      ]
+    },
+    {
       "version": "0.3.122",
       "date": "2026-11-03",
       "entries": [
