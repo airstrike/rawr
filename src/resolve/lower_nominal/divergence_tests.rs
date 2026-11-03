@@ -63,3 +63,35 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn language_a_mut_self_method_on_a_local_not_declared_mut_is_e0596() {
+    // rustc's E0596 for a program type's `&mut self` method, as for std's
+    // (#774).
+    let report = refused(
+        r#"
+struct Counter {
+    n: i32,
+}
+
+impl Counter {
+    fn bump(&mut self) {
+        self.n += 1;
+    }
+}
+
+fn main() {
+    let c = Counter { n: 0 };
+    c.bump();
+    println!("{}", c.n);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `c` as mutable, as it is not declared as mutable\n"
+        ),
+        "{report}"
+    );
+}

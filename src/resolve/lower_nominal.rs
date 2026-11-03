@@ -45025,6 +45025,21 @@ impl<'a> Parser<'a> {
                 mutation: operation,
                 receiver: binding.declaration,
             },
+            // The method's `&mut self` borrows the local itself: rustc's
+            // E0596, as for std's methods.
+            BindingKind::Local | BindingKind::Invocation
+                if matches!(writeback, Writeback::Direct) =>
+            {
+                Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                }
+            }
             BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
                 binding: name,
                 mutation: operation,
