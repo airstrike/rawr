@@ -2,7 +2,8 @@
 // iced's bezier_tool and game_of_life: a canvas whose program sends its
 // own messages, and `.map(Message::Curve)` turns them into the program's.
 // The crate's `map` names its callable's type in its output, `Map<Self, F,
-// Message>`, and `column!` boxes that `Map` beside the controls, through
+// Message>`, from a crate it doesn't re-export, as iced's `Map` is
+// iced_core's. `column!` boxes that `Map` beside the controls, through
 // the impl of `Widget` for `Map<W, F, A>`, whose parameters its type takes
 // in another order than the impl declares them.
 
