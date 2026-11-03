@@ -28,6 +28,14 @@ pub(crate) enum Std {
     Cow,
     /// alloc's `Box<T>`: its value, which rawr holds as itself.
     Box,
+    /// alloc's `Rc<T>` (`arc` false) or `Arc<T>` of a crate's `T`: rawr's
+    /// counted pointer, whose value is the crate's own pointer (#775).
+    /// Of any other `T` it is [`Unrun::Rc`] or [`Unrun::Arc`].
+    Counted { arc: bool },
+    /// std's `HashMap`, `HashSet`, `BTreeMap` or `BTreeSet`, by its name:
+    /// rawr's collection of that kind, whose keys are rawr's strings,
+    /// numbers, chars or bools (#777). Of other keys it is not run yet.
+    Keyed(&'static str, Unrun),
     /// core's `Duration`: rawr's own.
     Duration,
     /// std's `Instant`: rawr's own.
@@ -49,14 +57,21 @@ pub(crate) enum Std {
     Clone, Copy, Debug, serde::Deserialize, Eq, Ord, PartialEq, PartialOrd, serde::Serialize,
 )]
 pub enum Unrun {
-    /// `std::rc::Rc`, rawr's real counted pointer (#748, `Ty::Counted`):
-    /// passing one to a crate as the native pointer is still to come.
+    /// `std::rc::Rc` of other than a crate's type, as `Rc<str>` or
+    /// `Rc<i64>`: rawr's counted pointer holds that value itself, which no
+    /// crate's pointer can share without a copy.
     Rc,
     /// `std::sync::Arc`, as `Rc` is.
     Arc,
+    /// `std::collections::HashMap` of keys other than rawr's strings,
+    /// numbers, chars or bools: rawr orders its keys where it holds them,
+    /// and a crate's key type has no order rawr reads yet.
     HashMap,
+    /// `std::collections::HashSet`, as `HashMap` is.
     HashSet,
+    /// `std::collections::BTreeMap`, as `HashMap` is.
     BTreeMap,
+    /// `std::collections::BTreeSet`, as `HashMap` is.
     BTreeSet,
     /// Any other std type: one rawr has no representation for yet.
     Other,
@@ -93,15 +108,15 @@ pub(crate) const BINDING: [(&[&str], Std); 23] = [
     (&["alloc", "boxed", "Box"], Std::Box),
     (
         &["alloc", "collections", "btree", "map", "BTreeMap"],
-        Std::Unrun(Unrun::BTreeMap),
+        Std::Keyed("BTreeMap", Unrun::BTreeMap),
     ),
     (
         &["alloc", "collections", "btree", "set", "BTreeSet"],
-        Std::Unrun(Unrun::BTreeSet),
+        Std::Keyed("BTreeSet", Unrun::BTreeSet),
     ),
-    (&["alloc", "rc", "Rc"], Std::Unrun(Unrun::Rc)),
+    (&["alloc", "rc", "Rc"], Std::Counted { arc: false }),
     (&["alloc", "string", "String"], Std::String),
-    (&["alloc", "sync", "Arc"], Std::Unrun(Unrun::Arc)),
+    (&["alloc", "sync", "Arc"], Std::Counted { arc: true }),
     (&["alloc", "vec", "Vec"], Std::Vec),
     (
         &["core", "io", "error", "Error"],
@@ -128,11 +143,11 @@ pub(crate) const BINDING: [(&[&str], Std); 23] = [
     (&["core", "time", "Duration"], Std::Duration),
     (
         &["std", "collections", "hash", "map", "HashMap"],
-        Std::Unrun(Unrun::HashMap),
+        Std::Keyed("HashMap", Unrun::HashMap),
     ),
     (
         &["std", "collections", "hash", "set", "HashSet"],
-        Std::Unrun(Unrun::HashSet),
+        Std::Keyed("HashSet", Unrun::HashSet),
     ),
     (
         &["std", "ffi", "os_str", "OsStr"],

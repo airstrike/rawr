@@ -162,9 +162,20 @@ impl Parser<'_> {
         if !returns_error {
             return Ok(());
         }
+        // `"text".into()`'s target is the `String` boxed here.
+        let into = self
+            .text_into
+            .iter()
+            .find(|(at, ..)| *at == value.span)
+            .map(|(.., target)| target.clone());
+        if let Some(target) = &into
+            && let Ty::Infer(_) = self.inference.resolve(target)
+        {
+            self.unify_type(target, &Ty::String);
+        }
         let source = self.inference.resolve(&value.ty);
         let boxed = matches!(&source, Ty::Boxed(inner) if !self.std_error(inner, false));
-        let text = source.is_text() && self.text_into.contains(&value.span);
+        let text = source.is_text() && into.is_some();
         if !boxed && !text {
             return Ok(());
         }

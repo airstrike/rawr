@@ -3,13 +3,14 @@
 # `--rawr-manifest`, plus the commands that install it. `rawr` reads them
 # as data and names no binary itself.
 
+# The installer puts rawr-import beside rawr with the rest of rawr's prebuilt
+# binaries. rawr-import installs the pinned nightly it reads crate APIs with
+# the first time it needs it.
 [[binary]]
 format = 1
 name = "rawr-import"
 sections = ["rust"]
 commands = ["cache"]
 install = [
-    "rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src",
-    "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli",
-    "cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver",
+    "curl -LsSf https://rawr.airstrike.fyi/install.sh | sh",
 ]

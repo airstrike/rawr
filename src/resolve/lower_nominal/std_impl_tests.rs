@@ -251,3 +251,106 @@ fn main() {
         "{report}"
     );
 }
+
+/// A method found through a program's `Deref` that takes `&mut self`
+/// takes the steps through its `DerefMut`, as rustc's probe does, through
+/// two impls and through a `&mut` parameter; `as_deref` borrows through a
+/// program's `Deref`.
+#[test]
+fn language_a_mut_self_method_probes_through_a_programs_deref_mut() {
+    let source = r#"
+use std::ops::{Deref, DerefMut};
+
+struct Stack {
+    items: Vec<i64>,
+}
+
+impl Deref for Stack {
+    type Target = Vec<i64>;
+    fn deref(&self) -> &Vec<i64> {
+        &self.items
+    }
+}
+
+impl DerefMut for Stack {
+    fn deref_mut(&mut self) -> &mut Vec<i64> {
+        &mut self.items
+    }
+}
+
+struct Named {
+    stack: Stack,
+    name: &'static str,
+}
+
+impl Deref for Named {
+    type Target = Stack;
+    fn deref(&self) -> &Stack {
+        &self.stack
+    }
+}
+
+impl DerefMut for Named {
+    fn deref_mut(&mut self) -> &mut Stack {
+        &mut self.stack
+    }
+}
+
+fn fill(stack: &mut Stack) {
+    stack.push(5);
+    stack.push(6);
+}
+
+fn main() {
+    let mut s = Stack { items: vec![1] };
+    s.push(2);
+    fill(&mut s);
+    s.retain(|x| *x != 5);
+    println!("{:?} {}", s.items, s.len());
+    let mut n = Named { stack: Stack { items: Vec::new() }, name: "n" };
+    n.push(7);
+    n.stack.push(8);
+    println!("{} {:?} {:?}", n.name, n.items, n.last());
+    let some = Some(Stack { items: vec![3, 4] });
+    let view: Option<&Vec<i64>> = some.as_deref();
+    println!("{:?} {:?}", view.map(|v| v.len()), some.as_deref().map(|v| v[0]));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[1, 2, 6] 3\nn [7, 8] Some(8)\nSome(2) Some(3)\n"
+    );
+}
+
+/// A `&mut self` method through a `Deref` with no `DerefMut` is rustc's
+/// E0596.
+#[test]
+fn language_a_mut_self_method_without_deref_mut_is_refused() {
+    let report = refused(
+        r#"
+use std::ops::Deref;
+
+struct Ro {
+    items: Vec<i64>,
+}
+
+impl Deref for Ro {
+    type Target = Vec<i64>;
+    fn deref(&self) -> &Vec<i64> {
+        &self.items
+    }
+}
+
+fn main() {
+    let mut r = Ro { items: vec![1] };
+    r.push(3);
+}
+"#,
+    );
+    assert!(
+        report.contains("cannot borrow data in dereference of `Ro` as mutable"),
+        "{report}"
+    );
+    assert!(report.contains("E0596"), "{report}");
+}

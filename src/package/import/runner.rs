@@ -102,6 +102,18 @@ pub enum StructuralKind {
     Take,
     /// A variant's fields lent, which shares the variant's selector.
     Lend,
+    /// A variant's fields lent mutably, which shares the variant's selector.
+    LendMut,
+    /// One of a variant's fields copied, which shares the variant's
+    /// selector.
+    Read {
+        field: u32,
+    },
+    /// One of a variant's fields lent, which shares the variant's
+    /// selector.
+    Borrow {
+        field: u32,
+    },
     /// A field set in place, which shares the field's selector.
     Store,
 }
@@ -174,6 +186,17 @@ fn semantic_type(
     if identity == Definition::boxed().as_bytes() && arguments.len() == 1 {
         let element = arguments.into_vec().remove(0);
         return Ok(Some(host::type_ref::Type::boxed(element)));
+    }
+    // std's map or set: rawr's of its kind (#777).
+    if let Some(kind) = Definition::keyed_kind(identity) {
+        return Ok(Some(host::type_ref::Type::keyed(kind, arguments)));
+    }
+    // Rust's `Rc<T>` or `Arc<T>` of a crate's type: rawr's (#775).
+    if let Some(arc) = Definition::counter(identity)
+        && arguments.len() == 1
+    {
+        let element = arguments.into_vec().remove(0);
+        return Ok(Some(host::type_ref::Type::counted(arc, element)));
     }
     if identity == Definition::duration().as_bytes() && arguments.is_empty() {
         return Ok(Some(host::type_ref::Type::builtin(
@@ -463,6 +486,9 @@ fn authenticate_structural(
                 StructuralKind::Test => host::structural::Kind::Test,
                 StructuralKind::Take => host::structural::Kind::Take,
                 StructuralKind::Lend => host::structural::Kind::Lend,
+                StructuralKind::LendMut => host::structural::Kind::LendMut,
+                StructuralKind::Read { field } => host::structural::Kind::Read { field },
+                StructuralKind::Borrow { field } => host::structural::Kind::Borrow { field },
                 StructuralKind::Store => host::structural::Kind::Store,
             },
         )
@@ -607,7 +633,10 @@ fn structural_path<'facade>(
                         StructuralKind::Match
                         | StructuralKind::Test
                         | StructuralKind::Take
-                        | StructuralKind::Lend => row.kind,
+                        | StructuralKind::Lend
+                        | StructuralKind::LendMut
+                        | StructuralKind::Read { .. }
+                        | StructuralKind::Borrow { .. } => row.kind,
                         _ => StructuralKind::Variant,
                     },
                 )

@@ -1,6 +1,7 @@
 //! Rust's mutable iteration: `for x in &mut v`, `v.iter_mut()` (also
 //! `.enumerate()`), a map's `iter_mut()` and `values_mut()`, and
-//! `v.iter_mut().for_each(|x| ..)`. Rawr has no references at runtime, so
+//! `v.iter_mut().for_each(|x| ..)`, and `let mut it = v.iter_mut();`
+//! stepped by `it.next()`. Rawr has no references at runtime, so
 //! the loop walks the indexes and each element is a place: its binding
 //! reads `v[i]`, and `*x = ..` (or `x.push(..)`) writes it there.
 
@@ -19,6 +20,20 @@ pub(super) struct Held {
     declaration: Span,
     holder: ImmutableString,
     located: origin::Fragment,
+}
+
+/// A local holding `v.iter_mut()` (`let mut it = v.iter_mut();`). Rawr
+/// has no references at runtime, so the local is the index of the next
+/// element, and each `it.next()` lends `v` at that index as
+/// `v.get_mut(i)` does.
+#[derive(Clone)]
+pub(super) struct HeldIterMut {
+    /// The local's declaration, or the `iter_mut()` call's span while no
+    /// `let` has taken it.
+    pub(super) declaration: Span,
+    /// The place walked.
+    place: ParsedExpr,
+    element: Ty,
 }
 
 /// What a mutable loop walks: a `Vec`'s elements, or a map's values with
@@ -848,6 +863,56 @@ impl Parser<'_> {
         Ok(parsed)
     }
 
+    /// `it.next()` of a local holding `v.iter_mut()` (`HeldIterMut`):
+    /// `Some` of the place of the element at the local's index, which it
+    /// passes, or `None` past the end.
+    pub(super) fn step_iter_mut(
+        &mut self,
+        name: &ImmutableString,
+        held: HeldIterMut,
+        name_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut ahead = self.input.clone();
+        let tokens: Vec<Token> = (0..3)
+            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
+            .collect();
+        let captured = self
+            .closures
+            .iter()
+            .any(|scope| scope.outer.get(name) == Some(&held.declaration));
+        if captured
+            || !(tokens[0] == Token::Period
+                && matches!(&tokens[1], Token::Identifier(member) if member.as_str() == "next")
+                && tokens[2] == Token::Unit)
+        {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "an `iter_mut()` iterator kept in a local, other than stepped with \
+                            `next()` in its own body"
+                    .into(),
+                source: name_span,
+            });
+        }
+        self.next();
+        self.next();
+        let (_, end) = self.next();
+        self.flow().called(end);
+        let expression = span(name_span.start(), end);
+        self.require_mutable_binding(name, expression)?;
+        let mut local = self.operator_expr(name.as_str().into(), held.place.ty.clone(), name_span);
+        local.lvalue = Some(Lvalue::Binding {
+            binding: name.clone(),
+            ty: held.place.ty.clone(),
+        });
+        self.mutable_use(&local, expression);
+        let slot = self.temporary("index");
+        let mut locate = origin::Fragment::plain(format!("if {name} < "));
+        locate.push(held.place.rendered_source().surrounded("(", ")"));
+        locate.push_text(format!(
+            ".len() {{ {slot} = {name}; {name} += 1; }} else {{ {slot} = -1; }} "
+        ));
+        self.optional_element(&held.place, &held.element, &slot, locate, expression)
+    }
+
     /// `v.iter_mut().find(f)`: `Some` of the first element's place `f`
     /// holds for, or `None` (`optional_element`).
     fn parse_iter_mut_find(
@@ -858,17 +923,17 @@ impl Parser<'_> {
         for _ in 0..3 {
             self.next();
         }
+        let walked = Ty::Reference {
+            mutable: true,
+            target: Box::new(element.clone()),
+        };
         let item = Ty::Reference {
             mutable: false,
-            target: Box::new(Ty::Reference {
-                mutable: true,
-                target: Box::new(element.clone()),
-            }),
+            target: Box::new(walked.clone()),
         };
-        self.closure_hints = vec![Some(Box::new([item.clone()]) as Box<[Ty]>)];
-        let arguments = self.parse_call_arguments("`find` arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let iterator = Ty::Iter(Box::new(walked));
+        let (mut arguments, end) =
+            self.parse_std_arguments(&iterator, "find", "`find` arguments")?;
         let expression = span(value.span.start(), end);
         let [predicate] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(
@@ -1006,6 +1071,23 @@ impl Parser<'_> {
         let tokens: Vec<Token> = (0..5)
             .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
             .collect();
+        // `let mut it = v.iter_mut();`: the index of the element its
+        // first `next()` lends.
+        if tokens[0] == Token::Unit && tokens[1] == Token::SemiColon {
+            self.require_mutable_binding(&owner, value.span)?;
+            let (_, end) = self.next();
+            let expression = span(value.span.start(), end);
+            let ty = Ty::Iter(Box::new(Ty::Reference {
+                mutable: true,
+                target: Box::new(element.clone()),
+            }));
+            self.pending_iter_mut = Some(HeldIterMut {
+                declaration: expression,
+                place: value.clone(),
+                element,
+            });
+            return Ok(self.operator_expr("0".into(), ty, expression));
+        }
         if !(tokens[0] == Token::Unit
             && tokens[1] == Token::Period
             && matches!(&tokens[2], Token::Identifier(name) if name.as_str() == "for_each")
@@ -1734,9 +1816,9 @@ fn mark_parts(
         | NominalPattern::Literal(_)
         | NominalPattern::Range { .. }
         | NominalPattern::Option(None) => Ok(()),
-        NominalPattern::Option(Some(child)) | NominalPattern::Result(Ok(child) | Err(child)) => {
-            mark_parts(child, parts, rest)
-        }
+        NominalPattern::Option(Some(child))
+        | NominalPattern::Result(Ok(child) | Err(child))
+        | NominalPattern::Cow { payload: child, .. } => mark_parts(child, parts, rest),
         NominalPattern::Enum(child) => child
             .payload
             .iter_mut()

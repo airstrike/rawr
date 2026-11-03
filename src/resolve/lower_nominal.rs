@@ -4,6 +4,7 @@ mod borrows;
 mod cargo_env;
 pub(crate) mod cell;
 pub(crate) mod counted;
+pub(crate) mod cow;
 
 mod drops;
 mod error_object;
@@ -31,6 +32,8 @@ mod comparison_tests;
 #[cfg(test)]
 mod copies_tests;
 #[cfg(test)]
+mod divergence_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
@@ -40,6 +43,8 @@ mod rust_meaning_tests;
 mod std_impl_tests;
 #[cfg(test)]
 mod std_method_tests;
+#[cfg(test)]
+mod str_tests;
 
 use super::borrowck::{
     record,
@@ -2058,6 +2063,29 @@ fn imported_surface_type(
                 inference, models, inner, operation, imported,
             )?]),
         },
+        // A map or set, which crosses as std's of its kind (#777).
+        Ty::Keyed(kind, members) => {
+            let mut converted = imported.entries(members.len())?;
+            for member in members.iter() {
+                converted.push(imported_surface_type(
+                    inference, models, member, operation, imported,
+                )?);
+            }
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::keyed(kind.name()),
+                arguments: converted.into_boxed_slice(),
+            }
+        }
+        // An `Rc<T>` or `Arc<T>` of a crate's type, which stands for the
+        // crate's own pointer (#775).
+        Ty::Counted(counter, inner) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::counted(
+                *counter == Counter::Arc,
+            ),
+            arguments: Box::new([imported_surface_type(
+                inference, models, inner, operation, imported,
+            )?]),
+        },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
             arguments: Box::default(),
@@ -2253,7 +2281,13 @@ const fn structural_use(kind: crate::host::structural::Kind) -> &'static str {
         Kind::Constructor => "constructing it",
         Kind::Field { .. } => "reading this field",
         Kind::Variant => "constructing this variant",
-        Kind::Match | Kind::Test | Kind::Take | Kind::Lend => "matching on this variant",
+        Kind::Match
+        | Kind::Test
+        | Kind::Take
+        | Kind::Lend
+        | Kind::LendMut
+        | Kind::Read { .. }
+        | Kind::Borrow { .. } => "matching on this variant",
         Kind::Store => "assigning to this field",
     }
 }
@@ -2414,6 +2448,19 @@ fn instance_surface_type(
         Ty::Boxed(inner) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::boxed(),
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
+        },
+        Ty::Counted(counter, inner) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::counted(
+                *counter == Counter::Arc,
+            ),
+            arguments: Box::new([instance_surface_type(inference, models, inner)?]),
+        },
+        Ty::Keyed(kind, members) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::keyed(kind.name()),
+            arguments: members
+                .iter()
+                .map(|member| instance_surface_type(inference, models, member))
+                .collect::<Option<_>>()?,
         },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
@@ -5216,6 +5263,7 @@ impl Models {
             Ty::Cell(..) => true,
             Ty::Boxed(inner)
             | Ty::Reverse(inner)
+            | Ty::Cow(inner)
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
             Ty::Result(ok, err) => self.holds_cell(ok, visiting) || self.holds_cell(err, visiting),
@@ -5540,6 +5588,11 @@ enum PreludeOp {
     /// `Reverse(value)` and its `.0`.
     ReverseWrap,
     ReverseInner,
+    /// `Cow::Borrowed(value)`, `Cow::Owned(value)`, and a `Cow`'s payload
+    /// (`cow.rs`).
+    CowBorrowed,
+    CowOwned,
+    CowValue,
     /// `RefCell::new(value)`, a borrow of a cell (`1` mutable), a cell's or
     /// a borrow's value, a borrow's store, a borrow's release, and
     /// `into_inner`, `replace` and `clone` (`cell.rs`).
@@ -5618,6 +5671,9 @@ enum PreludeOp {
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
     Slice,
+    /// `v.get(low..high)`: `Slice`'s operands, `Some` of the copy, or
+    /// `None` where `Slice` panics.
+    SliceGetRange,
     /// `v.get(i)`, `first()` (`0`) and `last()` (`-1`): an `Option` of the
     /// element.
     SliceGet,
@@ -5734,6 +5790,9 @@ impl PreludeOp {
             Self::MapFrom => "map.from",
             Self::SetFrom => "set.from",
             Self::ReverseWrap => "reverse.new",
+            Self::CowBorrowed => "cow.borrowed",
+            Self::CowOwned => "cow.owned",
+            Self::CowValue => "cow.value",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
             Self::PlainCellNew => "cell.new_plain",
@@ -5776,6 +5835,7 @@ impl PreludeOp {
             Self::Cast => "number.cast",
             Self::WideLiteral => "number.wide-literal",
             Self::Slice => "slice.range",
+            Self::SliceGetRange => "slice.get-range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
@@ -5863,6 +5923,8 @@ impl PreludeOp {
             | Self::TypeIndex
             | Self::Discriminant
             | Self::ReverseWrap
+            | Self::CowBorrowed
+            | Self::CowOwned
             | Self::DisplayText
             | Self::CellNew
             | Self::PlainCellNew
@@ -5906,6 +5968,7 @@ impl PreludeOp {
                 TypeId::of::<crate::FnPtr>(),
             ],
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
+            Self::CowValue => vec![TypeId::of::<cow::Value>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
             Self::FormatFloat => vec![
@@ -5994,7 +6057,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::Slice => vec![
+            Self::Slice | Self::SliceGetRange => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
@@ -6317,7 +6380,9 @@ impl PreludeOp {
                     flags & 2 == 2,
                 )));
             }
-            Self::Slice | Self::SplitAt => return slice_value(self, args),
+            Self::Slice | Self::SliceGetRange | Self::SplitAt => {
+                return slice_value(self, args);
+            }
             Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
             Self::Memory => {
@@ -6443,6 +6508,7 @@ impl PreludeOp {
                 });
             }
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
+            Self::CowBorrowed | Self::CowOwned | Self::CowValue => return cow::run(self, args[0]),
             Self::DisplayText => {
                 return match crate::place::get(args[0]) {
                     Some(place) => place.invoke(crate::place::Operation::Display, &mut []),
@@ -6968,12 +7034,16 @@ fn builtin_code(ty: &Ty) -> Option<crate::INT> {
         Ty::Bool => -5,
         Ty::Char => -6,
         Ty::Option(_) => -7,
-        // A program's impl for `[T]` is its impl for `Vec<T>`: both are
-        // an array at runtime.
+        // `Vec<T>` and `[T]` own their impls apart, as in Rust, though
+        // both are an array at runtime (`builtin_type_key`).
         Ty::Array {
-            kind: sequence::Kind::Vec | sequence::Kind::Slice,
+            kind: sequence::Kind::Vec,
             ..
         } => -8,
+        Ty::Array {
+            kind: sequence::Kind::Slice,
+            ..
+        } => -11,
         Ty::Unit => -9,
         Ty::Result(..) => -10,
         Ty::Boxed(inner) => return builtin_code(inner),
@@ -8301,14 +8371,6 @@ impl Counter {
     }
 }
 
-/// A type as std's impls take it: a type, or `str`, which Rawr's types
-/// hold only as the referent of a `&str` (`Ty::Str`).
-#[derive(Clone, Debug, PartialEq)]
-enum Compared {
-    Ty(Ty),
-    Str,
-}
-
 /// Which `PartialEq` impl an `==` resolves to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartialEqImpl {
@@ -8392,6 +8454,11 @@ enum Ty {
     /// float literal's kind still to be inferred.
     Float(Float),
     String,
+    /// `str`, rustc's unsized text: what `*` of a `&str` or a `String`
+    /// gives, usable only as a place (`&*s`, a comparison, a method's
+    /// receiver). The same text as a `String` at runtime. A reference to
+    /// it is `Ty::Str`.
+    UnsizedStr,
     /// `&str`: a borrowed string, the same text as a `String` at runtime.
     /// It is `Copy`, so a use never moves it. It is a distinct type from
     /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
@@ -8442,6 +8509,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
+    /// `std::borrow::Cow<'_, B>` of its borrowed type `B` (`str`, `[T]` or
+    /// a sized `T`): a `cow::Value` at runtime.
+    Cow(Box<Ty>),
     /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
     /// runtime, which every copy of it shares (`cell.rs`).
     Cell(CellKind, Box<Ty>),
@@ -8516,6 +8586,7 @@ impl Ty {
             | Self::Weak(_, target)
             | Self::Iter(target)
             | Self::Reverse(target)
+            | Self::Cow(target)
             | Self::Range(target)
             | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
@@ -8554,6 +8625,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -8623,6 +8695,14 @@ impl Ty {
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
+        }
+        // A header's bare `str` reads as a `&str` (`type_ref::Type::is_str`);
+        // a `Cow`'s `B` is the unsized `str`.
+        if let Some(borrowed) = ty.cow_element() {
+            return Self::Cow(Box::new(match Self::from_resolved(borrowed) {
+                Self::Str => Self::UnsizedStr,
+                borrowed => borrowed,
+            }));
         }
         if let Some((kind, inner)) = ty.cell_element() {
             return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
@@ -8736,6 +8816,7 @@ impl Ty {
             Self::Int(kind) => kind.name().into(),
             Self::Float(kind) => kind.name().into(),
             Self::String => "String".into(),
+            Self::UnsizedStr => "str".into(),
             Self::Str => "&str".into(),
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
@@ -8790,6 +8871,7 @@ impl Ty {
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
+            Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
@@ -8873,6 +8955,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
+            Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
             Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
@@ -8888,7 +8971,7 @@ impl Ty {
             Self::Int(kind) if kind.wide() => None,
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
-            Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
+            Self::String | Self::UnsizedStr | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
@@ -9018,6 +9101,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -9035,6 +9119,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
+            | Self::Cow(_)
             | Self::Cell(..)
             | Self::Dyn(..)
             | Self::Infer(_)
@@ -9291,6 +9376,7 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
+            | (Ty::Cow(left), Ty::Cow(right))
             | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
@@ -9547,6 +9633,7 @@ impl Inference {
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
+            Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
@@ -10035,6 +10122,13 @@ enum PatternSyntax {
         payload: Option<Box<PatternSyntax>>,
         span: Span,
     },
+    /// `Cow::Borrowed(pattern)` or `Cow::Owned(pattern)` (`owned`) on a
+    /// `Cow<'_, B>`.
+    Cow {
+        owned: bool,
+        payload: Box<PatternSyntax>,
+        span: Span,
+    },
     /// `0`, `-1`, `'a'`, `"x"`, `true`, `1.5`.
     Literal {
         literal: ast::NominalLiteral,
@@ -10133,6 +10227,7 @@ impl PatternSyntax {
             | Self::UnitStruct { span, .. }
             | Self::TupleStruct { span, .. }
             | Self::Prelude { span, .. }
+            | Self::Cow { span, .. }
             | Self::Literal { span, .. }
             | Self::Range { span, .. }
             | Self::Tuple { span, .. }
@@ -10160,6 +10255,7 @@ impl PatternSyntax {
                 before.iter().chain(after.iter()).any(Self::has_ref_mut)
             }
             Self::Reference { pattern, .. } | Self::At { pattern, .. } => pattern.has_ref_mut(),
+            Self::Cow { payload, .. } => payload.has_ref_mut(),
             _ => false,
         }
     }
@@ -10225,6 +10321,8 @@ enum CoverageKey {
         variant: nominal::variant::Id,
     },
     Prelude(Prelude),
+    /// `Cow::Owned` (`true`) or `Cow::Borrowed`.
+    Cow(bool),
     /// A literal: of `bool`, one of its two values; otherwise one of
     /// unboundedly many.
     Literal(ast::NominalLiteral),
@@ -10705,6 +10803,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         }
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
+        Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
@@ -11132,30 +11231,121 @@ struct HostPattern {
     binds: Vec<PatternBinding>,
     values: Vec<origin::Fragment>,
     /// The fields of crate values that bindings move or lend, each read
-    /// once for every binding of its variant.
+    /// once for every binding of its variant, and the fields that patterns
+    /// below a variant's read.
     parts: Vec<HostPart>,
     /// Each binding that reads a part: its index in `binds`, its part's
     /// index in `parts`, and the copy it reads where the part is not read.
     readers: Vec<(usize, usize, origin::Fragment)>,
+    /// The bindings and parts in the order they are bound: a binding of a
+    /// whole value before a part that moves or lends it, and a part before
+    /// what reads it.
+    steps: Vec<HostStep>,
+}
+
+/// One binding or part of a `HostPattern`, by its index.
+#[derive(Clone, Copy)]
+enum HostStep {
+    Bind(usize),
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
+    Part(usize),
+}
+
+/// Where a `HostPattern`'s bindings are read.
+#[derive(Clone, Copy)]
+enum HostReading {
+    /// In the arm, the scope they are used in.
+    Arm,
+    /// In an arm's guard, which binds them by reference, as Rust does, so
+    /// no part is moved before the arm is chosen.
+    Guard,
+    /// As values that leave the scope they are made in, as a `let`-`else`
+    /// gives them to the statements after it, past the end of any lend.
+    Escaping,
 }
 
 /// A crate value's fields, moved or lent for the bindings of one variant
-/// pattern, under a hidden name.
+/// pattern, or one field a pattern below the variant's reads, under a
+/// hidden name.
 struct HostPart {
     name: String,
     reader: origin::Fragment,
-    /// Whether reading the part moves the fields out of the value; a part
-    /// that does not lends them for the rest of its scope.
+    /// The reader where a guard reads the part, when it is not `reader`:
+    /// one that lends what `reader` moves.
+    guard: Option<origin::Fragment>,
+    /// The reader where the bindings leave their scope, or `None` where
+    /// the part lends what it reads and its bindings read copies instead.
+    escaping: Option<origin::Fragment>,
+    /// Whether reading the part moves the fields out of the value.
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
     moves: bool,
-    /// The reader that lends a moving part's fields instead, where Rust
-    /// binds them by reference.
-    lent: Option<origin::Fragment>,
+    /// Whether reading the part lends the fields mutably.
+    #[cfg_attr(
+        not(feature = "rust-import"),
+        expect(dead_code, reason = "only imported variants have parts")
+    )]
+    mutable: bool,
+}
+
+impl HostPart {
+    /// The part of a variant's fields read by `reader`, which moves them
+    /// out of the value when `guard` gives the reader that lends them
+    /// instead, or lends them, mutably when `mutable`.
+    #[cfg(feature = "rust-import")]
+    fn fields(
+        name: String,
+        reader: origin::Fragment,
+        guard: Option<origin::Fragment>,
+        mutable: bool,
+    ) -> Self {
+        let moves = guard.is_some();
+        Self {
+            name,
+            escaping: moves.then(|| reader.clone()),
+            reader,
+            guard,
+            moves,
+            mutable,
+        }
+    }
+
+    /// Whether the part moves or mutably lends what it reads: what a
+    /// pattern below the variant's reads then comes from the part, as
+    /// nothing else may reach the value meanwhile.
+    #[cfg(feature = "rust-import")]
+    const fn holds(&self) -> bool {
+        self.moves || self.mutable
+    }
+
+    /// The reader of the part where it is read as `reading`.
+    fn reader(&self, reading: HostReading) -> Option<&origin::Fragment> {
+        match reading {
+            HostReading::Arm => Some(&self.reader),
+            HostReading::Guard => Some(self.guard.as_ref().unwrap_or(&self.reader)),
+            HostReading::Escaping => self.escaping.as_ref(),
+        }
+    }
 }
 
 impl HostPattern {
     fn bind(&mut self, binding: PatternBinding, value: origin::Fragment) {
+        self.steps.push(HostStep::Bind(self.binds.len()));
         self.binds.push(binding);
         self.values.push(value);
+    }
+
+    /// Add `part`, bound before what is bound after it, and give its index.
+    #[cfg(feature = "rust-import")]
+    fn part(&mut self, part: HostPart) -> usize {
+        self.steps.push(HostStep::Part(self.parts.len()));
+        self.parts.push(part);
+        self.parts.len() - 1
     }
 
     /// Bind `binding` to member `index` of the part `part`, or to `copy`
@@ -11174,6 +11364,20 @@ impl HostPattern {
         self.bind(binding, value);
     }
 
+    /// Whether a part moves what it reads, which the variant above it then
+    /// moves out too.
+    #[cfg(feature = "rust-import")]
+    fn moves(&self) -> bool {
+        self.parts.iter().any(|part| part.moves)
+    }
+
+    /// Whether a part lends what it reads mutably, which the variant above
+    /// it then lends mutably too.
+    #[cfg(feature = "rust-import")]
+    fn lends_mutably(&self) -> bool {
+        self.parts.iter().any(|part| part.mutable)
+    }
+
     /// Take `other`'s bindings and the parts they read.
     fn absorb_binds(&mut self, other: Self) {
         let (binds, parts) = (self.binds.len(), self.parts.len());
@@ -11183,6 +11387,11 @@ impl HostPattern {
                 .into_iter()
                 .map(|(bind, part, copy)| (binds + bind, parts + part, copy)),
         );
+        self.steps
+            .extend(other.steps.into_iter().map(|step| match step {
+                HostStep::Bind(index) => HostStep::Bind(binds + index),
+                HostStep::Part(index) => HostStep::Part(parts + index),
+            }));
         self.binds.extend(other.binds);
         self.values.extend(other.values);
         self.parts.extend(other.parts);
@@ -11203,59 +11412,48 @@ impl HostPattern {
     /// `let name = value; ..` for each binding, in the scope the bindings
     /// are used in.
     fn rendered_binds(&self) -> origin::Fragment {
-        self.rendered(|part| Some(&part.reader))
+        self.rendered(HostReading::Arm)
     }
 
-    /// The bindings as an arm's guard reads them: as references, as Rust
-    /// binds them there, so no part is moved before the arm is chosen.
+    /// The bindings as an arm's guard reads them (`HostReading::Guard`).
     fn rendered_guard_binds(&self) -> origin::Fragment {
-        self.rendered(|part| {
-            if part.moves {
-                part.lent.as_ref()
-            } else {
-                Some(&part.reader)
-            }
-        })
+        self.rendered(HostReading::Guard)
     }
 
-    /// The bindings as values that leave the scope they are made in, as a
-    /// `let`-`else` gives them to the statements after it, past the end of
-    /// any lend.
+    /// The bindings as values that leave the scope they are made in
+    /// (`HostReading::Escaping`).
     fn rendered_escaping_binds(&self) -> origin::Fragment {
-        self.rendered(|part| part.moves.then_some(&part.reader))
+        self.rendered(HostReading::Escaping)
     }
 
-    /// Each binding that reads no part comes first, since it may read the
-    /// whole value a part then moves or lends; then each part by the reader
-    /// `read` gives it, and the bindings that read parts, by copy where
-    /// `read` gives none.
-    fn rendered<'a>(
-        &'a self,
-        read: impl Fn(&'a HostPart) -> Option<&'a origin::Fragment>,
-    ) -> origin::Fragment {
+    /// Each binding and part in order, a part by its reader where it is
+    /// read as `reading`, and a binding that reads a part by copy where
+    /// the part has none.
+    fn rendered(&self, reading: HostReading) -> origin::Fragment {
         let mut source = origin::Fragment::default();
         let mut bind = |name: &str, value: &origin::Fragment| {
             source.push_text(format!("let {name} = "));
             source.push(value.clone());
             source.push_text("; ");
         };
-        for (index, (binding, value)) in self.binds.iter().zip(&self.values).enumerate() {
-            if !self.readers.iter().any(|(reader, ..)| *reader == index) {
-                bind(&binding.name, value);
+        for step in &self.steps {
+            match *step {
+                HostStep::Part(index) => {
+                    let part = &self.parts[index];
+                    if let Some(reader) = part.reader(reading) {
+                        bind(&part.name, reader);
+                    }
+                }
+                HostStep::Bind(index) => {
+                    let value = self
+                        .readers
+                        .iter()
+                        .find(|(reader, ..)| *reader == index)
+                        .filter(|(_, part, _)| self.parts[*part].reader(reading).is_none())
+                        .map_or(&self.values[index], |(.., copy)| copy);
+                    bind(&self.binds[index].name, value);
+                }
             }
-        }
-        for part in &self.parts {
-            if let Some(reader) = read(part) {
-                bind(&part.name, reader);
-            }
-        }
-        for (index, part, copy) in &self.readers {
-            let value = if read(&self.parts[*part]).is_some() {
-                &self.values[*index]
-            } else {
-                copy
-            };
-            bind(&self.binds[*index].name, value);
         }
         source
     }
@@ -11489,6 +11687,12 @@ struct Parser<'a> {
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
+    /// The locals holding a `v.iter_mut()`, by name, each stepped by
+    /// `next()` (`places::HeldIterMut`).
+    held_iter_mut: BTreeMap<ImmutableString, places::HeldIterMut>,
+    /// The `v.iter_mut()` just read as a whole `let`'s value, which the
+    /// `let` keeps in `held_iter_mut`.
+    pending_iter_mut: Option<places::HeldIterMut>,
     /// The locals holding a map entry's `&mut`, as `let grains =
     /// map.entry(k).or_default();`, by name: their declaration and the
     /// tokens of the entry, which each use reads again.
@@ -11577,9 +11781,10 @@ struct Parser<'a> {
     pending_parses: Vec<(Ty, Ty, Span, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
-    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
-    /// Error` (`error_object.rs`).
-    text_into: Vec<Span>,
+    /// The `text.into()` calls, each one's span, the text's type and the
+    /// target, which `Err(..)` may box as `dyn Error` (`error_object.rs`)
+    /// and the use site gives.
+    text_into: Vec<(Span, Ty, Ty)>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -11847,6 +12052,8 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             bound_iterators: BTreeMap::new(),
+            held_iter_mut: BTreeMap::new(),
+            pending_iter_mut: None,
             entry_aliases: BTreeMap::new(),
             last_cell_borrow: None,
             cell_guards: BTreeMap::new(),
@@ -14358,6 +14565,15 @@ impl<'a> Parser<'a> {
             ),
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
+            // A `Cow` writes what it derefs to.
+            Ty::Cow(borrowed) => {
+                let payload = self.prelude_op(PreludeOp::CowValue, [value]);
+                let borrowed = cow::payload_ty(borrowed);
+                Some(
+                    self.display_text(&borrowed, payload.clone())
+                        .unwrap_or(payload),
+                )
+            }
             _ => None,
         }
     }
@@ -16889,6 +17105,30 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        // A `text.into()` no use gives a target: rustc's E0283, as std has
+        // many `From<String>` impls. A target other than the text's own
+        // type or a `String` is one rawr doesn't convert into.
+        for (at, source, target) in std::mem::take(&mut self.text_into) {
+            match self.inference.resolve(&target) {
+                Ty::Infer(_) => {
+                    return Err(Error::StdPath {
+                        code: "E0283",
+                        message: "type annotations needed".into(),
+                        label: Some("type must be known at this point".into()),
+                        note: None,
+                        reference: at,
+                    });
+                }
+                target if target == Ty::String || target == source => {}
+                target => {
+                    return Err(Error::TypeMismatch {
+                        expected: target.name(&self.models),
+                        actual: Ty::String.name(&self.models),
+                        expression: at,
+                    });
+                }
+            }
+        }
         self.finish_formats()?;
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
             if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
@@ -17487,6 +17727,14 @@ impl<'a> Parser<'a> {
             Ty::Int(_) => crate::capability::builtin_supports("i64", capability),
             Ty::Float(_) => crate::capability::builtin_supports("f64", capability),
             Ty::String => crate::capability::builtin_supports("String", capability),
+            // `str` is unsized: it has what a `String` has but a value's
+            // own (`Clone`, `Copy`, `Default`).
+            Ty::UnsizedStr => {
+                !matches!(
+                    capability,
+                    capability::Kind::Clone | capability::Kind::Copy | capability::Kind::Default
+                ) && crate::capability::builtin_supports("String", capability)
+            }
             // `&str` is `Copy`, and otherwise has what a `String` has.
             Ty::Str => {
                 capability == capability::Kind::Copy
@@ -17541,6 +17789,25 @@ impl<'a> Parser<'a> {
             },
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
+            // std's impls for `Cow<B>`, which ask of `B`.
+            Ty::Cow(ref borrowed) => match capability {
+                capability::Kind::Send | capability::Kind::Static => {
+                    self.type_provides(borrowed, capability)
+                }
+                capability => crate::resolve::std_trait::anywhere(capability.name()).is_some_and(
+                    |definition| {
+                        std_impl::holds(
+                            &mut std_impl::Probe(self),
+                            definition,
+                            &self.inference.resolve(ty),
+                            &[],
+                            true,
+                            0,
+                        )
+                        .is_ok()
+                    },
+                ),
+            },
             // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
             // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
             // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
@@ -17674,12 +17941,34 @@ impl<'a> Parser<'a> {
                     .map(|member| self.proven_type(member, operation, span))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Keyed(..) | Ty::Reverse(_) => {
+            // A map or set a crate takes or gives (#777): its array of
+            // `[key, value]` pairs, or of keys.
+            Ty::Keyed(kind, ref members) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.proven_type(member, operation, span))
+                    .collect::<Result<Box<[_]>, _>>()?;
+                let entry = if kind.is_map() {
+                    intrinsic::Type::tuple(members)
+                } else {
+                    members
+                        .into_vec()
+                        .pop()
+                        .ok_or_else(|| unpassable(ty.name(&self.models), operation, span))?
+                };
+                intrinsic::Type::array(entry, None)
+            }
+            Ty::Reverse(_) | Ty::Cow(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
             // A `Box` is its value at runtime (D492.3), which a crate's
             // `Box<T>` boxes where it takes it.
             Ty::Boxed(inner) => self.proven_type(&inner, operation, span)?,
+            // An `Rc` or `Arc` a crate takes or gives (#775): rawr's
+            // pointer, whose value the crate's own pointer holds.
+            Ty::Counted(counter, inner) => {
+                intrinsic::Type::counted(counter.name(), self.proven_type(&inner, operation, span)?)
+            }
             // A `RefCell`, as a canvas Program's State, the host keeps and
             // hands back as it is.
             Ty::Cell(kind, _) => intrinsic::Type::builtin(kind.name(), TypeId::of::<cell::Cell>()),
@@ -17708,7 +17997,7 @@ impl<'a> Parser<'a> {
             Ty::Char => intrinsic::Type::builtin("char", TypeId::of::<char>()),
             Ty::Int(_) => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Float(_) => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
-            Ty::String | Ty::Str => {
+            Ty::String | Ty::UnsizedStr | Ty::Str => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
@@ -17827,12 +18116,7 @@ impl<'a> Parser<'a> {
                     operation: span,
                 });
             }
-            Ty::Never
-            | Ty::Param(_)
-            | Ty::Projection(..)
-            | Ty::Counted(..)
-            | Ty::Weak(..)
-            | Ty::Dyn(..) => {
+            Ty::Never | Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })
@@ -19412,6 +19696,37 @@ impl<'a> Parser<'a> {
                 owner,
                 originating,
             )?)),
+            // std's map or set in a crate's signature: rawr's (#777).
+            Shape::Keyed(name, members) => Ty::Keyed(
+                Keyed::from_name(name)
+                    .ok_or_else(|| self.unsupported("a keyed collection rawr has no kind for"))?,
+                members
+                    .iter()
+                    .map(|member| {
+                        self.instantiate_host_type(
+                            member,
+                            parameters,
+                            operation,
+                            span,
+                            owner,
+                            originating,
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            // A crate's `Rc<T>` or `Arc<T>`: rawr's, which stands for the
+            // crate's own pointer at runtime (#775).
+            Shape::Counted(arc, element) => Ty::Counted(
+                if *arc { Counter::Arc } else { Counter::Rc },
+                Box::new(self.instantiate_host_type(
+                    element,
+                    parameters,
+                    operation,
+                    span,
+                    owner,
+                    originating,
+                )?),
+            ),
             Shape::Iter(element) => Ty::Iter(Box::new(self.instantiate_host_type(
                 element,
                 parameters,
@@ -22109,6 +22424,14 @@ impl<'a> Parser<'a> {
         item: &crate::host::item::Definition,
     ) -> Result<(), Error> {
         self.mutable_use(receiver, operation);
+        // A `&mut T` reaches its value mutably without being `mut` itself,
+        // as a pattern's binding through `&mut T` does (#786).
+        if matches!(
+            self.inference.resolve(&receiver.ty),
+            Ty::Reference { mutable: true, .. }
+        ) {
+            return Ok(());
+        }
         // An imported value is changed where it lives, through its handle,
         // so a place below a mutable binding (`self.panes.split(..)`) needs
         // only that binding to be mutable, as Rust's `&mut self` does.
@@ -22151,6 +22474,15 @@ impl<'a> Parser<'a> {
         };
         let reason = match self.bindings.get(name.as_str()) {
             Some(binding) if binding.mutable && binding.available => return Ok(()),
+            Some(binding)
+                if binding.available
+                    && matches!(
+                        self.inference.resolve(&binding.ty),
+                        Ty::Reference { mutable: true, .. }
+                    ) =>
+            {
+                return Ok(());
+            }
             Some(binding) if !binding.available => {
                 format!("borrow of moved value: `{name}` (E0382)")
             }
@@ -23262,6 +23594,27 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let mut it = v.iter_mut();`: each `it.next()` lends the next
+        // element of `v`.
+        match self.pending_iter_mut.take() {
+            Some(mut held) if held.declaration == value.span => {
+                held.declaration = name_span;
+                self.held_iter_mut.insert(name.clone(), held);
+            }
+            _ => {
+                self.held_iter_mut.remove(&name);
+            }
+        }
+        // A local's type is sized (rustc's E0277): `let x = *s;`.
+        if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+            return Err(Error::MissingCapability {
+                owner: "str".into(),
+                capability: "Sized".into(),
+                operation: name_span,
+                derive: false,
+                required_by: None,
+            });
+        }
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
@@ -24369,12 +24722,15 @@ impl<'a> Parser<'a> {
                 let keyword = self.binding_keyword(*mutable, ty);
                 let _ = write!(statements, " {keyword} {name} = {path};");
 
+                // Below a reference the binding is one more reference, even
+                // to a member that is itself a reference: `&(i64, &i64)`
+                // binds `&&i64`.
                 let ty = match (self.binding_mode.get(), self.inference.resolve(ty)) {
-                    (Some(mutable), ty) if !matches!(ty, Ty::Reference { .. }) => Ty::Reference {
+                    (Some(mutable), ty) => Ty::Reference {
                         mutable,
                         target: Box::new(ty),
                     },
-                    (_, ty) => ty,
+                    (None, ty) => ty,
                 };
                 self.trace_bind(name, *span, &ty);
                 self.bindings.insert(
@@ -25323,6 +25679,9 @@ impl<'a> Parser<'a> {
             self.next();
             segments.push(self.expect_qualified_name()?);
         }
+        if let [(head, head_span), _, ..] = segments.as_slice() {
+            self.unbound_std_type(head, true, *head_span)?;
+        }
         // A path into a `.rs` module, `echo::Event::Connected`, is spelled
         // through the app crate, as the same path is in an expression.
         if segments.len() >= 2 {
@@ -25383,6 +25742,25 @@ impl<'a> Parser<'a> {
                     segments[0].1.start(),
                     text_end(variant_span.start(), variant),
                 ),
+            });
+        }
+        // `Cow::Borrowed(..)` and `Cow::Owned(..)`.
+        let written = segments
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        if !mutable && let Some(owned) = self.cow_variant(&written) {
+            let start = segments[0].1.start();
+            self.expect(Token::LeftParen, "'(' after a `Cow` variant in a pattern")?;
+            let payload = self.parse_pattern_syntax()?;
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            }
+            let end = self.expect(Token::RightParen, "')' after a `Cow` variant pattern")?;
+            return Ok(PatternSyntax::Cow {
+                owned,
+                payload: Box::new(payload),
+                span: span(start, end),
             });
         }
         // The prelude's `Some(..)`, `None`, `Ok(..)` and `Err(..)`, also as
@@ -25697,16 +26075,11 @@ impl<'a> Parser<'a> {
                 span,
                 mutable,
             } => {
-                let expected = match expected {
-                    Ty::Reference { .. } if !*mutable => expected,
-                    Ty::Reference { target, .. } => Ty::Reference {
-                        mutable: true,
-                        target,
-                    },
-                    target => Ty::Reference {
-                        mutable: *mutable,
-                        target: Box::new(target),
-                    },
+                // `ref y` borrows the part whatever its type: on an `&i64`
+                // member it binds `&&i64`.
+                let expected = Ty::Reference {
+                    mutable: *mutable,
+                    target: Box::new(expected),
                 };
                 let binding = PatternSyntax::Binding {
                     name: name.clone(),
@@ -25739,9 +26112,9 @@ impl<'a> Parser<'a> {
                         pattern: *span,
                     });
                 }
-                let ty = match (self.binding_mode.get(), &expected) {
-                    (_, Ty::Reference { .. }) | (None, _) => expected.clone(),
-                    (Some(mutable), _) => Ty::Reference {
+                let ty = match self.binding_mode.get() {
+                    None => expected.clone(),
+                    Some(mutable) => Ty::Reference {
                         mutable,
                         target: Box::new(expected.clone()),
                     },
@@ -25788,6 +26161,18 @@ impl<'a> Parser<'a> {
             PatternSyntax::Prelude { .. } => {
                 self.resolve_prelude_pattern(syntax, &expected, bound_names, binding_declarations)
             }
+            PatternSyntax::Cow {
+                owned,
+                payload,
+                span,
+            } => self.resolve_cow_pattern(
+                *owned,
+                payload,
+                *span,
+                &expected,
+                bound_names,
+                binding_declarations,
+            ),
             PatternSyntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
                 self.trace_test(FactAccess::Read, None);
@@ -25992,9 +26377,9 @@ impl<'a> Parser<'a> {
                     });
                 }
                 // Below a reference the binding is one, as a plain binding.
-                let ty = match (self.binding_mode.get(), &expected) {
-                    (_, Ty::Reference { .. }) | (None, _) => expected.clone(),
-                    (Some(mutable), _) => Ty::Reference {
+                let ty = match self.binding_mode.get() {
+                    None => expected.clone(),
+                    Some(mutable) => Ty::Reference {
                         mutable,
                         target: Box::new(expected.clone()),
                     },
@@ -26681,6 +27066,19 @@ impl<'a> Parser<'a> {
                     prelude(Prelude::Err, &[*err]),
                 ]);
             }
+            Ty::Cow(borrowed) => {
+                let owned = self.owned_of(&borrowed).unwrap_or(Ty::Unknown);
+                return Some(
+                    [(false, cow::reference_to(*borrowed)), (true, owned)]
+                        .into_iter()
+                        .map(|(owned, payload)| CoverageConstructor {
+                            key: CoverageKey::Cow(owned),
+                            name: if owned { "Cow::Owned" } else { "Cow::Borrowed" }.into(),
+                            payload: Box::new([payload]),
+                        })
+                        .collect(),
+                );
+            }
             _ => {}
         }
         let definition = resolved.script()?;
@@ -26908,6 +27306,7 @@ impl<'a> Parser<'a> {
         let mut source = match subject_ty {
             Ty::Option(_)
             | Ty::Result(..)
+            | Ty::Cow(_)
             | Ty::Tuple(_)
             | Ty::Array { .. }
             | Ty::Int(_)
@@ -29423,11 +29822,6 @@ impl<'a> Parser<'a> {
                 Some(&definition),
             )?);
         }
-        let payload = if fields.is_empty() {
-            Ty::Unit
-        } else {
-            Ty::Tuple(fields.clone().into_boxed_slice())
-        };
         let selector = variant.imported_identity();
         // A matcher reads the value by its handle and gives new values, its
         // fields, which take its output's witness; the value stays
@@ -29451,20 +29845,8 @@ impl<'a> Parser<'a> {
             [origin::Fragment::call(&tester, [value.clone()])],
         );
         out.tests.push(test);
-        let copied = operation(
-            crate::host::structural::Kind::Match,
-            Ty::Option(Box::new(payload)),
-        );
-        let helper = self.push_imported_op(&path, selector, Some(copied), at)?;
-        let matched = origin::Fragment::call(&helper, [value.clone()]);
-        let inner = self.prelude_op(PreludeOp::Unwrap, [matched]);
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } = selector else {
             unreachable!("an enum variant's selector names an enum variant")
-        };
-        let field_at = |index: usize| {
-            let mut field = inner.clone().surrounded("(", ")");
-            field.push_text(format!("[{index}]"));
-            field
         };
         let discard = PatternSyntax::Discard { span: at };
         let members: Vec<(usize, &PatternSyntax)> = match (form, &pattern.named) {
@@ -29519,64 +29901,191 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        // A binding of a field Rawr can't read in place, as an
-        // `io::Error`, takes the field as rustc does: by value it moves
-        // the variant's fields out, and through `&T` it borrows them where
-        // a copy can't stand in for the borrow. Other fields are read in
-        // place, as Rust reads a `Copy` field and Rawr its own values.
+        // Each field is read alone (#785): one read in place, as Rust reads
+        // a `Copy` field and Rawr its own values, is copied, and one a
+        // pattern below the variant's matches is lent to it, so a field
+        // without `Clone` beside it is no obstacle.
+        let reader =
+            |this: &mut Self, index: usize, lent: bool| -> Result<origin::Fragment, Error> {
+                let field = u32::try_from(index).map_err(|_| Error::InvalidMatch {
+                    owner: path.clone(),
+                    reason: "the variant has too many fields".into(),
+                    pattern: at,
+                })?;
+                let kind = if lent {
+                    crate::host::structural::Kind::Borrow { field }
+                } else {
+                    crate::host::structural::Kind::Read { field }
+                };
+                let read = operation(kind, fields[index].clone());
+                let helper = this.push_imported_op(&path, selector, Some(read), at)?;
+                Ok(origin::Fragment::call(&helper, [value.clone()]))
+            };
+        // A pattern below the variant's is matched on its field under a
+        // hidden name, first, so the variant's own reader can be chosen
+        // for what it binds.
+        let mut nested = Vec::new();
+        for (index, member) in &members {
+            if matches!(
+                member,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Literal { .. }
+                    | PatternSyntax::Range { .. }
+            ) {
+                continue;
+            }
+            let name = self.temporary("field");
+            let mut below = HostPattern::default();
+            self.host_pattern(
+                member,
+                origin::Fragment::plain(name.as_str()),
+                &fields[*index],
+                &mut below,
+            )?;
+            nested.push((*index, name, below));
+        }
+        // A binding of a field Rawr can't read in place, as an `io::Error`,
+        // takes the field as rustc does: by value it moves the variant's
+        // fields out, through `&T` it borrows them where a copy can't stand
+        // in for the borrow, and through `&mut T` or as `ref mut` it borrows
+        // them mutably (#786). Other fields are read in place, as Rust reads
+        // a `Copy` field and Rawr its own values. A pattern below that moves
+        // or mutably borrows reads its field from the variant's fields moved
+        // or mutably borrowed alike.
         let native = |this: &Self, ty: &Ty| {
             !this.type_provides(ty, capability::Kind::Copy) && !this.plain_value(ty)
         };
         let unclonable = |this: &Self, ty: &Ty| {
             native(this, ty) && !this.type_provides(ty, capability::Kind::Clone)
         };
-        let binds = |this: &Self, wanted: &dyn Fn(&Self, &Ty) -> bool| {
-            members.iter().any(|(index, member)| {
-                matches!(member, PatternSyntax::Binding { .. }) && wanted(this, &fields[*index])
+        let outer = self.host_binding_mode.get();
+        let binds = |wanted: &dyn Fn(&PatternSyntax, Option<bool>, &Ty) -> bool| {
+            members.iter().any(|(index, member)| match member {
+                PatternSyntax::Binding { .. } => wanted(member, outer, &fields[*index]),
+                PatternSyntax::Ref { mutable, .. } => {
+                    wanted(member, Some(*mutable), &fields[*index])
+                }
+                _ => false,
             })
         };
-        let kind = match self.host_binding_mode.get() {
-            None if binds(self, &native) => Some(crate::host::structural::Kind::Take),
-            Some(false) if binds(self, &unclonable) => Some(crate::host::structural::Kind::Lend),
-            _ => None,
+        let mutable = binds(&|_, mode, ty| mode == Some(true) && native(self, ty))
+            || nested.iter().any(|(.., below)| below.lends_mutably());
+        let moves = binds(&|_, mode, ty| mode.is_none() && native(self, ty))
+            || nested.iter().any(|(.., below)| below.moves());
+        let lends = binds(&|member, mode, ty| {
+            mode == Some(false)
+                && (unclonable(self, ty)
+                    || (matches!(member, PatternSyntax::Ref { .. }) && native(self, ty)))
+        });
+        let kind = if mutable {
+            Some(crate::host::structural::Kind::LendMut)
+        } else if moves {
+            Some(crate::host::structural::Kind::Take)
+        } else if lends {
+            Some(crate::host::structural::Kind::Lend)
+        } else {
+            None
         };
         let part = match kind {
             Some(kind) => {
                 let output = Ty::Tuple(fields.clone().into_boxed_slice());
-                let moves = kind == crate::host::structural::Kind::Take;
                 // A guard binds what the arm moves by reference.
-                let lent = if moves {
+                let guard = if kind == crate::host::structural::Kind::Take {
                     let lent = operation(crate::host::structural::Kind::Lend, output.clone());
                     let lender = self.push_imported_op(&path, selector, Some(lent), at)?;
                     Some(origin::Fragment::call(&lender, [value.clone()]))
                 } else {
                     None
                 };
-                let reader =
+                let read =
                     self.push_imported_op(&path, selector, Some(operation(kind, output)), at)?;
-                out.parts.push(HostPart {
-                    name: self.temporary("part"),
-                    reader: origin::Fragment::call(&reader, [value]),
-                    moves,
-                    lent,
-                });
-                Some(out.parts.len() - 1)
+                let part = HostPart::fields(
+                    self.temporary("part"),
+                    origin::Fragment::call(&read, [value.clone()]),
+                    guard,
+                    kind == crate::host::structural::Kind::LendMut,
+                );
+                Some(out.part(part))
             }
             None => None,
         };
+        let mut nested = nested.into_iter().peekable();
         for (index, member) in members {
-            let Some(part) = part.filter(|_| matches!(member, PatternSyntax::Binding { .. }))
-            else {
-                self.host_pattern(member, field_at(index), &fields[index], out)?;
+            if let Some((_, name, below)) = nested.next_if(|(field, ..)| *field == index) {
+                // The pattern's tests read the field lent to them alone.
+                if let Some(condition) = below.condition() {
+                    let mut test = origin::Fragment::plain(format!("{{ let {name} = "));
+                    test.push(reader(self, index, true)?);
+                    test.push_text("; ");
+                    test.push(condition);
+                    test.push_text(" }");
+                    out.tests.push(test);
+                }
+                if below.binds.is_empty() {
+                    continue;
+                }
+                // What it binds reads the field from the variant's part
+                // when the part moves the fields or lends them mutably, and
+                // lent alone, or copied where it leaves its scope, else.
+                let held = part.filter(|part| out.parts[*part].holds());
+                let field = match held {
+                    Some(held) => {
+                        let mut field = origin::Fragment::plain(out.parts[held].name.as_str());
+                        field.push_text(format!("[{index}]"));
+                        let source = &out.parts[held];
+                        HostPart {
+                            name,
+                            escaping: source.escaping.is_some().then(|| field.clone()),
+                            reader: field,
+                            guard: None,
+                            moves: source.moves,
+                            mutable: source.mutable,
+                        }
+                    }
+                    None => HostPart {
+                        name,
+                        reader: reader(self, index, true)?,
+                        guard: None,
+                        escaping: Some(reader(self, index, false)?),
+                        moves: false,
+                        mutable: false,
+                    },
+                };
+                out.part(field);
+                for binding in &below.binds {
+                    self.require_new_host_binding(out, &binding.name, binding.span)?;
+                }
+                out.absorb_binds(below);
+                continue;
+            }
+            if matches!(member, PatternSyntax::Discard { .. }) {
+                continue;
+            }
+            let copy = reader(self, index, false)?;
+            let Some(part) = part.filter(|_| {
+                matches!(
+                    member,
+                    PatternSyntax::Binding { .. } | PatternSyntax::Ref { .. }
+                )
+            }) else {
+                self.host_pattern(member, copy, &fields[index], out)?;
                 continue;
             };
             // The binding any pattern on the field makes, read from the
-            // part instead.
+            // part instead: by reference for `ref` and `ref mut`.
             let mut single = HostPattern::default();
-            self.host_pattern(member, field_at(index), &fields[index], &mut single)?;
-            let (Some(binding), Some(copy)) = (single.binds.pop(), single.values.pop()) else {
+            self.host_pattern(member, copy, &fields[index], &mut single)?;
+            let (Some(mut binding), Some(copy)) = (single.binds.pop(), single.values.pop()) else {
                 unreachable!("a binding pattern binds its name")
             };
+            if let PatternSyntax::Ref { mutable, .. } = member {
+                binding.ty = Ty::Reference {
+                    mutable: *mutable,
+                    target: Box::new(binding.ty),
+                };
+            }
             self.require_new_host_binding(out, &binding.name, binding.span)?;
             out.bind_part(binding, part, index, copy);
         }
@@ -29620,6 +30129,127 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the unguarded arms `rows` of a match on facade values, one
+    /// pattern for each of `tys` in each row, cover every value, as rustc
+    /// checks it: the arms on one variant of a facade enum cover it when
+    /// their patterns below it cover its fields together, so `A(B(x))` and
+    /// `A(C)` cover `A` when `B` and `C` are its field's variants.
+    fn host_rows_cover(
+        &mut self,
+        rows: Vec<Vec<&PatternSyntax>>,
+        tys: &[Ty],
+        at: Span,
+    ) -> Result<bool, Error> {
+        let Some((ty, rest)) = tys.split_first() else {
+            return Ok(!rows.is_empty());
+        };
+        // Each row by its first pattern, past `name @` and `&`, with each
+        // alternative of a `|` a row of its own.
+        let mut spread = Vec::new();
+        for row in rows {
+            let Some((&first, tail)) = row.split_first() else {
+                continue;
+            };
+            let mut firsts = vec![first];
+            while let Some(first) = firsts.pop() {
+                match first {
+                    PatternSyntax::At { pattern, .. }
+                    | PatternSyntax::Reference { pattern, .. } => {
+                        firsts.push(pattern);
+                    }
+                    PatternSyntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    _ => spread.push((first, tail.to_vec())),
+                }
+            }
+        }
+        let irrefutable = |pattern: &PatternSyntax| {
+            matches!(
+                pattern,
+                PatternSyntax::Binding { .. }
+                    | PatternSyntax::Ref { .. }
+                    | PatternSyntax::Discard { .. }
+                    | PatternSyntax::Rest { .. }
+            )
+        };
+        let resolved = self.inference.resolve(ty);
+        let enumerated = match without_references(&resolved) {
+            Ty::Host { proof, arguments } => match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum(variants) => {
+                    Some((proof.clone(), arguments.clone(), variants.to_vec()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((proof, arguments, variants)) =
+            enumerated.filter(|_| spread.iter().any(|(first, _)| !irrefutable(first)))
+        else {
+            // Only a pattern that matches every value covers a type whose
+            // values are not told apart here.
+            let wild = spread
+                .into_iter()
+                .filter(|(first, _)| irrefutable(first))
+                .map(|(_, tail)| tail)
+                .collect();
+            return self.host_rows_cover(wild, rest, at);
+        };
+        let definition = proof.definition.clone();
+        let path: ImmutableString = definition.path().as_str().into();
+        let discard = PatternSyntax::Discard { span: at };
+        for variant in &variants {
+            let mut parameters = definition
+                .parameters()
+                .iter()
+                .cloned()
+                .zip(arguments.iter().cloned())
+                .collect();
+            let mut fields = Vec::with_capacity(variant.fields().len());
+            for field in variant.fields() {
+                fields.push(self.instantiate_host_type(
+                    field.ty(),
+                    &mut parameters,
+                    &path,
+                    at,
+                    proof.owner.as_ref(),
+                    Some(&definition),
+                )?);
+            }
+            let mut specialized = Vec::new();
+            for (first, tail) in &spread {
+                let members = match first {
+                    pattern if irrefutable(pattern) => vec![&discard; fields.len()],
+                    PatternSyntax::Enum(pattern) if pattern.variant.as_str() == variant.name() => {
+                        match &pattern.named {
+                            Some((names, _)) => {
+                                let mut members = vec![&discard; fields.len()];
+                                for ((name, _), member) in names.iter().zip(pattern.payload.iter())
+                                {
+                                    if let Some(index) = variant
+                                        .fields()
+                                        .iter()
+                                        .position(|field| field.name() == name.as_str())
+                                    {
+                                        members[index] = member;
+                                    }
+                                }
+                                members
+                            }
+                            None if pattern.payload.is_empty() => vec![&discard; fields.len()],
+                            None => tuple_members(&pattern.payload, fields.len(), &discard)?,
+                        }
+                    }
+                    _ => continue,
+                };
+                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+            }
+            let tys: Vec<Ty> = fields.into_iter().chain(rest.iter().cloned()).collect();
+            if !self.host_rows_cover(specialized, &tys, at)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// `match` on a facade enum: `Status::Hovered`, `Status::Active { is_checked }`,
     /// `Key::Named(key::Named::Tab)`, `A | B`, `_` and bindings, lowered to
     /// the facade's variant tests and field readers.
@@ -29651,6 +30281,9 @@ impl<'a> Parser<'a> {
         let mut arm_ends = Vec::new();
         let original_bindings = self.bindings.clone();
         let mut covered = Vec::<ImmutableString>::new();
+        // The arms without a guard, whose patterns below a variant cover it
+        // together.
+        let mut unguarded = Vec::new();
         let mut exhaustive = false;
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
@@ -29687,6 +30320,7 @@ impl<'a> Parser<'a> {
                 exhaustive = true;
             } else {
                 Self::host_covers(&syntax, &mut covered);
+                unguarded.push(syntax);
             }
             self.expect(Token::DoubleArrow, "'=>' after a match pattern")?;
             // A block arm needs no ',' after it, as in Rust.
@@ -29712,7 +30346,14 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
-        if !exhaustive && !variants.iter().all(|variant| covered.contains(variant)) {
+        if !exhaustive
+            && !variants.iter().all(|variant| covered.contains(variant))
+            && !self.host_rows_cover(
+                unguarded.iter().map(|syntax| vec![syntax]).collect(),
+                std::slice::from_ref(&subject_ty),
+                match_span,
+            )?
+        {
             return Err(Error::InvalidMatch {
                 owner: owner_path.as_str().into(),
                 reason: "non-exhaustive patterns; add a `_` arm".into(),
@@ -31190,6 +31831,27 @@ impl<'a> Parser<'a> {
                     operand.ty = *target;
                 }
             }
+            // A left operand with no impl of the operator's trait, as
+            // `"a" + "b"`: rustc's E0369.
+            let left = self.inference.resolve(&lhs.ty);
+            if !matches!(left, Ty::Infer(_)) && !allowed_type(allowed, &left) {
+                let right = self.inference.resolve(&rhs.ty);
+                let (left, right) = (left.name(&self.models), right.name(&self.models));
+                let message = match symbol {
+                    "+" => format!("cannot add `{right}` to `{left}`"),
+                    "-" => format!("cannot subtract `{right}` from `{left}`"),
+                    "*" => format!("cannot multiply `{left}` by `{right}`"),
+                    "/" => format!("cannot divide `{left}` by `{right}`"),
+                    _ => format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
+                };
+                return Err(Error::StdPath {
+                    code: "E0369",
+                    message: message.into(),
+                    label: None,
+                    note: None,
+                    reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
+                });
+            }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
         // An `i128` or a `u128` past `i64` is boxed: its operators are
@@ -32021,7 +32683,7 @@ impl<'a> Parser<'a> {
         };
         let Some((definition, partial)) = partial_cmp else {
             // A std type std doesn't order (rustc's E0369).
-            if self.std_declared(&Compared::Ty(peeled.clone()))
+            if self.std_declared(&peeled)
                 && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -32153,18 +32815,15 @@ impl<'a> Parser<'a> {
     }
 
     /// A compared type as rustc names it.
-    fn compared_name(&self, side: &Compared) -> ImmutableString {
-        match side {
-            Compared::Ty(ty) => self.inference.resolve(ty).name(&self.models),
-            Compared::Str => "str".into(),
-        }
+    fn compared_name(&self, side: &Ty) -> ImmutableString {
+        self.inference.resolve(side).name(&self.models)
     }
 
     fn equality(
         &mut self,
         operator: Token,
         operator_at: Option<Span>,
-        lhs: ParsedExpr,
+        mut lhs: ParsedExpr,
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
         let negate = matches!(operator, Token::NotEqualsTo);
@@ -32181,8 +32840,8 @@ impl<'a> Parser<'a> {
         // compares their values as they are; `Self`'s takes the right
         // operand as the left's type.
         let (left, right) = (
-            Compared::Ty(self.inference.resolve(&lhs.ty)),
-            Compared::Ty(self.inference.resolve(&rhs.ty)),
+            self.inference.resolve(&lhs.ty),
+            self.inference.resolve(&rhs.ty),
         );
         match self.std_partial_eq(&left, &right) {
             Ok(PartialEqImpl::Own) => {
@@ -32200,6 +32859,9 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+        // A `Cow` compares what it derefs to, as std's impls for it do.
+        self.cow_compared(&mut lhs);
+        self.cow_compared(&mut rhs);
         // `&T == &T` compares the referents, as Rust's `PartialEq for &A` does,
         // and `Box<T> == Box<T>` their contents.
         let mut peeled = self.inference.resolve(&lhs.ty);
@@ -32687,6 +33349,17 @@ impl<'a> Parser<'a> {
                 Err(placeholder) => placeholder,
             };
             let (ty, at) = types[index].clone();
+            // A formatting argument is sized (rustc's E0277): `*s` of a
+            // `&str` is no argument, `s` is.
+            if ty == Ty::UnsizedStr {
+                return Err(Error::MissingCapability {
+                    owner: "str".into(),
+                    capability: "Sized".into(),
+                    operation: at,
+                    derive: false,
+                    required_by: None,
+                });
+            }
             let name = origin::Fragment::plain(names[index].as_str());
             let count = |count: &Option<FormatCount>| {
                 count.as_ref().map(|count| match count {
@@ -32931,6 +33604,7 @@ impl<'a> Parser<'a> {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Reverse(_)
+            | Ty::Cow(_)
             | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
@@ -32996,7 +33670,8 @@ impl<'a> Parser<'a> {
                 | Ty::Boxed(target)
                 | Ty::Counted(_, target)
                 | Ty::Option(target)
-                | Ty::Reverse(target) => inside(this, &target, seen),
+                | Ty::Reverse(target)
+                | Ty::Cow(target) => inside(this, &target, seen),
                 Ty::Array { element, .. } => inside(this, &element, seen),
                 Ty::Result(ok, err) => inside(this, &ok, seen) || inside(this, &err, seen),
                 Ty::Tuple(members) | Ty::Keyed(_, members) => {
@@ -33147,6 +33822,24 @@ impl<'a> Parser<'a> {
         let path = path.collect::<Vec<_>>().join("::");
         crate::resolve::std_ordering(&path)
             && (path != "Ordering" || self.models.get("Ordering").is_none())
+    }
+
+    /// rustc's error for a std type's bare `name` that nothing in scope
+    /// binds: no generic parameter, declaration, alias or `use`, and not
+    /// std's prelude (`std_path::unbound_type`). `head` when it heads a
+    /// path, as `HashMap::new()`.
+    fn unbound_std_type(&self, name: &str, head: bool, reference: Span) -> Result<(), Error> {
+        if self.generics.contains_key(name)
+            || self.models.get(name).is_some()
+            || self.models.alias(name).is_some()
+            || self.models.import(name).is_some()
+        {
+            return Ok(());
+        }
+        match crate::resolve::std_path::unbound_type(name, head, reference) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     /// `Duration::from_secs` or `std::time::Instant::now` after its first
@@ -33485,10 +34178,8 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        self.closure_hints = vec![Some(Box::default())];
-        let arguments = self.parse_call_arguments("`Ordering` method arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&Ty::Ordering, &member, "`Ordering` method arguments")?;
         let receiver = value.rendered_source().surrounded("(", ")");
         let comparison = match member.as_str() {
             "is_eq" => Some("== 0"),
@@ -34066,13 +34757,8 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
-        // `retain`'s closure takes each `char`.
-        if member.as_str() == "retain" {
-            self.closure_hints = vec![Some(Box::new([Ty::Char]))];
-        }
-        let arguments = self.parse_call_arguments("string method arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&value.ty, &member, "string method arguments")?;
         for argument in &mut arguments {
             self.strip_string_reference(argument);
         }
@@ -34430,9 +35116,13 @@ impl<'a> Parser<'a> {
                 self.borrow_temporary(&operand, whole);
             }
             self.hold_temporary(&mut operand)?;
-            operand.ty = Ty::Reference {
-                mutable: false,
-                target: Box::new(self.inference.resolve(&operand.ty)),
+            // `&*s` of a `String`: a `&str`.
+            operand.ty = match self.inference.resolve(&operand.ty) {
+                Ty::UnsizedStr => Ty::Str,
+                target => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(target),
+                },
             };
             operand.span = span(start, operand.span.end());
             // `&s.a.b`: the field chain a call may lend (`lend_argument`).
@@ -34449,10 +35139,26 @@ impl<'a> Parser<'a> {
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
             let resolved = self.inference.resolve(&operand.ty);
-            let (Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target)) =
-                resolved.clone()
-            else {
-                return Err(self.unsupported("`*` on a value that is not a reference or box"));
+            let target = match resolved.clone() {
+                Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => target,
+                // `*s` of a `&str` is the `str` it refers to.
+                Ty::Str => Box::new(Ty::UnsizedStr),
+                // `*s` of a `String` or a `Cow`: its `Deref` target, from
+                // std's impls.
+                ty => match self.deref_target(&ty, false) {
+                    Some((
+                        target,
+                        call @ (std_impl::DerefCall::Value | std_impl::DerefCall::Cow),
+                    )) => {
+                        self.apply_derefs(&mut operand, vec![call], ty)?;
+                        Box::new(target)
+                    }
+                    _ => {
+                        return Err(
+                            self.unsupported("`*` on a value that is not a reference or box")
+                        )
+                    }
+                },
             };
             // `*v = x` through a `&mut` local or place (a map's entry, an
             // `and_modify` value) writes it.
@@ -34692,6 +35398,19 @@ impl<'a> Parser<'a> {
                 reference: *reference,
             };
         }
+        // An unstable one, as `Option::map_or_default`: rustc's E0658.
+        if let Error::UnknownMember {
+            member, reference, ..
+        } = &error
+            && let Some(ty) = self.std_probed.get(&reference.start())
+            && let Some(unstable) = std_method::steps(ty).into_iter().find_map(|step| {
+                crate::std_table::item(&format!("{}::{member}", step.owner))
+                    .filter(|item| item.kind == "assoc-fn")
+                    .and_then(|item| crate::resolve::std_path::unstable(item.stability, *reference))
+            })
+        {
+            return unstable;
+        }
         error
     }
 
@@ -34868,29 +35587,33 @@ impl<'a> Parser<'a> {
                 }
                 value.ty = unboxed;
             }
-            // A member a program's type lacks, through its `impl Deref`
-            // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
-            while let Some(id) = match self.inference.resolve(&value.ty) {
-                Ty::Script(id, _) => Some(id),
-                Ty::Reference { target, .. } => match self.inference.resolve(&target) {
-                    Ty::Script(id, _) => Some(id),
-                    _ => None,
-                },
-                _ => None,
-            } && !self.own_member(id, &member)
-            {
-                let reference = match self.inference.resolve(&value.ty) {
-                    reference @ Ty::Reference { .. } => reference,
-                    owned => Ty::Reference {
-                        mutable: false,
-                        target: Box::new(owned),
-                    },
-                };
-                let Some((ty, call)) = self.deref_reference(&reference, true) else {
+            // A `Cow`'s own method; any other member is its `Deref`
+            // target's.
+            if let Some(parsed) = self.cow_member(&mut value, &member, member_span)? {
+                value = parsed;
+                continue;
+            }
+            while let Ty::Cow(_) = self.inference.resolve(&value.ty) {
+                let owner = self.inference.resolve(&value.ty);
+                let Some((target, call)) = self.deref_target(&owner, false) else {
                     break;
                 };
-                self.apply_derefs(&mut value, vec![call], ty);
+                self.apply_derefs(&mut value, vec![call], target)?;
             }
+            if let Ty::Reference { target, .. } = self.inference.resolve(&value.ty)
+                && let Ty::Cow(_) = self.inference.resolve(&target)
+                && let Some((target, call)) = self.deref_target(&target, false)
+            {
+                self.apply_derefs(&mut value, vec![call], target)?;
+            }
+            // `(*s).len()`: `str`'s methods take it by reference, which the
+            // probe's autoref makes a `&str`.
+            if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+                value.ty = Ty::Str;
+            }
+            // A member a program's type lacks, through its `impl Deref`
+            // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
+            value = self.probe_derefs(value, &member, member_span)?;
             #[cfg(feature = "rust-import")]
             let (has_host, imported_definition) = {
                 let resolved = self.inference.resolve(&value.ty);
@@ -35326,6 +36049,18 @@ impl<'a> Parser<'a> {
                 let receiver = match &builtin {
                     Ty::Reference { target, .. } => (**target).clone(),
                     ty => ty.clone(),
+                };
+                // A `Vec<T>` or `[T; N]` without the method reaches its
+                // `[T]`'s impl, through `Deref` or unsizing, as a slice.
+                let receiver = match self.slice_impl_step(&receiver, &member) {
+                    Some((slice, mutable)) => {
+                        value.ty = Ty::Reference {
+                            mutable,
+                            target: Box::new(slice.clone()),
+                        };
+                        slice
+                    }
+                    None => receiver,
                 };
                 // Rust probes the receiver by value before it autorefs it:
                 // on a value (not a reference), a trait function taking
@@ -36171,8 +36906,7 @@ impl<'a> Parser<'a> {
         // Each pointer's `Deref` target, from std's impls.
         let mut inner = boxed.clone();
         while let Ty::Boxed(..) = inner
-            && let Some((Compared::Ty(target), std_impl::DerefCall::Value)) =
-                self.deref_target(&inner, false)
+            && let Some((target, std_impl::DerefCall::Value)) = self.deref_target(&inner, false)
         {
             inner = self.inference.resolve(&target);
         }
@@ -36776,6 +37510,9 @@ impl<'a> Parser<'a> {
         }
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
+        }
+        if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
+            self.unbound_std_type(&name, true, name_span)?;
         }
 
         // `Type::<A>::member`: the path without its arguments, its value
@@ -38020,6 +38757,14 @@ impl<'a> Parser<'a> {
                 return self.parse_prelude_constructor(Prelude::Some, start);
             }
         }
+        // `Cow::Borrowed(..)`, `std::borrow::Cow::Owned(..)`.
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some((member, member_span)) = self.cow_member_ahead(&name)
+        {
+            let start = Span::new(name_span.start(), member_span.end());
+            return self.parse_cow_associated(&member, start);
+        }
         if matches!(name.as_str(), "Option" | "Result")
             && matches!(self.peek(), Token::DoubleColon)
             && !shadowed(self, &name)
@@ -38446,6 +39191,14 @@ impl<'a> Parser<'a> {
         self.mention(&name, declaration, &ty, name_span);
         if let Some(element) = self.aliased_element(&name, declaration, &ty, name_span)? {
             return Ok(element);
+        }
+        if let Some(held) = self
+            .held_iter_mut
+            .get(&name)
+            .filter(|held| held.declaration == declaration)
+            .cloned()
+        {
+            return self.step_iter_mut(&name, held, name_span);
         }
         // A local bound to a `RefCell` borrow: the cell's value. A closure
         // or async body reads its own borrows, not one it captures.
@@ -40243,18 +40996,9 @@ impl<'a> Parser<'a> {
             mutable: false,
             target: Box::new(element.clone()),
         };
-        // A closure argument takes the parameter type Rust infers for it.
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        self.closure_hints = match member.as_str() {
-            "map" | "and_then" | "is_some_and" | "is_none_or" => vec![hint(vec![element.clone()])],
-            "map_or" => vec![None, hint(vec![element.clone()])],
-            "filter" => vec![hint(vec![reference.clone()])],
-            "unwrap_or_else" | "or_else" | "ok_or_else" => vec![hint(Vec::new())],
-            _ => Vec::new(),
-        };
         self.script_callables = true;
-        let (mut arguments, end) = self.parse_call_arguments("`Option` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&owner, &member, "`Option` method arguments")?;
         self.builtin_enum_receiver(&mut value, None, &member, &arguments, member_span)?;
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
@@ -40580,15 +41324,32 @@ impl<'a> Parser<'a> {
             // `Option<&[u8]>`, `Option<Box<T>>` `Option<&T>`.
             "as_deref" | "as_deref_mut" => {
                 arity(0, &arguments)?;
-                source.push_text(o.as_str());
                 let mutable = member.as_str() == "as_deref_mut";
                 let reference = Ty::Reference {
                     mutable,
                     target: Box::new(self.inference.resolve(&element)),
                 };
                 match self.deref_reference(&reference, false) {
-                    Some((target, std_impl::DerefCall::Value)) => Ty::Option(Box::new(target)),
+                    Some((target, std_impl::DerefCall::Value)) => {
+                        source.push_text(o.as_str());
+                        Ty::Option(Box::new(target))
+                    }
                     // A program's `deref` runs on the value inside.
+                    Some((target, std_impl::DerefCall::Program(call))) if !mutable => {
+                        source.push_text("if ");
+                        let test = is(self);
+                        source.push(test);
+                        source.push_text(" { ");
+                        let unwrapped = unwrap(self);
+                        let dereferenced = Self::std_call(&call, unwrapped, &[]);
+                        let some = self.prelude_op(PreludeOp::Some, [dereferenced]);
+                        source.push(some);
+                        source.push_text(" } else { ");
+                        let none = self.prelude_op(PreludeOp::None, []);
+                        source.push(none);
+                        source.push_text(" }");
+                        Ty::Option(Box::new(target))
+                    }
                     Some(_) => {
                         return Err(Error::NotYet {
                             path: format!("Option::{member}").into(),
@@ -40695,11 +41456,8 @@ impl<'a> Parser<'a> {
         value: ParsedExpr,
         member: ImmutableString,
     ) -> Result<ParsedExpr, Error> {
-        if member.as_str() == "then" {
-            self.closure_hints = vec![Some(Box::default())];
-        }
-        let (mut arguments, end) = self.parse_call_arguments("`bool` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&Ty::Bool, &member, "`bool` method arguments")?;
         let expression = span(value.span.start(), end);
         let [argument] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(
@@ -40757,18 +41515,9 @@ impl<'a> Parser<'a> {
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Result(Box::new(ok.clone()), Box::new(err.clone()));
-        // A closure argument takes the parameter type Rust infers for it.
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        self.closure_hints = match member.as_str() {
-            "map" | "and_then" | "is_ok_and" => vec![hint(vec![ok.clone()])],
-            "map_err" | "or_else" | "unwrap_or_else" | "is_err_and" => {
-                vec![hint(vec![err.clone()])]
-            }
-            _ => Vec::new(),
-        };
         self.script_callables = true;
-        let (mut arguments, end) = self.parse_call_arguments("`Result` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&owner, &member, "`Result` method arguments")?;
         self.builtin_enum_receiver(
             &mut value,
             Some((&ok, &err)),
@@ -41424,6 +42173,11 @@ impl<'a> Parser<'a> {
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
         }
+        // A `Cow` writes what it derefs to.
+        if let Ty::Cow(borrowed) = &ty {
+            let payload = self.prelude_op(PreludeOp::CowValue, [value]);
+            return self.debug_source(&cow::payload_ty(borrowed), payload, span);
+        }
         if let Some(spec) = self.debug_spec.clone() {
             // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
             let leaf = match &ty {
@@ -41702,6 +42456,44 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The `[T]` whose program impl a trait method `member` of a `Vec<T>`
+    /// or `[T; N]` `receiver` runs when the receiver's type has none of its
+    /// own, and whether it takes `&mut self`: Rust's probe reaches the
+    /// slice through `Deref` or unsizing. `[T]` and `Vec<T>` are each
+    /// their own impl owner.
+    fn slice_impl_step(&self, receiver: &Ty, member: &ImmutableString) -> Option<(Ty, bool)> {
+        let Ty::Array {
+            element,
+            kind: sequence::Kind::Vec | sequence::Kind::Array(_),
+        } = receiver
+        else {
+            return None;
+        };
+        let has = |ty: &Ty| {
+            owner_id(ty).and_then(|owner| self.models.trait_methods.get(&(owner, member.clone())))
+        };
+        if has(receiver).is_some() {
+            return None;
+        }
+        let slice = Ty::sequence(sequence::Kind::Slice, (**element).clone());
+        let mutable = has(&slice)?
+            .iter()
+            .any(|definition| definition.receiver() == Some(receiver::Mode::Mutable));
+        Some((slice, mutable))
+    }
+
+    /// The range operand of `drain(r)` or `range(r)`, between `open` and
+    /// `end`: a value of `usize`s, which holds no borrow, for the call's
+    /// summary to read.
+    fn range_operand(&mut self, open: Position, end: Position) {
+        let range = super::borrowck::record::Argument {
+            span: span(open, end),
+            holds: false,
+            returns: false,
+        };
+        self.flow().call_operands(&[range], end);
+    }
+
     /// The `Vec`, array and slice methods Rust code reaches for.
     fn parse_array_method(
         &mut self,
@@ -41726,6 +42518,8 @@ impl<'a> Parser<'a> {
         // A `VecDeque` is an array at runtime, whose back is its end: its
         // methods `DEQUE_METHODS` names run as the `Vec`'s, and the others
         // std has are not run yet.
+        // The member as written, whose declaration types its closures.
+        let written = member.clone();
         let member: ImmutableString = if kind == sequence::Kind::Deque {
             let Some((_, runs)) = DEQUE_METHODS
                 .iter()
@@ -41816,9 +42610,10 @@ impl<'a> Parser<'a> {
         }
         // `v.drain(range)`: the removed elements, as an iterator.
         if member.as_str() == "drain" {
-            self.expect(Token::LeftParen, "'(' after `drain`")?;
+            let open = self.expect(Token::LeftParen, "'(' after `drain`")?;
             let bounds = self.parse_range_or_expr()?;
             let end = self.expect(Token::RightParen, "')' after `drain`'s range")?;
+            self.range_operand(open, end);
             let Err((low, high, inclusive)) = bounds else {
                 return Err(self.unsupported("`drain` of something other than a range"));
             };
@@ -41838,6 +42633,39 @@ impl<'a> Parser<'a> {
             let ty = Ty::Iter(Box::new(element));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
+        // A deque's `range(r)`: an iterator over references to the
+        // elements of `r`, which is the array's own range.
+        if kind == sequence::Kind::Deque && member.as_str() == "range" {
+            let open = self.expect(Token::LeftParen, "'(' after `range`")?;
+            let bounds = self.parse_range_or_expr()?;
+            let end = self.expect(Token::RightParen, "')' after `range`'s range")?;
+            self.range_operand(open, end);
+            let Err((low, high, inclusive)) = bounds else {
+                return Err(self.unsupported("`range` of something other than a range"));
+            };
+            let mut operands = vec![value.rendered_source().surrounded("(", ")")];
+            for (bound, open) in [(low, "0"), (high, "-1")] {
+                operands.push(match bound {
+                    Some(bound) => {
+                        self.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                        bound.rendered_source()
+                    }
+                    None => open.into(),
+                });
+            }
+            operands.push(inclusive.to_string().into());
+            let slice = self.prelude_op(PreludeOp::Slice, operands);
+            let slice = self.operator_expr(
+                slice,
+                Ty::sequence(sequence::Kind::Slice, element.clone()),
+                span(value.span.start(), end),
+            );
+            let item = Ty::Reference {
+                mutable: false,
+                target: Box::new(element),
+            };
+            return Ok(self.array_iterator(&slice, item, end));
+        }
         // `[T; N]::map(f)`: `[U; N]`, each element passed by value.
         if member.as_str() == "map"
             && let Ty::Array {
@@ -41845,10 +42673,8 @@ impl<'a> Parser<'a> {
                 ..
             } = self.inference.resolve(&value.ty)
         {
-            self.closure_hints = vec![Some(Box::new([element.clone()]) as Box<[Ty]>)];
-            let arguments = self.parse_call_arguments("array method arguments");
-            self.closure_hints = Vec::new();
-            let (mut arguments, end) = arguments?;
+            let (mut arguments, end) =
+                self.parse_std_arguments(&value.ty, &member, "array method arguments")?;
             let [callable] = arguments.as_mut_slice() else {
                 return Err(Error::argument_count(
                     Callee::Method,
@@ -41882,36 +42708,57 @@ impl<'a> Parser<'a> {
                 span(value.span.start(), end),
             ));
         }
-        // A closure argument takes the parameter types Rust infers for it.
+        // `v.get(low..high)`: std's `SliceIndex` of a range, an
+        // `Option<&[T]>`. `VecDeque::get` takes an index alone.
+        if member.as_str() == "get"
+            && kind != sequence::Kind::Deque
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            self.next();
+            let bounds = self.parse_range_or_expr()?;
+            let end = self.expect(Token::RightParen, "')' after call arguments")?;
+            let operands: Vec<_> = match &bounds {
+                Ok(index) => vec![self.argument_fact(index)],
+                Err((low, high, _)) => low
+                    .iter()
+                    .chain(high)
+                    .map(|bound| self.argument_fact(bound))
+                    .collect(),
+            };
+            self.flow().call_operands(&operands, end);
+            match bounds {
+                Ok(index) => self.pending_arguments = Some((vec![index], end)),
+                Err((low, high, inclusive)) => {
+                    let mut operands = vec![value.rendered_source().surrounded("(", ")")];
+                    for (bound, open) in [(low, "0"), (high, "-1")] {
+                        operands.push(match bound {
+                            Some(bound) => {
+                                self.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                                bound.rendered_source()
+                            }
+                            None => open.into(),
+                        });
+                    }
+                    operands.push(inclusive.to_string().into());
+                    let source = self.prelude_op(PreludeOp::SliceGetRange, operands);
+                    let slice = Ty::Reference {
+                        mutable: false,
+                        target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                    };
+                    let ty = Ty::Option(Box::new(slice));
+                    return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+                }
+            }
+        }
         let reference = Ty::Reference {
             mutable: false,
             target: Box::new(element.clone()),
         };
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        // `v.iter().min_by_key(..)` passes `&&T`: a reference to the
-        // iterator's `&T`.
-        let borrowed = Ty::Reference {
-            mutable: false,
-            target: Box::new(reference.clone()),
-        };
-        self.closure_hints = match member.as_str() {
-            "sort_by" | "sort_unstable_by" => {
-                vec![hint(vec![reference.clone(), reference.clone()])]
-            }
-            "min_by" | "max_by" => vec![hint(vec![borrowed.clone(), borrowed])],
-            "sort_by_key" | "sort_unstable_by_key" | "retain" => {
-                vec![hint(vec![reference.clone()])]
-            }
-            "min_by_key" | "max_by_key" => vec![hint(vec![borrowed])],
-            _ => Vec::new(),
-        };
-        let arguments = if member.as_str() == "append" {
-            self.parse_borrowing_arguments("array method arguments")
+        let (mut arguments, end) = if member.as_str() == "append" {
+            self.parse_borrowing_arguments("array method arguments")?
         } else {
-            self.parse_call_arguments("array method arguments")
+            self.parse_std_arguments(&receiver_ty, &written, "array method arguments")?
         };
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
         if let Some(sorted) = self.parse_sort_method(&value, &element, &member, &mut arguments)? {
             return Ok(self.operator_expr(sorted, Ty::Unit, span(value.span.start(), end)));
         }
@@ -42164,6 +43011,31 @@ impl<'a> Parser<'a> {
                 };
                 (source, ty)
             }
+            // A deque's `remove(i)`, `swap_remove_back(i)` and
+            // `swap_remove_front(i)`, `None` past its end, and its
+            // `rotate_left(n)` and `rotate_right(n)`.
+            (
+                "deque_remove" | "swap_remove_back" | "swap_remove_front" | "rotate_left"
+                | "rotate_right",
+                [index],
+            ) if kind == sequence::Kind::Deque => {
+                self.coerce_expr(&Ty::Int(Int::Usize), index)?;
+                let code = vec_method_code(member.as_str()).to_string();
+                let operands = vec![
+                    code.into(),
+                    index.rendered_source(),
+                    "()".into(),
+                    "()".into(),
+                ];
+                let helper = self.push_op(Op::Prelude(PreludeOp::VecMethod));
+                let source = self.mutation_call(&value, &helper, operands)?;
+                let ty = if member.starts_with("rotate") {
+                    Ty::Unit
+                } else {
+                    Ty::Option(Box::new(element))
+                };
+                (source, ty)
+            }
             ("truncate", [_]) | ("reverse" | "clear", []) | ("retain", [_]) => {
                 let mut operands = Vec::new();
                 if let [argument] = arguments.as_mut_slice() {
@@ -42334,6 +43206,17 @@ impl<'a> Parser<'a> {
                     ],
                 )?;
                 (source.surrounded("{ ", "; }"), Ty::Unit)
+            }
+            // A deque's `as_slices()`: the whole, which is contiguous at
+            // runtime and a slice of it as `as_slice` is, then an empty
+            // slice.
+            ("as_slices", []) if kind == sequence::Kind::Deque => {
+                let source = receiver.surrounded("[", ", []]");
+                let half = Ty::Reference {
+                    mutable: false,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                (source, Ty::Tuple(Box::new([half.clone(), half])))
             }
             // `split_at(mid)`: the two halves, `(&[T], &[T])`.
             ("split_at", [mid]) => {
@@ -44678,6 +45561,27 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
+    /// The arguments of a call of std's method `member` on the native
+    /// `receiver`, each closure among them with the parameter types std's
+    /// declaration gives it (#795), whether or not rawr runs the method:
+    /// `v.dedup_by_key(|x| *x / 2)` reads `x` as `&mut T`, and fails with the
+    /// method's not-yet error, not inside the closure.
+    fn parse_std_arguments(
+        &mut self,
+        receiver: &Ty,
+        member: &str,
+        context: &str,
+    ) -> Result<(Vec<ParsedExpr>, Position), Error> {
+        let receiver = self.inference.resolve(receiver);
+        let declared = std_method::arguments(&receiver, member, &mut || self.inference.fresh());
+        self.closure_hints = declared.closures;
+        self.generic_argument_hints = declared.generics;
+        let arguments = self.parse_call_arguments(context);
+        self.closure_hints = Vec::new();
+        self.generic_argument_hints = Vec::new();
+        arguments
+    }
+
     fn parse_call_arguments(
         &mut self,
         context: &str,
@@ -44883,6 +45787,21 @@ impl<'a> Parser<'a> {
                 mutation: operation,
                 receiver: binding.declaration,
             },
+            // The method's `&mut self` borrows the local itself: rustc's
+            // E0596, as for std's methods.
+            BindingKind::Local | BindingKind::Invocation
+                if matches!(writeback, Writeback::Direct) =>
+            {
+                Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                }
+            }
             BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
                 binding: name,
                 mutation: operation,
@@ -47431,6 +48350,15 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        // A bare `str`, as `Cow<'_, str>` writes it: rustc's unsized `str`.
+        if name.as_str() == "str"
+            && !matches!(self.peek(), Token::DoubleColon)
+            && self.models.get(&name).is_none()
+        {
+            return Ok(Ty::UnsizedStr);
+        }
+        let head = matches!(self.peek(), Token::DoubleColon);
+        self.unbound_std_type(&name, head, name_span)?;
         // `dyn Fn(A) -> B` and `dyn Trait`.
         if name.as_str() == "dyn" && !self.models.get(&name).is_some() {
             // `dyn for<'a> Fn(&'a T)`.
@@ -47547,6 +48475,9 @@ impl<'a> Parser<'a> {
                     name_span,
                 )?;
                 if let Some(spelling) = std.and_then(crate::resolve::std_path::spelling) {
+                    if spelling == "Cow" {
+                        return self.parse_cow_type();
+                    }
                     name = spelling.into();
                 }
             }
@@ -47685,6 +48616,9 @@ impl<'a> Parser<'a> {
             && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
+        }
+        if self.cow_named(&name) && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
+            return self.parse_cow_type();
         }
         if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
         {
@@ -48444,7 +49378,7 @@ impl<'a> Parser<'a> {
         // program's calls its `deref`.
         if let Some((ty, calls)) = self.deref_coercion(&target, &source) {
             source = ty.clone();
-            self.apply_derefs(value, calls, ty);
+            self.apply_derefs(value, calls, ty)?;
         }
         // A reborrow: `&mut T` where `&T` is expected, as a `&mut Game`
         // parameter passed on to a function that only reads it. The
@@ -48891,11 +49825,31 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        // Text converts into the std type its `let` or caller expects
+        // through std's `From` of it (`Cow<str>`).
+        if source.is_text()
+            && let Some(target) = self
+                .collect_hint
+                .as_ref()
+                .filter(|(_, depth)| *depth == self.expression_stack.len())
+                .map(|(target, _)| self.inference.resolve(target))
+            && !matches!(target, Ty::String | Ty::Infer(_))
+            && let Some(op) = self.std_conversion(&target, &source)
+        {
+            if let Some(op) = op {
+                value.source = self.prelude_op(op, [value.rendered_source()]);
+                value.prelude = origin::Fragment::default();
+            }
+            value.ty = target;
+            return Ok(value.retain_origin());
+        }
         // Text converts into a `String`, through `From<&str>` or
-        // `From<T> for T` (or into a boxed error, `box_returned_error`).
+        // `From<T> for T` (or into a boxed error, `box_returned_error`):
+        // the target the use site gives, which rustc needs (E0283).
         if source.is_text() {
-            self.text_into.push(value.span);
-            value.ty = Ty::String;
+            let target = self.inference.fresh();
+            self.text_into.push((value.span, source, target.clone()));
+            value.ty = target;
         }
         Ok(value.retain_origin())
     }
@@ -49479,6 +50433,7 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
+            | (Ty::Cow(expected_element), Ty::Cow(actual_element))
             | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
             }
@@ -50783,6 +51738,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Boxed(target)
         | Ty::Iter(target)
         | Ty::Reverse(target)
+        | Ty::Cow(target)
         | Ty::Range(target)
         | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
@@ -51354,6 +52310,10 @@ fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> Str
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
     }
+    // A `Cow` writes what it derefs to.
+    if let Some(inner) = cow::payload(value) {
+        return debug_value_spec(&inner, models, spec);
+    }
     if let Some(option) = crate::option::read(value) {
         return match option {
             Some(inner) => format!("Some({})", debug_value_spec(&inner, models, spec)),
@@ -51810,6 +52770,10 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return compare_value(&rhs.0, &lhs.0, models);
     }
+    // A `Cow` orders as what it derefs to.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // An `i128` or a `u128` past `i64`, boxed.
     if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
         && let Some(ordering) = wide_order(lhs, rhs)
@@ -51919,6 +52883,10 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
     ) {
         return equal_value(&lhs.0, &rhs.0);
+    }
+    // A `Cow` compares what it derefs to, `Borrowed` or `Owned`.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return equal_value(&lhs, &rhs);
     }
     if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
         return match (lhs, rhs) {
@@ -52834,10 +53802,16 @@ const VEC_METHODS: &[&str] = &[
     "extend_move",
     "extend_copy",
     "extend_clone",
+    "deque_remove",
+    "swap_remove_back",
+    "swap_remove_front",
+    "rotate_left",
+    "rotate_right",
 ];
 
 /// The `VecDeque` methods rawr runs, each as the `Vec` method of an array
-/// whose back is its end. std's others are not run yet (D712.1).
+/// whose back is its end, or as an operation of the deque's own (`remove`'s
+/// `Option`, `range`, `as_slices`). std's others are not run yet (D712.1).
 const DEQUE_METHODS: &[(&str, &str)] = &[
     ("push_back", "push"),
     ("pop_back", "pop"),
@@ -52867,6 +53841,14 @@ const DEQUE_METHODS: &[(&str, &str)] = &[
     ("resize", "resize"),
     ("resize_with", "resize_with"),
     ("clone", "clone"),
+    ("remove", "deque_remove"),
+    ("swap_remove_back", "swap_remove_back"),
+    ("swap_remove_front", "swap_remove_front"),
+    ("rotate_left", "rotate_left"),
+    ("rotate_right", "rotate_right"),
+    ("range", "range"),
+    ("as_slices", "as_slices"),
+    ("make_contiguous", "as_mut_slice"),
 ];
 
 /// A `VEC_METHODS` code by name.
@@ -53222,6 +54204,27 @@ fn vec_method(context: Option<&NativeCallContext<'_>>, args: &mut FnCallArgs) ->
             Some(last) => crate::option::some(last),
             None => crate::option::none(),
         }),
+        // A deque's removals, `None` past its end.
+        Some("deque_remove" | "swap_remove_back" | "swap_remove_front") if a >= len => {
+            Ok(crate::option::none())
+        }
+        Some("deque_remove") => Ok(crate::option::some(array.remove(a))),
+        Some("swap_remove_back") => Ok(crate::option::some(array.swap_remove(a))),
+        Some("swap_remove_front") => {
+            array.swap(0, a);
+            Ok(crate::option::some(array.remove(0)))
+        }
+        Some("rotate_left" | "rotate_right") if a > len => {
+            fail("assertion failed: n <= self.len()".into())
+        }
+        Some("rotate_left") => {
+            array.rotate_left(a);
+            Ok(Dynamic::UNIT)
+        }
+        Some("rotate_right") => {
+            array.rotate_right(a);
+            Ok(Dynamic::UNIT)
+        }
         Some("pop_front") if array.is_empty() => Ok(crate::option::none()),
         Some("pop_front") => Ok(crate::option::some(array.remove(0))),
         // A changed copy of `array[a..]` stored back over it.
@@ -53659,16 +54662,29 @@ fn char_method(c: char, name: &str, argument: &Dynamic) -> Dynamic {
 
 /// `Slice` (`v[low..high]`) and `SplitAt` (`v.split_at(mid)`) of an array
 /// or a string, a copy of the range, with Rust's panics for a range out of
-/// bounds or a string index off a `char` boundary.
+/// bounds or a string index off a `char` boundary. `SliceGetRange`
+/// (`v.get(low..high)`) is `None` where `Slice` panics, and `Some` of the
+/// copy.
 fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
+    let checked = op == PreludeOp::SliceGetRange;
     let fail = |message: String| -> RawrResult {
+        if checked {
+            return Ok(crate::option::none());
+        }
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let found = |value: Dynamic| -> RawrResult {
+        Ok(if checked {
+            crate::option::some(value)
+        } else {
+            value
+        })
     };
     let text = args[0].clone().into_immutable_string().ok();
     let len = match (&text, args[0].as_array_ref()) {
         (Some(text), _) => text.len(),
         (None, Ok(array)) => array.len(),
-        (None, Err(_)) => return fail("a slice is not an array or a string at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array or a string at runtime")),
     };
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
     let (low, high) = if op == PreludeOp::SplitAt {
@@ -53709,7 +54725,7 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                 let (left, right) = text.split_at(low);
                 vec![left.into(), right.into()]
             } else {
-                return Ok(Dynamic::from(ImmutableString::from(&text[low..high])));
+                return found(Dynamic::from(ImmutableString::from(&text[low..high])));
             }
         }
         (None, Ok(array)) => {
@@ -53719,10 +54735,10 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                     Dynamic::from_array(array[low..].to_vec()),
                 ]
             } else {
-                return Ok(Dynamic::from_array(array[low..high].to_vec()));
+                return found(Dynamic::from_array(array[low..high].to_vec()));
             }
         }
-        (None, Err(_)) => return fail("a slice is not an array at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array at runtime")),
     };
     Ok(Dynamic::from_array(pieces))
 }
@@ -54469,6 +55485,7 @@ fn binds_by_value(pattern: &PatternSyntax) -> bool {
         }
         PatternSyntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
         PatternSyntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
+        PatternSyntax::Cow { payload, .. } => binds_by_value(payload),
         PatternSyntax::Slice {
             before,
             rest,

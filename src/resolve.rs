@@ -1394,10 +1394,11 @@ fn resolve_imports(
                     )),
                 );
             }
-            // A std type Rawr has no representation for yet names it, so
-            // its uses say so.
+            // A std type names its std path, which a path through it
+            // resolves by, unless it names one of Rawr's types above.
             if matches!(binding.target, item::Import::Module)
-                && let Some(path) = std_path::unrepresented_type(&binding.qualified)
+                && !types.contains_key(&binding.name.text)
+                && let Some(path) = std_path::bound_type(&binding.qualified)
             {
                 types.insert(binding.name.text.clone(), type_ref::Target::Std(path));
             }
@@ -1688,9 +1689,9 @@ pub(crate) fn std_reverse(path: &str) -> bool {
 }
 
 /// `std::collections::HashMap` and its kin as a type path is written:
-/// `HashMap` (imported, or Rawr's when the crate has no type of that
-/// name), `collections::HashMap`, `std::collections::HashMap`; the
-/// collection's name.
+/// `HashMap` (which a `use` binds: a bare name nothing binds is refused
+/// before, by `std_path::unbound_type`), `collections::HashMap`,
+/// `std::collections::HashMap`; the collection's name.
 pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
     if let Some(collection) = hasher_alias(path) {
         return Some(collection);
@@ -1757,8 +1758,9 @@ pub(crate) fn renamed_std_type(qualified: &str, name: &str) -> Option<&'static s
 }
 
 /// `std::time::Duration` and `Instant` as a type path is written: bare
-/// (imported, or Rawr's when the crate has no type of that name), or by
-/// `time::`, `std::time::` or `core::time::`; the type's name.
+/// (which a `use` binds: a bare name nothing binds is refused before, by
+/// `std_path::unbound_type`), or by `time::`, `std::time::` or
+/// `core::time::`; the type's name.
 pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     let name = path
         .strip_prefix("std::time::")
@@ -1783,7 +1785,8 @@ pub(crate) fn std_plain_cell(path: &str) -> bool {
     matches!(path, "cell::Cell" | "std::cell::Cell" | "core::cell::Cell")
 }
 
-/// `std::cell::RefCell` as a path is written.
+/// `std::cell::RefCell` as a path is written. A bare `RefCell` nothing
+/// binds is refused before, by `std_path::unbound_type`.
 pub(crate) fn std_cell(path: &str) -> bool {
     matches!(
         path,
@@ -3112,9 +3115,10 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
                 "bool" => -5,
                 "char" => -6,
                 "Option" => -7,
-                // A slice's impl is its `Vec`'s: both are an array at
-                // runtime.
-                "Vec" | crate::item::type_ref::SLICE_TYPE => -8,
+                // `Vec<T>` and `[T]` are each their own owner, though
+                // both are an array at runtime.
+                "Vec" => -8,
+                crate::item::type_ref::SLICE_TYPE => -11,
                 "Result" => -10,
                 _ => return None,
             }

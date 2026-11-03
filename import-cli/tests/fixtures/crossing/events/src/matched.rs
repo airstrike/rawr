@@ -21,6 +21,10 @@ impl Door {
     pub fn close(self) -> String {
         format!("closed {}", self.name)
     }
+
+    pub fn rename(&mut self, name: &str) {
+        self.name = name.to_owned();
+    }
 }
 
 #[derive(Debug)]
@@ -31,6 +35,25 @@ pub enum Outcome {
         attempts: u32,
     },
     Idle,
+}
+
+/// An enum whose variants hold an `Outcome` and a `Door`, neither `Clone`,
+/// beside fields that are.
+#[derive(Debug)]
+pub enum Wrapped {
+    Held(Outcome, String),
+    Counted { door: Door, count: u32 },
+}
+
+pub fn held(outcome: Outcome, label: &str) -> Wrapped {
+    Wrapped::Held(outcome, label.to_owned())
+}
+
+pub fn counted(name: &str, count: u32) -> Wrapped {
+    Wrapped::Counted {
+        door: Door::new(name),
+        count,
+    }
 }
 
 pub fn open(name: &str) -> Outcome {

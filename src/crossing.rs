@@ -392,3 +392,25 @@ impl Slot {
 pub fn universe() {
     rawr_import::universe::set();
 }
+
+pub use crate::resolve::lower_nominal::counted::Link;
+
+/// A rawr `Rc` or `Arc` of `value`, the handle of a crate value a crate's
+/// own pointer holds, which `link` reads (#775).
+pub fn counted(value: Dynamic, link: Link) -> Dynamic {
+    crate::resolve::lower_nominal::counted::native(value, link)
+}
+
+/// The value the rawr `Rc` or `Arc` `pointer` points to, rawr's strong
+/// count of it, and whether `pointer` is rawr's only pointer to it, strong
+/// or weak.
+#[must_use]
+pub fn pointee(pointer: &Dynamic) -> Option<(Dynamic, usize, bool)> {
+    crate::resolve::lower_nominal::counted::pointee(pointer)
+}
+
+/// Link the rawr `Rc` or `Arc` `pointer` to the crate's own pointer `link`
+/// reads, where its value moved into one when it crossed (#775).
+pub fn link(pointer: &Dynamic, link: Link) {
+    crate::resolve::lower_nominal::counted::link(pointer, link);
+}

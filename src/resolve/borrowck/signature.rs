@@ -171,6 +171,19 @@ impl Reader<'_> {
                 let region = self.lifetime(span, path.span);
                 out.push((own, region));
             }
+            // `Cow<'a, B>` holds a borrow of its lifetime, of a `B` below
+            // it: `Cow<'a, str>` is a `&'a str` or a `String`.
+            Type::Path(path) if let Some(borrowed) = ty.cow_element() => {
+                let lifetime = path.arguments.iter().find_map(|argument| match argument {
+                    Argument::Lifetime(span) => Some(*span),
+                    Argument::Type(_) => None,
+                });
+                let region = self.lifetime(lifetime, path.span);
+                out.push((own, region));
+                if !borrowed.is_str() {
+                    self.positions(borrowed, at.push(Step::Arg(0)), output, out);
+                }
+            }
             // An iterator's value captures what it was made of; as an
             // output, its items are below it.
             Type::Path(_) if ty.iterator_item().is_some() => {
