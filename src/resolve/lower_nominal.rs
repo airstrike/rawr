@@ -31,6 +31,8 @@ mod comparison_tests;
 #[cfg(test)]
 mod copies_tests;
 #[cfg(test)]
+mod divergence_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
@@ -5618,6 +5620,9 @@ enum PreludeOp {
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
     Slice,
+    /// `v.get(low..high)`: `Slice`'s operands, `Some` of the copy, or
+    /// `None` where `Slice` panics.
+    SliceGetRange,
     /// `v.get(i)`, `first()` (`0`) and `last()` (`-1`): an `Option` of the
     /// element.
     SliceGet,
@@ -5776,6 +5781,7 @@ impl PreludeOp {
             Self::Cast => "number.cast",
             Self::WideLiteral => "number.wide-literal",
             Self::Slice => "slice.range",
+            Self::SliceGetRange => "slice.get-range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
@@ -5994,7 +6000,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::Slice => vec![
+            Self::Slice | Self::SliceGetRange => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
@@ -6317,7 +6323,9 @@ impl PreludeOp {
                     flags & 2 == 2,
                 )));
             }
-            Self::Slice | Self::SplitAt => return slice_value(self, args),
+            Self::Slice | Self::SliceGetRange | Self::SplitAt => {
+                return slice_value(self, args);
+            }
             Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
             Self::Memory => {
@@ -11577,9 +11585,10 @@ struct Parser<'a> {
     pending_parses: Vec<(Ty, Ty, Span, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
-    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
-    /// Error` (`error_object.rs`).
-    text_into: Vec<Span>,
+    /// The `text.into()` calls, each one's span, the text's type and the
+    /// target, which `Err(..)` may box as `dyn Error` (`error_object.rs`)
+    /// and the use site gives.
+    text_into: Vec<(Span, Ty, Ty)>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -16889,6 +16898,30 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        // A `text.into()` no use gives a target: rustc's E0283, as std has
+        // many `From<String>` impls. A target other than the text's own
+        // type or a `String` is one rawr doesn't convert into.
+        for (at, source, target) in std::mem::take(&mut self.text_into) {
+            match self.inference.resolve(&target) {
+                Ty::Infer(_) => {
+                    return Err(Error::StdPath {
+                        code: "E0283",
+                        message: "type annotations needed".into(),
+                        label: Some("type must be known at this point".into()),
+                        note: None,
+                        reference: at,
+                    });
+                }
+                target if target == Ty::String || target == source => {}
+                target => {
+                    return Err(Error::TypeMismatch {
+                        expected: target.name(&self.models),
+                        actual: Ty::String.name(&self.models),
+                        expression: at,
+                    });
+                }
+            }
+        }
         self.finish_formats()?;
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
             if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
@@ -31282,6 +31315,27 @@ impl<'a> Parser<'a> {
                     operand.ty = *target;
                 }
             }
+            // A left operand with no impl of the operator's trait, as
+            // `"a" + "b"`: rustc's E0369.
+            let left = self.inference.resolve(&lhs.ty);
+            if !matches!(left, Ty::Infer(_)) && !allowed_type(allowed, &left) {
+                let right = self.inference.resolve(&rhs.ty);
+                let (left, right) = (left.name(&self.models), right.name(&self.models));
+                let message = match symbol {
+                    "+" => format!("cannot add `{right}` to `{left}`"),
+                    "-" => format!("cannot subtract `{right}` from `{left}`"),
+                    "*" => format!("cannot multiply `{left}` by `{right}`"),
+                    "/" => format!("cannot divide `{left}` by `{right}`"),
+                    _ => format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
+                };
+                return Err(Error::StdPath {
+                    code: "E0369",
+                    message: message.into(),
+                    label: None,
+                    note: None,
+                    reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
+                });
+            }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
         // An `i128` or a `u128` past `i64` is boxed: its operators are
@@ -34783,6 +34837,19 @@ impl<'a> Parser<'a> {
                 path: std_method::path(&found).into(),
                 reference: *reference,
             };
+        }
+        // An unstable one, as `Option::map_or_default`: rustc's E0658.
+        if let Error::UnknownMember {
+            member, reference, ..
+        } = &error
+            && let Some(ty) = self.std_probed.get(&reference.start())
+            && let Some(unstable) = std_method::steps(ty).into_iter().find_map(|step| {
+                crate::std_table::item(&format!("{}::{member}", step.owner))
+                    .filter(|item| item.kind == "assoc-fn")
+                    .and_then(|item| crate::resolve::std_path::unstable(item.stability, *reference))
+            })
+        {
+            return unstable;
         }
         error
     }
@@ -41974,6 +42041,48 @@ impl<'a> Parser<'a> {
                 span(value.span.start(), end),
             ));
         }
+        // `v.get(low..high)`: std's `SliceIndex` of a range, an
+        // `Option<&[T]>`. `VecDeque::get` takes an index alone.
+        if member.as_str() == "get"
+            && kind != sequence::Kind::Deque
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            self.next();
+            let bounds = self.parse_range_or_expr()?;
+            let end = self.expect(Token::RightParen, "')' after call arguments")?;
+            let operands: Vec<_> = match &bounds {
+                Ok(index) => vec![self.argument_fact(index)],
+                Err((low, high, _)) => low
+                    .iter()
+                    .chain(high)
+                    .map(|bound| self.argument_fact(bound))
+                    .collect(),
+            };
+            self.flow().call_operands(&operands, end);
+            match bounds {
+                Ok(index) => self.pending_arguments = Some((vec![index], end)),
+                Err((low, high, inclusive)) => {
+                    let mut operands = vec![value.rendered_source().surrounded("(", ")")];
+                    for (bound, open) in [(low, "0"), (high, "-1")] {
+                        operands.push(match bound {
+                            Some(bound) => {
+                                self.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                                bound.rendered_source()
+                            }
+                            None => open.into(),
+                        });
+                    }
+                    operands.push(inclusive.to_string().into());
+                    let source = self.prelude_op(PreludeOp::SliceGetRange, operands);
+                    let slice = Ty::Reference {
+                        mutable: false,
+                        target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                    };
+                    let ty = Ty::Option(Box::new(slice));
+                    return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+                }
+            }
+        }
         // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
             mutable: false,
@@ -44975,6 +45084,21 @@ impl<'a> Parser<'a> {
                 mutation: operation,
                 receiver: binding.declaration,
             },
+            // The method's `&mut self` borrows the local itself: rustc's
+            // E0596, as for std's methods.
+            BindingKind::Local | BindingKind::Invocation
+                if matches!(writeback, Writeback::Direct) =>
+            {
+                Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                }
+            }
             BindingKind::Local | BindingKind::Invocation => Error::ImmutableBinding {
                 binding: name,
                 mutation: operation,
@@ -48984,10 +49108,12 @@ impl<'a> Parser<'a> {
         value.span = span(value.span.start(), end);
         value.lvalue = None;
         // Text converts into a `String`, through `From<&str>` or
-        // `From<T> for T` (or into a boxed error, `box_returned_error`).
+        // `From<T> for T` (or into a boxed error, `box_returned_error`):
+        // the target the use site gives, which rustc needs (E0283).
         if source.is_text() {
-            self.text_into.push(value.span);
-            value.ty = Ty::String;
+            let target = self.inference.fresh();
+            self.text_into.push((value.span, source, target.clone()));
+            value.ty = target;
         }
         Ok(value.retain_origin())
     }
@@ -53751,16 +53877,29 @@ fn char_method(c: char, name: &str, argument: &Dynamic) -> Dynamic {
 
 /// `Slice` (`v[low..high]`) and `SplitAt` (`v.split_at(mid)`) of an array
 /// or a string, a copy of the range, with Rust's panics for a range out of
-/// bounds or a string index off a `char` boundary.
+/// bounds or a string index off a `char` boundary. `SliceGetRange`
+/// (`v.get(low..high)`) is `None` where `Slice` panics, and `Some` of the
+/// copy.
 fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
+    let checked = op == PreludeOp::SliceGetRange;
     let fail = |message: String| -> RawrResult {
+        if checked {
+            return Ok(crate::option::none());
+        }
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let found = |value: Dynamic| -> RawrResult {
+        Ok(if checked {
+            crate::option::some(value)
+        } else {
+            value
+        })
     };
     let text = args[0].clone().into_immutable_string().ok();
     let len = match (&text, args[0].as_array_ref()) {
         (Some(text), _) => text.len(),
         (None, Ok(array)) => array.len(),
-        (None, Err(_)) => return fail("a slice is not an array or a string at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array or a string at runtime")),
     };
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
     let (low, high) = if op == PreludeOp::SplitAt {
@@ -53801,7 +53940,7 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                 let (left, right) = text.split_at(low);
                 vec![left.into(), right.into()]
             } else {
-                return Ok(Dynamic::from(ImmutableString::from(&text[low..high])));
+                return found(Dynamic::from(ImmutableString::from(&text[low..high])));
             }
         }
         (None, Ok(array)) => {
@@ -53811,10 +53950,10 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                     Dynamic::from_array(array[low..].to_vec()),
                 ]
             } else {
-                return Ok(Dynamic::from_array(array[low..high].to_vec()));
+                return found(Dynamic::from_array(array[low..high].to_vec()));
             }
         }
-        (None, Err(_)) => return fail("a slice is not an array at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array at runtime")),
     };
     Ok(Dynamic::from_array(pieces))
 }

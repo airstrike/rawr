@@ -227,8 +227,8 @@ fn shared_receivers_and_immutable_bindings_cannot_mutate() {
     assert_resolution(
         &Engine::new(),
         "struct Counter { value: i64 } impl Counter { fn increment(&mut self) { self.value += 1; } } let counter = Counter { value: 0 }; counter.increment();",
-        Category::ImmutableBinding,
-        "immutable binding 'counter'",
+        Category::BorrowConflict,
+        "cannot borrow `counter` as mutable, as it is not declared as mutable",
     );
 
     let shared_field = resolution_error(
