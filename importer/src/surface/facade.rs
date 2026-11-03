@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 39;
+const SCHEMA: u32 = 40;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -840,7 +840,9 @@ type OpaqueUse = ([u8; 32], Box<[Box<str>]>);
 
 impl Type {
     /// Each type among `opaque` this type names, with the names of its
-    /// parameters: those of the item's parameters its arguments are.
+    /// parameters: each by its position, so every item that names the
+    /// type declares it alike, as each type's `Widget::explain` names the
+    /// one opaque type its trait's default body gives.
     fn opaque(&self, opaque: &std::collections::BTreeSet<[u8; 32]>, found: &mut Vec<OpaqueUse>) {
         match self {
             Self::Nominal {
@@ -848,13 +850,8 @@ impl Type {
                 arguments,
             } => {
                 if opaque.contains(identity) {
-                    let names = arguments
-                        .iter()
-                        .enumerate()
-                        .map(|(position, argument)| match argument {
-                            Self::Parameter(name) => name.clone(),
-                            _ => format!("T{position}").into(),
-                        })
+                    let names = (0..arguments.len())
+                        .map(|position| format!("T{position}").into())
                         .collect();
                     found.push((*identity, names));
                 }
