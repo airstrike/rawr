@@ -40,6 +40,8 @@ mod rust_meaning_tests;
 mod std_impl_tests;
 #[cfg(test)]
 mod std_method_tests;
+#[cfg(test)]
+mod str_tests;
 
 use super::borrowck::{
     record,
@@ -8301,14 +8303,6 @@ impl Counter {
     }
 }
 
-/// A type as std's impls take it: a type, or `str`, which Rawr's types
-/// hold only as the referent of a `&str` (`Ty::Str`).
-#[derive(Clone, Debug, PartialEq)]
-enum Compared {
-    Ty(Ty),
-    Str,
-}
-
 /// Which `PartialEq` impl an `==` resolves to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartialEqImpl {
@@ -8392,6 +8386,11 @@ enum Ty {
     /// float literal's kind still to be inferred.
     Float(Float),
     String,
+    /// `str`, rustc's unsized text: what `*` of a `&str` or a `String`
+    /// gives, usable only as a place (`&*s`, a comparison, a method's
+    /// receiver). The same text as a `String` at runtime. A reference to
+    /// it is `Ty::Str`.
+    UnsizedStr,
     /// `&str`: a borrowed string, the same text as a `String` at runtime.
     /// It is `Copy`, so a use never moves it. It is a distinct type from
     /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
@@ -8554,6 +8553,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -8736,6 +8736,7 @@ impl Ty {
             Self::Int(kind) => kind.name().into(),
             Self::Float(kind) => kind.name().into(),
             Self::String => "String".into(),
+            Self::UnsizedStr => "str".into(),
             Self::Str => "&str".into(),
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
@@ -8888,7 +8889,7 @@ impl Ty {
             Self::Int(kind) if kind.wide() => None,
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
-            Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
+            Self::String | Self::UnsizedStr | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
@@ -9018,6 +9019,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -17491,6 +17493,14 @@ impl<'a> Parser<'a> {
             Ty::Int(_) => crate::capability::builtin_supports("i64", capability),
             Ty::Float(_) => crate::capability::builtin_supports("f64", capability),
             Ty::String => crate::capability::builtin_supports("String", capability),
+            // `str` is unsized: it has what a `String` has but a value's
+            // own (`Clone`, `Copy`, `Default`).
+            Ty::UnsizedStr => {
+                !matches!(
+                    capability,
+                    capability::Kind::Clone | capability::Kind::Copy | capability::Kind::Default
+                ) && crate::capability::builtin_supports("String", capability)
+            }
             // `&str` is `Copy`, and otherwise has what a `String` has.
             Ty::Str => {
                 capability == capability::Kind::Copy
@@ -17712,7 +17722,7 @@ impl<'a> Parser<'a> {
             Ty::Char => intrinsic::Type::builtin("char", TypeId::of::<char>()),
             Ty::Int(_) => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Float(_) => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
-            Ty::String | Ty::Str => {
+            Ty::String | Ty::UnsizedStr | Ty::Str => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
@@ -23354,6 +23364,16 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        // A local's type is sized (rustc's E0277): `let x = *s;`.
+        if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+            return Err(Error::MissingCapability {
+                owner: "str".into(),
+                capability: "Sized".into(),
+                operation: name_span,
+                derive: false,
+                required_by: None,
+            });
+        }
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
@@ -32113,7 +32133,7 @@ impl<'a> Parser<'a> {
         };
         let Some((definition, partial)) = partial_cmp else {
             // A std type std doesn't order (rustc's E0369).
-            if self.std_declared(&Compared::Ty(peeled.clone()))
+            if self.std_declared(&peeled)
                 && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -32245,11 +32265,8 @@ impl<'a> Parser<'a> {
     }
 
     /// A compared type as rustc names it.
-    fn compared_name(&self, side: &Compared) -> ImmutableString {
-        match side {
-            Compared::Ty(ty) => self.inference.resolve(ty).name(&self.models),
-            Compared::Str => "str".into(),
-        }
+    fn compared_name(&self, side: &Ty) -> ImmutableString {
+        self.inference.resolve(side).name(&self.models)
     }
 
     fn equality(
@@ -32273,8 +32290,8 @@ impl<'a> Parser<'a> {
         // compares their values as they are; `Self`'s takes the right
         // operand as the left's type.
         let (left, right) = (
-            Compared::Ty(self.inference.resolve(&lhs.ty)),
-            Compared::Ty(self.inference.resolve(&rhs.ty)),
+            self.inference.resolve(&lhs.ty),
+            self.inference.resolve(&rhs.ty),
         );
         match self.std_partial_eq(&left, &right) {
             Ok(PartialEqImpl::Own) => {
@@ -34522,9 +34539,13 @@ impl<'a> Parser<'a> {
                 self.borrow_temporary(&operand, whole);
             }
             self.hold_temporary(&mut operand)?;
-            operand.ty = Ty::Reference {
-                mutable: false,
-                target: Box::new(self.inference.resolve(&operand.ty)),
+            // `&*s` of a `String`: a `&str`.
+            operand.ty = match self.inference.resolve(&operand.ty) {
+                Ty::UnsizedStr => Ty::Str,
+                target => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(target),
+                },
             };
             operand.span = span(start, operand.span.end());
             // `&s.a.b`: the field chain a call may lend (`lend_argument`).
@@ -34541,10 +34562,23 @@ impl<'a> Parser<'a> {
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
             let resolved = self.inference.resolve(&operand.ty);
-            let (Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target)) =
-                resolved.clone()
-            else {
-                return Err(self.unsupported("`*` on a value that is not a reference or box"));
+            let target = match resolved.clone() {
+                Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => target,
+                // `*s` of a `&str` is the `str` it refers to.
+                Ty::Str => Box::new(Ty::UnsizedStr),
+                // `*s` of a `String` or a `Cow`: its `Deref` target, from
+                // std's impls.
+                ty => match self.deref_target(&ty, false) {
+                    Some((target, call @ std_impl::DerefCall::Value)) => {
+                        self.apply_derefs(&mut operand, vec![call], ty);
+                        Box::new(target)
+                    }
+                    _ => {
+                        return Err(
+                            self.unsupported("`*` on a value that is not a reference or box")
+                        )
+                    }
+                },
             };
             // `*v = x` through a `&mut` local or place (a map's entry, an
             // `and_modify` value) writes it.
@@ -34959,6 +34993,11 @@ impl<'a> Parser<'a> {
                     rebox = Some(boxed);
                 }
                 value.ty = unboxed;
+            }
+            // `(*s).len()`: `str`'s methods take it by reference, which the
+            // probe's autoref makes a `&str`.
+            if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+                value.ty = Ty::Str;
             }
             // A member a program's type lacks, through its `impl Deref`
             // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
@@ -36263,8 +36302,7 @@ impl<'a> Parser<'a> {
         // Each pointer's `Deref` target, from std's impls.
         let mut inner = boxed.clone();
         while let Ty::Boxed(..) = inner
-            && let Some((Compared::Ty(target), std_impl::DerefCall::Value)) =
-                self.deref_target(&inner, false)
+            && let Some((target, std_impl::DerefCall::Value)) = self.deref_target(&inner, false)
         {
             inner = self.inference.resolve(&target);
         }
