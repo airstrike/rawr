@@ -508,7 +508,9 @@ main();
             "{call}: {report}"
         );
     }
+}
 
+#[test]
 fn language_an_options_clone_borrows_its_receiver() {
     // std writes `const impl<T> Clone for Option<T> where T: [const] Clone
     // + [const] Destruct`; the table keeps that impl, so `clone` takes
