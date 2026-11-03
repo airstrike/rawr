@@ -24461,12 +24461,15 @@ impl<'a> Parser<'a> {
                 let keyword = self.binding_keyword(*mutable, ty);
                 let _ = write!(statements, " {keyword} {name} = {path};");
 
+                // Below a reference the binding is one more reference, even
+                // to a member that is itself a reference: `&(i64, &i64)`
+                // binds `&&i64`.
                 let ty = match (self.binding_mode.get(), self.inference.resolve(ty)) {
-                    (Some(mutable), ty) if !matches!(ty, Ty::Reference { .. }) => Ty::Reference {
+                    (Some(mutable), ty) => Ty::Reference {
                         mutable,
                         target: Box::new(ty),
                     },
-                    (_, ty) => ty,
+                    (None, ty) => ty,
                 };
                 self.trace_bind(name, *span, &ty);
                 self.bindings.insert(
@@ -25789,16 +25792,11 @@ impl<'a> Parser<'a> {
                 span,
                 mutable,
             } => {
-                let expected = match expected {
-                    Ty::Reference { .. } if !*mutable => expected,
-                    Ty::Reference { target, .. } => Ty::Reference {
-                        mutable: true,
-                        target,
-                    },
-                    target => Ty::Reference {
-                        mutable: *mutable,
-                        target: Box::new(target),
-                    },
+                // `ref y` borrows the part whatever its type: on an `&i64`
+                // member it binds `&&i64`.
+                let expected = Ty::Reference {
+                    mutable: *mutable,
+                    target: Box::new(expected),
                 };
                 let binding = PatternSyntax::Binding {
                     name: name.clone(),
@@ -25831,9 +25829,9 @@ impl<'a> Parser<'a> {
                         pattern: *span,
                     });
                 }
-                let ty = match (self.binding_mode.get(), &expected) {
-                    (_, Ty::Reference { .. }) | (None, _) => expected.clone(),
-                    (Some(mutable), _) => Ty::Reference {
+                let ty = match self.binding_mode.get() {
+                    None => expected.clone(),
+                    Some(mutable) => Ty::Reference {
                         mutable,
                         target: Box::new(expected.clone()),
                     },
@@ -26084,9 +26082,9 @@ impl<'a> Parser<'a> {
                     });
                 }
                 // Below a reference the binding is one, as a plain binding.
-                let ty = match (self.binding_mode.get(), &expected) {
-                    (_, Ty::Reference { .. }) | (None, _) => expected.clone(),
-                    (Some(mutable), _) => Ty::Reference {
+                let ty = match self.binding_mode.get() {
+                    None => expected.clone(),
+                    Some(mutable) => Ty::Reference {
                         mutable,
                         target: Box::new(expected.clone()),
                     },

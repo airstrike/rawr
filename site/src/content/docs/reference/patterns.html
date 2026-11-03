@@ -17,7 +17,7 @@ println!("{size}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-match" data-out="out-match" aria-label="Run match.rs" hidden></button><b>rawr run match.rs</b><span id="out-match" aria-live="polite">many, even</span></div>
 </div>
 <h2 id="destructuring">Destructuring</h2>
-<p>Struct, tuple, enum and slice patterns. <code>..</code> matches the rest.</p>
+<p>Struct, tuple, enum and slice patterns. <code>..</code> matches the rest. A pattern matched through a reference binds references, as Rust&rsquo;s default binding modes do. A member that is already a reference gets one more, so <code>let (_, x) = &amp;(1, &amp;n);</code> makes <code>x</code> a <code>&amp;&amp;i64</code>.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="destructure.rs" id="src-destructure">struct Point {
     x: i64,

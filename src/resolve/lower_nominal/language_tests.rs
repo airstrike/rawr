@@ -5174,6 +5174,37 @@ fn language_default_binding_modes() {
 }
 
 #[test]
+fn language_default_binding_mode_through_reference_members() {
+    // Below a reference every binding is one more reference: a member
+    // that is itself `&i64` binds `&&i64`, in `let`, closure parameters,
+    // `ref`, `@`, `if let` and `match`.
+    let value = run_string(
+        r#"
+        pub fn run() -> String {
+            let n = 5;
+            let t = (1, &n);
+            let r = &t;
+            let (_, x) = r;
+            let v = vec![1, 2, 3];
+            let big: Vec<(usize, &i64)> = v.iter().enumerate().filter(|(_, x)| **x > 1).collect();
+            let a = match t { (_, ref y) => **y };
+            let b = match r { (_, y @ _) => **y };
+            let c = if let Some((_, y)) = &Some(t) { **y } else { 0 };
+            let d = match &Some(&n) { Some(y) => **y, None => 0 };
+            format!("{} {:?} {} {} {} {}", **x, big, a, b, c, d)
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "5 [(1, 2), (2, 3)] 5 5 5 5");
+    // One `*` leaves a reference, as rustc's E0308 says.
+    let error = rejected(
+        "pub fn run() -> i64 { let n: i64 = 5; let t = (1, &n); let r = &t; let (_, x) = r; let y: i64 = *x; y } run()",
+    );
+    assert!(error.contains("expected 'i64', found '&i64'"), "{error}");
+}
+
+#[test]
 fn language_char_vec_and_set_methods() {
     // `char`'s classification, case and digit methods; a `Vec` changed in
     // place; set algebra; `BTreeMap::range`; `entry` on a field.
