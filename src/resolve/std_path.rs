@@ -160,7 +160,7 @@ pub(crate) fn unstable_argument(name: &str, index: usize, reference: Span) -> Op
 }
 
 /// rustc's E0658 for naming an item with `stability`, when it is unstable.
-fn unstable(stability: Stability, reference: Span) -> Option<Error> {
+pub(crate) fn unstable(stability: Stability, reference: Span) -> Option<Error> {
     let Stability::Unstable {
         feature,
         issue,

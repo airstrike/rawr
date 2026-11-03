@@ -34838,6 +34838,19 @@ impl<'a> Parser<'a> {
                 reference: *reference,
             };
         }
+        // An unstable one, as `Option::map_or_default`: rustc's E0658.
+        if let Error::UnknownMember {
+            member, reference, ..
+        } = &error
+            && let Some(ty) = self.std_probed.get(&reference.start())
+            && let Some(unstable) = std_method::steps(ty).into_iter().find_map(|step| {
+                crate::std_table::item(&format!("{}::{member}", step.owner))
+                    .filter(|item| item.kind == "assoc-fn")
+                    .and_then(|item| crate::resolve::std_path::unstable(item.stability, *reference))
+            })
+        {
+            return unstable;
+        }
         error
     }
 

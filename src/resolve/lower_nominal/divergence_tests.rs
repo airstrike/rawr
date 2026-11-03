@@ -164,6 +164,20 @@ fn language_a_std_type_with_a_wrong_argument_count_is_e0107() {
 }
 
 #[test]
+fn language_an_unstable_std_method_is_e0658() {
+    // std declares it, behind a feature stable Rust can't enable (#771).
+    // `Option::map_or_default`, the issue's example, is stable in the
+    // table's toolchain.
+    let report =
+        refused("fn main() { let s = String::from(\"ab\"); let c = s.into_chars(); }\nmain();\n");
+    assert!(
+        report.starts_with("error[E0658]: use of unstable library feature `string_into_chars`\n"),
+        "{report}"
+    );
+    assert!(report.contains("issues/133125"), "{report}");
+}
+
+#[test]
 fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
     // rustc's E0369, in its words for each operator (#733).
     for (expression, message) in [
