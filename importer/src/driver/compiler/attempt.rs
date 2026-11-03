@@ -356,7 +356,7 @@ mod tests {
         }
         let mut callback = Callback(false);
         let exit = rustc_driver::catch_with_exit_code(|| {
-            rustc_driver::run_compiler(
+            crate::compat::compiler_entrypoint(
                 &[
                     "rustc".to_owned(),
                     "--crate-name=attempt_fixture".to_owned(),

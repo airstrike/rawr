@@ -11,7 +11,9 @@ use sha2::{Digest as _, Sha256};
 #[allow(dead_code)]
 mod host;
 
-const RUSTC_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
+#[path = "src/cargo/toolchain/window.rs"]
+#[allow(dead_code)]
+mod window;
 
 /// The Rawr packages a generated harness builds against.
 const HOST_PACKAGES: [&str; 10] = [
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // itself, so it names itself too.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/cargo/toolchain/host.rs");
+    println!("cargo:rerun-if-changed=src/cargo/toolchain/window.rs");
     if env::var_os("CARGO_FEATURE_EMBEDDED_HOST").is_some() {
         embed_host()?;
     }
@@ -50,18 +53,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     // variable for test runs, where the importer reads the environment.
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("no OUT_DIR")?);
     fs::write(output.join("toolchain-host"), host)?;
+    compiler_cfgs(&version);
     if env::var_os("CARGO_FEATURE_RUSTC_DRIVER").is_none() {
         return Ok(());
     }
 
-    let expected = format!("commit-hash: {RUSTC_COMMIT}");
-    if !version.lines().any(|line| line == expected) {
-        return Err(format!("rustc-driver requires pinned {expected}").into());
-    }
-
     let sysroot = Command::new(&rustc).args(["--print", "sysroot"]).output()?;
     if !sysroot.status.success() {
-        return Err("the pinned rustc sysroot query failed".into());
+        return Err("the rustc sysroot query failed".into());
     }
     let sysroot = PathBuf::from(String::from_utf8(sysroot.stdout)?.trim());
     let library = sysroot.join("lib").canonicalize()?;
@@ -73,11 +72,42 @@ fn main() -> Result<(), Box<dyn Error>> {
     for path in [&library, &target_library] {
         let path = path
             .to_str()
-            .ok_or("the pinned sysroot library path is not UTF-8")?;
+            .ok_or("the sysroot library path is not UTF-8")?;
         println!("cargo:rustc-link-search=native={path}");
         println!("cargo:rustc-link-arg-bin=rawr-import-driver=-Wl,-rpath,{path}");
     }
     Ok(())
+}
+
+/// The cfgs for the compiler APIs the building nightly has (`window.rs`),
+/// and the commit the driver names in its version. A toolchain without a
+/// commit date (a local build) gets the window's oldest APIs; one outside
+/// the window gets `rawr_rustc_outside_window`, which the driver refuses.
+fn compiler_cfgs(version: &str) {
+    let value = |prefix: &str| {
+        version
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(str::trim)
+            .unwrap_or_default()
+    };
+    let date = value("commit-date:");
+    println!("cargo::rustc-check-cfg=cfg(rawr_rustc_outside_window)");
+    for (cfg, _) in window::CHANGES {
+        println!("cargo::rustc-check-cfg=cfg({cfg})");
+    }
+    if !date.is_empty() && !window::contains(date) {
+        println!("cargo::rustc-cfg=rawr_rustc_outside_window");
+    }
+    for (cfg, since) in window::CHANGES {
+        if !date.is_empty() && date >= since {
+            println!("cargo::rustc-cfg={cfg}");
+        }
+    }
+    println!(
+        "cargo::rustc-env=RAWR_RUSTC_COMMIT={}",
+        value("commit-hash:")
+    );
 }
 
 /// Embed the host sources a generated harness compiles (every package's
