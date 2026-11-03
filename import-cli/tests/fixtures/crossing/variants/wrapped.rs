@@ -55,8 +55,8 @@ impl Counter {
     fn view(&self) -> impl Widget<Message> {
         column![
             zoomed(3, button("Increment").on_press(Message::Increment)).padded(),
-            centered(text(self.value).size(50)),
-            button("Decrement").on_press(Message::Decrement),
+            text(self.value).size(50),
+            centered(button("Decrement").on_press(Message::Decrement)),
         ]
     }
 }

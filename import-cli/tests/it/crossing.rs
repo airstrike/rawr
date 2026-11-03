@@ -1085,7 +1085,7 @@ fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
     let (rawr, cargo) = both_printed("crossing-wrapped", "wrapped.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.ends_with("last view pad 0 pad 3 opaque [Increment] pad 0 opaque 2@50 [Decrement]"),
+        rawr.ends_with("last view pad 0 pad 3 opaque [Increment] 2@50 pad 0 opaque [Decrement]"),
         "{rawr}"
     );
 }
