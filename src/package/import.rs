@@ -1245,11 +1245,19 @@ fn imported_paths<'contract>(
 ) -> Result<ImportedPaths<'contract>, Error> {
     let mut capacity = contract.outcomes().len();
     for outcome in contract.outcomes() {
+        // Each associated item, and each member of the opaque type a
+        // trait's method over its `Self` gives (`surface::opaque`).
         let associated = outcome
             .implementations()
-            .map(rawr_import::classify::ImplementationOutcome::associated)
-            .map(|associated| associated.len())
-            .try_fold(0_usize, usize::checked_add)
+            .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+            .map(|associated| {
+                associated
+                    .implementations()
+                    .map(rawr_import::classify::ImplementationOutcome::associated)
+                    .map(|members| members.len())
+                    .try_fold(1_usize, usize::checked_add)
+            })
+            .try_fold(0_usize, |count, items| count.checked_add(items?))
             .ok_or(Error::Allocation)?;
         capacity = capacity.checked_add(associated).ok_or(Error::Allocation)?;
     }
@@ -1286,6 +1294,18 @@ fn imported_paths<'contract>(
                 rawr_import::surface::member::is_members(implementation, &definition)
             }) {
                 let associated_path = rawr_import::surface::member::path(&path, associated.name());
+                let owner = rawr_import::surface::opaque::path(&associated_path, 0);
+                for member in associated
+                    .implementations()
+                    .flat_map(rawr_import::classify::ImplementationOutcome::associated)
+                {
+                    let member_path = format!("{owner}::{}", member.name());
+                    allocation.retain(1, member_path.len())?;
+                    entries.push(ImportedPath {
+                        path: member_path.into_boxed_str(),
+                        outcome: member,
+                    });
+                }
                 allocation.retain(1, associated_path.len())?;
                 entries.push(ImportedPath {
                     path: associated_path.into_boxed_str(),
