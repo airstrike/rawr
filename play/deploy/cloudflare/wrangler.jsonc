@@ -32,9 +32,9 @@
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
     // A whole run, killed after it: the script time plus the process start.
-    "PLAY_TIMEOUT_MS": "15000",
+    "PLAY_TIMEOUT_MS": "30000",
     // Script time per run.
-    "PLAY_TIME_MS": "5000",
+    "PLAY_TIME_MS": "15000",
     // The image's commit (pin-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).

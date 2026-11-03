@@ -30,8 +30,8 @@
 <h2 id="limits">Limits</h2>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
-  <tr><td>Time budget</td><td>5 seconds of real time for a run on the server.</td></tr>
-  <tr><td>Whole run</td><td>15 seconds. The process is stopped after that.</td></tr>
+  <tr><td>Time budget</td><td>15 seconds of real time for a run on the server.</td></tr>
+  <tr><td>Whole run</td><td>30 seconds. The process is stopped after that.</td></tr>
   <tr><td>Memory</td><td>256 MB of address space per run.</td></tr>
   <tr><td>Operations</td><td>1,000,000 per run on the server.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
@@ -80,7 +80,7 @@
   <tr><td><code>operation limit exceeded: more than 1000000 operations (an endless loop?)</code></td><td>The run took more than 1,000,000 operations.</td></tr>
   <tr><td><code>call depth limit exceeded: deeper than 32 calls (endless recursion?)</code></td><td>Calls nested more than 32 deep.</td></tr>
   <tr><td><code>size limit exceeded: .. (strings up to 65536 bytes, arrays and maps up to 65536 items)</code></td><td>A string, array, vector or map grew past its limit.</td></tr>
-  <tr><td><code>the run timed out after 15000 ms</code></td><td>The whole run took more than 15 seconds, so its process was stopped.</td></tr>
+  <tr><td><code>the run timed out after 30000 ms</code></td><td>The whole run took more than 30 seconds, so its process was stopped.</td></tr>
   <tr><td><code>?play stopped: out of memory or crashed</code></td><td>The process ran out of its 256 MB, or it crashed without a message.</td></tr>
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The run panicked. The line after it is the panic&rsquo;s message.</td></tr>
   <tr><td><code>the playground is busy; try again in a moment</code></td><td>The server stayed busy for too long. Discord runs go first.</td></tr>

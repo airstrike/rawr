@@ -57,7 +57,7 @@ impl Default for Limits {
             // One rule for every collection: a `HashMap` already counts
             // against the array limit, so maps get the same 65,536 items.
             map_size: 64 * 1024,
-            time: Duration::from_secs(2),
+            time: Duration::from_secs(10),
             memory: None,
         }
     }
