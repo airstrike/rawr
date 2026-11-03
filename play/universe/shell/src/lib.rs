@@ -48,6 +48,10 @@ pub const FRAME: &str = "PLAY_FRAME";
 /// The variable naming the run's deadline, in milliseconds since the Unix
 /// epoch: the last frame is drawn and written before it.
 pub const DEADLINE: &str = "PLAY_DEADLINE";
+/// The variable naming a file that may give a sooner deadline, in the same
+/// form, as the run goes on: the bot writes one there once another snippet
+/// waits. It is read at each frame.
+pub const DEADLINE_FILE: &str = "PLAY_DEADLINE_FILE";
 
 /// The time between two frames: 20 frames a second. A GIF's delays are in
 /// hundredths of a second, and browsers slow any delay under two of them to
@@ -102,7 +106,7 @@ where
             "no display",
         )));
     };
-    let deadline = deadline();
+    let mut deadline = Deadline::from_env();
     let mut shell = Shell::new(&program)?;
     shell.settle(&program);
     let mut film = Film::default();
@@ -119,7 +123,7 @@ where
         }
         let now = Instant::now();
         let step = now - drawn;
-        if film.full() || shell.exited || now + step * 2 + INTERVAL + FINISH >= deadline {
+        if film.full() || shell.exited || now + step * 2 + INTERVAL + FINISH >= deadline.at(now) {
             break;
         }
         // Whether the program may still change: what it did since this
@@ -140,21 +144,49 @@ where
     std::fs::write(path, bytes).map_err(Error::WindowCreationFailed)
 }
 
-/// The run's deadline, or [`FRAMES`] intervals from now when none is set.
-fn deadline() -> Instant {
-    let now = Instant::now();
-    let fallback = now + INTERVAL * FRAMES as u32;
-    let Some(millis) = std::env::var(DEADLINE)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-    else {
-        return fallback;
-    };
-    let at = UNIX_EPOCH + Duration::from_millis(millis);
-    match at.duration_since(SystemTime::now()) {
-        Ok(left) => (now + left).min(fallback),
-        Err(_) => now,
+/// The run's deadline: the one [`DEADLINE`] gives, or [`FRAMES`] intervals
+/// from the start when it is sooner or none is set, and the one the file
+/// [`DEADLINE_FILE`] names once that file gives one.
+struct Deadline {
+    fixed: Instant,
+    file: Option<std::path::PathBuf>,
+    set: Option<Instant>,
+}
+
+impl Deadline {
+    fn from_env() -> Self {
+        let now = Instant::now();
+        let fallback = now + INTERVAL * FRAMES as u32;
+        let fixed = std::env::var(DEADLINE)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map_or(fallback, |millis| instant(millis, now).min(fallback));
+        Self {
+            fixed,
+            file: std::env::var_os(DEADLINE_FILE).map(std::path::PathBuf::from),
+            set: None,
+        }
     }
+
+    /// The deadline at `now`, reading the file until it gives one.
+    fn at(&mut self, now: Instant) -> Instant {
+        if self.set.is_none()
+            && let Some(file) = &self.file
+        {
+            self.set = std::fs::read_to_string(file)
+                .ok()
+                .and_then(|text| text.trim().parse::<u64>().ok())
+                .map(|millis| instant(millis, now));
+        }
+        self.set.map_or(self.fixed, |set| set.min(self.fixed))
+    }
+}
+
+/// `millis` since the Unix epoch on the monotonic clock, as seen at `now`.
+fn instant(millis: u64, now: Instant) -> Instant {
+    let at = UNIX_EPOCH + Duration::from_millis(millis);
+    at.duration_since(SystemTime::now())
+        .map_or(now, |left| now + left)
 }
 
 /// What the program's tasks and subscriptions send the shell.

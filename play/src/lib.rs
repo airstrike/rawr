@@ -10,10 +10,13 @@
 //! operations, call depth, data sizes, output and a wall-clock deadline,
 //! and it reads no file.
 
+pub mod budget;
 #[cfg(feature = "bot")]
 pub mod channels;
 pub mod message;
 pub mod plain;
+#[cfg(feature = "bot")]
+pub mod queue;
 pub mod server;
 #[cfg(feature = "bot")]
 pub mod stats;
@@ -22,6 +25,7 @@ pub mod universe;
 pub mod web;
 
 use std::fmt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub use plain::Output;
@@ -42,6 +46,9 @@ pub struct Limits {
     pub map_size: usize,
     /// Wall-clock budget for one run.
     pub time: Duration,
+    /// A file the bot may write a sooner deadline to as the run goes on
+    /// (see [`rawr::play::deadline`]).
+    pub deadline: Option<PathBuf>,
     /// The address space a run on the universe runner may have, in bytes
     /// (`RLIMIT_AS`, Linux only); `None` for no limit.
     pub memory: Option<u64>,
@@ -58,6 +65,7 @@ impl Default for Limits {
             // against the array limit, so maps get the same 65,536 items.
             map_size: 64 * 1024,
             time: Duration::from_secs(10),
+            deadline: None,
             memory: None,
         }
     }
@@ -94,7 +102,8 @@ pub fn run(source: &str, limits: &Limits) -> Result<Output, PlayError> {
     if let Some(universe) = universe::Universe::from_env() {
         return universe.run(source, limits);
     }
-    let deadline = Instant::now() + limits.time;
+    let deadline =
+        rawr::play::deadline::Watch::new(Instant::now() + limits.time, limits.deadline.clone());
     let parsed = plain::Parsed::new(source, limits, deadline)?;
     parsed.run(source, limits)
 }

@@ -119,8 +119,12 @@ the output passed 64 KiB. `note`, when present, is a remark on the run, such
 as an iterator that nothing consumed.
 
 `--time-ms N` sets the script time budget, and `--memory-mb N`
-caps the process's address space (`RLIMIT_AS`, Linux only). Errors go to
-stderr with exit status 1.
+caps the process's address space (`RLIMIT_AS`, Linux only).
+`--deadline-file F` names a file that may give a sooner deadline as the
+run goes on, in milliseconds since the Unix epoch. The engine's progress
+callback, the universe runner and the iced shell read it, so a deadline
+written there mid-run stops the program with its output so far. Errors go
+to stderr with exit status 1.
 
 ## Bot
 
@@ -166,8 +170,9 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | --- | --- | --- |
 | `DISCORD_TOKEN` | — | Bot token; else read from `DISCORD_TOKEN_FILE`, else `~/.config/rawr-play/token` |
 | `PLAY_WORKERS` | 2 | Runs at once |
-| `PLAY_TIME_MS` | 2000 | Script time budget per run (engine deadline) |
-| `PLAY_TIMEOUT_MS` | 10000 | Whole run; the `rawr-play` process is killed after it |
+| `PLAY_TIME_MS` | 2000 | Script time of a run once another snippet waits, counted from then |
+| `PLAY_TIMEOUT_MS` | 10000 | Whole run once another snippet waits, counted from then; the `rawr-play` process is killed after it |
+| `PLAY_MAX_MS` | 600000 | Script time of a run nothing waits behind: the ceiling against a runaway loop |
 | `PLAY_MEMORY_MB` | 1024 | Address-space cap per run process (Linux) |
 | `PLAY_USER_PER_MIN` | 4 | Runs per user per minute |
 | `PLAY_CHANNEL_PER_MIN` | 12 | Runs per channel per minute |
@@ -184,7 +189,19 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 
 Snippets are untrusted. Each run is its own `rawr-play` process, started
 with an empty environment, reading the code on stdin and writing its result
-on stdout. The bot kills it at `PLAY_TIMEOUT_MS`. On Linux the process's
+on stdout.
+
+A run has no time limit while no other snippet waits for the server. A
+1/16-vCPU container runs one snippet at a time, so a program that takes a
+second on a laptop may take a minute there, and nothing is gained by
+stopping it while nobody waits. Once another snippet waits, the running one
+gets `PLAY_TIME_MS` of script time and `PLAY_TIMEOUT_MS` in all, both from
+that moment, and then stops with `time limit exceeded` and its output so
+far. The bot writes that deadline to the run's deadline file
+(`--deadline-file`), and the run's processes read it as they go. A run
+nothing waits behind still stops after `PLAY_MAX_MS` of script time (10
+minutes by default; raise it to allow longer runs), and its process is
+killed `PLAY_TIMEOUT_MS - PLAY_TIME_MS` after that. On Linux the process's
 address space is capped at `PLAY_MEMORY_MB`, so a runaway allocation aborts
 that run only and the bot replies "out of memory".
 
