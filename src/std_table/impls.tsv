@@ -170,6 +170,7 @@ core::clone::Clone	core::ops::range::RangeTo	std::ops::RangeTo<Idx>		Idx	Idx: Cl
 core::clone::Clone	core::ops::range::RangeToInclusive	std::ops::RangeToInclusive<Idx>		Idx	Idx: Clone	
 core::clone::Clone	core::option::IntoIter	std::option::IntoIter<A>		A	A: Clone	
 core::clone::Clone	core::option::Iter	std::option::Iter<A>		A		
+core::clone::Clone	core::option::Option	Option<T>		T	T: Clone	
 core::clone::Clone	core::panic::location::Location	std::panic::Location				
 core::clone::Clone	core::pin::Pin	std::pin::Pin<Ptr>		Ptr	Ptr: Clone	
 core::clone::Clone	core::ptr::non_null::NonNull	std::ptr::NonNull<T>		T		
@@ -1300,6 +1301,7 @@ core::convert::TryFrom	&	&str	&std::ffi::OsStr			Error = std::str::Utf8Error
 core::convert::TryFrom	&mut	&mut [T; N]	&mut [T]	T const:N		Error = std::array::TryFromSliceError
 core::convert::TryFrom	[;]	[T; N]	&[T]	T const:N	T: Copy	Error = std::array::TryFromSliceError
 core::convert::TryFrom	[;]	[T; N]	&mut [T]	T const:N	T: Copy	Error = std::array::TryFromSliceError
+core::convert::TryFrom	[;]	[T; N]	Vec<T, A>	T A const:N		Error = Vec<T, A>
 core::convert::TryFrom	_	T	U	T U	U: Into<T>	Error = std::convert::Infallible
 core::convert::TryFrom	alloc::boxed::Box	Box<[T; N]>	Box<[T]>	T const:N		Error = Box<[T]>
 core::convert::TryFrom	alloc::boxed::Box	Box<[T; N]>	Vec<T>	T const:N		Error = Vec<T>
@@ -7783,6 +7785,7 @@ core::ops::drop::Drop	alloc::rc::Weak	std::rc::Weak<T, A>		T A
 core::ops::drop::Drop	alloc::string::Drain	std::string::Drain				
 core::ops::drop::Drop	alloc::sync::Arc	std::sync::Arc<T, A>		T A		
 core::ops::drop::Drop	alloc::sync::Weak	std::sync::Weak<T, A>		T A		
+core::ops::drop::Drop	alloc::vec::Vec	Vec<T, A>		T A		
 core::ops::drop::Drop	alloc::vec::drain::Drain	std::vec::Drain<T, A>		T A		
 core::ops::drop::Drop	alloc::vec::extract_if::ExtractIf	std::vec::ExtractIf<T, F, A>		T F A		
 core::ops::drop::Drop	alloc::vec::into_iter::IntoIter	std::vec::IntoIter<T, A>		T A		
