@@ -194,6 +194,22 @@ fn a_boot_function_giving_the_state_and_a_task_runs() {
     );
 }
 
+/// iced's delineate: `selector::find(id)` is generic over `Selector`, a
+/// trait with an associated output that the crate also implements for
+/// `FnMut` closures, and takes the widget `Id` with no closure. Its task's
+/// `Option<Target>` maps into a message. iced's scrollable: a palette
+/// field's `Color`, which the program names by no path, converts into a
+/// `Background` by `.into()` through `From`. The output is `cargo run`'s.
+#[test]
+fn a_selector_finds_by_id_and_a_fields_color_converts_into_a_background() {
+    let (rawr, cargo) = both_printed("crossing-found", "found.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("Some(50.0) Color(Color { r: 3, g: 4, b: 5 })"),
+        "{rawr}"
+    );
+}
+
 /// iced's system_information: `Task::map(Message::InformationReceived)`
 /// calls the variant on another thread, as iced's executor does, with a
 /// crate value native code made. The message is made where it is
