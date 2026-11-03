@@ -131,6 +131,39 @@ main();
 }
 
 #[test]
+fn language_a_std_type_with_a_wrong_argument_count_is_e0107() {
+    // rustc's E0107, from std's declaration: its parameters, defaults and
+    // unstable ones counted (#752).
+    for (ty, message) in [
+        (
+            "Vec<i32, i32, i32>",
+            "struct takes at most 2 generic arguments but 3 generic arguments were supplied",
+        ),
+        ("Vec", "missing generics for struct `Vec`"),
+        (
+            "Option<i32, i32>",
+            "enum takes 1 generic argument but 2 generic arguments were supplied",
+        ),
+        (
+            "Result<i32>",
+            "enum takes 2 generic arguments but 1 generic argument was supplied",
+        ),
+        (
+            "HashMap<i32>",
+            "struct takes at least 2 generic arguments but 1 generic argument was supplied",
+        ),
+    ] {
+        let report = refused(&format!(
+            "use std::collections::HashMap;\nfn f(x: {ty}) {{}}\nfn main() {{}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(&format!("error[E0107]: {message}\n")),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
     // rustc's E0369, in its words for each operator (#733).
     for (expression, message) in [

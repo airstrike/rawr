@@ -12265,20 +12265,23 @@ fn language_std_arities_take_their_defaults() {
         run()
     "#);
     assert_eq!(value, 42);
-    // Too many, too few, and an unstable parameter's argument (rustc's
-    // E0658 for `Vec<T, A>`'s `A`).
-    let error = rejected("pub fn run() -> i64 { let v: Vec<i64, i64, i64> = Vec::new(); 0 } run()");
+    // An unstable parameter's argument (rustc's E0658 for `Vec<T, A>`'s
+    // `A`), and too few (E0107).
+    let error = rejected("pub fn run() -> i64 { let v: Vec<i64, i64> = Vec::new(); 0 } run()");
     assert!(
         error.contains("use of unstable library feature `allocator_api`"),
         "{error}"
     );
-    let error = rejected("fn take(v: Vec<i64, i64, i64>) {}\npub fn run() -> i64 { 0 } run()");
+    let error = rejected("fn take(v: Vec<i64, i64>) {}\npub fn run() -> i64 { 0 } run()");
     assert!(
         error.contains("use of unstable library feature `allocator_api`"),
         "{error}"
     );
     let error = rejected("fn take(o: Option) {}\npub fn run() -> i64 { 0 } run()");
-    assert!(error.contains("Option': expected 1, found 0"), "{error}");
+    assert!(
+        error.contains("missing generics for enum `Option`"),
+        "{error}"
+    );
     let error = rejected(
         "use std::collections::HashMap;\n\
          pub fn run() -> i64 { let m: HashMap<i64, i64, std::hash::RandomState, std::alloc::Global> = HashMap::new(); 0 } run()",

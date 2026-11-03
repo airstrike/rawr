@@ -762,6 +762,10 @@ fn resolve_path(
             .iter()
             .filter(|argument| matches!(argument, Argument::Type(_)))
             .count();
+        // Fewer or more arguments than std's declaration takes (E0107).
+        if let Some(error) = super::std_path::wrong_arity(&name, actual, span) {
+            return Err(error);
+        }
         // An argument for an unstable parameter, as `Vec<T, A>`'s `A`.
         if actual > stable
             && let Some(error) = super::std_path::unstable_argument(&name, stable, span)
