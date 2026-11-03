@@ -90,6 +90,34 @@ main();
         report.contains("can't compare `str` with `&str`"),
         "{report}"
     );
+    // A formatting argument is sized, as this toolchain's rustc says.
+    let report = refused(
+        r#"
+fn main() {
+    let s: &str = "a";
+    println!("{}", *s);
+}
+main();
+"#,
+    );
+    assert!(
+        report.contains("the size for values of type `str` cannot be known at compilation time"),
+        "{report}"
+    );
+    // A `&str` parameter takes `&*s`, not `*s` (E0308).
+    let report = refused(
+        r#"
+fn count(s: &str) -> usize {
+    s.len()
+}
+fn main() {
+    let s = String::new();
+    count(*s);
+}
+main();
+"#,
+    );
+    assert!(report.contains("expected `&str`, found `str`"), "{report}");
 }
 
 #[test]
@@ -147,4 +175,144 @@ fn main() {
 main();
 "#;
     assert_eq!(printed(source), "[1, 2] [1, 2, 3] 3\n[1, 2, 3]\n");
+}
+
+#[test]
+fn language_cow_converts_compares_and_derefs() {
+    let source = r#"
+use std::borrow::Cow;
+
+fn count(text: &str) -> usize {
+    text.len()
+}
+
+fn shout<'a>(text: &'a str) -> Cow<'a, str> {
+    if text.ends_with('!') {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(format!("{}!", text))
+    }
+}
+
+fn describe(c: &Cow<str>) -> String {
+    match c {
+        Cow::Borrowed(s) => format!("borrowed {}", s),
+        Cow::Owned(s) => format!("owned {}", s),
+    }
+}
+
+fn main() {
+    let a: Cow<str> = "hi".into();
+    let b: Cow<str> = String::from("hi").into();
+    let c = Cow::from("x");
+    println!("{} {} {} {}", a == b, count(&a), c, describe(&b));
+    let words: Vec<Cow<str>> = vec![shout("a"), shout("b!")];
+    println!("{:?}", words);
+    for w in &words {
+        println!("{} {}", describe(w), w.to_uppercase());
+    }
+    let n = match shout("z") {
+        Cow::Borrowed(s) => s.len(),
+        Cow::Owned(s) => s.len() * 10,
+    };
+    println!("{}", n);
+    let mut v: Cow<[i32]> = Cow::Borrowed(&[1, 2, 3]);
+    v.to_mut()[0] = 9;
+    println!("{:?} {}", v, v.iter().sum::<i32>());
+    let s: &str = &*a;
+    let t = String::from("tt");
+    println!("{} {}", s, (*t).len() + (*a).len());
+    println!("{:>5}|{:?}", a, Cow::Borrowed("q"));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "true 2 x owned hi\n[\"a!\", \"b!\"]\nowned a! A!\nborrowed b! B!\n20\n[9, 2, 3] 14\nhi 4\n   hi|\"q\"\n"
+    );
+}
+
+#[test]
+fn language_cow_refusals_are_rustcs() {
+    // `is_owned` is an unstable associated function, no method (E0599).
+    let report = refused(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let c: Cow<str> = Cow::Borrowed("a");
+    let _ = c.is_owned();
+}
+main();
+"#,
+    );
+    assert!(report.contains("is_owned"), "{report}");
+    assert!(report.contains("Cow<'_, str>"), "{report}");
+    let report = refused(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let c: Cow<str> = Cow::Borrowed("a");
+    match c {
+        Cow::Borrowed(s) => println!("{}", s),
+    }
+}
+main();
+"#,
+    );
+    // rawr's match-coverage error, as for every enum: rustc's E0004.
+    assert!(report.contains("non-exhaustive patterns"), "{report}");
+    assert!(report.contains("Cow::Owned(_)"), "{report}");
+    let report = refused(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let c: Cow<str> = Cow::Borrowed("a");
+    let x = *c;
+}
+main();
+"#,
+    );
+    assert!(report.contains("E0277"), "{report}");
+    assert!(
+        report.contains("the size for values of type `str` cannot be known at compilation time"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+use std::borrow::Cow;
+fn f() -> Cow<str> {
+    Cow::Borrowed("a")
+}
+fn main() {
+    f();
+}
+main();
+"#,
+    );
+    assert!(report.contains("E0106"), "{report}");
+}
+
+#[test]
+fn language_cow_orders_and_clones_by_stds_impls() {
+    let source = r#"
+use std::borrow::Cow;
+
+fn take(c: Cow<'_, str>) -> usize {
+    c.len()
+}
+
+fn main() {
+    let s = String::from("ab");
+    let r = &s;
+    println!("{} {}", *s == *"ab", **r == *s);
+    let c: Cow<str> = Cow::Borrowed("a");
+    let d = c.clone();
+    let e: String = d.to_string();
+    let o: Cow<str> = Cow::Owned(String::from("b"));
+    println!("{} {} {} {}", e, c < o, c == d, o > d);
+    println!("{}", take(Cow::Borrowed(&s)));
+}
+main();
+"#;
+    assert_eq!(printed(source), "true true\na true true true\n2\n");
 }

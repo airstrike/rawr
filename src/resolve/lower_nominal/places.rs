@@ -1734,9 +1734,9 @@ fn mark_parts(
         | NominalPattern::Literal(_)
         | NominalPattern::Range { .. }
         | NominalPattern::Option(None) => Ok(()),
-        NominalPattern::Option(Some(child)) | NominalPattern::Result(Ok(child) | Err(child)) => {
-            mark_parts(child, parts, rest)
-        }
+        NominalPattern::Option(Some(child))
+        | NominalPattern::Result(Ok(child) | Err(child))
+        | NominalPattern::Cow { payload: child, .. } => mark_parts(child, parts, rest),
         NominalPattern::Enum(child) => child
             .payload
             .iter_mut()

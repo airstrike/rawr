@@ -381,6 +381,12 @@ pub(crate) enum NominalPattern {
     Option(Option<Box<NominalPattern>>),
     /// `Ok(pattern)` or `Err(pattern)` on a Rawr `Result<T, E>`.
     Result(Result<Box<NominalPattern>, Box<NominalPattern>>),
+    /// `Cow::Borrowed(pattern)` or `Cow::Owned(pattern)` (`owned`) on a
+    /// `Cow<'_, B>`.
+    Cow {
+        owned: bool,
+        payload: Box<NominalPattern>,
+    },
     /// A literal: `0`, `'a'`, `"x"`, `true`, `1.5`.
     Literal(NominalLiteral),
     /// A range of literals: `1..=9`, `'a'..='z'`, `0..10`, `5..`, `..=3`.

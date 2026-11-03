@@ -1,4 +1,4 @@
-<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, errors, path and io.">
+<meta name="description" content="The parts of Rust's standard library that rawr supports: strings, Cow, Vec, iterators, numbers, time, collections, RefCell and Cell, mem, conversions, errors, path and io.">
 <article>
 <h1>std</h1>
 <p class="lede">The parts of the standard library that rawr provides.</p>
@@ -13,6 +13,30 @@ let fields: Vec&lt;&amp;str&gt; = line.trim().split(", ").collect();
 let id: i64 = fields[0].replace("id=", "").parse().unwrap();
 println!("{fields:?} {id}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-strings" data-out="out-strings" aria-label="Run strings.rs" hidden></button><b>rawr run strings.rs</b><span id="out-strings" aria-live="polite">["id=7", "name=rawr"] 7</span></div>
+</div>
+<p><code>*</code> of a <code>&amp;str</code> or a <code>String</code> is rustc&rsquo;s <code>str</code>. It works where rustc allows it: <code>&amp;*s</code> is a <code>&amp;str</code>, <code>*a == *b</code> compares, and <code>(*s).len()</code> calls a method. A <code>str</code> has no size, so <code>let x = *s;</code> and <code>println!("{}", *s)</code> are rustc&rsquo;s E0277.</p>
+<h2 id="cow"><code>Cow</code></h2>
+<p><code>use std::borrow::Cow;</code> brings in std&rsquo;s <code>Cow</code>. <code>Cow&lt;'_, str&gt;</code>, <code>Cow&lt;'_, [T]&gt;</code> and <code>Cow</code> of a <code>Clone</code> type work as in Rust. <code>Cow::Borrowed</code> and <code>Cow::Owned</code> build one and match one. <code>into_owned</code>, <code>to_mut</code> and <code>clone</code> are its own methods. Every other method is that of the type it derefs to, so <code>c.len()</code> is <code>str::len</code>. A <code>&amp;Cow&lt;str&gt;</code> passes where <code>&amp;str</code> is expected. <code>==</code>, <code>&lt;</code>, <code>{}</code>, <code>{:?}</code>, <code>From</code> and <code>.into()</code> come from std&rsquo;s impls for <code>Cow</code>.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="cow.rs" id="src-cow">use std::borrow::Cow;
+
+fn shout(text: &amp;str) -&gt; Cow&lt;'_, str&gt; {
+    if text.ends_with('!') {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(format!("{text}!"))
+    }
+}
+
+let words = vec![shout("a"), shout("b!")];
+for word in &amp;words {
+    match word {
+        Cow::Borrowed(s) =&gt; println!("borrowed {s}"),
+        Cow::Owned(s) =&gt; println!("owned {s}"),
+    }
+}</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-cow" data-out="out-cow" aria-label="Run cow.rs" hidden></button><b>rawr run cow.rs</b><span id="out-cow" aria-live="polite">owned a!
+borrowed b!</span></div>
 </div>
 <h2 id="vec"><code>Vec</code> and slices</h2>
 <p><code>push</code>, <code>pop</code>, <code>insert</code>, <code>remove</code>, <code>swap_remove</code>, <code>retain</code>, <code>extend</code>, <code>dedup</code>, <code>sort</code>, <code>sort_by</code>, <code>sort_by_key</code>, <code>contains</code>, <code>windows</code>, <code>chunks</code>, <code>chunks_exact</code>, <code>rchunks</code>, <code>first</code>, <code>last</code>, <code>resize</code>, <code>resize_with</code>, <code>Vec::with_capacity</code>, <code>capacity</code> and more. <code>get_mut</code>, <code>first_mut</code>, <code>last_mut</code> and <code>iter_mut().find(..)</code> lend an element to change.</p>

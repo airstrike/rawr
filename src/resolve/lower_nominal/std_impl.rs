@@ -73,6 +73,7 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
             arguments.to_vec(),
         ),
         Ty::Reverse(inner) => ("core::cmp::Reverse", one(inner)),
+        Ty::Cow(borrowed) => (cow::DEFINITION, one(borrowed)),
         Ty::Cell(CellKind::RefCell, inner) => ("core::cell::RefCell", one(inner)),
         Ty::Cell(CellKind::Cell, inner) => ("core::cell::Cell", one(inner)),
         Ty::Ordering => ("core::cmp::Ordering", Vec::new()),
@@ -142,6 +143,7 @@ fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
             Ty::Keyed(Keyed::BTreeSet, arguments.get(..1)?.into())
         }
         "core::cmp::Reverse" => Ty::Reverse(first()?),
+        cow::DEFINITION => Ty::Cow(first()?),
         "core::cell::RefCell" => Ty::Cell(CellKind::RefCell, first()?),
         "core::cell::Cell" => Ty::Cell(CellKind::Cell, first()?),
         "core::cmp::Ordering" => Ty::Ordering,
@@ -595,7 +597,12 @@ fn bind(
                 return false;
             };
             if definition == "str" {
-                return ty.is_none();
+                // A type still to be inferred becomes `str`.
+                return match ty {
+                    None => true,
+                    Some(ty @ Ty::Infer(_)) => solver.unify(&Ty::UnsizedStr, &ty),
+                    Some(_) => false,
+                };
             }
             let Some(ty) = ty else {
                 return false;
@@ -810,6 +817,9 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
         (Ty::Float(Float::F64), Ty::Float(_)) => Some(None),
         // Every sequence is an array at runtime.
         (Ty::Array { .. }, Ty::Array { .. }) => Some(None),
+        // A `Cow` of a reference borrows it, and of a value owns it.
+        (Ty::Cow(_), Ty::Str | Ty::Reference { .. }) => Some(Some(PreludeOp::CowBorrowed)),
+        (Ty::Cow(_), _) => Some(Some(PreludeOp::CowOwned)),
         // A box is its value at runtime, and an `Rc` or `Arc` a new
         // allocation of it.
         (Ty::Boxed(inner), source) if same(inner, source) => Some(None),
@@ -875,6 +885,8 @@ pub(super) enum DerefCall {
     Program(Box<method::Definition>),
     /// An `Rc`'s or `Arc`'s value, read (`counted.rs`).
     Counted,
+    /// A `Cow`'s payload, read (`cow.rs`).
+    Cow,
 }
 
 impl Parser<'_> {
@@ -934,10 +946,10 @@ impl Parser<'_> {
                 associated(self, &selected, "Target")
             });
         self.inference.commit(checkpoint);
-        let call = if matches!(ty, Ty::Counted(..)) {
-            DerefCall::Counted
-        } else {
-            DerefCall::Value
+        let call = match ty {
+            Ty::Counted(..) => DerefCall::Counted,
+            Ty::Cow(_) => DerefCall::Cow,
+            _ => DerefCall::Value,
         };
         target.map(|target| (target, call))
     }
@@ -1037,6 +1049,11 @@ impl Parser<'_> {
                     value.lvalue = None;
                 }
                 DerefCall::Counted => self.counted_value(value),
+                DerefCall::Cow => {
+                    value.source = self.prelude_op(PreludeOp::CowValue, [value.rendered_source()]);
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
+                }
             }
         }
         value.ty = ty;

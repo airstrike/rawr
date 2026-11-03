@@ -668,11 +668,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 "Display" => builder.help(format!(
                     "the trait `std::fmt::Display` is not implemented for `{owner}`"
                 )),
-                "Sized" => builder
-                    .help(format!(
-                        "the trait `Sized` is not implemented for `{owner}`"
-                    ))
-                    .note("all local variables must have a statically known size"),
+                "Sized" => builder.help(format!(
+                    "the trait `Sized` is not implemented for `{owner}`"
+                )),
                 _ => builder,
             };
             let builder = match required_by {
