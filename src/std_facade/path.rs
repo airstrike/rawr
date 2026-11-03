@@ -1,15 +1,15 @@
-//! std's `path` and `ffi` types for Rawr code (`resolve::std_reexport`
-//! sends `std::path` and `std::ffi` here). Each value is Rust's own
+//! std's `path` and `ffi` types for Rawr code. Each value is Rust's own
 //! `PathBuf` or `OsString`. A borrowed `Path` or `OsStr` is the same value,
 //! as Rawr code has no borrows of its own.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::host::{self, facade, item, signature, type_ref};
-use crate::{capability, receiver, Dynamic, EvalAltResult, ImmutableString, Position};
+use super::held::{self, Held};
+use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 
-const CAPABILITIES: &[capability::Kind] = &[
+/// What rawr runs for a path's and an `OsString`'s value.
+const RUNS: &[capability::Kind] = &[
     capability::Kind::Default,
     capability::Kind::Debug,
     capability::Kind::Clone,
@@ -19,117 +19,39 @@ const CAPABILITIES: &[capability::Kind] = &[
     capability::Kind::Static,
 ];
 
-pub(super) const PATH: &str = "path::PathBuf";
-const OS: &str = "ffi::OsString";
+/// The types the module holds: a `path.display()` is the text it writes.
+pub(super) const HELD: [Held; 3] = [
+    Held::Value(held::Value {
+        std: "std::path::PathBuf",
+        lent: &["std::path::Path"],
+        also: &[],
+        register: |builder, path, capabilities| {
+            builder
+                .default_value_type::<PathBuf>(path, &[], capabilities)
+                .map(drop)
+        },
+        crosses: true,
+        runs: RUNS,
+    }),
+    Held::Value(held::Value {
+        std: "std::ffi::OsString",
+        lent: &["std::ffi::OsStr"],
+        also: &[],
+        register: |builder, path, capabilities| {
+            builder
+                .default_value_type::<OsString>(path, &[], capabilities)
+                .map(drop)
+        },
+        crosses: true,
+        runs: RUNS,
+    }),
+    Held::Text("std::path::Display"),
+];
 
 /// Register `Debug` for each type.
 pub(crate) fn register_debug() {
     crate::host::debug::register::<PathBuf>();
     crate::host::debug::register::<OsString>();
-}
-
-/// Declare the types and their items in the std facade, under `path`
-/// and `ffi`.
-pub(crate) fn declare(builder: &mut facade::Builder) -> Result<(), host::Error> {
-    use type_ref::{Builtin, Type};
-
-    builder.module("path")?;
-    builder.module("ffi")?;
-    builder.default_value_type::<PathBuf>(PATH, &[], CAPABILITIES)?;
-    builder.default_value_type::<OsString>(OS, &[], CAPABILITIES)?;
-    builder.alias("path::Path", PATH)?;
-    builder.alias("ffi::OsStr", OS)?;
-
-    let string = || Type::builtin(Builtin::String);
-    let text = || Type::reference(false, string());
-    let path = || Type::registered(PATH);
-    let os = || Type::registered(OS);
-    let signature = |inputs: Vec<Type>, output: Type| {
-        let mut signature = signature::Builder::new();
-        for input in inputs {
-            signature.parameter(input);
-        }
-        signature.output(output);
-        signature.finish()
-    };
-    let mut function = |path: String, inputs: Vec<Type>, output: Type| {
-        builder.item(item::Definition::associated_function(
-            path,
-            signature(inputs, output),
-        )?)?;
-        Ok::<_, host::Error>(())
-    };
-    // `Path::new(s)` borrows its text as a path, which Rawr holds as the
-    // `PathBuf` it names: `Path` is `PathBuf` here, so its `new` is a form
-    // of `PathBuf::new` that takes the text.
-    function(
-        format!("{PATH}::new"),
-        vec![text()],
-        Type::reference(false, path()?),
-    )?;
-    for (owner, made) in [(PATH, path()?), (OS, os()?)] {
-        function(format!("{owner}::new"), vec![], made.clone())?;
-        function(format!("{owner}::default"), vec![], made.clone())?;
-        // `From<&str>` and `From<String>`.
-        function(format!("{owner}::from"), vec![text()], made.clone())?;
-        function(format!("{owner}::from"), vec![string()], made)?;
-    }
-    let mut method = |path: String, mode: receiver::Mode, inputs: Vec<Type>, output: Type| {
-        builder.item(item::Definition::method(
-            path,
-            mode,
-            signature(inputs, output),
-        )?)?;
-        Ok::<_, host::Error>(())
-    };
-    use receiver::Mode::{Mutable, Shared};
-    // `AsRef<Path>`: a `&str`, a `String` or a path.
-    for input in [text(), string(), path()?] {
-        method(
-            format!("{PATH}::push"),
-            Mutable,
-            vec![input.clone()],
-            Type::unit(),
-        )?;
-        method(format!("{PATH}::join"), Shared, vec![input], path()?)?;
-    }
-    method(
-        format!("{PATH}::parent"),
-        Shared,
-        vec![],
-        Type::option(path()?),
-    )?;
-    for name in ["file_name", "file_stem", "extension"] {
-        method(
-            format!("{PATH}::{name}"),
-            Shared,
-            vec![],
-            Type::option(os()?),
-        )?;
-    }
-    for name in ["to_path_buf", "to_owned"] {
-        method(format!("{PATH}::{name}"), Shared, vec![], path()?)?;
-    }
-    method(format!("{PATH}::as_os_str"), Shared, vec![], os()?)?;
-    method(format!("{OS}::to_os_string"), Shared, vec![], os()?)?;
-    method(format!("{OS}::to_owned"), Shared, vec![], os()?)?;
-    for owner in [PATH, OS] {
-        method(
-            format!("{owner}::to_str"),
-            Shared,
-            vec![],
-            Type::option(text()),
-        )?;
-        method(
-            format!("{owner}::to_string_lossy"),
-            Shared,
-            vec![],
-            string(),
-        )?;
-    }
-    // `path.display()` is the text `{}` prints, which `to_string` reads.
-    method(format!("{PATH}::display"), Shared, vec![], string())?;
-    Ok(())
 }
 
 fn error(message: impl Into<String>) -> Box<EvalAltResult> {
@@ -148,12 +70,25 @@ fn read<T: Clone + 'static>(value: &Dynamic, expected: &str) -> Result<T, Box<Ev
         })
 }
 
-/// A `String` or a `PathBuf` argument, as Rust's `AsRef<Path>`.
-fn path_like(value: &Dynamic) -> Result<PathBuf, Box<EvalAltResult>> {
-    if let Some(text) = value.read_lock::<ImmutableString>() {
-        return Ok(PathBuf::from(text.as_str()));
+/// A `String`, an `OsString` or a `PathBuf` argument, as Rust's
+/// `AsRef<Path>`.
+pub(super) fn path_like(value: &Dynamic) -> Result<PathBuf, Box<EvalAltResult>> {
+    if let Some(path) = value.read_lock::<PathBuf>() {
+        return Ok(path.clone());
     }
-    read::<PathBuf>(value, "PathBuf")
+    Ok(PathBuf::from(os_like(value)?))
+}
+
+/// A `String`, an `OsString` or a `PathBuf` argument, as Rust's
+/// `AsRef<OsStr>`.
+fn os_like(value: &Dynamic) -> Result<OsString, Box<EvalAltResult>> {
+    if let Some(text) = value.read_lock::<ImmutableString>() {
+        return Ok(OsString::from(text.as_str()));
+    }
+    if let Some(path) = value.read_lock::<PathBuf>() {
+        return Ok(path.clone().into_os_string());
+    }
+    read::<OsString>(value, "OsString")
 }
 
 fn text(value: &str) -> Dynamic {
@@ -164,14 +99,10 @@ fn os_text(value: Option<&std::ffi::OsStr>) -> Dynamic {
     crate::option::from(value.map(std::ffi::OsStr::to_os_string))
 }
 
-/// Bind the types' items in the std facade.
-pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
+/// Bind the types' items.
+pub(super) fn bind(binds: &mut impl super::Bind) {
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
-    let mut bind = |path: &str, callback: Callback| {
-        runtime
-            .bind(format!("{}::{path}", super::ROOT), callback)
-            .unwrap_or_else(|_| panic!("the std bindings must retain {path}"));
-    };
+    let mut bind = |path: &str, callback: Callback| binds.plain(path, callback);
     bind("path::PathBuf::new", |args| match args {
         [] => Ok(Dynamic::from(PathBuf::new())),
         [text, ..] => Ok(Dynamic::from(path_like(text)?)),
@@ -187,8 +118,7 @@ pub(crate) fn bind(runtime: &mut host::runtime::Builder) {
         Ok(Dynamic::from(OsString::new()))
     });
     bind("ffi::OsString::from", |args| {
-        let text = read::<ImmutableString>(args[0], "String")?;
-        Ok(Dynamic::from(OsString::from(text.as_str())))
+        Ok(Dynamic::from(os_like(args[0])?))
     });
     bind("path::PathBuf::push", |args| {
         let pushed = path_like(args[1])?;

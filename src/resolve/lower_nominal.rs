@@ -7839,7 +7839,7 @@ fn moved_input(inference: &Inference, ty: &Ty) -> bool {
                     .path()
                     .strip_prefix(crate::std_facade::ROOT)
                     .and_then(|path| path.strip_prefix("::"))
-                    .is_some_and(crate::std_facade::held))
+                    .is_some_and(crate::std_facade::crosses))
     )
 }
 
@@ -17619,18 +17619,14 @@ impl<'a> Parser<'a> {
                 }
                 let item_path = item.path();
                 let output = self.proven_type(&output, &item_path, span)?;
-                // An imported call gives back each `&mut` array and string
-                // it copies in after its value (`copied_places`).
-                let copies = if item.imported_identity().is_some() {
-                    operands
-                        .iter()
-                        .filter(|(ty, _, receiver)| !receiver && copied_input(&self.inference, ty))
-                        .count()
-                        .try_into()
-                        .unwrap_or(u8::MAX)
-                } else {
-                    0
-                };
+                // A host call gives back each `&mut` array and string it
+                // copies in after its value (`copied_places`).
+                let copies = operands
+                    .iter()
+                    .filter(|(ty, _, receiver)| !receiver && copied_input(&self.inference, ty))
+                    .count()
+                    .try_into()
+                    .unwrap_or(u8::MAX);
                 #[cfg(feature = "rust-import")]
                 let instance = self.imported_instance_key(
                     &item,
@@ -20296,7 +20292,6 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let summary = self.host_summary(&item, &self.inference.resolve(&ty), &types);
         let opens = item.opens();
-        let imported = item.imported_identity().is_some();
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -20306,13 +20301,8 @@ impl<'a> Parser<'a> {
             signature.requirements,
             call,
         )?;
-        let places = if imported {
-            let places = copied_places(&self.inference, &signature.inputs, &arguments);
-            move_into_call(&self.inference, &signature.inputs, &mut arguments);
-            places
-        } else {
-            Vec::new()
-        };
+        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let runtime_arguments = arguments
             .into_iter()
             .filter(|argument| !argument.ty.is_imported_static_operand());
@@ -21119,17 +21109,16 @@ impl<'a> Parser<'a> {
             (Vec::new(), member_span.end())
         } else {
             self.hint_closures(&items, Some(&receiver.ty));
-            // A std reader appends to its `&mut String` argument.
-            // So does an imported method that borrows a value mutably, as
-            // `render_stateful_widget` takes `&mut state` (D558.5).
+            // A method that borrows a value mutably, as std's
+            // `read_line(&mut buf)` and `render_stateful_widget(&mut
+            // state)` do (D558.5).
             if items.first().is_some_and(|item| {
-                crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
-                    || item.signature().parameters().iter().any(|parameter| {
-                        matches!(
-                            parameter.shape(),
-                            crate::host::type_ref::Shape::Reference { mutable: true, .. }
-                        )
-                    })
+                item.signature().parameters().iter().any(|parameter| {
+                    matches!(
+                        parameter.shape(),
+                        crate::host::type_ref::Shape::Reference { mutable: true, .. }
+                    )
+                })
             }) {
                 self.parse_borrowing_arguments("host method arguments")?
             } else {
@@ -21664,21 +21653,6 @@ impl<'a> Parser<'a> {
         mut arguments: Vec<ParsedExpr>,
         call: Span,
     ) -> Result<ParsedExpr, Error> {
-        if let Some(item) = items.first()
-            && arguments.len() == 1
-            && crate::std_facade::io::APPENDING.contains(&item.path().to_string().as_str())
-        {
-            return self.appending_host_method(
-                receiver,
-                definition,
-                items,
-                owner,
-                scoped,
-                member_span,
-                arguments,
-                call,
-            );
-        }
         self.deref_facade_strings(items, &mut arguments)?;
         let (item, signature) =
             self.select_host_signature(items, Some(&receiver.ty), &mut arguments, false, call)?;
@@ -21769,13 +21743,8 @@ impl<'a> Parser<'a> {
         let shared = item.receiver() == Some(receiver::Mode::Shared);
         let guard = item.guard();
         let opens = item.opens();
-        let places = if item.imported_identity().is_some() {
-            let places = copied_places(&self.inference, &signature.inputs, &arguments);
-            move_into_call(&self.inference, &signature.inputs, &mut arguments);
-            places
-        } else {
-            Vec::new()
-        };
+        let places = copied_places(&self.inference, &signature.inputs, &arguments);
+        move_into_call(&self.inference, &signature.inputs, &mut arguments);
         let helper = self.push_intrinsic(
             item,
             owner,
@@ -22021,69 +21990,6 @@ impl<'a> Parser<'a> {
             ty: target,
         })));
         parsed
-    }
-
-    /// `stdin.read_line(&mut buf)`, a std reader that appends to a
-    /// `&mut String` (`std_facade::io::APPENDING`): the facade's method
-    /// takes no argument and gives `(result, text)`, and the text is
-    /// appended to the place the argument borrows.
-    #[allow(clippy::too_many_arguments)]
-    fn appending_host_method(
-        &mut self,
-        receiver: ParsedExpr,
-        definition: &crate::host::type_def::Definition,
-        items: &[crate::host::item::Definition],
-        owner: Option<crate::host::facade::Dependency>,
-        scoped: bool,
-        member_span: Span,
-        arguments: Vec<ParsedExpr>,
-        call: Span,
-    ) -> Result<ParsedExpr, Error> {
-        let mut buffer = self
-            .mutable_arguments(&arguments, [0])?
-            .pop()
-            .expect("one `&mut` argument was checked");
-        let Some(lvalue) = buffer.lvalue.clone() else {
-            unreachable!("a `&mut` place has an lvalue");
-        };
-        self.require_mutable_binding(lvalue.binding(), buffer.span)?;
-        let Ty::Reference { target, .. } = self.inference.resolve(&buffer.ty) else {
-            unreachable!("a `&mut` place is a reference");
-        };
-        buffer.ty = *target;
-        self.coerce_expr(&Ty::String, &mut buffer)?;
-        let pair = self.finish_host_method(
-            receiver,
-            definition,
-            items,
-            owner,
-            scoped,
-            member_span,
-            Vec::new(),
-            call,
-        )?;
-        let Ty::Tuple(members) = self.inference.resolve(&pair.ty) else {
-            unreachable!("an appending reader gives `(result, text)`");
-        };
-        let read = self.temporary("read");
-        let mut appended = buffer.rendered_source().surrounded("(", ")");
-        appended.push_text(format!(" + {read}[1]"));
-        let store = self.store_lvalue(&lvalue, appended)?;
-        let mut source = origin::Fragment::plain(format!("{{ let {read} = "));
-        source.push(pair.rendered_source());
-        source.push_text("; ");
-        source.push(store);
-        source.push_text(format!(" {read}[0] }}"));
-        Ok(ParsedExpr {
-            prelude: origin::Fragment::default(),
-            source,
-            ty: members[0].clone(),
-            span: call,
-            lvalue: None,
-            outcome: pair.outcome,
-            evaluation: pair.evaluation,
-        }
-        .retain_origin())
     }
 
     /// The statement storing `value` into `lvalue`.

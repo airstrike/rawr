@@ -1552,17 +1552,9 @@ fn resolve_import_binding(
 
 /// The path `qualified` resolves at through a re-export: the std path an
 /// imported crate's re-export of a std item names (`iced::time::Duration`
-/// is `std::time::Duration`), or the core's own module for a std module it
-/// declares (`rawr_std::io` for `std::io`).
+/// is `std::time::Duration`), or the std facade's own item for a std item
+/// it declares (`rawr_std::io` for `std::io`).
 pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableString {
-    const REEXPORTS: [(&str, &str); 6] = [
-        ("std::path", "rawr_std::path"),
-        ("std::ffi", "rawr_std::ffi"),
-        ("std::io", "rawr_std::io"),
-        ("std::env", "rawr_std::env"),
-        ("std::fs", "rawr_std::fs"),
-        ("std::process", "rawr_std::process"),
-    ];
     if host.entry(qualified).is_some() {
         return qualified.into();
     }
@@ -1571,14 +1563,10 @@ pub(crate) fn std_reexport(qualified: &str, host: &host::Registry) -> ImmutableS
     if let Some(std) = host.std_alias(qualified) {
         return std;
     }
-    for (std, root) in REEXPORTS {
-        if let Some(rest) = qualified.strip_prefix(std)
-            && (rest.is_empty() || rest.starts_with("::"))
-        {
-            let reexported = format!("{root}{rest}");
-            if host.entry(&reexported).is_some() {
-                return reexported.into();
-            }
+    if let Some(rest) = qualified.strip_prefix("std::") {
+        let reexported = format!("{}::{rest}", crate::std_facade::ROOT);
+        if host.entry(&reexported).is_some() {
+            return reexported.into();
         }
     }
     qualified.into()

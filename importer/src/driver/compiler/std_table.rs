@@ -13,7 +13,10 @@
 //!   variants) under its path. A trait's line ends with its supertraits,
 //!   and each of its members' with its declaration as a program writes it
 //!   (D711 step 2), naming types by their public paths, bare for the
-//!   prelude's.
+//!   prelude's. A free function's line ends with its declaration too, and
+//!   a type alias's with the type it names (step 6). A type's inherent
+//!   items include those a later crate of std declares for it, as `std`'s
+//!   `impl io::Error` for core's `io::Error`.
 //!
 //! What differs by target (`arch`, `simd`, `os`) is left out, so the table
 //! is the same on every host. `scripts/std-table.sh` regenerates it for
@@ -196,6 +199,12 @@ struct Table<'tcx> {
     /// whose declarations are written once every public path is known
     /// (D711 step 4).
     inherent: BTreeMap<String, (DefId, DefId)>,
+    /// Each free function's line, whose declaration is written as an
+    /// inherent function's is (D711 step 6).
+    functions: BTreeMap<String, DefId>,
+    /// Each type alias's line, which ends with the type it names (D711
+    /// step 6): `Result<T, std::io::Error>` of `std::io::Result`.
+    aliases: BTreeMap<String, DefId>,
     /// Whether `ty` writes lifetimes: an inherent function's declaration
     /// does, for its borrow summary.
     lifetimes: std::cell::Cell<bool>,
@@ -224,6 +233,8 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         traits: Vec::new(),
         impls: BTreeSet::new(),
         inherent: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        aliases: BTreeMap::new(),
         lifetimes: std::cell::Cell::new(false),
     };
     for (krate, name) in &roots {
@@ -459,13 +470,24 @@ impl<'tcx> Table<'tcx> {
                 self.inherent(def_id, canonical);
             }
             DefKind::Struct | DefKind::Union => self.inherent(def_id, canonical),
+            DefKind::Fn => {
+                self.functions.insert(canonical.to_owned(), def_id);
+            }
+            DefKind::TyAlias => {
+                self.aliases.insert(canonical.to_owned(), def_id);
+            }
             _ => {}
         }
     }
 
+    /// A type's inherent items: its own crate's impls, then those a later
+    /// crate of std writes for it, as `std`'s `impl io::Error` for core's
+    /// `io::Error`.
     fn inherent(&mut self, def_id: DefId, canonical: &str) {
+        let tcx = self.tcx;
         let mut members = BTreeSet::new();
-        for implementation in self.tcx.inherent_impls(def_id) {
+        let incoherent = tcx.incoherent_impls(SimplifiedType::Adt(def_id));
+        for implementation in tcx.inherent_impls(def_id).iter().chain(incoherent) {
             self.inherent_members(*implementation, canonical, &mut members);
         }
     }
@@ -972,7 +994,8 @@ impl<'tcx> Table<'tcx> {
             }
         }
         let names = tcx.fn_arg_idents(def_id);
-        let method = tcx.associated_item(def_id).is_method();
+        let method =
+            tcx.def_kind(def_id) == DefKind::AssocFn && tcx.associated_item(def_id).is_method();
         let is_self = |ty: ty::Ty<'tcx>| {
             matches!(ty.kind(), ty::Param(parameter) if parameter.name == kw::SelfUpper)
                 || owner == Some(ty)
@@ -1054,7 +1077,8 @@ impl<'tcx> Table<'tcx> {
 
     /// Each inherent function's line: the impl's self type when it isn't
     /// the owner's own (`Option<&T>` of `copied`, `[u8]` of `is_ascii`),
-    /// then its declaration with its lifetimes (D711 step 4).
+    /// then its declaration with its lifetimes (D711 step 4); then each free
+    /// function's declaration and each type alias's type (step 6).
     fn inherent_signatures(&mut self) {
         let tcx = self.tcx;
         self.lifetimes.set(true);
@@ -1091,7 +1115,25 @@ impl<'tcx> Table<'tcx> {
                 *line = format!("{kind}\t{stability}\t{shown}\t{}", clean(&declaration));
             }
         }
+        // A free function's line ends with its declaration (D711 step 6).
+        let functions = std::mem::take(&mut self.functions);
+        for (key, function) in &functions {
+            let name = key.rsplit("::").next().unwrap_or_default();
+            let declaration = self.declare(*function, name, None);
+            if let Some(line) = self.items.get_mut(key) {
+                line.push('\t');
+                line.push_str(&clean(&declaration));
+            }
+        }
         self.lifetimes.set(false);
+        let aliases = std::mem::take(&mut self.aliases);
+        for (key, alias) in &aliases {
+            let target = self.ty(tcx.type_of(*alias).instantiate_identity().skip_norm_wip());
+            if let Some(line) = self.items.get_mut(key) {
+                line.push('\t');
+                line.push_str(&clean(&target));
+            }
+        }
     }
 }
 

@@ -27,7 +27,7 @@ pub(super) struct Proof {
     /// Whether the call gives a `DerefMut` borrow guard's place, which Rawr
     /// reads and stores as a `RefCell` borrow, in place of its `output`.
     place: bool,
-    /// How many `&mut` arrays and strings an imported call copies in and
+    /// How many `&mut` arrays and strings a host call copies in and
     /// gives back after its value, as `[value, copies..]` (D558 slice 2).
     copies: u8,
 }
