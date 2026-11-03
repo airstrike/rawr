@@ -1,0 +1,91 @@
+diff --git a/importer/src/bridge/generate.rs b/importer/src/bridge/generate.rs
+index bb2cb7c08..e04bcef63 100644
+--- a/importer/src/bridge/generate.rs
++++ b/importer/src/bridge/generate.rs
+@@ -7179,9 +7179,11 @@ impl Matcher {
+     }
+ }
+ 
+-/// The matchers of a variant of a non-generic enum: one that copies its
+-/// fields and its test, and, with fields, one that moves them, one that
+-/// lends them, one that lends them mutably, and for each field one that
++/// The matchers of a variant of an enum whose type parameters, if any, all
++/// have defaults, as iced's `Key<C = SmolStr>`, which its path names at
++/// them: one that copies its fields and its test, and, with fields, one
++/// that moves them, one that lends them, one that lends them mutably, and
++/// for each field one that
+ /// copies it and one that lends it. The set depends on the plan alone, so
+ /// the runner's manifest and its rows name the same adapters; how each
+ /// reaches the fields is decided where it is rendered (`render_matcher`).
+@@ -7192,7 +7194,10 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
+     else {
+         return Vec::new();
+     };
+-    if !parameters.is_empty() {
++    if parameters
++        .iter()
++        .any(|parameter| parameter.default().is_none())
++    {
+         return Vec::new();
+     }
+     if fields.is_empty() {
+@@ -8659,7 +8664,10 @@ fn render_adapter_body(
+             name, form, fields, ..
+         } => {
+             render_fields(fields, 0, output)?;
+-            write!(output, "    let output = {path}::{name}").map_err(request::unwritable)?;
++            // The enum's type, which names its defaulted parameters' types
++            // as rustc reads a path without them (`Key` is `Key<SmolStr>`).
++            let ty = structural_type(plan);
++            write!(output, "    let output: {ty} = {path}::{name}").map_err(request::unwritable)?;
+             render_constructor(*form, fields, output)?;
+             output
+                 .write_all(b";\n    insert_native!(arguments.arena, output).map(Dynamic::from)\n")
+@@ -13828,7 +13836,8 @@ fn render_give(
+     match ty {
+         ty if boxed_element(ty).is_some()
+             || counted_element(ty).is_some()
+-            || keyed_element(ty).is_some() =>
++            || keyed_element(ty).is_some()
++            || matches!(range_inclusive_element(ty), Some(convert::Type::Nominal { .. })) =>
+         {
+             let mut converted = String::new();
+             render_to_dynamic(ty, value, 0, &mut converted)?;
+@@ -14059,6 +14068,18 @@ fn render_from_dynamic(
+                     builtin.rust_name().unwrap_or_default()
+                 )
+             }
++            // Rawr's range of a crate type's bounds, as iced's
++            // `Radians::RANGE` gives: Rust's of the bounds it holds.
++            element @ convert::Type::Nominal { .. } => {
++                let mut start = String::new();
++                render_from_dynamic(element, &format!("start_{depth}"), depth + 1, &mut start)?;
++                let mut end = String::new();
++                render_from_dynamic(element, &format!("end_{depth}"), depth + 1, &mut end)?;
++                write!(
++                    output,
++                    "{value}.try_cast_result::<std::ops::RangeInclusive<Dynamic>>().map_err(|_| Error::TypeMismatch).and_then(|range| {{ let (start_{depth}, end_{depth}) = range.into_inner(); Ok::<_, Error>(({start})?..=({end})?) }})"
++                )
++            }
+             _ => {
+                 return Err(request::drift("an inclusive range of a type that is not a number"))
+             }
+@@ -14264,6 +14285,18 @@ fn render_to_dynamic(
+         ty if let Some(element) = boxed_element(ty) => {
+             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
+         }
++        // std's `RangeInclusive` of a crate's type, as iced's
++        // `Radians::RANGE`: rawr's range of its two bounds.
++        ty if let Some(element @ convert::Type::Nominal { .. }) = range_inclusive_element(ty) => {
++            let mut start = String::new();
++            render_to_dynamic(element, &format!("start_{depth}"), depth + 1, &mut start)?;
++            let mut end = String::new();
++            render_to_dynamic(element, &format!("end_{depth}"), depth + 1, &mut end)?;
++            write!(
++                output,
++                "{{ let (start_{depth}, end_{depth}) = {value}.into_inner(); ({start}).and_then(|start| ({end}).map(|end| Dynamic::from(start..=end))) }}"
++            )
++        }
+         // std's map or set, as rawr's of its kind: its entries sorted by
+         // key, as rawr keeps them (`keyed_element`).
+         ty if let Some((kind, members)) = keyed_element(ty) => {

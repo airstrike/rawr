@@ -194,6 +194,22 @@ fn a_boot_function_giving_the_state_and_a_task_runs() {
     );
 }
 
+/// iced's delineate: `selector::find(id)` is generic over `Selector`, a
+/// trait with an associated output that the crate also implements for
+/// `FnMut` closures, and takes the widget `Id` with no closure. Its task's
+/// `Option<Target>` maps into a message. iced's scrollable: a palette
+/// field's `Color`, which the program names by no path, converts into a
+/// `Background` by `.into()` through `From`. The output is `cargo run`'s.
+#[test]
+fn a_selector_finds_by_id_and_a_fields_color_converts_into_a_background() {
+    let (rawr, cargo) = both_printed("crossing-found", "found.rs", "Refresh");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("Some(50.0) Color(Color { r: 3, g: 4, b: 5 })"),
+        "{rawr}"
+    );
+}
+
 /// iced's system_information: `Task::map(Message::InformationReceived)`
 /// calls the variant on another thread, as iced's executor does, with a
 /// crate value native code made. The message is made where it is
@@ -392,6 +408,21 @@ fn a_slider_beside_an_opaque_widget_runs() {
         rawr.contains("1 view pad 0 1..=100@50/Some(50) \"50\" logo50@16")
             && rawr.contains("1 message SliderChanged(100)")
             && rawr.contains("last view pad 0 1..=100@100/Some(50) \"100\" logo100@16"),
+        "{rawr}"
+    );
+}
+
+/// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
+/// constant whose type is std's `RangeInclusive` of the crate's own type,
+/// and the slider takes it at that type. The output is `cargo run`'s.
+#[test]
+fn a_range_of_a_crate_type_from_an_associated_constant_crosses() {
+    let (rawr, cargo) = both_printed("crossing-turned", "turned.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None")
+            && rawr.contains("1 message Turned(Turn(1.0))")
+            && rawr.contains("last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None"),
         "{rawr}"
     );
 }
@@ -1368,6 +1399,21 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
     );
 }
 
+/// iced's `keyboard::Key<C = SmolStr>`: an enum whose every type parameter
+/// has a default is matched below a variant that names it without
+/// arguments, as modal's `KeyPressed { key: Key::Named(Named::Tab), .. }`,
+/// and made at the instance its use infers, its default where nothing else
+/// fixes it. The output is `cargo run`'s.
+#[test]
+fn an_enum_with_defaulted_parameters_is_matched_and_made() {
+    let (rawr, cargo) = both_printed("crossing-keys", "keys.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "back\nforward\nclose\ntyped a\nother\nother\nNamed(Escape)"
+    );
+}
+
 /// String-like generics follow their bound, not their spelling (#713): `S:
 /// Into<String>` takes what `impl Into<String>` takes, and `AsRef<str>`,
 /// `AsRef<Path>`, `Into<PathBuf>`, `AsRef<[u8]>` and `ToString` take a
@@ -1469,6 +1515,22 @@ fn maps_and_sets_cross_as_rawrs_keyed_collections() {
         "total 7\nkept 3 2\ncheapest nib nib\nprices {\"a\": 1, \"b\": 2}\n\
          catalog [\"cup\", \"mug\"] 5\ntags 8\nevens {0, 2, 4, 6}\n\
          letters ['a', 'b', 'c']\ninvert {1: \"one\", 2: \"two\"}"
+    );
+}
+
+/// A crate type's derived `Ord` keys a `BTreeMap` in the crate's order,
+/// not its hash's (#363), and a method that gives the same enum at a type
+/// borrowing its receiver, as iced's `Key::as_ref(&self) -> Key<&str>`,
+/// is matched at that type, a `&str` literal against the borrowed
+/// character (#345). The output is `cargo run`'s.
+#[test]
+fn a_crate_order_keys_a_btree_map_and_a_borrowed_instance_matches() {
+    let (rawr, cargo) = both_printed("crossing-ordered", "ordered.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "windows [\"third\", \"second\", \"first\"]\nfirst Id(8) third\n\
+         Some(\"toggle\")\nSome(\"reset\")\nother q\nNone\nNone\nNone"
     );
 }
 

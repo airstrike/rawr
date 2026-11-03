@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 98;
+const CLASSIFIER_VERSION: u32 = 100;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6241,6 +6241,10 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "Eq"),
             self.implements_for_any(definition, "Hash"),
         )
+        .with_order(
+            self.implements_for_any(definition, "PartialOrd"),
+            self.implements_for_any(definition, "Ord"),
+        )
         .with_borrowing(
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
@@ -6518,6 +6522,10 @@ impl<P: api::Phase> Context<'_, P> {
             self.implements_for_any(definition, "Eq"),
             self.implements_for_any(definition, "Hash"),
         )
+        .with_order(
+            self.implements_for_any(definition, "PartialOrd"),
+            self.implements_for_any(definition, "Ord"),
+        )
         .with_borrowing(
             lifetime_parameters(generics),
             covariant_lifetimes(generics),
@@ -6731,7 +6739,12 @@ impl<P: api::Phase> Context<'_, P> {
                 (signature, generics)
             });
         let opens_copies = self.late_binders_open_copies(signature);
-        let borrows_receiver = borrows_receiver(signature);
+        let borrows_receiver = borrows_receiver(signature, |id| {
+            self.graph
+                .definition_index(id)
+                .and_then(|index| self.graph.definitions().nth(index))
+                .is_some_and(|definition| std_binding::of(definition) == Some(Std::Option))
+        });
         let outer_scope = self
             .scope_lifetimes
             .replace(opens_copies || borrows_receiver);
@@ -7495,12 +7508,23 @@ impl<P: api::Phase> Context<'_, P> {
                             // A range of a type parameter or of a float, as
                             // a crate's `slider(range: RangeInclusive<T>,
                             // value: T, ..)` takes: Rawr's integer or float
-                            // range as `T` is an integer or a float.
+                            // range as `T` is an integer or a float. A
+                            // range of a crate's type, as iced's
+                            // `Radians::RANGE` is, holds its two bounds.
                             let element = self.convert(element)?;
-                            if !matches!(
-                                element,
-                                Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
-                            ) {
+                            let crate_type = matches!(
+                                &element,
+                                Type::Nominal { definition, .. }
+                                    if !crate::surface::identity::Definition::is_projected(
+                                        definition.as_bytes(),
+                                    )
+                            );
+                            if !crate_type
+                                && !matches!(
+                                    element,
+                                    Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                                )
+                            {
                                 return Err(
                                     representability::reject::Kind::UnsupportedGenericArgument
                                         .into(),
@@ -7695,8 +7719,16 @@ impl<P: api::Phase> Context<'_, P> {
                                 };
                             // `Reader<&'a [u8]>`: a shared slice of scalars or
                             // a `&str` a type argument names, which a scope
-                            // frame's value borrows (D558 tier 1).
-                            converted.push(match borrowed_argument(argument) {
+                            // frame's value borrows (D558 tier 1), at the
+                            // frame's own lifetime too, as iced's
+                            // `Key::as_ref(&self) -> Key<&str>` gives.
+                            let borrowed = borrowed_argument(argument).or_else(|| {
+                                self.scope_lifetimes
+                                    .get()
+                                    .then(|| late_borrowed_argument(argument))
+                                    .flatten()
+                            });
+                            converted.push(match borrowed {
                                 Some(target) => self.convert_borrowed(target)?,
                                 None => self.convert(argument)?,
                             });
@@ -7963,6 +7995,7 @@ impl<P: api::Phase> Context<'_, P> {
             implements("Eq"),
             implements("Hash"),
         )
+        .with_order(implements("PartialOrd"), implements("Ord"))
     }
 
     /// A function's output. A Rust future, an `impl Future<Output = T>` or
@@ -9373,7 +9406,10 @@ fn rebind_lifetime(ty: &model::Type, from: &model::Lifetime, to: &model::Lifetim
 /// `BytesStart::name(&self) -> QName<'_>` does: it opens a scope frame that
 /// holds the receiver borrowed while the output lives (D558 tier 1, slice
 /// 2). A plain `&T` output is read as a borrow guard instead.
-fn borrows_receiver(signature: &model::Signature) -> bool {
+fn borrows_receiver(
+    signature: &model::Signature,
+    is_option: impl Fn(&api::identity::Definition) -> bool,
+) -> bool {
     let model::Receiver::Reference {
         lifetime: receiver @ model::Lifetime::Late { .. },
         ..
@@ -9392,16 +9428,22 @@ fn borrows_receiver(signature: &model::Signature) -> bool {
         && !names_opaque(output)
         && signature.binders().len() == 1
         && !signature.inputs().any(names_late_lifetime)
-        && !lends_option_reference(output, receiver)
+        && !lends_option_reference(output, receiver, is_option)
 }
 
 /// Whether `output` is an `Option<&'r T>` of the receiver's lifetime `'r`,
 /// as pane_grid's `State::get_mut` gives: a borrow guard's place, not a
-/// frame (T012).
-fn lends_option_reference(output: &model::Type, receiver: &model::Lifetime) -> bool {
-    matches!(output, model::Type::Definition { arguments, .. }
+/// frame (T012). Another type of one borrowed argument, as iced's
+/// `Key::as_ref(&self) -> Key<&str>` gives, is a frame's value.
+fn lends_option_reference(
+    output: &model::Type,
+    receiver: &model::Lifetime,
+    is_option: impl Fn(&api::identity::Definition) -> bool,
+) -> bool {
+    matches!(output, model::Type::Definition { id, arguments }
         if matches!(&arguments[..], [model::Argument::Type(model::Type::Reference { lifetime, .. })]
-            if lifetime == receiver))
+            if lifetime == receiver)
+            && is_option(id))
 }
 
 /// Whether `ty` holds an opaque, trait object or function pointer type.
@@ -10308,9 +10350,32 @@ fn borrowed_argument(ty: &model::Type) -> Option<&model::Type> {
     let model::Type::Reference {
         lifetime: model::Lifetime::Early { .. } | model::Lifetime::Static,
         mutability: model::Mutability::Shared,
-        ty,
+        ..
     } = ty
     else {
+        return None;
+    };
+    lent_target(ty)
+}
+
+/// As `borrowed_argument`, of a late-bound lifetime: a scope frame's,
+/// which the receiver it holds borrowed outlives.
+fn late_borrowed_argument(ty: &model::Type) -> Option<&model::Type> {
+    let model::Type::Reference {
+        lifetime: model::Lifetime::Late { .. },
+        mutability: model::Mutability::Shared,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+    lent_target(ty)
+}
+
+/// What the shared reference `ty` lends when it is a slice of scalars or a
+/// `str`.
+fn lent_target(ty: &model::Type) -> Option<&model::Type> {
+    let model::Type::Reference { ty, .. } = ty else {
         return None;
     };
     match &**ty {
