@@ -6735,10 +6735,15 @@ fn render_source(
         // One type a program names at two paths, as a signature names
         // `iced::keyboard::Event` and a closure's inferred type the
         // `iced_core` one, is one type of the facade: its rows bind once,
-        // at the first path (D536.1).
+        // at the first path (D536.1). A field's or variant's selector names
+        // it within its type, so two types' `standard` fields are two rows.
+        let definition = plan
+            .definition()
+            .ok_or_else(|| request::drift("generated structural definition"))?;
         let instance = crate::surface::instance::key(plan.structural_instance());
         if !written.insert((
             plan.export().root_alias(),
+            definition,
             selector.to_owned(),
             kind.clone(),
             instance,
