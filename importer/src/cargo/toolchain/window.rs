@@ -9,7 +9,10 @@
 /// The oldest `commit-date` the driver builds on: the pinned nightly's.
 pub(crate) const OLDEST: &str = "2026-07-10";
 
-/// The newest `commit-date` the driver is known to build on.
+/// The newest `commit-date` the driver is known to build on. CI's
+/// nightly-window workflow (`.github/workflows/nightly-window.yml`) opens a
+/// pull request moving it, and `RANGE`, when a newer nightly builds the
+/// driver and reads std with it.
 pub(crate) const NEWEST: &str = "2026-11-01";
 
 /// The nightlies those dates are, for messages.
@@ -69,7 +72,9 @@ mod tests {
     #[test]
     fn each_change_is_inside_the_window_in_date_order() {
         assert!(contains(OLDEST) && contains(NEWEST));
-        assert!(!contains("2026-07-09") && !contains("2026-11-02"));
+        // `~` sorts after every digit, so `NEWEST~` is just past NEWEST
+        // wherever CI's nightly-window workflow moves it.
+        assert!(!contains("2026-07-09") && !contains(&format!("{NEWEST}~")));
         for pair in CHANGES.windows(2) {
             assert!(pair[0].1 <= pair[1].1, "{pair:?}");
         }

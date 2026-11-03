@@ -16,7 +16,7 @@
 </table>
 <p>One command installs prebuilt <code>rawr</code> and rawr-import:</p>
 <div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
-<p>The prebuilt <code>rawr-import-driver</code> is for <code>nightly-2026-07-11</code>. For another nightly, rawr-import builds a driver once, the first time a project uses that nightly, and keeps it in rawr&rsquo;s home. <a href="/docs/imports#toolchain">Imports</a> says how.</p>
+<p>The prebuilt <code>rawr-import-driver</code> is for <code>nightly-2026-07-11</code>. For another nightly, rawr-import builds a driver once, the first time a project uses that nightly, and keeps it in rawr&rsquo;s home. The range&rsquo;s end moves forward as nightly does: CI builds the driver on each day&rsquo;s nightly and moves it to the newest one that works. <a href="/docs/imports#toolchain">Imports</a> says how.</p>
 <p>Each release on <a href="https://github.com/airstrike/rawr/releases">GitHub</a> carries archives for macOS on Apple Silicon and Intel, Linux on x86_64 and aarch64, and Windows on x86_64. <a href="/docs/start#install">Start</a> gives the other ways to install.</p>
 
 <h2 id="platforms">Platforms</h2>

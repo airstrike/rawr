@@ -178,9 +178,15 @@ fn compiler_cfgs(version: &str) {
     for (cfg, _) in window::CHANGES {
         println!("cargo::rustc-check-cfg=cfg({cfg})");
     }
-    if !date.is_empty() && !window::contains(date) {
+    // CI's nightly-window workflow sets RAWR_NIGHTLY_PROBE to learn whether
+    // the window can move to a newer nightly: that nightly then builds with
+    // every change's cfg instead of being refused.
+    println!("cargo:rerun-if-env-changed=RAWR_NIGHTLY_PROBE");
+    let probe = env::var_os("RAWR_NIGHTLY_PROBE").is_some() && date > window::NEWEST;
+    if !date.is_empty() && !window::contains(date) && !probe {
         println!("cargo::rustc-cfg=rawr_rustc_outside_window");
     }
+    println!("cargo::rustc-env=RAWR_RUSTC_WINDOW={}", window::RANGE);
     for (cfg, since) in window::CHANGES {
         if !date.is_empty() && date >= since {
             println!("cargo::rustc-cfg={cfg}");

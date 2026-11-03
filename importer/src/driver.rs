@@ -3,10 +3,11 @@
 #![feature(rustc_private)]
 
 #[cfg(rawr_rustc_outside_window)]
-compile_error!(
-    "rawr-import-driver builds on nightly-2026-07-11 through nightly-2026-11-02 \
-     (`importer/src/cargo/toolchain/window.rs`)"
-);
+compile_error!(concat!(
+    "rawr-import-driver builds on ",
+    env!("RAWR_RUSTC_WINDOW"),
+    " (`importer/src/cargo/toolchain/window.rs`)"
+));
 
 #[cfg(rawr_rustc_attr_ir)]
 extern crate rustc_attr_ir;
