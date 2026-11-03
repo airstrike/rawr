@@ -6455,9 +6455,11 @@ fn render_source(
                 byte_array(&mut file, plan.selector().unwrap_or(&[0; 32]))?;
                 write!(file, ", instance: ").map_err(request::unwritable)?;
                 byte_array(&mut file, &[0; 32])?;
+                // A matcher gives new values, which take its output's
+                // witness: a field's reader gives the field's value alone.
                 writeln!(
                     file,
-                    ", bound: false, application: false, root: {:?}, witness: 0, arguments: 1, invoke: {} }},",
+                    ", bound: false, application: false, root: {:?}, witness: 1, arguments: 1, invoke: {} }},",
                     plan.export().root_alias(),
                     matcher.name(plan)
                 )
