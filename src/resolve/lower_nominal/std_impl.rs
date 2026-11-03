@@ -102,7 +102,7 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
 
 /// The native type that stands for the std definition `definition` with
 /// `arguments`: the inverse of [`std_definition`].
-fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
+pub(super) fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
     let first = || arguments.first().cloned().map(Box::new);
     if let Some(kind) = Int::named(definition) {
         return Some(Ty::Int(kind));

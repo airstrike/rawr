@@ -793,40 +793,23 @@ impl Parser<'_> {
             turbofish = Some(self.parse_local_type()?);
             self.expect_close_angle("'>' after turbofish type arguments")?;
         }
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
         let accumulator = self.inference.fresh();
-        self.closure_hints = match member.as_str() {
-            "map" | "filter_map" | "flat_map" | "any" | "all" | "position" | "find_map"
-            | "for_each" => vec![hint(vec![item.clone()])],
-            "filter" | "take_while" | "skip_while" | "inspect" | "find" | "partition"
-            | "next_if" => {
-                vec![hint(vec![reference(&item)])]
-            }
-            "fold" => vec![None, hint(vec![accumulator.clone(), item.clone()])],
-            // `&Self::Item`, as Rust passes them: `&&T` over `v.iter()`.
-            "min_by_key" | "max_by_key" | "min_by" | "max_by" => {
-                let count = if member.ends_with("_key") { 1 } else { 2 };
-                vec![hint(vec![reference(&item); count])]
-            }
-            _ => Vec::new(),
-        };
         // `collect()` takes the type its `let` or caller expects.
         let collect_hint = self
             .collect_hint
             .as_ref()
             .filter(|(_, depth)| *depth == self.expression_stack.len())
             .map(|(ty, _)| ty.clone());
-        let arguments = if member.as_str() == "fold" && matches!(self.peek(), Token::LeftParen) {
-            self.closure_hints = Vec::new();
-            self.parse_fold_arguments(&accumulator, &item)
-        } else {
-            // A crate function named as an argument is the closure that
-            // calls it, as for `Option::map` (T327): `.map(text)`.
-            self.script_callables = true;
-            self.parse_call_arguments("iterator method arguments")
-        };
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let (mut arguments, end) =
+            if member.as_str() == "fold" && matches!(self.peek(), Token::LeftParen) {
+                self.parse_fold_arguments(&accumulator, &item)?
+            } else {
+                // A crate function named as an argument is the closure that
+                // calls it, as for `Option::map` (T327): `.map(text)`.
+                self.script_callables = true;
+                let iterator = Ty::Iter(Box::new(item.clone()));
+                self.parse_std_arguments(&iterator, &member, "iterator method arguments")?
+            };
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
             if arguments.len() == expected {

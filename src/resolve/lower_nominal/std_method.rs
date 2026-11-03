@@ -79,6 +79,7 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
         Ty::Float(_) => one("f64", ty),
         Ty::Option(_) => one("core::option::Option", ty),
         Ty::Result(..) => one("core::result::Result", ty),
+        Ty::Ordering => one("core::cmp::Ordering", ty),
         Ty::String => vec![
             Step {
                 owner: "alloc::string::String",
@@ -301,6 +302,265 @@ pub(super) fn path(found: &Inherent) -> String {
         owner => owner.rsplit("::").next().unwrap_or(owner),
     };
     format!("{owner}::{}", found.item.name())
+}
+
+/// What std's declaration of a method gives each of a call's arguments.
+#[derive(Debug, Default)]
+pub(super) struct Arguments {
+    /// The parameter types of each closure argument, as its `Fn` bound
+    /// writes them: `[&T]` of `retain`'s `F: FnMut(&T) -> bool`. `None`
+    /// for an argument that takes no closure, or one whose inputs name a
+    /// type rawr has none of.
+    pub closures: Vec<Option<Box<[Ty]>>>,
+    /// The type of each argument up to the last that names one of the
+    /// method's own type parameters (`init: B` of `fold`), whose value
+    /// fixes it for the closures after it. Earlier ones are left to be
+    /// inferred.
+    pub generics: Vec<Ty>,
+}
+
+/// What std's declaration of the method `member` on the native `receiver`
+/// (a reference around it is the call's) gives its arguments (#795): the
+/// parameter types of `rposition`'s `P: FnMut(Self::Item) -> bool` are the
+/// iterator's items, those of `map_or_else`'s `F: FnOnce(T) -> U` the
+/// `Option`'s `T`. A type parameter of the method (`B` of `fold`) is a type
+/// `fresh` gives, one per parameter, to be inferred. Empty for a method std
+/// doesn't declare on the type.
+pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() -> Ty) -> Arguments {
+    let mut native = receiver;
+    while let Ty::Reference { target, .. } = native {
+        native = target;
+    }
+    let Some(found) = inherent(native, member) else {
+        return Arguments::default();
+    };
+    let Some(declared) = Declared::parse(found.item.declaration()) else {
+        return Arguments::default();
+    };
+    let Some(step) = steps(native)
+        .into_iter()
+        .find(|step| step.owner == found.owner)
+    else {
+        return Arguments::default();
+    };
+    let mut known = Known {
+        types: Vec::new(),
+        items: match native {
+            Ty::Iter(item) => Some((**item).clone()),
+            _ => None,
+        },
+    };
+    match found.item.impl_self() {
+        Some(own) => known.bind(&std_table::written(own), &step.ty),
+        None => known.own(found.owner, &step.ty),
+    }
+    // The method's own type parameters, and the bounds each has.
+    let mut bounds = Vec::new();
+    for generic in std_table::split_list(declared.generics)
+        .into_iter()
+        .chain(std_table::split_list(declared.wheres))
+    {
+        let (name, bound) = match std_table::top_level(generic, ": ") {
+            Some(colon) => (&generic[..colon], &generic[colon + 2..]),
+            None => (generic, ""),
+        };
+        if name != "Self" && !name.starts_with('\'') && !name.contains(['<', ':']) {
+            if !known.types.iter().any(|(known, _)| *known == name) {
+                known.types.push((name, fresh()));
+            }
+            bounds.push((name, bound));
+        }
+    }
+    let mut arguments = Arguments::default();
+    let mut generic_until = 0;
+    // The inputs after `self`.
+    for (index, input) in std_table::split_list(declared.inputs)
+        .into_iter()
+        .skip(1)
+        .enumerate()
+    {
+        let written = match std_table::top_level(input, ": ") {
+            Some(colon) => input[colon + 2..].trim(),
+            None => input,
+        };
+        let written_bounds: Vec<&'static str> = match written.strip_prefix("impl ") {
+            Some(bound) => vec![bound],
+            None => bounds
+                .iter()
+                .filter(|(name, _)| *name == written)
+                .map(|(_, bound)| *bound)
+                .collect(),
+        };
+        let closure = written_bounds
+            .into_iter()
+            .flat_map(std_table::split_bounds)
+            .find_map(closure_inputs);
+        match closure {
+            Some(inputs) => {
+                let inputs = std_table::split_list(inputs)
+                    .into_iter()
+                    .map(|input| known.ty(input))
+                    .collect::<Option<Box<[Ty]>>>();
+                arguments.closures.push(inputs);
+                arguments.generics.push(fresh());
+            }
+            None => {
+                arguments.closures.push(None);
+                let generic = bounds.iter().any(|(name, _)| *name == written);
+                match known.ty(written) {
+                    Some(ty) if generic => {
+                        arguments.generics.push(ty);
+                        generic_until = index + 1;
+                    }
+                    _ => arguments.generics.push(fresh()),
+                }
+            }
+        }
+    }
+    arguments.generics.truncate(generic_until);
+    arguments
+}
+
+/// The inputs a closure bound writes: `&T, &T` of `FnMut(&T, &T) -> bool`.
+fn closure_inputs(bound: &'static str) -> Option<&'static str> {
+    let open = ["FnOnce(", "FnMut(", "Fn("]
+        .iter()
+        .find_map(|closure| bound.starts_with(closure).then_some(closure.len() - 1))?;
+    let close = open + closing(&bound[open..], '(', ')')?;
+    Some(&bound[open + 1..close])
+}
+
+/// The types a method's declaration names, as rawr's: its impl's and its
+/// own type parameters, and an iterator's items.
+struct Known {
+    types: Vec<(&'static str, Ty)>,
+    /// `Self::Item` of an iterator's method.
+    items: Option<Ty>,
+}
+
+impl Known {
+    /// Gives the impl parameters the impl's self type `written` has the
+    /// parts of `ty` where they are: `T` of `Option<&T>` against
+    /// `Option<&u8>`.
+    fn bind(&mut self, written: &Written, ty: &Ty) {
+        match (written, ty) {
+            (
+                Written::Path {
+                    path, arguments, ..
+                },
+                _,
+            ) if arguments.is_empty() && std_table::definition_of(path).is_none() => {
+                self.types.push((path, ty.clone()));
+            }
+            (Written::Reference { target, .. }, Ty::Reference { target: found, .. }) => {
+                self.bind(target, found)
+            }
+            (
+                Written::Slice(element) | Written::Array(element, _),
+                Ty::Array { element: found, .. },
+            ) => self.bind(element, found),
+            (Written::Tuple(members), Ty::Tuple(found)) => {
+                for (member, found) in members.iter().zip(found.iter()) {
+                    self.bind(member, found);
+                }
+            }
+            (Written::Path { arguments, .. }, _) => {
+                if let Some((_, found)) = std_impl::std_definition(ty) {
+                    for (argument, found) in arguments.iter().zip(found.iter()) {
+                        self.bind(argument, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Gives the parameters of the std type `owner`'s own inherent impl the
+    /// arguments of `ty`: `T` of `Vec<T>`, `[T]`'s element.
+    fn own(&mut self, owner: &str, ty: &Ty) {
+        if let ("slice" | "array", Ty::Array { element, .. }) = (owner, ty) {
+            self.types.push(("T", (**element).clone()));
+            return;
+        }
+        let (Some(item), Some((_, arguments))) =
+            (std_table::item(owner), std_impl::std_definition(ty))
+        else {
+            return;
+        };
+        for (parameter, argument) in item.generics().zip(arguments) {
+            self.types.push((parameter.name, argument));
+        }
+    }
+
+    /// The type std writes as `text`, as rawr's: `None` for one rawr has
+    /// none of.
+    fn ty(&self, text: &'static str) -> Option<Ty> {
+        let text = text.trim();
+        if text == "()" {
+            return Some(Ty::Unit);
+        }
+        if let Some(rest) = text.strip_prefix('&') {
+            let rest = match rest.strip_prefix('\'') {
+                Some(named) => named.split_once(' ')?.1,
+                None => rest,
+            };
+            let (mutable, rest) = match rest.strip_prefix("mut ") {
+                Some(rest) => (true, rest),
+                None => (false, rest),
+            };
+            if !mutable && rest == "str" {
+                return Some(Ty::Str);
+            }
+            return Some(Ty::Reference {
+                mutable,
+                target: Box::new(self.ty(rest)?),
+            });
+        }
+        if let Some(inner) = text
+            .strip_prefix('[')
+            .and_then(|text| text.strip_suffix(']'))
+        {
+            return Some(match std_table::top_level(inner, "; ") {
+                Some(at) => Ty::sequence(
+                    sequence::Kind::Array(inner[at + 2..].trim().parse().ok()?),
+                    self.ty(&inner[..at])?,
+                ),
+                None => Ty::sequence(sequence::Kind::Slice, self.ty(inner)?),
+            });
+        }
+        if let Some(inner) = text
+            .strip_prefix('(')
+            .and_then(|text| text.strip_suffix(')'))
+        {
+            let inner = inner.strip_suffix(',').unwrap_or(inner);
+            let members = std_table::split_list(inner)
+                .into_iter()
+                .map(|member| self.ty(member))
+                .collect::<Option<Box<[Ty]>>>()?;
+            return Some(Ty::Tuple(members));
+        }
+        // `Self::Item`, `<I as Iterator>::Item`: the iterator's items.
+        if let Some((_, "Item")) = projection(text) {
+            return self.items.clone();
+        }
+        let (name, arguments) = match text.find('<') {
+            Some(open) if text.ends_with('>') => (&text[..open], &text[open + 1..text.len() - 1]),
+            Some(_) => return None,
+            None => (text, ""),
+        };
+        if arguments.is_empty()
+            && let Some((_, ty)) = self.types.iter().find(|(known, _)| *known == name)
+        {
+            return Some(ty.clone());
+        }
+        let definition = std_table::definition_of(name)?;
+        let arguments = std_table::split_list(arguments)
+            .into_iter()
+            .filter(|argument| !argument.starts_with('\''))
+            .map(|argument| self.ty(argument))
+            .collect::<Option<Vec<_>>>()?;
+        std_impl::std_type(definition, &arguments)
+    }
 }
 
 /// Whether an inherent impl's self type as std writes it (`Option<&T>`,

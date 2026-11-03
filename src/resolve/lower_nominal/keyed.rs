@@ -451,7 +451,11 @@ impl Parser<'_> {
             let ty = Ty::Iter(Box::new(item));
             return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
         }
-        let (mut arguments, end) = self.parse_call_arguments("map or set method arguments")?;
+        let (mut arguments, end) = self.parse_std_arguments(
+            &Ty::Keyed(kind, types.clone()),
+            &member,
+            "map or set method arguments",
+        )?;
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
             if arguments.len() == expected {

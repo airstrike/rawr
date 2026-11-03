@@ -33635,10 +33635,8 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        self.closure_hints = vec![Some(Box::default())];
-        let arguments = self.parse_call_arguments("`Ordering` method arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&Ty::Ordering, &member, "`Ordering` method arguments")?;
         let receiver = value.rendered_source().surrounded("(", ")");
         let comparison = match member.as_str() {
             "is_eq" => Some("== 0"),
@@ -34216,13 +34214,8 @@ impl<'a> Parser<'a> {
         if member.as_str() == "parse" {
             return self.parse_str_parse(value);
         }
-        // `retain`'s closure takes each `char`.
-        if member.as_str() == "retain" {
-            self.closure_hints = vec![Some(Box::new([Ty::Char]))];
-        }
-        let arguments = self.parse_call_arguments("string method arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&value.ty, &member, "string method arguments")?;
         for argument in &mut arguments {
             self.strip_string_reference(argument);
         }
@@ -40418,18 +40411,9 @@ impl<'a> Parser<'a> {
             mutable: false,
             target: Box::new(element.clone()),
         };
-        // A closure argument takes the parameter type Rust infers for it.
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        self.closure_hints = match member.as_str() {
-            "map" | "and_then" | "is_some_and" | "is_none_or" => vec![hint(vec![element.clone()])],
-            "map_or" => vec![None, hint(vec![element.clone()])],
-            "filter" => vec![hint(vec![reference.clone()])],
-            "unwrap_or_else" | "or_else" | "ok_or_else" => vec![hint(Vec::new())],
-            _ => Vec::new(),
-        };
         self.script_callables = true;
-        let (mut arguments, end) = self.parse_call_arguments("`Option` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&owner, &member, "`Option` method arguments")?;
         self.builtin_enum_receiver(&mut value, None, &member, &arguments, member_span)?;
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
@@ -40870,11 +40854,8 @@ impl<'a> Parser<'a> {
         value: ParsedExpr,
         member: ImmutableString,
     ) -> Result<ParsedExpr, Error> {
-        if member.as_str() == "then" {
-            self.closure_hints = vec![Some(Box::default())];
-        }
-        let (mut arguments, end) = self.parse_call_arguments("`bool` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&Ty::Bool, &member, "`bool` method arguments")?;
         let expression = span(value.span.start(), end);
         let [argument] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(
@@ -40932,18 +40913,9 @@ impl<'a> Parser<'a> {
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let owner = Ty::Result(Box::new(ok.clone()), Box::new(err.clone()));
-        // A closure argument takes the parameter type Rust infers for it.
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        self.closure_hints = match member.as_str() {
-            "map" | "and_then" | "is_ok_and" => vec![hint(vec![ok.clone()])],
-            "map_err" | "or_else" | "unwrap_or_else" | "is_err_and" => {
-                vec![hint(vec![err.clone()])]
-            }
-            _ => Vec::new(),
-        };
         self.script_callables = true;
-        let (mut arguments, end) = self.parse_call_arguments("`Result` method arguments")?;
-        self.closure_hints = Vec::new();
+        let (mut arguments, end) =
+            self.parse_std_arguments(&owner, &member, "`Result` method arguments")?;
         self.builtin_enum_receiver(
             &mut value,
             Some((&ok, &err)),
@@ -41939,6 +41911,8 @@ impl<'a> Parser<'a> {
         // A `VecDeque` is an array at runtime, whose back is its end: its
         // methods `DEQUE_METHODS` names run as the `Vec`'s, and the others
         // std has are not run yet.
+        // The member as written, whose declaration types its closures.
+        let written = member.clone();
         let member: ImmutableString = if kind == sequence::Kind::Deque {
             let Some((_, runs)) = DEQUE_METHODS
                 .iter()
@@ -42092,10 +42066,8 @@ impl<'a> Parser<'a> {
                 ..
             } = self.inference.resolve(&value.ty)
         {
-            self.closure_hints = vec![Some(Box::new([element.clone()]) as Box<[Ty]>)];
-            let arguments = self.parse_call_arguments("array method arguments");
-            self.closure_hints = Vec::new();
-            let (mut arguments, end) = arguments?;
+            let (mut arguments, end) =
+                self.parse_std_arguments(&value.ty, &member, "array method arguments")?;
             let [callable] = arguments.as_mut_slice() else {
                 return Err(Error::argument_count(
                     Callee::Method,
@@ -42171,36 +42143,15 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
             mutable: false,
             target: Box::new(element.clone()),
         };
-        let hint = |inputs: Vec<Ty>| Some(inputs.into_boxed_slice());
-        // `v.iter().min_by_key(..)` passes `&&T`: a reference to the
-        // iterator's `&T`.
-        let borrowed = Ty::Reference {
-            mutable: false,
-            target: Box::new(reference.clone()),
-        };
-        self.closure_hints = match member.as_str() {
-            "sort_by" | "sort_unstable_by" => {
-                vec![hint(vec![reference.clone(), reference.clone()])]
-            }
-            "min_by" | "max_by" => vec![hint(vec![borrowed.clone(), borrowed])],
-            "sort_by_key" | "sort_unstable_by_key" | "retain" => {
-                vec![hint(vec![reference.clone()])]
-            }
-            "min_by_key" | "max_by_key" => vec![hint(vec![borrowed])],
-            _ => Vec::new(),
-        };
-        let arguments = if member.as_str() == "append" {
-            self.parse_borrowing_arguments("array method arguments")
+        let (mut arguments, end) = if member.as_str() == "append" {
+            self.parse_borrowing_arguments("array method arguments")?
         } else {
-            self.parse_call_arguments("array method arguments")
+            self.parse_std_arguments(&receiver_ty, &written, "array method arguments")?
         };
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
         if let Some(sorted) = self.parse_sort_method(&value, &element, &member, &mut arguments)? {
             return Ok(self.operator_expr(sorted, Ty::Unit, span(value.span.start(), end)));
         }
@@ -45001,6 +44952,27 @@ impl<'a> Parser<'a> {
             evaluation: crate::host::usage::Evaluation::Required,
         }
         .retain_origin())
+    }
+
+    /// The arguments of a call of std's method `member` on the native
+    /// `receiver`, each closure among them with the parameter types std's
+    /// declaration gives it (#795), whether or not rawr runs the method:
+    /// `v.dedup_by_key(|x| *x / 2)` reads `x` as `&mut T`, and fails with the
+    /// method's not-yet error, not inside the closure.
+    fn parse_std_arguments(
+        &mut self,
+        receiver: &Ty,
+        member: &str,
+        context: &str,
+    ) -> Result<(Vec<ParsedExpr>, Position), Error> {
+        let receiver = self.inference.resolve(receiver);
+        let declared = std_method::arguments(&receiver, member, &mut || self.inference.fresh());
+        self.closure_hints = declared.closures;
+        self.generic_argument_hints = declared.generics;
+        let arguments = self.parse_call_arguments(context);
+        self.closure_hints = Vec::new();
+        self.generic_argument_hints = Vec::new();
+        arguments
     }
 
     fn parse_call_arguments(
