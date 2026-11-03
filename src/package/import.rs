@@ -2378,7 +2378,7 @@ fn build(
         let receiver = types.convert_input(&instance, &[], allocation)?;
         let signature = signature_with(&types, plan.signature(), Some(receiver), allocation)?;
         let lent = (lent_static(plan.signature()) << 1)
-            | u64::from(
+            | u32::from(
                 instance
                     == representability::convert::Type::Builtin(
                         representability::convert::Builtin::StaticStr,
@@ -2715,11 +2715,11 @@ fn imported_item(
 
 /// The inputs of `signature`, by bit, whose borrows the output keeps for
 /// as long as it lives (`Signature::lends`).
-fn lends(signature: &representability::signature::Signature) -> u64 {
+fn lends(signature: &representability::signature::Signature) -> u32 {
     signature
         .lends()
         .iter()
-        .filter(|index| **index < 64)
+        .filter(|index| **index < 32)
         .fold(0, |bits, index| bits | 1 << index)
 }
 
@@ -2727,13 +2727,13 @@ fn lends(signature: &representability::signature::Signature) -> u64 {
 /// one written `&'static str`, as iced's `Font::with_name` takes, or a type
 /// parameter a `&str` fills only at `'static`, as iced's `title(impl
 /// Title<State>)` is, which iced implements for `&'static str`.
-fn lent_static(signature: &representability::signature::Signature) -> u64 {
+fn lent_static(signature: &representability::signature::Signature) -> u32 {
     use representability::convert::{Builtin, Type};
     signature
         .inputs()
         .iter()
         .enumerate()
-        .take(64)
+        .take(32)
         .filter(|(_, input)| match input {
             Type::Builtin(Builtin::StaticStr) => true,
             Type::Parameter(index) => signature
