@@ -33,6 +33,15 @@ pack() {
 }
 pack "$out/rawr_web_bg.wasm"
 
+# SHA256SUMS names each file with its hash, as sha256sum writes it. A deploy
+# that keeps the live rawr-web (play/deploy/cloudflare/live-web.sh) reads it
+# from the site to know which files to fetch and to check them.
+node -e 'const fs = require("fs"), path = require("path"), crypto = require("crypto");
+  const dir = process.argv[1];
+  const lines = fs.readdirSync(dir).filter((f) => f !== "SHA256SUMS" && fs.statSync(path.join(dir, f)).isFile()).sort()
+    .map((f) => crypto.createHash("sha256").update(fs.readFileSync(path.join(dir, f))).digest("hex") + "  " + f + "\n");
+  fs.writeFileSync(path.join(dir, "SHA256SUMS"), lines.join(""));' "$out"
+
 if [ $# -eq 0 ]; then
   cp web/www/index.html "$out/"
 fi

@@ -8,6 +8,13 @@
 # needs no GPU. TLS (Discord's gateway and API) is OpenSSL through native-tls: the
 # build links the target's libssl-dev, and the distroless cc runtime already
 # ships libssl3 and the CA bundle.
+#
+# Every cargo build keeps its registry, git checkouts and target directory in
+# BuildKit cache mounts (the `--mount=type=cache` ids below), so a build
+# compiles the dependencies (iced, wgpu, tokio, serenity...) once and then
+# only rawr's own crates. The mounts are never part of the image. Locally
+# they live in the builder; GitHub Actions carries them between runs in its
+# cache (.github/workflows/bot.yml). Every build is --locked to Cargo.lock.
 
 FROM --platform=$BUILDPLATFORM rust:1.99.0-slim-bookworm AS toolchain
 ARG TARGETARCH
@@ -38,27 +45,19 @@ RUN set -eu; \
     fi; \
     rm -rf /var/lib/apt/lists/*; \
     rustup target add "$arch-unknown-linux-gnu"; \
-    echo "$arch-unknown-linux-gnu" > /target; \
-    cargo install cargo-chef --locked
+    echo "$arch-unknown-linux-gnu" > /target
 WORKDIR /src
 
-# The dependency list alone, so the next stage's cache survives source edits.
-FROM toolchain AS plan
-COPY . .
-RUN cargo chef prepare --recipe-path /recipe.json
-
-# Dependencies compile in their own layer, cached until Cargo.lock or a
-# manifest changes. The workspace crates (rawr among them) compile after.
 FROM toolchain AS build
 # Parallel rustc jobs, which also bound the codegen and thin-LTO threads. They
 # change build time only, never the binary's speed. CI passes 4 (16 GB runner
 # plus swap); 2 keeps a small local builder VM within its memory.
 ARG CARGO_BUILD_JOBS=2
-COPY --from=plan /recipe.json /recipe.json
-RUN . /cross.env \
-    && cargo chef cook --release --locked --target "$(cat /target)" -p rawr-play --features bot --bins --recipe-path /recipe.json
 COPY . .
-RUN . /cross.env && target="$(cat /target)" \
+RUN --mount=type=cache,id=rawr-play-build-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rawr-play-build-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=rawr-play-build-target,target=/src/target \
+    . /cross.env && target="$(cat /target)" \
     && cargo build --release --locked --target "$target" -p rawr-play --features bot --bins \
     && install -D -m 0755 -t /out "target/$target/release/rawr-play" "target/$target/release/rawr-play-bot"
 
@@ -83,9 +82,23 @@ RUN apt-get update \
     && rustup toolchain install nightly-2026-07-11 --profile minimal --component rustc-dev,rust-src --no-self-update
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p rawr-import-cli --bin rawr-import \
-    && cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
-    && cp -r play/universe /universe \
+# rawr-import and its driver only build the universe; the image ships
+# neither. So they build without LTO and with 16 codegen units, which
+# compiles them far faster than the workspace's release profile (fat LTO,
+# one codegen unit) and changes nothing they generate. rawr's home
+# ($CARGO_HOME/rawr: its runtime and shared bindings) and the universe's
+# target directory are cache mounts too, so the runner recompiles only what a
+# new rawr changes; rawr's own digests decide that, as on any machine.
+RUN --mount=type=cache,id=rawr-play-universe-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=rawr-play-universe-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=rawr-play-import-target,target=/src/target \
+    --mount=type=cache,id=rawr-play-universe-target,target=/universe/target \
+    --mount=type=cache,id=rawr-play-rawr-home,target=/usr/local/cargo/rawr \
+    CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+      cargo build --release --locked -p rawr-import-cli --bin rawr-import \
+    && CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+      cargo build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver \
+    && cp -r play/universe/. /universe/ \
     && RAWR_UNIVERSE_RUNNER=1 /src/target/release/rawr-import run /universe \
     && install -D -m 0755 /universe/target/rawr/runner/target/debug/play /out/universe/runner \
     && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml
