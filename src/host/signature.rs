@@ -649,6 +649,10 @@ fn same_input_type(
         (Shape::Tuple(left), Shape::Tuple(right)) => {
             same_types(left, right, left_parameters, right_parameters, mappings)?
         }
+        (Shape::Keyed(left_kind, left), Shape::Keyed(right_kind, right)) => {
+            left_kind == right_kind
+                && same_types(left, right, left_parameters, right_parameters, mappings)?
+        }
         (Shape::Counted(left_arc, left), Shape::Counted(right_arc, right)) => {
             left_arc == right_arc
                 && same_input_type(left, right, left_parameters, right_parameters, mappings)?

@@ -1425,6 +1425,24 @@ fn an_arc_of_a_crate_value_crosses_as_the_crates_own_pointer() {
     );
 }
 
+/// std's maps and sets in a crate's signature are rawr's (#777): a
+/// `&HashMap` and a `&BTreeMap` of crate values without `Clone` lend each
+/// value to the call and keep it after, a `&HashSet` of strings and a
+/// `HashMap` by value are made from rawr's, and a `BTreeMap`, a `HashMap`
+/// of crate values, a `BTreeSet` and a `HashSet` given back are rawr's,
+/// in key order. The output is `cargo run`'s.
+#[test]
+fn maps_and_sets_cross_as_rawrs_keyed_collections() {
+    let (rawr, cargo) = both_printed("crossing-keyed", "keyed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "total 7\nkept 3 2\ncheapest nib nib\nprices {\"a\": 1, \"b\": 2}\n\
+         catalog [\"cup\", \"mug\"] 5\ntags 8\nevens {0, 2, 4, 6}\n\
+         letters ['a', 'b', 'c']\ninvert {1: \"one\", 2: \"two\"}"
+    );
+}
+
 /// std's types in a crate's signature are its own in every position (D711
 /// step 5, #707): a tuple taken and given, `&String`, `&Vec<T>`,
 /// `Range<usize>` taken and given, `&Path` and a `Box<i64>` taken, given

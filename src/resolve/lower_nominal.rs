@@ -2058,6 +2058,19 @@ fn imported_surface_type(
                 inference, models, inner, operation, imported,
             )?]),
         },
+        // A map or set, which crosses as std's of its kind (#777).
+        Ty::Keyed(kind, members) => {
+            let mut converted = imported.entries(members.len())?;
+            for member in members.iter() {
+                converted.push(imported_surface_type(
+                    inference, models, member, operation, imported,
+                )?);
+            }
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::keyed(kind.name()),
+                arguments: converted.into_boxed_slice(),
+            }
+        }
         // An `Rc<T>` or `Arc<T>` of a crate's type, which stands for the
         // crate's own pointer (#775).
         Ty::Counted(counter, inner) => Type::Nominal {
@@ -2430,6 +2443,13 @@ fn instance_surface_type(
                 *counter == Counter::Arc,
             ),
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
+        },
+        Ty::Keyed(kind, members) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::keyed(kind.name()),
+            arguments: members
+                .iter()
+                .map(|member| instance_surface_type(inference, models, member))
+                .collect::<Option<_>>()?,
         },
         Ty::Time(Time::Duration) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::duration(),
@@ -17694,7 +17714,24 @@ impl<'a> Parser<'a> {
                     .map(|member| self.proven_type(member, operation, span))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Keyed(..) | Ty::Reverse(_) => {
+            // A map or set a crate takes or gives (#777): its array of
+            // `[key, value]` pairs, or of keys.
+            Ty::Keyed(kind, ref members) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.proven_type(member, operation, span))
+                    .collect::<Result<Box<[_]>, _>>()?;
+                let entry = if kind.is_map() {
+                    intrinsic::Type::tuple(members)
+                } else {
+                    members
+                        .into_vec()
+                        .pop()
+                        .ok_or_else(|| unpassable(ty.name(&self.models), operation, span))?
+                };
+                intrinsic::Type::array(entry, None)
+            }
+            Ty::Reverse(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
             // A `Box` is its value at runtime (D492.3), which a crate's
@@ -19432,6 +19469,24 @@ impl<'a> Parser<'a> {
                 owner,
                 originating,
             )?)),
+            // std's map or set in a crate's signature: rawr's (#777).
+            Shape::Keyed(name, members) => Ty::Keyed(
+                Keyed::from_name(name)
+                    .ok_or_else(|| self.unsupported("a keyed collection rawr has no kind for"))?,
+                members
+                    .iter()
+                    .map(|member| {
+                        self.instantiate_host_type(
+                            member,
+                            parameters,
+                            operation,
+                            span,
+                            owner,
+                            originating,
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
             // A crate's `Rc<T>` or `Arc<T>`: rawr's, which stands for the
             // crate's own pointer at runtime (#775).
             Shape::Counted(arc, element) => Ty::Counted(

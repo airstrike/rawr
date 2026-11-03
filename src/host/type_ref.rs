@@ -138,6 +138,10 @@ pub(crate) enum Shape {
     /// Rust's `Arc<T>` (true) or `Rc<T>` of a crate's `T`: rawr's counted
     /// pointer, standing for the crate's own pointer at runtime (#775).
     Counted(bool, Box<Type>),
+    /// std's `HashMap`, `HashSet`, `BTreeMap` or `BTreeSet`, by its name,
+    /// of its key (and value) types: rawr's collection of that kind, an
+    /// array sorted by key at runtime (#777).
+    Keyed(&'static str, Box<[Type]>),
     /// Rust's `std::ops::RangeInclusive<T>` of a type parameter `T`:
     /// Rawr's `RangeInclusive<f64>` or `RangeInclusive<i64>` at runtime as
     /// `T` is a float or an integer.
@@ -212,6 +216,7 @@ impl Type {
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_add(err.retained_bytes()?)),
             Shape::Tuple(types)
+            | Shape::Keyed(_, types)
             | Shape::Imported {
                 arguments: types, ..
             } => slice(types),
@@ -261,6 +266,13 @@ impl Type {
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
             Shape::Boxed(element) => Shape::Boxed(Box::new(element.try_clone()?)),
             Shape::Counted(arc, element) => Shape::Counted(*arc, Box::new(element.try_clone()?)),
+            Shape::Keyed(kind, members) => Shape::Keyed(
+                kind,
+                members
+                    .iter()
+                    .map(Self::try_clone)
+                    .collect::<Result<_, _>>()?,
+            ),
             Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
             Shape::RangeInclusive(element) => Shape::RangeInclusive(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
@@ -373,6 +385,13 @@ impl Type {
     #[must_use]
     pub fn counted(arc: bool, element: Self) -> Self {
         Self(Shape::Counted(arc, Box::new(element)))
+    }
+
+    /// Construct std's keyed collection `kind` of `members`, its key type
+    /// and a map's value type: rawr's collection of that kind (#777).
+    #[must_use]
+    pub fn keyed(kind: &'static str, members: Box<[Self]>) -> Self {
+        Self(Shape::Keyed(kind, members))
     }
 
     /// Construct Rust's `std::ops::Range<element>` of a float, a
@@ -522,6 +541,10 @@ impl Type {
             Shape::Tuple(members) => Ok(Self(Shape::Tuple(resolve_types(
                 members, root, types, parameters, _imported, item,
             )?))),
+            Shape::Keyed(kind, members) => Ok(Self(Shape::Keyed(
+                kind,
+                resolve_types(members, root, types, parameters, _imported, item)?,
+            ))),
             Shape::Array { element, sequence } => Ok(Self(Shape::Array {
                 element: Box::new(element.resolve(root, types, parameters, _imported, item)?),
                 sequence: *sequence,
@@ -661,7 +684,7 @@ impl Type {
     ) -> Result<(), host::Error> {
         match &mut self.0 {
             Shape::Unit | Shape::Builtin(_) => {}
-            Shape::Tuple(members) => {
+            Shape::Tuple(members) | Shape::Keyed(_, members) => {
                 for member in members {
                     member.resolve_imported(root, types, parameters, imported, item, allocation)?;
                 }
@@ -819,7 +842,7 @@ impl Type {
 
     pub(crate) fn collect_exports<'a>(&'a self, exports: &mut Vec<&'a host::type_def::Export>) {
         match &self.0 {
-            Shape::Tuple(members) => {
+            Shape::Tuple(members) | Shape::Keyed(_, members) => {
                 for member in members {
                     member.collect_exports(exports);
                 }
@@ -938,6 +961,17 @@ impl crate::digest::Write for Type {
             Shape::Counted(arc, element) => {
                 writer.tag(if *arc { 0x2319 } else { 0x2318 });
                 element.write(writer)?;
+            }
+            Shape::Keyed(kind, members) => {
+                writer.tag(match *kind {
+                    "HashMap" => 0x231a,
+                    "HashSet" => 0x231b,
+                    "BTreeMap" => 0x231c,
+                    _ => 0x231d,
+                });
+                for member in members {
+                    member.write(writer)?;
+                }
             }
             Shape::Range(element) => {
                 writer.tag(0x2313);

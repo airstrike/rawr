@@ -3279,6 +3279,15 @@ impl Types {
                 {
                     return Ok(host::type_ref::Type::boxed(element));
                 }
+                // std's map or set: rawr's of its kind (#777).
+                if let Some(kind) =
+                    rawr_import::surface::identity::Definition::keyed_kind(definition.as_bytes())
+                {
+                    return Ok(host::type_ref::Type::keyed(
+                        kind,
+                        std::mem::take(&mut converted).into_boxed_slice(),
+                    ));
+                }
                 // alloc's `Rc<T>` or `Arc<T>` of a crate's type: rawr's,
                 // standing for the crate's own pointer (#775).
                 if let Some(arc) =

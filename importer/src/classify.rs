@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 96;
+const CLASSIFIER_VERSION: u32 = 97;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7619,6 +7619,36 @@ impl<P: api::Phase> Context<'_, P> {
                                 }
                             }
                             _ => return Err(unrun().into()),
+                        }
+                    }
+                    // A map or set whose keys are rawr's strings, numbers,
+                    // chars or bools: rawr's collection of its kind, which
+                    // the crate's is made from or made into where it
+                    // crosses (#777).
+                    Some(Std::Keyed(name, unrun)) => {
+                        let not_run = || representability::reject::Kind::StdNotRun(unrun);
+                        let map = name.ends_with("Map");
+                        let mut converted = Vec::new();
+                        for index in 0..if map { 2 } else { 1 } {
+                            converted.push(self.convert(
+                                std_binding::type_argument(arguments, index).ok_or_else(not_run)?,
+                            )?);
+                        }
+                        let ordered = matches!(
+                            converted.first(),
+                            Some(Type::Builtin(builtin))
+                                if *builtin == Builtin::String
+                                    || *builtin == Builtin::Char
+                                    || *builtin == Builtin::Bool
+                                    || *builtin == Builtin::I64
+                                    || builtin.is_narrow_integer()
+                        );
+                        if !ordered {
+                            return Err(not_run().into());
+                        }
+                        Type::Nominal {
+                            definition: crate::surface::identity::Definition::keyed(name),
+                            arguments: converted.into_boxed_slice(),
                         }
                     }
                     Some(Std::Unrun(unrun)) => {

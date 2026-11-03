@@ -175,6 +175,10 @@ fn semantic_type(
         let element = arguments.into_vec().remove(0);
         return Ok(Some(host::type_ref::Type::boxed(element)));
     }
+    // std's map or set: rawr's of its kind (#777).
+    if let Some(kind) = Definition::keyed_kind(identity) {
+        return Ok(Some(host::type_ref::Type::keyed(kind, arguments)));
+    }
     // Rust's `Rc<T>` or `Arc<T>` of a crate's type: rawr's (#775).
     if let Some(arc) = Definition::counter(identity)
         && arguments.len() == 1

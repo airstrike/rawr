@@ -98,6 +98,9 @@ thread_local! {
     /// Homes a call borrowed (`PointerLent`), back to their slots the next
     /// time the owner thread has the arena.
     static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
+    /// Values a call borrowed in a map (`MapLent`), back to their slots the
+    /// next time the owner thread has the arena.
+    static RELENDS: RefCell<Vec<(NativeHandle, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
     /// The homes calls borrow now (`PointerLent`), by their slots.
     static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
 }
@@ -579,6 +582,53 @@ fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error>
         .and_then(|value| value.downcast::<T>().ok())
         .map(|value| *value)
         .ok_or(Error::TypeMismatch)
+}
+
+/// A map a call borrows whose values are crate values (#777): each value
+/// moved out of its slot into the map for the call, and back after, so
+/// none is copied. Its keys are rawr's strings or numbers, made for it.
+#[allow(dead_code)]
+struct MapLent<M: LentMap> { map: M, keys: Vec<(M::Key, NativeHandle)> }
+
+/// std's `HashMap` and `BTreeMap`, as a [`MapLent`] gives their values
+/// back.
+#[allow(dead_code)]
+trait LentMap: 'static {
+    type Key: 'static;
+    type Value: 'static;
+    fn pull(&mut self, key: &Self::Key) -> Option<Self::Value>;
+}
+
+impl<K: std::hash::Hash + Eq + 'static, V: 'static> LentMap for std::collections::HashMap<K, V> {
+    type Key = K;
+    type Value = V;
+    fn pull(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+}
+
+impl<K: Ord + 'static, V: 'static> LentMap for std::collections::BTreeMap<K, V> {
+    type Key = K;
+    type Value = V;
+    fn pull(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+}
+
+impl<M: LentMap> Drop for MapLent<M> {
+    fn drop(&mut self) {
+        let keys = std::mem::take(&mut self.keys);
+        // The call that borrowed it may still hold the arena: the values
+        // wait for its next use.
+        RELENDS.with_borrow_mut(|relends| {
+            for (key, handle) in keys {
+                if let Some(value) = self.map.pull(&key) {
+                    relends.push((handle, Box::new(value) as Box<dyn Any>));
+                }
+            }
+        });
+        let _ = with_arena(|_| Ok(()));
+    }
 }
 
 /// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
@@ -1300,6 +1350,20 @@ impl Arena {
             .map(|pointed| pointed.0)
     }
 
+    /// The value of `handle`, out of its slot while a call borrows it in a
+    /// map (`MapLent`); the slot refuses every use meanwhile.
+    #[allow(dead_code)]
+    fn lend_out<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+        self.settle(&handle);
+        if self.homed(&handle).is_some() {
+            return Err(Error::Leased);
+        }
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        self.slots[index].leased = true;
+        value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)
+    }
+
     /// The home of `handle`'s slot, out of it while a call borrows it
     /// (`PointerLent`); the slot refuses every use meanwhile.
     #[allow(dead_code)]
@@ -1565,6 +1629,9 @@ impl Arena {
         }
         for (handle, homed) in REHOMES.with_borrow_mut(std::mem::take) {
             self.rehome(handle, homed);
+        }
+        for (handle, value) in RELENDS.with_borrow_mut(std::mem::take) {
+            self.restore(handle, value);
         }
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
@@ -7081,6 +7148,7 @@ fn lendable(ty: &convert::Type) -> bool {
         && !is_facade_value(ty)
         && boxed_element(ty).is_none()
         && counted_element(ty).is_none()
+        && keyed_element(ty).is_none()
         && std_value(ty).is_none()
         && place::available(ty)
         && concrete_type(ty).is_some()
@@ -9132,6 +9200,7 @@ fn render_opening(
             && !is_duration(&ty)
             && boxed_element(&ty).is_none()
             && counted_element(&ty).is_none()
+            && keyed_element(&ty).is_none()
             && !is_facade_value(&ty)
             && !copy_scalar(&ty);
         if !native {
@@ -12460,6 +12529,38 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&HashMap<K, V>` and the other keyed collections: std's made from
+    // rawr's for the call. A map of crate values moves each value out of
+    // its slot into it for the call, and back after (`MapLent`).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && let Some((_, members)) = keyed_element(lent)
+    {
+        let rust =
+            concrete_type(lent).ok_or_else(|| request::drift("a lent keyed collection's type"))?;
+        if let [key, value] = members
+            && lendable(value)
+        {
+            let item =
+                concrete_type(value).ok_or_else(|| request::drift("a lent map's value type"))?;
+            let mut key_converted = String::new();
+            render_from_dynamic(key, "key", 1, &mut key_converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let mut lent = MapLent::<{rust}> {{ map: Default::default(), keys: Vec::new() }}; for entry in value.into_array().map_err(|_| Error::TypeMismatch)? {{ let mut pair = entry.into_array().map_err(|_| Error::TypeMismatch)?.into_iter(); let key = pair.next().ok_or(Error::TypeMismatch)?; let key = ({key_converted})?; let handle = pair.next().ok_or(Error::TypeMismatch)?.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; let item = arguments.arena.lend_out::<{item}>(handle.clone())?; lent.keys.push((Clone::clone(&key), handle)); lent.map.insert(key, item); }} lent }};\n    let argument_{local}: &{rust} = &argument_{local}_lent.map;"
+            )
+            .map_err(request::unwritable);
+        }
+        let mut converted = String::new();
+        render_from_dynamic(lent, "value", 0, &mut converted)?;
+        return writeln!(
+            output,
+            "    let argument_{local}_made: {rust} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    let argument_{local} = &argument_{local}_made;"
+        )
+        .map_err(request::unwritable);
+    }
     // `&Rc<T>` or `&Arc<T>` of a crate value: the crate's own pointer
     // rawr's stands for, lent from its slot for the call (#775).
     if let convert::Type::Borrowed {
@@ -12618,6 +12719,7 @@ fn render_take_input(
     ) || range_inclusive_element(ty).is_some()
         || boxed_element(ty).is_some()
         || counted_element(ty).is_some()
+        || keyed_element(ty).is_some()
     {
         deep = substituted(ty, signature, substitutions)?;
         &deep
@@ -12699,6 +12801,7 @@ impl Lease {
                     convert::Type::Nominal { .. } | convert::Type::Parameter(_)
                 ) && std_value(lent).is_none()
                     && counted_element(lent).is_none()
+                    && keyed_element(lent).is_none()
                     && !is_made_for_call(lent) =>
             {
                 let rust = concrete_type(lent)?;
@@ -13080,6 +13183,7 @@ fn render_callable_closure(
             || is_duration(ty)
             || boxed_element(ty).is_some()
             || counted_element(ty).is_some()
+            || keyed_element(ty).is_some()
     };
     let inputs = call
         .inputs()
@@ -13388,7 +13492,10 @@ fn render_take(
             )
             .map_err(request::unwritable);
         }
-        ty if range_inclusive_element(ty).is_some() || boxed_element(ty).is_some() => {
+        ty if range_inclusive_element(ty).is_some()
+            || boxed_element(ty).is_some()
+            || keyed_element(ty).is_some() =>
+        {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(
@@ -13463,7 +13570,10 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
-        ty if boxed_element(ty).is_some() || counted_element(ty).is_some() => {
+        ty if boxed_element(ty).is_some()
+            || counted_element(ty).is_some()
+            || keyed_element(ty).is_some() =>
+        {
             let mut converted = String::new();
             render_to_dynamic(ty, value, 0, &mut converted)?;
             writeln!(output, "    {converted}")
@@ -13651,6 +13761,18 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(element, value, depth, &mut converted)?;
             write!(output, "({converted}).map(Box::new)")
+        }
+        // Rawr's map or set, as std's of its kind, made from its entries
+        // (`keyed_element`).
+        ty if let Some((_, members)) = keyed_element(ty) => {
+            let rust = concrete_type(ty)
+                .ok_or_else(|| request::drift("a keyed collection's type"))?;
+            let entry = format!("entry_{depth}");
+            let converted = render_entry_from_dynamic(members, &entry, depth)?;
+            write!(
+                output,
+                "{{ let value = {value}; value.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{entry}| {converted}).collect::<Result<{rust}, Error>>()) }}"
+            )
         }
         // Rawr's `Rc` or `Arc` of a crate value, as the crate's own pointer
         // its value is in, made the first time it crosses (#775).
@@ -13886,6 +14008,45 @@ fn render_to_dynamic(
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
+        // std's map or set, as rawr's of its kind: its entries sorted by
+        // key, as rawr keeps them (`keyed_element`).
+        ty if let Some((kind, members)) = keyed_element(ty) => {
+            let sort = if kind.starts_with("Hash") {
+                if members.len() == 2 {
+                    "entries.sort_by(|left, right| left.0.cmp(&right.0)); "
+                } else {
+                    "entries.sort(); "
+                }
+            } else {
+                ""
+            };
+            let entry = match members {
+                [key] => {
+                    let mut converted = String::new();
+                    render_to_dynamic(key, &format!("key_{depth}"), depth + 1, &mut converted)?;
+                    format!("|key_{depth}| {converted}")
+                }
+                [key, value] => {
+                    let mut key_converted = String::new();
+                    render_to_dynamic(key, &format!("key_{depth}"), depth + 1, &mut key_converted)?;
+                    let mut value_converted = String::new();
+                    render_to_dynamic(
+                        value,
+                        &format!("value_{depth}"),
+                        depth + 1,
+                        &mut value_converted,
+                    )?;
+                    format!(
+                        "|(key_{depth}, value_{depth})| Ok::<Dynamic, Error>(Dynamic::from_array(vec![({key_converted})?, ({value_converted})?]))"
+                    )
+                }
+                _ => return Err(request::drift("a keyed collection of other than one or two types")),
+            };
+            write!(
+                output,
+                "{{ #[allow(unused_mut)] let mut entries = {value}.into_iter().collect::<Vec<_>>(); {sort}entries.into_iter().map({entry}).collect::<Result<Vec<Dynamic>, Error>>().map(Dynamic::from_array) }}"
+            )
+        }
         // The crate's own `Rc` or `Arc`, as rawr's pointer whose value is in
         // it: nothing is copied (#775).
         ty if counted_element(ty).is_some() => {
@@ -14058,6 +14219,7 @@ fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
         ty if counted_element(ty).is_some() => true,
+        ty if let Some((_, members)) = keyed_element(ty) => members.iter().any(holds_native),
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
         convert::Type::Tuple(members) => members.iter().any(holds_native),
         convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
@@ -14160,6 +14322,53 @@ fn counted_element(ty: &convert::Type) -> Option<(&'static str, &convert::Type)>
             Some((if arc { "std::sync::Arc" } else { "std::rc::Rc" }, element))
         }
         _ => None,
+    }
+}
+
+/// std's keyed collection (#777), when `ty` is one: its name and its key
+/// (and value) types. It crosses as rawr's, an array of `[key, value]`
+/// pairs or of keys sorted by key, which the crate's is made from or made
+/// into: the two lay their entries out apart, so the keys, rawr's strings
+/// or numbers, are made anew, and crate values move.
+fn keyed_element(ty: &convert::Type) -> Option<(&'static str, &[convert::Type])> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => Some((
+            crate::surface::identity::Definition::keyed_kind(definition.as_bytes())?,
+            arguments,
+        )),
+        _ => None,
+    }
+}
+
+/// The entry of a keyed collection of `members`, as Rust's iterator gives
+/// it, converted from the rawr value `entry` to a `Result` of it.
+fn render_entry_from_dynamic(
+    members: &[convert::Type],
+    entry: &str,
+    depth: usize,
+) -> Result<String, request::Error> {
+    match members {
+        [key] => {
+            let mut converted = String::new();
+            render_from_dynamic(key, entry, depth + 1, &mut converted)?;
+            Ok(converted)
+        }
+        [key, value] => {
+            let (key_name, value_name) = (format!("key_{depth}"), format!("value_{depth}"));
+            let mut key_converted = String::new();
+            render_from_dynamic(key, &key_name, depth + 1, &mut key_converted)?;
+            let mut value_converted = String::new();
+            render_from_dynamic(value, &value_name, depth + 1, &mut value_converted)?;
+            Ok(format!(
+                "{{ let mut pair = {entry}.into_array().map_err(|_| Error::TypeMismatch)?.into_iter(); let {key_name} = pair.next().ok_or(Error::TypeMismatch)?; let {value_name} = pair.next().ok_or(Error::TypeMismatch)?; Ok::<_, Error>((({key_converted})?, ({value_converted})?)) }}"
+            ))
+        }
+        _ => Err(request::drift(
+            "a keyed collection of other than one or two types",
+        )),
     }
 }
 
@@ -16279,6 +16488,14 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         ty if let Some((pointer, element)) = counted_element(ty) => {
             format!("{pointer}<{}>", concrete_type(element)?)
         }
+        ty if let Some((kind, members)) = keyed_element(ty) => format!(
+            "std::collections::{kind}<{}>",
+            members
+                .iter()
+                .map(concrete_type)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         // A script closure where a signature names its type, boxed (T417).
