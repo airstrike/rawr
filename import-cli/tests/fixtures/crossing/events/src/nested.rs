@@ -9,6 +9,20 @@ pub mod b {
             x + 1
         }
 
+        /// A type in a nested module.
+        pub struct Count(u32);
+
+        impl Count {
+            pub fn new(start: u32) -> Self {
+                Count(start)
+            }
+
+            pub fn next(&mut self) -> u32 {
+                self.0 += 1;
+                self.0
+            }
+        }
+
         pub mod d {
             /// A name from a module three levels down.
             pub fn g() -> String {

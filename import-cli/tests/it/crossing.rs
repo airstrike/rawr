@@ -1454,7 +1454,7 @@ fn using_what_a_wrapped_result_borrows_while_it_lives_is_rustcs_error() {
 fn a_function_in_a_module_nested_under_an_imported_module_runs() {
     let (rawr, cargo) = both_printed("crossing-nested", "nested.rs", "");
     assert_eq!(rawr, cargo);
-    assert_eq!(rawr, "f 2\ng deep\nthrough 42\ndeeper deep");
+    assert_eq!(rawr, "f 2\ng deep\nthrough 42\ndeeper deep\ncount 10 11");
 }
 
 /// `rawr-import check` of the fixture copied to `name` with `variant` as
