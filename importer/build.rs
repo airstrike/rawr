@@ -57,6 +57,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if env::var_os("CARGO_FEATURE_RUSTC_DRIVER").is_none() {
         return Ok(());
     }
+    // A driver built from rawr's own sources (`toolchain/driver.rs`) has no
+    // `src/driver.rs` beside its manifest, and no sources to carry.
+    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("no manifest dir")?);
+    if manifest.join("src/driver.rs").is_file() {
+        driver_sources(&manifest, &output)?;
+    }
 
     let sysroot = Command::new(&rustc).args(["--print", "sysroot"]).output()?;
     if !sysroot.status.success() {
@@ -76,6 +82,82 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo:rustc-link-search=native={path}");
         println!("cargo:rustc-link-arg-bin=rawr-import-driver=-Wl,-rpath,{path}");
     }
+    Ok(())
+}
+
+/// The files the driver compiles, relative to the importer's directory, and
+/// the root lockfile, which pins its dependencies.
+const DRIVER_SOURCES: [&str; 8] = [
+    "build.rs",
+    "src/driver.rs",
+    "src/driver",
+    "src/extract/engine.rs",
+    "src/extract/engine",
+    "src/extract/protocol/attempt.rs",
+    "src/cargo/toolchain/host.rs",
+    "src/cargo/toolchain/window.rs",
+];
+
+/// The driver's sources, so `rawr-import` can build a driver for a nightly it
+/// has none for (`toolchain/driver.rs`): their digest, which keys the built
+/// drivers, and with `embedded-host` the files themselves, since an
+/// installed `rawr-import` has no checkout. Without it, a build reads them
+/// from this checkout.
+fn driver_sources(importer: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
+    let mut files = Vec::new();
+    for source in DRIVER_SOURCES {
+        let path = importer.join(source);
+        println!("cargo:rerun-if-changed={}", path.display());
+        if path.is_dir() {
+            collect(&path, &mut files)?;
+        } else {
+            files.push(path);
+        }
+    }
+    let lock = importer.join("../Cargo.lock").canonicalize()?;
+    println!("cargo:rerun-if-changed={}", lock.display());
+    let mut entries = files
+        .iter()
+        .map(|path| {
+            Ok((
+                format!("importer/{}", relative(importer, path)?),
+                path.clone(),
+            ))
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
+    entries.push(("Cargo.lock".to_owned(), lock));
+    entries.sort();
+    let embed = env::var_os("CARGO_FEATURE_EMBEDDED_HOST").is_some();
+    let mut digest = Sha256::new();
+    let mut table = String::from("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
+    let mut names = String::from("pub(crate) static NAMES: &[&str] = &[\n");
+    for (relative, path) in &entries {
+        let bytes = fs::read(path)?;
+        digest.update((relative.len() as u64).to_le_bytes());
+        digest.update(relative.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(&bytes);
+        writeln!(names, "    {relative:?},")?;
+        if embed {
+            writeln!(
+                table,
+                "    ({relative:?}, include_bytes!({:?})),",
+                path.display().to_string()
+            )?;
+        }
+    }
+    table.push_str("];\n");
+    names.push_str("];\n");
+    let digest: [u8; 32] = digest.finalize().into();
+    let checkout = importer.join("..").canonicalize()?;
+    fs::write(
+        output.join("driver_source.rs"),
+        format!(
+            "pub(crate) const DIGEST: [u8; 32] = {digest:?};\n\
+             pub(crate) const CHECKOUT: &str = {:?};\n{names}{table}",
+            checkout.display().to_string()
+        ),
+    )?;
     Ok(())
 }
 

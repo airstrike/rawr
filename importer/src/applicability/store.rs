@@ -29,7 +29,7 @@ pub fn key(crate_name: &str, witness: &[u8; 32]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"rawr.import.intrinsic-entry-key/v1");
     hash.update(crate::extract::protocol::SCHEMA.to_le_bytes());
-    hash.update(crate::cargo::toolchain::pinned_commit().as_bytes());
+    hash.update(crate::cargo::toolchain::active().rustc_commit().as_bytes());
     hash.update(crate_name.as_bytes());
     hash.update([0]);
     hash.update(witness);
@@ -44,7 +44,7 @@ pub fn shared_key(crate_name: &str, shared: &str) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"rawr.import.intrinsic-entry-shared-key/v1");
     hash.update(crate::extract::protocol::SCHEMA.to_le_bytes());
-    hash.update(crate::cargo::toolchain::pinned_commit().as_bytes());
+    hash.update(crate::cargo::toolchain::active().rustc_commit().as_bytes());
     hash.update(crate_name.as_bytes());
     hash.update([0]);
     hash.update(shared.as_bytes());

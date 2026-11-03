@@ -32,7 +32,8 @@ pub(crate) fn lock(rawr: &Path) -> io::Result<File> {
 /// a same-named crate of another project never stands in for it.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn nightly_directory(home: &Path) -> PathBuf {
-    home.join(NIGHTLY).join(crate::cargo::toolchain::CHANNEL)
+    home.join(NIGHTLY)
+        .join(crate::cargo::toolchain::active().name())
 }
 
 const NIGHTLY: &str = "nightly";

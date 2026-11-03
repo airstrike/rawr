@@ -13,7 +13,10 @@ use crate::input::{build, proof::Entry, stored};
 use crate::node::{Error, GraphBudget};
 use crate::store::bundle::{self, buffer::Buffer};
 
-const COMPILER: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
+/// The commit of the compiler this process imports with.
+fn compiler() -> &'static str {
+    crate::cargo::toolchain::active().rustc_commit()
+}
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum Kind {
@@ -75,7 +78,7 @@ impl Scope {
         toolchain: &toolchain::Proof,
         target: &str,
     ) -> Result<Self, Error> {
-        if toolchain.rustc_commit() != COMPILER
+        if toolchain.rustc_commit() != compiler()
             || toolchain.host() != toolchain::HOST
             || target != toolchain::HOST
             || toolchain.target() != target

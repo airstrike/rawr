@@ -18,6 +18,7 @@ pub(crate) const RANGE: &str = "nightly-2026-07-11 through nightly-2026-11-02";
 /// Each compiler API change inside the window: its cfg and the `commit-date`
 /// of the merge that made it. A nightly whose commit is from that day but
 /// precedes the merge is the one ambiguity; none of the window's edges is.
+#[cfg_attr(not(test), allow(dead_code, reason = "the build script reads it"))]
 pub(crate) const CHANGES: [(&str, &str); 12] = [
     // `DefKind::InlineConst` merged into `DefKind::AnonConst` (#159113).
     ("rawr_rustc_anon_inline_const", "2026-07-11"),
@@ -54,4 +55,22 @@ pub(crate) const CHANGES: [(&str, &str); 12] = [
 /// are `YYYY-MM-DD`, so they order as text.
 pub(crate) fn contains(commit_date: &str) -> bool {
     (OLDEST..=NEWEST).contains(&commit_date)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contains, CHANGES, NEWEST, OLDEST};
+
+    #[test]
+    fn each_change_is_inside_the_window_in_date_order() {
+        assert!(contains(OLDEST) && contains(NEWEST));
+        assert!(!contains("2026-07-09") && !contains("2026-11-02"));
+        for pair in CHANGES.windows(2) {
+            assert!(pair[0].1 <= pair[1].1, "{pair:?}");
+        }
+        for (cfg, since) in CHANGES {
+            assert!(cfg.starts_with("rawr_rustc_"), "{cfg}");
+            assert!(OLDEST < since && contains(since), "{cfg} {since}");
+        }
+    }
 }

@@ -1,4 +1,10 @@
-//! Crate-owned dated-nightly and schema support authority.
+//! The nightly an import reads crate APIs with, and schema support
+//! authority.
+//!
+//! A project names its toolchain as rustup finds it (`selection.rs`), and
+//! one that names none reads with the pinned nightly. The selected toolchain
+//! is identified by its `rustc -vV` and `cargo -vV` (`identity.rs`), and it
+//! must be a nightly inside the window the driver builds on (`window.rs`).
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -13,19 +19,22 @@ use crate::{Error, Result};
 
 mod bootstrap;
 mod cached;
+mod driver;
 mod host;
+mod identity;
+mod selection;
+pub(crate) mod window;
 
 pub(crate) use bootstrap::Installed;
 pub use cached::{cached, Attestation};
+pub(crate) use driver::Built;
+pub use identity::{active, Identity};
+pub(crate) use selection::Selection;
 
-/// The pinned nightly the importer's driver runs on.
+/// The pinned nightly: what a project that names no toolchain reads crate
+/// APIs with, and what prebuilt drivers and the embedded std table are for.
 pub const CHANNEL: &str = "nightly-2026-07-11";
 const RUST_RELEASE: &str = "1.99.0-nightly";
-/// The commit of the pinned nightly that extracts facts.
-pub(crate) const fn pinned_commit() -> &'static str {
-    RUST_COMMIT
-}
-
 const RUST_COMMIT: &str = "375b1431b7d89d1c2e2bc168c011848ae12b7d14";
 const CARGO_RELEASE: &str = "1.99.0-nightly";
 const CARGO_COMMIT: &str = "59800466c5c41c444d264b1010b4d57e85a7117f";
@@ -41,13 +50,14 @@ const SUPPORTED_PROBE_PROTOCOL: u32 = 46;
 const SUPPORTED_UNIT_SCHEMA: u32 = 1;
 const SUPPORTED_GRAPH_SCHEMA: u32 = 1;
 
-/// The one Cargo commit whose saved build-output layout is supported.
-pub const fn supported_cargo_commit() -> &'static str {
-    CARGO_COMMIT
+/// The Cargo commit whose saved build-output layout this process reads: the
+/// active toolchain's.
+pub fn supported_cargo_commit() -> &'static str {
+    active().cargo_commit()
 }
 
-pub(crate) const fn supported_rustc_commit() -> &'static str {
-    RUST_COMMIT
+pub(crate) fn supported_rustc_commit() -> &'static str {
+    active().rustc_commit()
 }
 
 /// Versioned metadata-probe, unit, and graph decoding protocols.
@@ -258,14 +268,15 @@ impl Requirement {
         let rustc = Version::parse("rustc -Vv", &rustc)?;
         let rustdoc = Version::parse("rustdoc -Vv", &rustdoc)?;
         let cargo = Version::parse("cargo -Vv", &cargo)?;
-        exact("rustc release", RUST_RELEASE, rustc.release)?;
-        exact("rustc commit", RUST_COMMIT, rustc.commit)?;
+        let identity = active();
+        exact("rustc release", identity.rustc_release(), rustc.release)?;
+        exact("rustc commit", identity.rustc_commit(), rustc.commit)?;
         exact("rustc host", HOST, rustc.host)?;
-        exact("rustdoc release", RUST_RELEASE, rustdoc.release)?;
-        exact("rustdoc commit", RUST_COMMIT, rustdoc.commit)?;
+        exact("rustdoc release", identity.rustc_release(), rustdoc.release)?;
+        exact("rustdoc commit", identity.rustc_commit(), rustdoc.commit)?;
         exact("rustdoc host", HOST, rustdoc.host)?;
-        exact("Cargo release", CARGO_RELEASE, cargo.release)?;
-        exact("Cargo commit", CARGO_COMMIT, cargo.commit)?;
+        exact("Cargo release", identity.cargo_release(), cargo.release)?;
+        exact("Cargo commit", identity.cargo_commit(), cargo.commit)?;
         exact("Cargo host", HOST, cargo.host)?;
 
         #[cfg(feature = "rustc-driver")]
@@ -283,7 +294,8 @@ impl Requirement {
                 limits,
             )?;
             let expected = format!(
-                "rawr-import-driver {SUPPORTED_PLAN_SCHEMA} {SUPPORTED_PROBE_PROTOCOL} {RUST_COMMIT}\n"
+                "rawr-import-driver {SUPPORTED_PLAN_SCHEMA} {SUPPORTED_PROBE_PROTOCOL} {}\n",
+                identity.rustc_commit()
             );
             let actual = std::str::from_utf8(&version).map_err(|error| Error::Schema {
                 document: "rawr-import-driver --version",
@@ -356,13 +368,13 @@ impl Requirement {
         }
 
         Ok(Proof {
-            channel: CHANNEL.into(),
-            rustc_release: RUST_RELEASE.into(),
-            rustc_commit: RUST_COMMIT.into(),
-            rustdoc_release: RUST_RELEASE.into(),
-            rustdoc_commit: RUST_COMMIT.into(),
-            cargo_release: CARGO_RELEASE.into(),
-            cargo_commit: CARGO_COMMIT.into(),
+            channel: identity.name().into(),
+            rustc_release: identity.rustc_release().into(),
+            rustc_commit: identity.rustc_commit().into(),
+            rustdoc_release: identity.rustc_release().into(),
+            rustdoc_commit: identity.rustc_commit().into(),
+            cargo_release: identity.cargo_release().into(),
+            cargo_commit: identity.cargo_commit().into(),
             host: HOST.into(),
             target: HOST.into(),
             components: REQUIRED_COMPONENTS.map(Box::from).into(),
@@ -382,7 +394,7 @@ impl Requirement {
 }
 
 impl Proof {
-    /// The exact dated nightly selected for this resolution.
+    /// The nightly selected for this resolution, as rustup names it.
     pub fn channel(&self) -> &str {
         &self.channel
     }
@@ -680,7 +692,8 @@ mod tests {
     use std::path::PathBuf;
 
     /// rawr's embedded std table was taken with the pinned toolchain
-    /// (D711): a bump of `CHANNEL` reruns `scripts/std-table.sh`.
+    /// (D711): a bump of `CHANNEL` reruns `scripts/std-table.sh`. Any other
+    /// toolchain's is written with its driver (`driver.rs`).
     #[test]
     fn the_std_table_is_for_the_pinned_toolchain() {
         let stamp = include_str!("../../../src/std_table/TOOLCHAIN");
