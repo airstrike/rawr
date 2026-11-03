@@ -601,15 +601,16 @@ impl Registry {
         instance: Option<[u8; 32]>,
     ) -> Option<&structural::Definition> {
         let fingerprint = selector.fingerprint();
-        // A variant's selector names its constructor and its matcher, and
+        // A variant's selector names its constructor and its matchers, and
         // a field's its reader and its store.
-        let matcher = kind == structural::Kind::Match;
-        let store = kind == structural::Kind::Store;
         let selected = |definition: &&structural::Definition| {
             definition.selector() == &fingerprint
                 && definition.instance() == instance
-                && (definition.kind() == structural::Kind::Match) == matcher
-                && (definition.kind() == structural::Kind::Store) == store
+                && if kind.shares_selector() || definition.kind().shares_selector() {
+                    definition.kind() == kind
+                } else {
+                    true
+                }
         };
         // One type at two paths has one adapter, at one of them (D536.1):
         // `ratatui::style::Color` is also `ratatui_core::style::Color`

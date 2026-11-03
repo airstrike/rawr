@@ -15,9 +15,30 @@ pub(crate) enum Kind {
     Variant,
     /// A variant's fields when the value is that variant, else `None`.
     Match,
+    /// `Some(())` when the value is the variant, else `None`: a pattern's
+    /// test, which reads no field.
+    Test,
+    /// The fields of a value of the variant, moved out of it, as a
+    /// by-value pattern binds them.
+    Take,
+    /// The fields of a value of the variant, lent for the rest of the
+    /// scope that binds them, as a pattern through `&T` binds them.
+    Lend,
     /// A field set in place to a value, through the place's handle or a
     /// value native code lends `&mut`.
     Store,
+}
+
+impl Kind {
+    /// Whether one selector names this adapter beside another of its
+    /// family, which `kind` tells apart: a variant's matchers beside its
+    /// constructor, and a field's store beside its reader.
+    pub(crate) const fn shares_selector(self) -> bool {
+        matches!(
+            self,
+            Self::Match | Self::Test | Self::Take | Self::Lend | Self::Store
+        )
+    }
 }
 
 /// One generated-adapter admission retained by the compiler and runtime.
@@ -219,6 +240,12 @@ impl Proof {
         }
 
         let result = result?;
+        // A scope frame a variant's lender made: the fields it lends are
+        // reached only through their own types' accessors, and the copies
+        // it makes are Rawr's own values.
+        if self.definition.kind() == Kind::Lend && crate::scope::is_opening(&result) {
+            return Ok(result);
+        }
         if let Err(error) = self.output.validate(&result, model, runtime) {
             return Err(EvalAltResult::ErrorRuntime(
                 format!(
