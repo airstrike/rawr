@@ -32,6 +32,7 @@ const TYPES: &[(&str, &str)] = &[
     ("alloc::collections::btree::map::BTreeMap", "BTreeMap"),
     ("alloc::collections::btree::set::BTreeSet", "BTreeSet"),
     ("core::cmp::Reverse", "Reverse"),
+    ("alloc::borrow::Cow", "Cow"),
     ("core::cmp::Ordering", "Ordering"),
     ("core::cell::RefCell", "RefCell"),
     ("core::cell::Cell", "Cell"),

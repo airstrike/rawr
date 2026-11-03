@@ -4,6 +4,7 @@ mod borrows;
 mod cargo_env;
 pub(crate) mod cell;
 pub(crate) mod counted;
+pub(crate) mod cow;
 
 mod drops;
 mod error_object;
@@ -42,6 +43,8 @@ mod rust_meaning_tests;
 mod std_impl_tests;
 #[cfg(test)]
 mod std_method_tests;
+#[cfg(test)]
+mod str_tests;
 
 use super::borrowck::{
     record,
@@ -5260,6 +5263,7 @@ impl Models {
             Ty::Cell(..) => true,
             Ty::Boxed(inner)
             | Ty::Reverse(inner)
+            | Ty::Cow(inner)
             | Ty::Option(inner)
             | Ty::Array { element: inner, .. } => self.holds_cell(inner, visiting),
             Ty::Result(ok, err) => self.holds_cell(ok, visiting) || self.holds_cell(err, visiting),
@@ -5584,6 +5588,11 @@ enum PreludeOp {
     /// `Reverse(value)` and its `.0`.
     ReverseWrap,
     ReverseInner,
+    /// `Cow::Borrowed(value)`, `Cow::Owned(value)`, and a `Cow`'s payload
+    /// (`cow.rs`).
+    CowBorrowed,
+    CowOwned,
+    CowValue,
     /// `RefCell::new(value)`, a borrow of a cell (`1` mutable), a cell's or
     /// a borrow's value, a borrow's store, a borrow's release, and
     /// `into_inner`, `replace` and `clone` (`cell.rs`).
@@ -5781,6 +5790,9 @@ impl PreludeOp {
             Self::MapFrom => "map.from",
             Self::SetFrom => "set.from",
             Self::ReverseWrap => "reverse.new",
+            Self::CowBorrowed => "cow.borrowed",
+            Self::CowOwned => "cow.owned",
+            Self::CowValue => "cow.value",
             Self::DisplayText => "format.display",
             Self::CellNew => "cell.new",
             Self::PlainCellNew => "cell.new_plain",
@@ -5911,6 +5923,8 @@ impl PreludeOp {
             | Self::TypeIndex
             | Self::Discriminant
             | Self::ReverseWrap
+            | Self::CowBorrowed
+            | Self::CowOwned
             | Self::DisplayText
             | Self::CellNew
             | Self::PlainCellNew
@@ -5954,6 +5968,7 @@ impl PreludeOp {
                 TypeId::of::<crate::FnPtr>(),
             ],
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
+            Self::CowValue => vec![TypeId::of::<cow::Value>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
             Self::FormatFloat => vec![
@@ -6493,6 +6508,7 @@ impl PreludeOp {
                 });
             }
             Self::ReverseWrap => return Ok(Dynamic::from(std::cmp::Reverse(args[0].take()))),
+            Self::CowBorrowed | Self::CowOwned | Self::CowValue => return cow::run(self, args[0]),
             Self::DisplayText => {
                 return match crate::place::get(args[0]) {
                     Some(place) => place.invoke(crate::place::Operation::Display, &mut []),
@@ -8355,14 +8371,6 @@ impl Counter {
     }
 }
 
-/// A type as std's impls take it: a type, or `str`, which Rawr's types
-/// hold only as the referent of a `&str` (`Ty::Str`).
-#[derive(Clone, Debug, PartialEq)]
-enum Compared {
-    Ty(Ty),
-    Str,
-}
-
 /// Which `PartialEq` impl an `==` resolves to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PartialEqImpl {
@@ -8446,6 +8454,11 @@ enum Ty {
     /// float literal's kind still to be inferred.
     Float(Float),
     String,
+    /// `str`, rustc's unsized text: what `*` of a `&str` or a `String`
+    /// gives, usable only as a place (`&*s`, a comparison, a method's
+    /// receiver). The same text as a `String` at runtime. A reference to
+    /// it is `Ty::Str`.
+    UnsizedStr,
     /// `&str`: a borrowed string, the same text as a `String` at runtime.
     /// It is `Copy`, so a use never moves it. It is a distinct type from
     /// `String`, as in Rust: a `&String` becomes a `&str` only by deref
@@ -8496,6 +8509,9 @@ enum Ty {
     /// `std::cmp::Reverse<T>`: a `std::cmp::Reverse<Dynamic>` at runtime,
     /// which `compare_value` orders backwards.
     Reverse(Box<Ty>),
+    /// `std::borrow::Cow<'_, B>` of its borrowed type `B` (`str`, `[T]` or
+    /// a sized `T`): a `cow::Value` at runtime.
+    Cow(Box<Ty>),
     /// `std::cell::RefCell<T>` or `std::cell::Cell<T>`: a `cell::Cell` at
     /// runtime, which every copy of it shares (`cell.rs`).
     Cell(CellKind, Box<Ty>),
@@ -8570,6 +8586,7 @@ impl Ty {
             | Self::Weak(_, target)
             | Self::Iter(target)
             | Self::Reverse(target)
+            | Self::Cow(target)
             | Self::Range(target)
             | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
@@ -8608,6 +8625,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -8677,6 +8695,14 @@ impl Ty {
         }
         if let Some(inner) = ty.reverse_element() {
             return Self::Reverse(Box::new(Self::from_resolved(inner)));
+        }
+        // A header's bare `str` reads as a `&str` (`type_ref::Type::is_str`);
+        // a `Cow`'s `B` is the unsized `str`.
+        if let Some(borrowed) = ty.cow_element() {
+            return Self::Cow(Box::new(match Self::from_resolved(borrowed) {
+                Self::Str => Self::UnsizedStr,
+                borrowed => borrowed,
+            }));
         }
         if let Some((kind, inner)) = ty.cell_element() {
             return Self::Cell(CellKind::named(kind), Box::new(Self::from_resolved(inner)));
@@ -8790,6 +8816,7 @@ impl Ty {
             Self::Int(kind) => kind.name().into(),
             Self::Float(kind) => kind.name().into(),
             Self::String => "String".into(),
+            Self::UnsizedStr => "str".into(),
             Self::Str => "&str".into(),
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
@@ -8844,6 +8871,7 @@ impl Ty {
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
             Self::Iter(item) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
+            Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
             Self::Keyed(kind, arguments) => format!(
                 "{}<{}>",
@@ -8927,6 +8955,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..) => Some(TypeId::of::<crate::Array>()),
             Self::Reverse(_) => Some(TypeId::of::<std::cmp::Reverse<Dynamic>>()),
+            Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
             Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
@@ -8942,7 +8971,7 @@ impl Ty {
             Self::Int(kind) if kind.wide() => None,
             Self::Int(_) => Some(TypeId::of::<INT>()),
             Self::Float(_) => Some(TypeId::of::<crate::FLOAT>()),
-            Self::String | Self::Str => Some(TypeId::of::<ImmutableString>()),
+            Self::String | Self::UnsizedStr | Self::Str => Some(TypeId::of::<ImmutableString>()),
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
@@ -9072,6 +9101,7 @@ impl Ty {
             | Self::Int(_)
             | Self::Float(_)
             | Self::String
+            | Self::UnsizedStr
             | Self::Str
             | Self::InclusiveRange
             | Self::FloatRange
@@ -9089,6 +9119,7 @@ impl Ty {
             | Self::Iter(_)
             | Self::Keyed(..)
             | Self::Reverse(_)
+            | Self::Cow(_)
             | Self::Cell(..)
             | Self::Dyn(..)
             | Self::Infer(_)
@@ -9345,6 +9376,7 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::Option(left), Ty::Option(right))
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
+            | (Ty::Cow(left), Ty::Cow(right))
             | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
@@ -9601,6 +9633,7 @@ impl Inference {
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
             Ty::Iter(item) => Ty::Iter(Box::new(self.resolve(item))),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
+            Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
@@ -10089,6 +10122,13 @@ enum PatternSyntax {
         payload: Option<Box<PatternSyntax>>,
         span: Span,
     },
+    /// `Cow::Borrowed(pattern)` or `Cow::Owned(pattern)` (`owned`) on a
+    /// `Cow<'_, B>`.
+    Cow {
+        owned: bool,
+        payload: Box<PatternSyntax>,
+        span: Span,
+    },
     /// `0`, `-1`, `'a'`, `"x"`, `true`, `1.5`.
     Literal {
         literal: ast::NominalLiteral,
@@ -10187,6 +10227,7 @@ impl PatternSyntax {
             | Self::UnitStruct { span, .. }
             | Self::TupleStruct { span, .. }
             | Self::Prelude { span, .. }
+            | Self::Cow { span, .. }
             | Self::Literal { span, .. }
             | Self::Range { span, .. }
             | Self::Tuple { span, .. }
@@ -10214,6 +10255,7 @@ impl PatternSyntax {
                 before.iter().chain(after.iter()).any(Self::has_ref_mut)
             }
             Self::Reference { pattern, .. } | Self::At { pattern, .. } => pattern.has_ref_mut(),
+            Self::Cow { payload, .. } => payload.has_ref_mut(),
             _ => false,
         }
     }
@@ -10279,6 +10321,8 @@ enum CoverageKey {
         variant: nominal::variant::Id,
     },
     Prelude(Prelude),
+    /// `Cow::Owned` (`true`) or `Cow::Borrowed`.
+    Cow(bool),
     /// A literal: of `bool`, one of its two values; otherwise one of
     /// unboundedly many.
     Literal(ast::NominalLiteral),
@@ -10759,6 +10803,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         }
         Ty::Iter(item) => Ty::Iter(Box::new(instantiate(item, substitution))),
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
+        Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
@@ -14520,6 +14565,15 @@ impl<'a> Parser<'a> {
             ),
             // A `ParseIntError` and kin is its message.
             Ty::ParseError(error) => Some(self.parse_error_display(*error, value)),
+            // A `Cow` writes what it derefs to.
+            Ty::Cow(borrowed) => {
+                let payload = self.prelude_op(PreludeOp::CowValue, [value]);
+                let borrowed = cow::payload_ty(borrowed);
+                Some(
+                    self.display_text(&borrowed, payload.clone())
+                        .unwrap_or(payload),
+                )
+            }
             _ => None,
         }
     }
@@ -17677,6 +17731,14 @@ impl<'a> Parser<'a> {
             Ty::Int(_) => crate::capability::builtin_supports("i64", capability),
             Ty::Float(_) => crate::capability::builtin_supports("f64", capability),
             Ty::String => crate::capability::builtin_supports("String", capability),
+            // `str` is unsized: it has what a `String` has but a value's
+            // own (`Clone`, `Copy`, `Default`).
+            Ty::UnsizedStr => {
+                !matches!(
+                    capability,
+                    capability::Kind::Clone | capability::Kind::Copy | capability::Kind::Default
+                ) && crate::capability::builtin_supports("String", capability)
+            }
             // `&str` is `Copy`, and otherwise has what a `String` has.
             Ty::Str => {
                 capability == capability::Kind::Copy
@@ -17731,6 +17793,25 @@ impl<'a> Parser<'a> {
             },
             // `Reverse<T>` derives everything from `T`.
             Ty::Reverse(inner) => self.type_provides(&inner, capability),
+            // std's impls for `Cow<B>`, which ask of `B`.
+            Ty::Cow(ref borrowed) => match capability {
+                capability::Kind::Send | capability::Kind::Static => {
+                    self.type_provides(borrowed, capability)
+                }
+                capability => crate::resolve::std_trait::anywhere(capability.name()).is_some_and(
+                    |definition| {
+                        std_impl::holds(
+                            &mut std_impl::Probe(self),
+                            definition,
+                            &self.inference.resolve(ty),
+                            &[],
+                            true,
+                            0,
+                        )
+                        .is_ok()
+                    },
+                ),
+            },
             // `RefCell<T>` is `Clone`, `Default`, `Debug`, `PartialEq` and
             // `Eq` when `T` is, and never `Copy`. `Cell<T>` reads its value
             // by copy, so its `Clone`, `Debug`, `PartialEq` and `Eq` also
@@ -17881,7 +17962,7 @@ impl<'a> Parser<'a> {
                 };
                 intrinsic::Type::array(entry, None)
             }
-            Ty::Reverse(_) => {
+            Ty::Reverse(_) | Ty::Cow(_) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
             // A `Box` is its value at runtime (D492.3), which a crate's
@@ -17920,7 +18001,7 @@ impl<'a> Parser<'a> {
             Ty::Char => intrinsic::Type::builtin("char", TypeId::of::<char>()),
             Ty::Int(_) => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Float(_) => intrinsic::Type::builtin("f64", TypeId::of::<crate::FLOAT>()),
-            Ty::String | Ty::Str => {
+            Ty::String | Ty::UnsizedStr | Ty::Str => {
                 intrinsic::Type::builtin("String", TypeId::of::<ImmutableString>())
             }
             Ty::InclusiveRange => intrinsic::Type::i64_range_inclusive(),
@@ -23616,6 +23697,16 @@ impl<'a> Parser<'a> {
                 self.held_iter_mut.remove(&name);
             }
         }
+        // A local's type is sized (rustc's E0277): `let x = *s;`.
+        if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+            return Err(Error::MissingCapability {
+                owner: "str".into(),
+                capability: "Sized".into(),
+                operation: name_span,
+                derive: false,
+                required_by: None,
+            });
+        }
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
@@ -25745,6 +25836,25 @@ impl<'a> Parser<'a> {
                 ),
             });
         }
+        // `Cow::Borrowed(..)` and `Cow::Owned(..)`.
+        let written = segments
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        if !mutable && let Some(owned) = self.cow_variant(&written) {
+            let start = segments[0].1.start();
+            self.expect(Token::LeftParen, "'(' after a `Cow` variant in a pattern")?;
+            let payload = self.parse_pattern_syntax()?;
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            }
+            let end = self.expect(Token::RightParen, "')' after a `Cow` variant pattern")?;
+            return Ok(PatternSyntax::Cow {
+                owned,
+                payload: Box::new(payload),
+                span: span(start, end),
+            });
+        }
         // The prelude's `Some(..)`, `None`, `Ok(..)` and `Err(..)`, also as
         // `Option::Some(..)` or `Result::Ok(..)`.
         let prelude = match segments.as_slice() {
@@ -26143,6 +26253,18 @@ impl<'a> Parser<'a> {
             PatternSyntax::Prelude { .. } => {
                 self.resolve_prelude_pattern(syntax, &expected, bound_names, binding_declarations)
             }
+            PatternSyntax::Cow {
+                owned,
+                payload,
+                span,
+            } => self.resolve_cow_pattern(
+                *owned,
+                payload,
+                *span,
+                &expected,
+                bound_names,
+                binding_declarations,
+            ),
             PatternSyntax::Literal { literal, ty, span } => {
                 self.require_pattern_type(&expected, ty, *span)?;
                 self.trace_test(FactAccess::Read, None);
@@ -27036,6 +27158,19 @@ impl<'a> Parser<'a> {
                     prelude(Prelude::Err, &[*err]),
                 ]);
             }
+            Ty::Cow(borrowed) => {
+                let owned = self.owned_of(&borrowed).unwrap_or(Ty::Unknown);
+                return Some(
+                    [(false, cow::reference_to(*borrowed)), (true, owned)]
+                        .into_iter()
+                        .map(|(owned, payload)| CoverageConstructor {
+                            key: CoverageKey::Cow(owned),
+                            name: if owned { "Cow::Owned" } else { "Cow::Borrowed" }.into(),
+                            payload: Box::new([payload]),
+                        })
+                        .collect(),
+                );
+            }
             _ => {}
         }
         let definition = resolved.script()?;
@@ -27263,6 +27398,7 @@ impl<'a> Parser<'a> {
         let mut source = match subject_ty {
             Ty::Option(_)
             | Ty::Result(..)
+            | Ty::Cow(_)
             | Ty::Tuple(_)
             | Ty::Array { .. }
             | Ty::Int(_)
@@ -32639,7 +32775,7 @@ impl<'a> Parser<'a> {
         };
         let Some((definition, partial)) = partial_cmp else {
             // A std type std doesn't order (rustc's E0369).
-            if self.std_declared(&Compared::Ty(peeled.clone()))
+            if self.std_declared(&peeled)
                 && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -32771,18 +32907,15 @@ impl<'a> Parser<'a> {
     }
 
     /// A compared type as rustc names it.
-    fn compared_name(&self, side: &Compared) -> ImmutableString {
-        match side {
-            Compared::Ty(ty) => self.inference.resolve(ty).name(&self.models),
-            Compared::Str => "str".into(),
-        }
+    fn compared_name(&self, side: &Ty) -> ImmutableString {
+        self.inference.resolve(side).name(&self.models)
     }
 
     fn equality(
         &mut self,
         operator: Token,
         operator_at: Option<Span>,
-        lhs: ParsedExpr,
+        mut lhs: ParsedExpr,
         mut rhs: ParsedExpr,
     ) -> Result<ParsedExpr, Error> {
         let negate = matches!(operator, Token::NotEqualsTo);
@@ -32799,8 +32932,8 @@ impl<'a> Parser<'a> {
         // compares their values as they are; `Self`'s takes the right
         // operand as the left's type.
         let (left, right) = (
-            Compared::Ty(self.inference.resolve(&lhs.ty)),
-            Compared::Ty(self.inference.resolve(&rhs.ty)),
+            self.inference.resolve(&lhs.ty),
+            self.inference.resolve(&rhs.ty),
         );
         match self.std_partial_eq(&left, &right) {
             Ok(PartialEqImpl::Own) => {
@@ -32818,6 +32951,9 @@ impl<'a> Parser<'a> {
                 });
             }
         }
+        // A `Cow` compares what it derefs to, as std's impls for it do.
+        self.cow_compared(&mut lhs);
+        self.cow_compared(&mut rhs);
         // `&T == &T` compares the referents, as Rust's `PartialEq for &A` does,
         // and `Box<T> == Box<T>` their contents.
         let mut peeled = self.inference.resolve(&lhs.ty);
@@ -33305,6 +33441,17 @@ impl<'a> Parser<'a> {
                 Err(placeholder) => placeholder,
             };
             let (ty, at) = types[index].clone();
+            // A formatting argument is sized (rustc's E0277): `*s` of a
+            // `&str` is no argument, `s` is.
+            if ty == Ty::UnsizedStr {
+                return Err(Error::MissingCapability {
+                    owner: "str".into(),
+                    capability: "Sized".into(),
+                    operation: at,
+                    derive: false,
+                    required_by: None,
+                });
+            }
             let name = origin::Fragment::plain(names[index].as_str());
             let count = |count: &Option<FormatCount>| {
                 count.as_ref().map(|count| match count {
@@ -33549,6 +33696,7 @@ impl<'a> Parser<'a> {
             | Ty::Result(..)
             | Ty::Keyed(..)
             | Ty::Reverse(_)
+            | Ty::Cow(_)
             | Ty::Cell(..)
             | Ty::Time(_)
             | Ty::Boxed(..)
@@ -33614,7 +33762,8 @@ impl<'a> Parser<'a> {
                 | Ty::Boxed(target)
                 | Ty::Counted(_, target)
                 | Ty::Option(target)
-                | Ty::Reverse(target) => inside(this, &target, seen),
+                | Ty::Reverse(target)
+                | Ty::Cow(target) => inside(this, &target, seen),
                 Ty::Array { element, .. } => inside(this, &element, seen),
                 Ty::Result(ok, err) => inside(this, &ok, seen) || inside(this, &err, seen),
                 Ty::Tuple(members) | Ty::Keyed(_, members) => {
@@ -35059,9 +35208,13 @@ impl<'a> Parser<'a> {
                 self.borrow_temporary(&operand, whole);
             }
             self.hold_temporary(&mut operand)?;
-            operand.ty = Ty::Reference {
-                mutable: false,
-                target: Box::new(self.inference.resolve(&operand.ty)),
+            // `&*s` of a `String`: a `&str`.
+            operand.ty = match self.inference.resolve(&operand.ty) {
+                Ty::UnsizedStr => Ty::Str,
+                target => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(target),
+                },
             };
             operand.span = span(start, operand.span.end());
             // `&s.a.b`: the field chain a call may lend (`lend_argument`).
@@ -35078,10 +35231,26 @@ impl<'a> Parser<'a> {
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
             let resolved = self.inference.resolve(&operand.ty);
-            let (Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target)) =
-                resolved.clone()
-            else {
-                return Err(self.unsupported("`*` on a value that is not a reference or box"));
+            let target = match resolved.clone() {
+                Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => target,
+                // `*s` of a `&str` is the `str` it refers to.
+                Ty::Str => Box::new(Ty::UnsizedStr),
+                // `*s` of a `String` or a `Cow`: its `Deref` target, from
+                // std's impls.
+                ty => match self.deref_target(&ty, false) {
+                    Some((
+                        target,
+                        call @ (std_impl::DerefCall::Value | std_impl::DerefCall::Cow),
+                    )) => {
+                        self.apply_derefs(&mut operand, vec![call], ty)?;
+                        Box::new(target)
+                    }
+                    _ => {
+                        return Err(
+                            self.unsupported("`*` on a value that is not a reference or box")
+                        )
+                    }
+                },
             };
             // `*v = x` through a `&mut` local or place (a map's entry, an
             // `and_modify` value) writes it.
@@ -35509,6 +35678,30 @@ impl<'a> Parser<'a> {
                     rebox = Some(boxed);
                 }
                 value.ty = unboxed;
+            }
+            // A `Cow`'s own method; any other member is its `Deref`
+            // target's.
+            if let Some(parsed) = self.cow_member(&mut value, &member, member_span)? {
+                value = parsed;
+                continue;
+            }
+            while let Ty::Cow(_) = self.inference.resolve(&value.ty) {
+                let owner = self.inference.resolve(&value.ty);
+                let Some((target, call)) = self.deref_target(&owner, false) else {
+                    break;
+                };
+                self.apply_derefs(&mut value, vec![call], target)?;
+            }
+            if let Ty::Reference { target, .. } = self.inference.resolve(&value.ty)
+                && let Ty::Cow(_) = self.inference.resolve(&target)
+                && let Some((target, call)) = self.deref_target(&target, false)
+            {
+                self.apply_derefs(&mut value, vec![call], target)?;
+            }
+            // `(*s).len()`: `str`'s methods take it by reference, which the
+            // probe's autoref makes a `&str`.
+            if self.inference.resolve(&value.ty) == Ty::UnsizedStr {
+                value.ty = Ty::Str;
             }
             // A member a program's type lacks, through its `impl Deref`
             // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
@@ -36805,8 +36998,7 @@ impl<'a> Parser<'a> {
         // Each pointer's `Deref` target, from std's impls.
         let mut inner = boxed.clone();
         while let Ty::Boxed(..) = inner
-            && let Some((Compared::Ty(target), std_impl::DerefCall::Value)) =
-                self.deref_target(&inner, false)
+            && let Some((target, std_impl::DerefCall::Value)) = self.deref_target(&inner, false)
         {
             inner = self.inference.resolve(&target);
         }
@@ -38656,6 +38848,14 @@ impl<'a> Parser<'a> {
                 let start = Span::new(name_span.start(), member_span.end());
                 return self.parse_prelude_constructor(Prelude::Some, start);
             }
+        }
+        // `Cow::Borrowed(..)`, `std::borrow::Cow::Owned(..)`.
+        if matches!(self.peek(), Token::DoubleColon)
+            && !self.bindings.contains_key(name.as_str())
+            && let Some((member, member_span)) = self.cow_member_ahead(&name)
+        {
+            let start = Span::new(name_span.start(), member_span.end());
+            return self.parse_cow_associated(&member, start);
         }
         if matches!(name.as_str(), "Option" | "Result")
             && matches!(self.peek(), Token::DoubleColon)
@@ -42064,6 +42264,11 @@ impl<'a> Parser<'a> {
         let ty = self.inference.resolve(ty);
         if self.std_error(&ty, false) {
             return Ok(self.error_text(value, true));
+        }
+        // A `Cow` writes what it derefs to.
+        if let Ty::Cow(borrowed) = &ty {
+            let payload = self.prelude_op(PreludeOp::CowValue, [value]);
+            return self.debug_source(&cow::payload_ty(borrowed), payload, span);
         }
         if let Some(spec) = self.debug_spec.clone() {
             // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
@@ -48237,6 +48442,13 @@ impl<'a> Parser<'a> {
             }
             _ => self.expect_name("binding type")?,
         };
+        // A bare `str`, as `Cow<'_, str>` writes it: rustc's unsized `str`.
+        if name.as_str() == "str"
+            && !matches!(self.peek(), Token::DoubleColon)
+            && self.models.get(&name).is_none()
+        {
+            return Ok(Ty::UnsizedStr);
+        }
         let head = matches!(self.peek(), Token::DoubleColon);
         self.unbound_std_type(&name, head, name_span)?;
         // `dyn Fn(A) -> B` and `dyn Trait`.
@@ -48355,6 +48567,9 @@ impl<'a> Parser<'a> {
                     name_span,
                 )?;
                 if let Some(spelling) = std.and_then(crate::resolve::std_path::spelling) {
+                    if spelling == "Cow" {
+                        return self.parse_cow_type();
+                    }
                     name = spelling.into();
                 }
             }
@@ -48493,6 +48708,9 @@ impl<'a> Parser<'a> {
             && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
+        }
+        if self.cow_named(&name) && matches!(self.peek(), Token::LessThan) && qualified.is_none() {
+            return self.parse_cow_type();
         }
         if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
         {
@@ -49699,6 +49917,24 @@ impl<'a> Parser<'a> {
         }
         value.span = span(value.span.start(), end);
         value.lvalue = None;
+        // Text converts into the std type its `let` or caller expects
+        // through std's `From` of it (`Cow<str>`).
+        if source.is_text()
+            && let Some(target) = self
+                .collect_hint
+                .as_ref()
+                .filter(|(_, depth)| *depth == self.expression_stack.len())
+                .map(|(target, _)| self.inference.resolve(target))
+            && !matches!(target, Ty::String | Ty::Infer(_))
+            && let Some(op) = self.std_conversion(&target, &source)
+        {
+            if let Some(op) = op {
+                value.source = self.prelude_op(op, [value.rendered_source()]);
+                value.prelude = origin::Fragment::default();
+            }
+            value.ty = target;
+            return Ok(value.retain_origin());
+        }
         // Text converts into a `String`, through `From<&str>` or
         // `From<T> for T` (or into a boxed error, `box_returned_error`):
         // the target the use site gives, which rustc needs (E0283).
@@ -50289,6 +50525,7 @@ impl<'a> Parser<'a> {
             (Ty::Option(expected_element), Ty::Option(actual_element))
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
+            | (Ty::Cow(expected_element), Ty::Cow(actual_element))
             | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
             }
@@ -51593,6 +51830,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Boxed(target)
         | Ty::Iter(target)
         | Ty::Reverse(target)
+        | Ty::Cow(target)
         | Ty::Range(target)
         | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
@@ -52164,6 +52402,10 @@ fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> Str
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
     }
+    // A `Cow` writes what it derefs to.
+    if let Some(inner) = cow::payload(value) {
+        return debug_value_spec(&inner, models, spec);
+    }
     if let Some(option) = crate::option::read(value) {
         return match option {
             Some(inner) => format!("Some({})", debug_value_spec(&inner, models, spec)),
@@ -52620,6 +52862,10 @@ fn compare_value(lhs: &Dynamic, rhs: &Dynamic, models: &Models) -> Option<std::c
     ) {
         return compare_value(&rhs.0, &lhs.0, models);
     }
+    // A `Cow` orders as what it derefs to.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return compare_value(&lhs, &rhs, models);
+    }
     // An `i128` or a `u128` past `i64`, boxed.
     if (matches!(lhs.0, Union::Variant(..)) || matches!(rhs.0, Union::Variant(..)))
         && let Some(ordering) = wide_order(lhs, rhs)
@@ -52729,6 +52975,10 @@ pub(crate) fn equal_value(lhs: &Dynamic, rhs: &Dynamic) -> bool {
         rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
     ) {
         return equal_value(&lhs.0, &rhs.0);
+    }
+    // A `Cow` compares what it derefs to, `Borrowed` or `Owned`.
+    if let (Some(lhs), Some(rhs)) = (cow::payload(lhs), cow::payload(rhs)) {
+        return equal_value(&lhs, &rhs);
     }
     if let (Some(lhs), Some(rhs)) = (crate::option::read(lhs), crate::option::read(rhs)) {
         return match (lhs, rhs) {
@@ -55327,6 +55577,7 @@ fn binds_by_value(pattern: &PatternSyntax) -> bool {
         }
         PatternSyntax::Or { alternatives, .. } => alternatives.iter().any(binds_by_value),
         PatternSyntax::Prelude { payload, .. } => payload.as_deref().is_some_and(binds_by_value),
+        PatternSyntax::Cow { payload, .. } => binds_by_value(payload),
         PatternSyntax::Slice {
             before,
             rest,

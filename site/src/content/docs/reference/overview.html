@@ -119,7 +119,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A returned borrow of a parameter whose type has several lifetimes isn&rsquo;t checked against the output&rsquo;s lifetime. An example is <code>&amp;self</code> of a struct that has a lifetime parameter. A lifetime written in a type inside a body, as in <code>let x: &amp;'static i32 = &amp;n;</code>, isn&rsquo;t checked.</li>
   <li>A block&rsquo;s value that borrows a temporary of its tail, as in <code>let r = { String::from("a").as_str() };</code>, isn&rsquo;t checked.</li>
   <li>A struct&rsquo;s field whose type leaves out a struct&rsquo;s lifetime, as <code>w: Wrapper</code> of <code>struct Wrapper&lt;'a&gt;</code>, is accepted. rustc refuses it with E0106. A field written as a reference without a lifetime is refused, as in rustc.</li>
-  <li><code>String</code> and <code>&amp;str</code> are one type to the checker. Passing <code>"x"</code> where a <code>String</code> is expected is accepted.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
   <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li><code>HashMap</code> can be used without a <code>use</code> line.</li>

@@ -324,6 +324,10 @@ impl Comparison<'_, '_> {
         ) {
             return self.compare_plain(&rhs.0, &lhs.0);
         }
+        // A `Cow` orders as what it derefs to.
+        if let (Some(lhs), Some(rhs)) = (super::cow::payload(lhs), super::cow::payload(rhs)) {
+            return self.compare_plain(&lhs, &rhs);
+        }
         if let (Ok(lhs), Ok(rhs)) = (lhs.as_array_ref(), rhs.as_array_ref()) {
             return self.lexicographic(&lhs, &rhs, |_| &Shape::Plain);
         }
@@ -365,6 +369,10 @@ impl Comparison<'_, '_> {
             rhs.read_lock::<std::cmp::Reverse<Dynamic>>(),
         ) {
             return self.equal(&lhs.0, &rhs.0);
+        }
+        // A `Cow` compares what it derefs to, `Borrowed` or `Owned`.
+        if let (Some(lhs), Some(rhs)) = (super::cow::payload(lhs), super::cow::payload(rhs)) {
+            return self.equal(&lhs, &rhs);
         }
         match (&lhs.0, &rhs.0) {
             (Union::Array(left, ..), Union::Array(right, ..)) => {

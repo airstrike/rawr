@@ -667,6 +667,7 @@ fn resolve_path(
         || prelude_arity(&parsed).is_some()
         || super::std_collection(&name).is_some()
         || name.as_str() == "Reverse"
+        || name.as_str() == "Cow"
         || name.as_str() == "RefCell"
         || name.as_str() == "Cell" && host.source_type("Cell").is_none()
         || name.as_str() == "Vec"
@@ -1522,6 +1523,11 @@ impl Type {
             Argument::Type(ty) => Some((path.name.as_str(), ty)),
             Argument::Lifetime(_) => None,
         })
+    }
+
+    /// `B` of `std::borrow::Cow<'_, B>`.
+    pub(crate) fn cow_element(&self) -> Option<&Type> {
+        self.builtin_element("Cow")
     }
 
     /// `T` of `std::cmp::Reverse<T>`.

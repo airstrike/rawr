@@ -358,7 +358,8 @@ fn collect_names(syntax: &PatternSyntax, names: &mut Vec<(ImmutableString, Span)
         PatternSyntax::Prelude {
             payload: Some(payload),
             ..
-        } => collect_names(payload, names),
+        }
+        | PatternSyntax::Cow { payload, .. } => collect_names(payload, names),
         PatternSyntax::Reference { pattern, .. } => collect_names(pattern, names),
         PatternSyntax::Or { alternatives, .. } => {
             if let Some(first) = alternatives.first() {
@@ -1418,6 +1419,24 @@ impl Parser<'_> {
                     moves.push(path.clone());
                 }
                 leftover
+            }
+            // A `Cow::Owned` binding moves its owned value out, which drop
+            // glue would need to follow.
+            PatternSyntax::Cow { owned, payload, .. } => {
+                if let Ty::Cow(borrowed) = &resolved
+                    && *owned
+                    && binds_by_value(payload)
+                    && let Some(owned) = self.owned_of(borrowed)
+                    && self.needs_drop(&owned, at)?
+                {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "a `Cow::Owned` pattern that moves a value whose type \
+                                    implements `Drop`: not supported in Rawr yet"
+                            .into(),
+                        source: at,
+                    });
+                }
+                false
             }
             PatternSyntax::Or { alternatives, .. } => {
                 let mut leftover = false;
