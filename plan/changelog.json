@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.122",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"?play gives a run 15 seconds of script time and 30 seconds in all, so programs that fit comfortably on a laptop don't hit the time limit on the bot's shared container.","issues":[872]}
+      ]
+    },
+    {
       "version": "0.3.121",
       "date": "2026-11-03",
       "entries": [

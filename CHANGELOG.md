@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.122 (2026-11-03)
+
+- ?play gives a run 15 seconds of script time and 30 seconds in all, so programs that fit comfortably on a laptop don't hit the time limit on the bot's shared container. (#872)
+
 ## 0.3.121 (2026-11-03)
 
 - A result that borrows its call's values works whatever its trait: generic methods at several types, methods that give `Self`, associated types the result binds and supertrait methods all run, through a proxy rustc still checks. A `Self` such a method gives keeps the same values borrowed, as rustc has it. (#849)

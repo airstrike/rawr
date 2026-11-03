@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.121",
+  "version": "0.3.122",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.122",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"?play gives a run 15 seconds of script time and 30 seconds in all, so programs that fit comfortably on a laptop don't hit the time limit on the bot's shared container.","issues":[872]}
+        ]
+      },
       {
         "version": "0.3.121",
         "date": "2026-11-03",
@@ -2070,7 +2077,8 @@
     {"issue":868,"title":"Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health"},
     {"issue":869,"title":"Read a crate trait's associated const through a generic parameter","state":"open","category":"Divergences from rustc"},
     {"issue":870,"title":"Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc"},
-    {"issue":871,"title":"Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)"}
+    {"issue":871,"title":"Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)"},
+    {"issue":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed","category":"Health","release":"0.3.122"}
   ],
   "groups": [
     {

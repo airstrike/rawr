@@ -871,6 +871,7 @@
     {"t":"T868","issue":868,"title":"T868: Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T869","issue":869,"title":"T869: Read a crate trait's associated const through a generic parameter","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T870","issue":870,"title":"T870: Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T871","issue":871,"title":"T871: Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T871","issue":871,"title":"T871: Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T872","issue":872,"title":"T872: ?play time limits are too tight for the bot's shared container","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"caf2b5035","release":"0.3.122"}
   ]
 }
