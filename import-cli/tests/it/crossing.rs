@@ -1075,6 +1075,37 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
     );
 }
 
+/// iced's loupe (#845): `zoomed` gives the program's `Zoomed<impl
+/// Widget<Message> + 'a>` and `centered` the crate's `Column<impl
+/// Widget<Message> + 'a>`, an `impl Trait` inside the output, whose hidden
+/// type the checker infers from each body, as rustc does. The output is
+/// `cargo run`'s.
+#[test]
+fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
+    let (rawr, cargo) = both_printed("crossing-wrapped", "wrapped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 pad 3 opaque [Increment] pad 0 opaque 2@50 [Decrement]"),
+        "{rawr}"
+    );
+}
+
+/// iced's ferris and layout (#345): `explain`, a method of the
+/// blanket-implemented `Framed`, gives an `impl Widget` from the trait's own
+/// default body, which sits in `column!` as it is and is boxed through
+/// `boxed`. The output is `cargo run`'s.
+#[test]
+fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
+    let (rawr, cargo) = both_printed("crossing-explained", "explained.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 explain white [Increment] 2@50 explain blue [Decrement]"
+        ),
+        "{rawr}"
+    );
+}
+
 /// iced's download_progress (#568): the program's own native
 /// `download(url: impl AsRef<str>) -> impl Steps` gives an opaque type
 /// that captures its `impl AsRef<str>` input, which Rawr fills with a
