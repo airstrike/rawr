@@ -622,7 +622,7 @@ pub mod widgets {
         /// The widget, marked to show its layout in `color`, as iced's
         /// `Widget::explain`: an opaque type the trait's own default body
         /// gives, which no implementation overrides.
-        fn explain(self, color: impl Into<String>) -> impl Widget<Message, Theme, Renderer>
+        fn explain(self, color: impl Into<u32>) -> impl Widget<Message, Theme, Renderer>
         where
             Self: Sized,
         {
@@ -637,7 +637,7 @@ pub mod widgets {
     mod explained {
         pub struct Explain<W> {
             pub(super) widget: W,
-            pub(super) color: String,
+            pub(super) color: u32,
         }
 
         impl<W, Message, Theme, Renderer> super::Widget<Message, Theme, Renderer> for Explain<W>
@@ -645,7 +645,7 @@ pub mod widgets {
             W: super::Widget<Message, Theme, Renderer>,
         {
             fn labels(&self, labels: &mut Vec<String>) {
-                labels.push(format!("explain {}", self.color));
+                labels.push(format!("explain #{:06x}", self.color));
                 self.widget.labels(labels);
             }
 

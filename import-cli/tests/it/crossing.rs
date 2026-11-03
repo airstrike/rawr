@@ -1098,7 +1098,10 @@ fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
     let (rawr, cargo) = both_printed("crossing-explained", "explained.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
-        rawr.ends_with("last view pad 0 explain white [Increment] 2@50 explain blue [Decrement]"),
+        rawr.ends_with(
+            "last view pad 0 [Increment] 2@50 explain #ffffff 1..=10@5/None \
+             explain #0000ff 1..=100@50/None [Decrement]"
+        ),
         "{rawr}"
     );
 }
