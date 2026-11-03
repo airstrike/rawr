@@ -253,8 +253,51 @@ pub trait Std: Sized + 'static {
     /// The Rust value a script value holds, moved out of it.
     fn take(value: Dynamic) -> Option<Self>;
 
-    /// The Rust value a script value holds, lent for a call.
-    fn lend(value: Dynamic) -> Option<Self::Lent>;
+    /// The Rust value a script value holds, lent for a call. `arena` is
+    /// the calling runner's, where a value a crate's value lends is reached
+    /// ([`Borrow`]).
+    fn lend(value: Dynamic, arena: &mut dyn std::any::Any) -> Option<Self::Lent>;
+
+    /// The script value of a `&Self` a crate's value lends (#680), as a
+    /// `&self` method's `&io::Error` borrows from its receiver: `borrow`
+    /// reaches the value where its owner holds it at each use, so none is
+    /// copied. `None` for a type whose borrow crosses as a copy, as a
+    /// `&Path` does.
+    fn borrowed(borrow: Borrow<Self>) -> Option<Dynamic> {
+        let _ = borrow;
+        None
+    }
+}
+
+/// A borrow of a `T` a crate's value lends (`Std::borrowed`): given the
+/// runner's arena, or `None` to reach it itself, it claims the owner and
+/// gives a guard that derefs to the borrowed value while it lives, or why
+/// the owner can't be reached.
+pub type Borrow<T> = std::sync::Arc<
+    dyn Fn(Option<&mut dyn std::any::Any>) -> RawrResultOf<Lending<T>> + Send + Sync,
+>;
+
+/// A guard a [`Borrow`] gives, which holds the owner claimed.
+pub type Lending<T> = Box<dyn std::ops::Deref<Target = T> + Send>;
+
+/// A std value a script value shares, lent for a call: one it holds, or
+/// one a crate's value lends ([`Borrow`]).
+pub enum Shared<T: 'static> {
+    /// The value the script value holds.
+    Held(std::sync::Arc<T>),
+    /// The value where a crate's value holds it, its owner claimed.
+    Borrowed(Lending<T>),
+}
+
+impl<T: 'static> std::ops::Deref for Shared<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            Self::Held(value) => value,
+            Self::Borrowed(lending) => lending,
+        }
+    }
 }
 
 /// A std value a script value holds as itself, lent for a call.
@@ -281,7 +324,7 @@ macro_rules! std_held {
                 value.try_cast::<Self>()
             }
 
-            fn lend(value: Dynamic) -> Option<Lent<Self>> {
+            fn lend(value: Dynamic, _arena: &mut dyn std::any::Any) -> Option<Lent<Self>> {
                 value.try_cast::<Self>().map(Lent)
             }
         }

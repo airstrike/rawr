@@ -98,3 +98,43 @@ pub fn read(path: &Path) -> Result<String, Error> {
     }
     Ok(text)
 }
+
+/// Appends `name` to `path`, in place.
+pub fn extend(path: &mut PathBuf, name: &str) {
+    path.push(name);
+}
+
+/// Makes room in `path` for `extra` more bytes.
+pub fn reserve(path: &mut PathBuf, extra: usize) {
+    path.reserve(extra);
+}
+
+/// Whether `path` has room for 100 bytes: what `reserve` made, which a
+/// copy of it has none of.
+pub fn roomy(path: &mut PathBuf) -> bool {
+    path.capacity() >= 100
+}
+
+/// A failed read, which holds its `io::Error`.
+#[derive(Debug)]
+pub struct Failure {
+    error: io::Error,
+    pub path: PathBuf,
+}
+
+impl Failure {
+    pub fn new(path: PathBuf) -> Self {
+        let error = missing(&path);
+        Self { error, path }
+    }
+
+    /// The error, borrowed from the failure.
+    pub fn error(&self) -> &io::Error {
+        &self.error
+    }
+
+    /// Appends the failure's path to `out`, in place.
+    pub fn append_to(&self, out: &mut PathBuf) {
+        out.push(&self.path);
+    }
+}

@@ -90,8 +90,12 @@ pub(super) fn available(ty: &convert::Type) -> bool {
             owned: true,
             length: None,
         } => available(element),
+        // One of std's types Rawr's std holds as its Rust value crosses as
+        // that value (`crossing::Std`), never as a crate's native place.
         convert::Type::Nominal { arguments, .. } => {
-            !super::carries_lifetime(ty) && arguments.iter().all(available)
+            super::std_value(ty).is_none()
+                && !super::carries_lifetime(ty)
+                && arguments.iter().all(available)
         }
         _ => false,
     }

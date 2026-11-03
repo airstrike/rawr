@@ -2,8 +2,11 @@
 //! types in a program and in the crates it uses. A crate struct's `PathBuf`
 //! field, a crate function taking `&Path` or giving an `io::Error`, and `?`
 //! from an `io::Result` into a crate error that converts as thiserror's
-//! `#[from]` writes it all print what `cargo run` prints. Build the driver
-//! first, as for `plain`.
+//! `#[from]` writes it all print what `cargo run` prints. So do a crate
+//! function and method taking `&mut PathBuf`, which change the program's
+//! local and struct field, and a method giving `&io::Error`, which lends
+//! the error its value holds (#680). Build the driver first, as for
+//! `plain`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,6 +53,17 @@ fn std_path_and_io_error_are_the_crates_own_types() {
         "{expected}"
     );
     assert!(expected.contains("wrapped io: slow\n"), "{expected}");
+    assert!(
+        expected.ends_with(
+            "extended data/notes/b.txt 3\n\
+             job job jobs/first\n\
+             roomy true true\n\
+             error lost.txt is missing NotFound\n\
+             cause NotFound lost.txt\n\
+             appended data/notes/b.txt/lost.txt jobs/first/lost.txt\n"
+        ),
+        "{expected}"
+    );
 
     let directory = crate::support::scratch();
     let rawr = run(Command::new(env!("CARGO_BIN_EXE_rawr-import"))
