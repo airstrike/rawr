@@ -1109,6 +1109,95 @@ impl Parser<'_> {
         value.ty = ty;
     }
 
+    /// The method probe's deref steps, as rustc's probe takes them: while
+    /// `value`'s type, or the type it refers to, is a program's type that
+    /// lacks `member`, one step through its `Deref`. A method found past
+    /// the steps that takes `&mut self` takes them through `DerefMut`,
+    /// each `deref_mut` called on the place before it, as rustc's
+    /// `convert_place_derefs_to_mutable` does.
+    pub(super) fn probe_derefs(
+        &mut self,
+        mut value: ParsedExpr,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut steps = Vec::new();
+        let mut probed = self.inference.resolve(&value.ty);
+        loop {
+            let target = match &probed {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                owned => owned.clone(),
+            };
+            let Ty::Script(id, _) = target else {
+                break;
+            };
+            if self.own_member(id, member) {
+                break;
+            }
+            let reference = match &probed {
+                reference @ Ty::Reference { .. } => reference.clone(),
+                owned => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(owned.clone()),
+                },
+            };
+            let Some((ty, call)) = self.deref_reference(&reference, true) else {
+                break;
+            };
+            steps.push((id, target, ty.clone(), call));
+            probed = ty;
+        }
+        let method = matches!(self.peek(), Token::LeftParen | Token::Unit);
+        if !method || self.member_receiver(&probed, member) != Some(receiver::Mode::Mutable) {
+            for (_, _, ty, call) in steps {
+                self.apply_derefs(&mut value, vec![call], ty);
+            }
+            return Ok(value);
+        }
+        for (id, owner, _, _) in steps {
+            // rustc's E0596 when the type has no `DerefMut`.
+            if self.deref_target(&owner, true).is_none() {
+                return Err(Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow data in dereference of `{}` as mutable",
+                        owner.name(&self.models)
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                });
+            }
+            let name = self.models.definition(id).name().into();
+            value = match self.call_owner_method(
+                value,
+                id,
+                name,
+                &"deref_mut".into(),
+                member_span,
+                Vec::new(),
+                member_span.start(),
+            )? {
+                Ok(called) => called,
+                Err(_) => unreachable!("`DerefMut` has `deref_mut`"),
+            };
+        }
+        Ok(value)
+    }
+
+    /// The receiver `member` takes on `ty`, through its references: a
+    /// program type's method's, or std's inherent method's.
+    fn member_receiver(&self, ty: &Ty, member: &str) -> Option<receiver::Mode> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Script(id, _) => self.receiver_method(id, member)?.receiver(),
+            ty => std_method::inherent(&ty, member).map(|found| found.mode),
+        }
+    }
+
     /// Whether the program's type `id` has a field or method `member` of its
     /// own, which the method probe finds before it derefs.
     pub(super) fn own_member(&self, id: type_def::Id, member: &str) -> bool {

@@ -34962,27 +34962,7 @@ impl<'a> Parser<'a> {
             }
             // A member a program's type lacks, through its `impl Deref`
             // (D711 step 3): `wrapper.len()` is `wrapper.deref().len()`.
-            while let Some(id) = match self.inference.resolve(&value.ty) {
-                Ty::Script(id, _) => Some(id),
-                Ty::Reference { target, .. } => match self.inference.resolve(&target) {
-                    Ty::Script(id, _) => Some(id),
-                    _ => None,
-                },
-                _ => None,
-            } && !self.own_member(id, &member)
-            {
-                let reference = match self.inference.resolve(&value.ty) {
-                    reference @ Ty::Reference { .. } => reference,
-                    owned => Ty::Reference {
-                        mutable: false,
-                        target: Box::new(owned),
-                    },
-                };
-                let Some((ty, call)) = self.deref_reference(&reference, true) else {
-                    break;
-                };
-                self.apply_derefs(&mut value, vec![call], ty);
-            }
+            value = self.probe_derefs(value, &member, member_span)?;
             #[cfg(feature = "rust-import")]
             let (has_host, imported_definition) = {
                 let resolved = self.inference.resolve(&value.ty);
@@ -40672,15 +40652,32 @@ impl<'a> Parser<'a> {
             // `Option<&[u8]>`, `Option<Box<T>>` `Option<&T>`.
             "as_deref" | "as_deref_mut" => {
                 arity(0, &arguments)?;
-                source.push_text(o.as_str());
                 let mutable = member.as_str() == "as_deref_mut";
                 let reference = Ty::Reference {
                     mutable,
                     target: Box::new(self.inference.resolve(&element)),
                 };
                 match self.deref_reference(&reference, false) {
-                    Some((target, std_impl::DerefCall::Value)) => Ty::Option(Box::new(target)),
+                    Some((target, std_impl::DerefCall::Value)) => {
+                        source.push_text(o.as_str());
+                        Ty::Option(Box::new(target))
+                    }
                     // A program's `deref` runs on the value inside.
+                    Some((target, std_impl::DerefCall::Program(call))) if !mutable => {
+                        source.push_text("if ");
+                        let test = is(self);
+                        source.push(test);
+                        source.push_text(" { ");
+                        let unwrapped = unwrap(self);
+                        let dereferenced = Self::std_call(&call, unwrapped, &[]);
+                        let some = self.prelude_op(PreludeOp::Some, [dereferenced]);
+                        source.push(some);
+                        source.push_text(" } else { ");
+                        let none = self.prelude_op(PreludeOp::None, []);
+                        source.push(none);
+                        source.push_text(" }");
+                        Ty::Option(Box::new(target))
+                    }
                     Some(_) => {
                         return Err(Error::NotYet {
                             path: format!("Option::{member}").into(),
