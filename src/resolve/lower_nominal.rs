@@ -22085,6 +22085,12 @@ impl<'a> Parser<'a> {
         if method && member == "to_string" && self.imported_member_owner(ty, member).is_none() {
             return None;
         }
+        // `into()` is std's blanket `Into` over the target's `From`, which
+        // the use site picks (`parse_host_into`), whatever alias names the
+        // type.
+        if method && member == "into" && matches!(self.peek(), Token::Unit) {
+            return None;
+        }
         // Every alias names the same Rust type: a method any alias has is
         // the type's own, and so is a field, as `frame.area().x` reads
         // `Rect::x` whichever path `Frame::area` names `Rect` by.
