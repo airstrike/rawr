@@ -86,3 +86,38 @@ pub fn state(outcome: &Outcome) -> &'static str {
         Outcome::Idle => "idle",
     }
 }
+
+/// A label with `Clone`, which a match through a reference borrows where
+/// it is rather than copies.
+#[derive(Clone, Debug)]
+pub struct Tag {
+    label: String,
+}
+
+impl Tag {
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+#[derive(Debug)]
+pub enum Shelf {
+    Stocked(Tag),
+    Empty,
+}
+
+pub fn stocked(label: &str) -> Shelf {
+    Shelf::Stocked(Tag {
+        label: label.to_owned(),
+    })
+}
+
+/// Whether `tag` is the one `shelf` holds, not a copy of it.
+pub fn shelved(tag: &Tag, shelf: &Shelf) -> bool {
+    matches!(shelf, Shelf::Stocked(held) if std::ptr::eq(held, tag))
+}
+
+/// Whether `door` is the one `outcome` holds, not a copy of it.
+pub fn holds(door: &Door, outcome: &Outcome) -> bool {
+    matches!(outcome, Outcome::Opened(held) if std::ptr::eq(held, door))
+}

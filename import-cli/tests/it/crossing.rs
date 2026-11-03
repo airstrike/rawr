@@ -1330,7 +1330,12 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 /// tests its field lent to it and moves or lends what it binds, and a
 /// `Copy` field is copied beside a field without `Clone`. Through `&mut`
 /// and as `ref mut` it lends a `Door` mutably (#786), so a `&mut self`
-/// method changes the matched value. The output is `cargo run`'s.
+/// method changes the matched value. A field bound through a reference is
+/// borrowed where it is, a `Clone` one too (#782), so a crate function sees
+/// the very field the value holds, and the borrow outlives its arm (#783):
+/// a function returns it, a `match` gives it to a `let`, and a `let`-`else`
+/// keeps it for the statements after; `.clone()` of it is a value of its
+/// own. The output is `cargo run`'s.
 #[test]
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("crossing-matched", "matched.rs", "");
@@ -1342,7 +1347,9 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
          gate closed gate\nclosed hatch\nidle\n\
          below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
          above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
-         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3"
+         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3\n\
+         kept true\ndoor kept open\nloft door loft\n\
+         Tag { label: \"blue\" } blue true\nblue true\nblue true false\ntrue"
     );
 }
 

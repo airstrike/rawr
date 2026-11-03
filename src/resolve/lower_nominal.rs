@@ -6173,6 +6173,9 @@ impl PreludeOp {
                 }
             }
             Self::ValueClone => {
+                if let Some(projected) = args[0].read_lock::<crate::scope::Projected>() {
+                    return projected.cloned();
+                }
                 return match crate::place::get(args[0]) {
                     Some(place) => place.invoke(crate::place::Operation::Clone, &mut []),
                     None => Ok(args[0].clone()),
@@ -11280,7 +11283,8 @@ struct HostPart {
     /// one that lends what `reader` moves.
     guard: Option<origin::Fragment>,
     /// The reader where the bindings leave their scope, or `None` where
-    /// the part lends what it reads and its bindings read copies instead.
+    /// the part lends what it reads mutably for that scope alone and its
+    /// bindings read copies instead.
     escaping: Option<origin::Fragment>,
     /// Whether reading the part moves the fields out of the value.
     #[cfg_attr(
@@ -11310,7 +11314,7 @@ impl HostPart {
         let moves = guard.is_some();
         Self {
             name,
-            escaping: moves.then(|| reader.clone()),
+            escaping: (!mutable).then(|| reader.clone()),
             reader,
             guard,
             moves,
@@ -30104,37 +30108,31 @@ impl<'a> Parser<'a> {
         }
         // A binding of a field Rawr can't read in place, as an `io::Error`,
         // takes the field as rustc does: by value it moves the variant's
-        // fields out, through `&T` it borrows them where a copy can't stand
-        // in for the borrow, and through `&mut T` or as `ref mut` it borrows
-        // them mutably (#786). Other fields are read in place, as Rust reads
-        // a `Copy` field and Rawr its own values. A pattern below that moves
-        // or mutably borrows reads its field from the variant's fields moved
-        // or mutably borrowed alike.
+        // fields out, through `&T` or as `ref` it borrows them where they
+        // are, a `Clone` field too (#782), and through `&mut T` or as `ref
+        // mut` it borrows them mutably (#786). Other fields are read in
+        // place, as Rust reads a `Copy` field and Rawr its own values. A
+        // pattern below that moves or mutably borrows reads its field from
+        // the variant's fields moved or mutably borrowed alike.
         let native = |this: &Self, ty: &Ty| {
             !this.type_provides(ty, capability::Kind::Copy) && !this.plain_value(ty)
         };
-        let unclonable = |this: &Self, ty: &Ty| {
-            native(this, ty) && !this.type_provides(ty, capability::Kind::Clone)
-        };
         let outer = self.host_binding_mode.get();
-        let binds = |wanted: &dyn Fn(&PatternSyntax, Option<bool>, &Ty) -> bool| {
-            members.iter().any(|(index, member)| match member {
-                PatternSyntax::Binding { .. } => wanted(member, outer, &fields[*index]),
-                PatternSyntax::Ref { mutable, .. } => {
-                    wanted(member, Some(*mutable), &fields[*index])
-                }
-                _ => false,
+        // Whether a binding of a native field has the binding mode `wanted`:
+        // `None` by value, else `Some` of whether it is mutable.
+        let binds = |wanted: Option<bool>| {
+            members.iter().any(|(index, member)| {
+                let mode = match member {
+                    PatternSyntax::Binding { .. } => outer,
+                    PatternSyntax::Ref { mutable, .. } => Some(*mutable),
+                    _ => return false,
+                };
+                mode == wanted && native(self, &fields[*index])
             })
         };
-        let mutable = binds(&|_, mode, ty| mode == Some(true) && native(self, ty))
-            || nested.iter().any(|(.., below)| below.lends_mutably());
-        let moves = binds(&|_, mode, ty| mode.is_none() && native(self, ty))
-            || nested.iter().any(|(.., below)| below.moves());
-        let lends = binds(&|member, mode, ty| {
-            mode == Some(false)
-                && (unclonable(self, ty)
-                    || (matches!(member, PatternSyntax::Ref { .. }) && native(self, ty)))
-        });
+        let mutable = binds(Some(true)) || nested.iter().any(|(.., below)| below.lends_mutably());
+        let moves = binds(None) || nested.iter().any(|(.., below)| below.moves());
+        let lends = binds(Some(false));
         let kind = if mutable {
             Some(crate::host::structural::Kind::LendMut)
         } else if moves {
@@ -30184,7 +30182,7 @@ impl<'a> Parser<'a> {
                 }
                 // What it binds reads the field from the variant's part
                 // when the part moves the fields or lends them mutably, and
-                // lent alone, or copied where it leaves its scope, else.
+                // borrowed alone else, past the scope too (#783).
                 let held = part.filter(|part| out.parts[*part].holds());
                 let field = match held {
                     Some(held) => {
@@ -30200,14 +30198,17 @@ impl<'a> Parser<'a> {
                             mutable: source.mutable,
                         }
                     }
-                    None => HostPart {
-                        name,
-                        reader: reader(self, index, true)?,
-                        guard: None,
-                        escaping: Some(reader(self, index, false)?),
-                        moves: false,
-                        mutable: false,
-                    },
+                    None => {
+                        let borrowed = reader(self, index, true)?;
+                        HostPart {
+                            name,
+                            reader: borrowed.clone(),
+                            guard: None,
+                            escaping: Some(borrowed),
+                            moves: false,
+                            mutable: false,
+                        }
+                    }
                 };
                 out.part(field);
                 for binding in &below.binds {

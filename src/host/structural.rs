@@ -251,7 +251,15 @@ impl Proof {
             }
         }
 
-        let result = runtime.invoke(requirement, args, None, None, &crate::Access::NONE);
+        // A field a pattern borrows is lent to the call alone, but a lender
+        // of its own fields projects through it.
+        let result = if self.definition.kind().lends() {
+            runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+        } else {
+            crate::scope::opened(args, &mut |args| {
+                runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+            })
+        };
 
         for (index, (operand, value)) in self.operands.iter().zip(args.iter()).enumerate() {
             let observable =
