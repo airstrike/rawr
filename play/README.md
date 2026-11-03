@@ -287,9 +287,11 @@ started from any other.
 
 The image is `play/Dockerfile`. Its Rust stages run on the build host's
 architecture. They cross-compile to linux/amd64 (or arm64) when the host
-differs, and build natively when it matches. The dependencies compile in a
-layer of their own (cargo-chef), so a cached build recompiles only the
-workspace crates. The runtime is `gcr.io/distroless/cc-debian12:nonroot`
+differs, and build natively when it matches. Each cargo build keeps its
+registry, git checkouts and target directory in BuildKit cache mounts, so a
+build with a warm cache recompiles only rawr's own crates. rawr-import and
+its driver, which only build the universe and are not shipped, build
+without LTO. The runtime is `gcr.io/distroless/cc-debian12:nonroot`
 with the two stripped binaries. `push-image.sh` builds it with Apple's `container` (no Docker
 needed), pushes it to `registry.cloudflare.com` and writes its address into
 `wrangler.jsonc`; since `image` is then a registry address, `wrangler
@@ -319,48 +321,101 @@ answers 100146 or a 500.
 
 ### Release from GitHub Actions
 
-`.github/workflows/release.yml` releases from GitHub instead of a Mac. Once
-it is switched on, it is the main path. For now it runs only by hand, from
-the Actions tab (Run workflow). After the first good run, uncomment its
-`push` trigger to release every push to main that touches the bot's sources
-or the site.
+`.github/workflows/release.yml` (the **Release** workflow) releases from
+GitHub instead of a Mac and is the main path. It runs by hand, from the
+Actions tab (Run workflow). It chains four stages. Each is a reusable
+workflow that also runs on its own, and each starts only after the one
+before it succeeded or was skipped. A failure stops every stage after it.
 
-The job runs on `ubuntu-latest`, which is x86-64, so the image builds
-natively with Docker Buildx. Buildx keeps its layers in the GitHub Actions
-cache, so a later run recompiles only the workspace crates. The job adds
-24 GB of swap first and builds with four rustc jobs. Before the image, it
-builds the site and runs the Worker's and the site's tests, so a broken site
-stops the release before an image is built or pushed.
+| Stage | Workflow | What it does | When it runs |
+| --- | --- | --- | --- |
+| 1. binaries | `binaries.yml` | Builds the prebuilt archives for the GitHub release of the version. | Only when the `binaries` input is ticked. Patch releases have no tags yet. |
+| 2. playground | `playground.yml` | Builds rawr-web into the run's `web` artifact. | Every release. |
+| 3. bot | `bot.yml` | Builds the ?play image and pushes it as `rawr-play:<commit>`. | When the image's inputs changed since the image Cloudflare runs (`bot: auto`). `always` builds anyway and `skip` never builds. |
+| 4. site | `site.yml` | Deploys the Worker and site with the new rawr-web and the new image, or the running image when stage 3 built none. Then it waits for the bot and runs the site's snippets. | Every release. |
 
-The job pushes the image as `rawr-play:<commit>`. `pin-image.sh` writes that
-image and `PLAY_VERSION` into the job's own copy of `wrangler.jsonc`, and the
-job runs `deploy.sh`. It never commits, so the committed `wrangler.jsonc`
-keeps the last image `release.sh` pushed. `npm run release:worker` runs
-`pin-image.sh` with no image, which reads the image Cloudflare runs, so it
-never deploys that older one. The job never sees the Discord token, which
-stays among the Worker's secrets.
+Stages 2 and 3 only publish: an artifact and a registry image. The site
+stage makes the one deploy, so the site never goes live ahead of its bot,
+and a failed stage leaves the live site as it was. Run alone, `playground.yml`
+and `bot.yml` deploy through `site.yml` themselves (input `deploy`). A
+playground deploy keeps the running image. A bot deploy keeps the live
+rawr-web.
 
-The job waits for the `web` job's rawr-web artifact before it deploys, so
-the deploy runs on the same runner as the image build. The artifact is kept
-90 days for the site's deploys.
+The bot stage skips its build when nothing the image is built from has
+changed. `image-changed.sh` compares this commit with the commit of the
+running image (its tag). It counts every file the Docker build copies
+except the ones no build step reads: `site/`, `plan/`, `play/deploy/`,
+`.github/`, `guides/`, `CHANGELOG.md` and rawr-web's sources. It ignores
+a release commit's version bumps. A new top-level directory counts as an
+input until it is listed there.
 
-### Deploy the site between releases
+The image builds on `ubuntu-latest` (x86-64) with Docker Buildx, natively,
+with 24 GB of swap and four rustc jobs. Its cargo caches are BuildKit cache
+mounts (`play/Dockerfile`). `buildkit-cache-dance` moves them between the
+builder and `actions/cache`, under a key made of the external dependencies
+of `Cargo.lock` (`scripts/deps-key.sh`, which ignores the workspace's own
+versions), the Dockerfile and the universe's manifest. iced, wgpu, tokio and
+serenity therefore compile once per dependency or toolchain change. Every
+other build compiles only rawr's crates and the universe's bindings. The
+rawr-web build caches the same way.
 
-`.github/workflows/site.yml` runs on every push to main that changes `plan/`
-or `site/`, so `/todo`, the changelog and the docs go live within minutes of
-a plan or docs commit. It builds no image. `pin-image.sh` points
-`wrangler.jsonc` at the image Cloudflare runs, and the job downloads the
-`web` artifact of the release run at that image's commit into `public/web`,
-since a deploy replaces every asset. Then it runs `deploy.sh`: the build,
-the Worker's and the site's tests, the deploy, the wait for the bot and the
-site's snippets. The container keeps its image, so its rollout is a no-op.
+Expected times, measured from the last single-job release (about 38
+minutes):
 
-It shares the release's concurrency group, `release-play`, with
-`queue: max`. A deploy never runs beside a release, and a waiting run never
-cancels another. The site job reads the running image only once its turn
-comes, so a release that ran before it is never rolled back. A release made
-from a Mac uploads no `web` artifact, so the site job fails until the next
-release from GitHub.
+- Playground: about 3 minutes. The rawr-web build took 2.5 minutes with its
+  cache.
+- Bot, cold cache: about 15 to 20 minutes. Before, the universe stage took
+  20 minutes: 9.5 for rawr-import and 4 for its driver (fat LTO, one codegen
+  unit), and 6.5 for the runner. The bot binary took 5 minutes in parallel,
+  and exporting the layer cache took another 5. Without LTO the two tools
+  should take a third to a half of that time, and the cache export is now
+  small.
+- Bot, warm cache: about 8 to 12 minutes, mostly rawr's own crates and the
+  runner's bindings. A release that changes no image input skips the build:
+  under a minute.
+- Site: 2 to 4 minutes on the running image. A new image adds up to 5
+  minutes for the rollout and the bot's first runs.
+
+A whole release that changes no bot input takes about 7 minutes. One that
+does takes about 15 to 25 minutes. These figures are estimates until the
+first runs measure them.
+
+The image is tagged with its commit. `pin-image.sh` writes the image and
+`PLAY_VERSION` into the job's own copy of `wrangler.jsonc`. The job never
+commits, so the committed `wrangler.jsonc` keeps the last image
+`release.sh` pushed. Every deploy without a new image runs `pin-image.sh`
+with no image, which reads the image Cloudflare runs. The jobs never see the
+Discord token, which stays among the Worker's secrets.
+
+A deploy replaces every asset, so a deploy that builds no rawr-web ships the
+live one again. `web/build.sh` writes `SHA256SUMS` beside rawr-web, which
+the site serves as `/web/SHA256SUMS`. `live-web.sh` reads it from the site,
+fetches each file it lists and checks each hash.
+
+### Deploy the site and the Worker between releases
+
+`.github/workflows/site.yml` also runs on every push to main that changes
+`plan/`, `site/` or the Worker (`play/deploy/cloudflare`). `/todo`, the
+changelog, the docs, the Worker's code and its settings therefore go live
+within minutes, on the running image with the live rawr-web. One example is
+`PLAY_TIME_MS` in `wrangler.jsonc`. A settings change restarts the bot on
+the image it already runs. This deploy builds nothing in Rust.
+
+Every workflow takes the concurrency group `release-play` with
+`queue: max` when it runs on its own. A deploy never runs beside a release,
+and a waiting run never cancels another. A stage called from another
+workflow takes a group of its own, because the caller already holds
+`release-play`. A deploy reads the running image only once its turn comes,
+so a release that ran before it is never rolled back.
+
+The first release with these workflows has to build rawr-web, because the
+live site has no `/web/SHA256SUMS` before it. Until that release, a
+site-only deploy stops at `live-web.sh` with a message that says so. Run
+**Release** with `bot: always` the first time. It rebuilds the image with
+the new Dockerfile and saves the cold caches. In the run, watch the `bot /
+image` job's "Build the image" step for the cold time, and the `site /
+site` job for the rollout and the snippets. Then run **Release** again with
+`bot: always` to measure a warm build. After that, `auto` is the default.
 
 The repository needs two secrets and one variable, under Settings → Secrets
 and variables → Actions:
