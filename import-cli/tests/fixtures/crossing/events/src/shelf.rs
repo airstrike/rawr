@@ -23,6 +23,11 @@ impl Item {
         self.name.clone()
     }
 
+    /// Counts one more show of this item.
+    pub(crate) fn count(&self) {
+        self.shown.set(self.shown.get() + 1);
+    }
+
     /// How many times a result showed this item.
     pub fn shown(&self) -> u32 {
         self.shown.get()
