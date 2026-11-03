@@ -20,6 +20,7 @@ pub mod named;
 pub mod plane;
 pub mod pointers;
 pub mod results;
+pub mod selector;
 pub mod sequences;
 pub mod signatures;
 
