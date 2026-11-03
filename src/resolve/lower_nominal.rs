@@ -31,6 +31,8 @@ mod comparison_tests;
 #[cfg(test)]
 mod copies_tests;
 #[cfg(test)]
+mod divergence_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 mod placeholder_tests;
@@ -5618,6 +5620,9 @@ enum PreludeOp {
     /// boundaries): `slice(value, low, high, inclusive)`, `high` `-1` for
     /// an open end; a copy, with Rust's panics.
     Slice,
+    /// `v.get(low..high)`: `Slice`'s operands, `Some` of the copy, or
+    /// `None` where `Slice` panics.
+    SliceGetRange,
     /// `v.get(i)`, `first()` (`0`) and `last()` (`-1`): an `Option` of the
     /// element.
     SliceGet,
@@ -5776,6 +5781,7 @@ impl PreludeOp {
             Self::Cast => "number.cast",
             Self::WideLiteral => "number.wide-literal",
             Self::Slice => "slice.range",
+            Self::SliceGetRange => "slice.get-range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
             Self::CharMethod => "char.method",
@@ -5994,7 +6000,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
             ],
-            Self::Slice => vec![
+            Self::Slice | Self::SliceGetRange => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<crate::INT>(),
@@ -6317,7 +6323,9 @@ impl PreludeOp {
                     flags & 2 == 2,
                 )));
             }
-            Self::Slice | Self::SplitAt => return slice_value(self, args),
+            Self::Slice | Self::SliceGetRange | Self::SplitAt => {
+                return slice_value(self, args);
+            }
             Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),
             Self::Memory => {
@@ -41974,6 +41982,48 @@ impl<'a> Parser<'a> {
                 span(value.span.start(), end),
             ));
         }
+        // `v.get(low..high)`: std's `SliceIndex` of a range, an
+        // `Option<&[T]>`. `VecDeque::get` takes an index alone.
+        if member.as_str() == "get"
+            && kind != sequence::Kind::Deque
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            self.next();
+            let bounds = self.parse_range_or_expr()?;
+            let end = self.expect(Token::RightParen, "')' after call arguments")?;
+            let operands: Vec<_> = match &bounds {
+                Ok(index) => vec![self.argument_fact(index)],
+                Err((low, high, _)) => low
+                    .iter()
+                    .chain(high)
+                    .map(|bound| self.argument_fact(bound))
+                    .collect(),
+            };
+            self.flow().call_operands(&operands, end);
+            match bounds {
+                Ok(index) => self.pending_arguments = Some((vec![index], end)),
+                Err((low, high, inclusive)) => {
+                    let mut operands = vec![value.rendered_source().surrounded("(", ")")];
+                    for (bound, open) in [(low, "0"), (high, "-1")] {
+                        operands.push(match bound {
+                            Some(bound) => {
+                                self.require_type(&Ty::Int(Int::Usize), &bound.ty, bound.span)?;
+                                bound.rendered_source()
+                            }
+                            None => open.into(),
+                        });
+                    }
+                    operands.push(inclusive.to_string().into());
+                    let source = self.prelude_op(PreludeOp::SliceGetRange, operands);
+                    let slice = Ty::Reference {
+                        mutable: false,
+                        target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                    };
+                    let ty = Ty::Option(Box::new(slice));
+                    return Ok(self.operator_expr(source, ty, span(value.span.start(), end)));
+                }
+            }
+        }
         // A closure argument takes the parameter types Rust infers for it.
         let reference = Ty::Reference {
             mutable: false,
@@ -53751,16 +53801,29 @@ fn char_method(c: char, name: &str, argument: &Dynamic) -> Dynamic {
 
 /// `Slice` (`v[low..high]`) and `SplitAt` (`v.split_at(mid)`) of an array
 /// or a string, a copy of the range, with Rust's panics for a range out of
-/// bounds or a string index off a `char` boundary.
+/// bounds or a string index off a `char` boundary. `SliceGetRange`
+/// (`v.get(low..high)`) is `None` where `Slice` panics, and `Some` of the
+/// copy.
 fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
+    let checked = op == PreludeOp::SliceGetRange;
     let fail = |message: String| -> RawrResult {
+        if checked {
+            return Ok(crate::option::none());
+        }
         Err(EvalAltResult::ErrorRuntime(message.into(), Position::NONE).into())
+    };
+    let found = |value: Dynamic| -> RawrResult {
+        Ok(if checked {
+            crate::option::some(value)
+        } else {
+            value
+        })
     };
     let text = args[0].clone().into_immutable_string().ok();
     let len = match (&text, args[0].as_array_ref()) {
         (Some(text), _) => text.len(),
         (None, Ok(array)) => array.len(),
-        (None, Err(_)) => return fail("a slice is not an array or a string at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array or a string at runtime")),
     };
     let at = |value: &Dynamic| usize::try_from(value.as_int().unwrap_or_default()).ok();
     let (low, high) = if op == PreludeOp::SplitAt {
@@ -53801,7 +53864,7 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                 let (left, right) = text.split_at(low);
                 vec![left.into(), right.into()]
             } else {
-                return Ok(Dynamic::from(ImmutableString::from(&text[low..high])));
+                return found(Dynamic::from(ImmutableString::from(&text[low..high])));
             }
         }
         (None, Ok(array)) => {
@@ -53811,10 +53874,10 @@ fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
                     Dynamic::from_array(array[low..].to_vec()),
                 ]
             } else {
-                return Ok(Dynamic::from_array(array[low..high].to_vec()));
+                return found(Dynamic::from_array(array[low..high].to_vec()));
             }
         }
-        (None, Err(_)) => return fail("a slice is not an array at runtime".into()),
+        (None, Err(_)) => return Err(invariant("a slice is not an array at runtime")),
     };
     Ok(Dynamic::from_array(pieces))
 }
