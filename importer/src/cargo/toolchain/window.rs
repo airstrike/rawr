@@ -19,17 +19,22 @@ pub(crate) const RANGE: &str = "nightly-2026-07-11 through nightly-2026-11-02";
 /// of the merge that made it. A nightly whose commit is from that day but
 /// precedes the merge is the one ambiguity; none of the window's edges is.
 #[cfg_attr(not(test), allow(dead_code, reason = "the build script reads it"))]
-pub(crate) const CHANGES: [(&str, &str); 12] = [
+pub(crate) const CHANGES: [(&str, &str); 14] = [
     // `DefKind::InlineConst` merged into `DefKind::AnonConst` (#159113).
     ("rawr_rustc_anon_inline_const", "2026-07-11"),
     // `predicates_of` and `explicit_super_predicates_of` became
     // `clauses_of` and `explicit_super_clauses_of` (#160102).
     ("rawr_rustc_clause_queries", "2026-07-28"),
+    // `locator.rs`'s observed events moved to lines 590 and 439
+    // (#158823).
+    ("rawr_rustc_locator_search_paths", "2026-07-31"),
     // `StabilityLevel` and `UnstableReason` moved to `rustc_attr_ir`
     // (#160761).
     ("rawr_rustc_attr_ir", "2026-08-08"),
     // `PredicatePolarity` became `ClausePolarity` (#161396).
     ("rawr_rustc_clause_polarity", "2026-08-20"),
+    // `locator.rs`'s observed events moved to lines 598 and 447 (#161434).
+    ("rawr_rustc_locator_candidates", "2026-08-21"),
     // `ImplPolarity::Reservation` was removed (#161772).
     ("rawr_rustc_no_reservation_impls", "2026-08-25"),
     // `DefKind::TestBinderConstraints` was added (#161772).

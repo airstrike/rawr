@@ -43,12 +43,90 @@
 //! `TOOLCHAIN` names the pinned nightly and the target the table was taken
 //! for; the importer's tests check it is `CHANNEL`.
 //!
+//! A project that imports with another nightly checks against that
+//! nightly's std: rawr-import writes its table with the toolchain's driver,
+//! hands its directory to [`install`], and gives it to the runner in
+//! `RAWR_STD_TABLE`. Without either, the embedded table is the one.
+//!
 //! Nothing is decoded ahead of a lookup: each lookup is a binary search of
-//! the embedded text, so a program pays only for the paths it names.
+//! the table's text, so a program pays only for the paths it names.
 
-const PATHS: &str = include_str!("std_table/paths.tsv");
-const ITEMS: &str = include_str!("std_table/items.tsv");
-const IMPLS: &str = include_str!("std_table/impls.tsv");
+use std::path::{Path as FilePath, PathBuf};
+use std::sync::OnceLock;
+
+/// The three files' text.
+struct Table {
+    paths: &'static str,
+    items: &'static str,
+    impls: &'static str,
+    /// The directory it was read from; `None` for the embedded table.
+    directory: Option<PathBuf>,
+}
+
+/// The table [`install`] set, or `RAWR_STD_TABLE`'s.
+static TABLE: OnceLock<Table> = OnceLock::new();
+
+const EMBEDDED: Table = Table {
+    paths: include_str!("std_table/paths.tsv"),
+    items: include_str!("std_table/items.tsv"),
+    impls: include_str!("std_table/impls.tsv"),
+    directory: None,
+};
+
+impl Table {
+    /// The table in `directory`. Its text lives as long as the process,
+    /// as the embedded one does.
+    fn read(directory: &FilePath) -> std::io::Result<Self> {
+        let read = |name: &str| -> std::io::Result<&'static str> {
+            Ok(String::leak(std::fs::read_to_string(directory.join(name))?))
+        };
+        Ok(Self {
+            paths: read("paths.tsv")?,
+            items: read("items.tsv")?,
+            impls: read("impls.tsv")?,
+            directory: Some(directory.to_path_buf()),
+        })
+    }
+
+    /// The process's table: the one [`install`]ed or named by
+    /// `RAWR_STD_TABLE`, else the embedded one. A lookup before
+    /// [`install`] reads the embedded table, so rawr-import installs its
+    /// toolchain's before it checks a program.
+    fn get() -> &'static Self {
+        if let Some(table) = TABLE.get() {
+            return table;
+        }
+        match std::env::var_os("RAWR_STD_TABLE") {
+            Some(directory) => match Self::read(FilePath::new(&directory)) {
+                Ok(table) => TABLE.get_or_init(|| table),
+                Err(_) => &EMBEDDED,
+            },
+            None => &EMBEDDED,
+        }
+    }
+}
+
+/// Check this process's programs against the std table in `directory`, the
+/// one rawr-import wrote for the toolchain a project imports with. A
+/// process uses one table: installing another one after it is refused.
+///
+/// # Errors
+///
+/// When the table can't be read, or another one is already in use.
+#[doc(hidden)]
+pub fn install(directory: &FilePath) -> std::io::Result<()> {
+    if TABLE.get().is_none() {
+        let table = Table::read(directory)?;
+        let _ = TABLE.set(table);
+    }
+    match TABLE.get().and_then(|table| table.directory.as_deref()) {
+        Some(installed) if installed == directory => Ok(()),
+        _ => Err(std::io::Error::other(format!(
+            "rawr is already checking against another std table than `{}`",
+            directory.display()
+        ))),
+    }
+}
 
 /// The namespace a path is in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -360,7 +438,12 @@ fn path_line(line: &'static str) -> Path {
 /// The path `path` in `namespace`, as a program writes it:
 /// `std::collections::HashMap`.
 pub(crate) fn path(path: &str, namespace: Namespace) -> Option<Path> {
-    find(PATHS, &format!("{path}\t{}", namespace.letter()), 2).map(path_line)
+    find(
+        Table::get().paths,
+        &format!("{path}\t{}", namespace.letter()),
+        2,
+    )
+    .map(path_line)
 }
 
 /// The path in any namespace: a type's first, then a value's, then a
@@ -379,7 +462,7 @@ pub(crate) fn is_module(path: &str) -> bool {
 /// The definition `definition`, or a member of one: `alloc::vec::Vec`,
 /// `alloc::vec::Vec::push`, `i64::pow`.
 pub(crate) fn item(definition: &str) -> Option<Item> {
-    find(ITEMS, definition, 1).map(item_line)
+    find(Table::get().items, definition, 1).map(item_line)
 }
 
 fn item_line(line: &'static str) -> Item {
@@ -426,7 +509,7 @@ fn lines_from(text: &'static str, prefix: &str) -> &'static str {
 pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
     let prefix = format!("{definition}::");
     let length = prefix.len();
-    lines_from(ITEMS, &prefix)
+    lines_from(Table::get().items, &prefix)
         .lines()
         .take_while(move |line| line.starts_with(&prefix))
         .filter(move |line| {
@@ -441,7 +524,8 @@ pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
 /// table, for the method probe's traits.
 pub(crate) fn trait_functions(name: &str) -> Vec<Item> {
     let suffix = format!("::{name}\tassoc-fn\ts\t");
-    ITEMS
+    Table::get()
+        .items
         .lines()
         .filter(|line| {
             line.find(&suffix).is_some_and(|at| {
@@ -539,7 +623,7 @@ pub(crate) fn is_root(name: &str) -> bool {
 /// `use module::*;` binds.
 pub(crate) fn children(module: &str) -> impl Iterator<Item = Path> {
     let prefix = format!("{module}::");
-    lines_from(PATHS, &prefix)
+    lines_from(Table::get().paths, &prefix)
         .lines()
         .take_while(move |line| line.starts_with(&prefix))
         .map(path_line)
@@ -754,7 +838,7 @@ pub(crate) fn trait_impls(trait_: &str) -> impl Iterator<Item = Impl> {
 
 /// The impls whose lines start with `prefix`.
 fn impl_lines(prefix: String) -> impl Iterator<Item = Impl> {
-    lines_from(IMPLS, &prefix)
+    lines_from(Table::get().impls, &prefix)
         .lines()
         .take_while(move |line| line.starts_with(&prefix))
         .map(|line| {

@@ -30,6 +30,15 @@ pub(crate) type GenericArgsRef<'tcx> = rustc_middle::ty::GenericArgsRef<'tcx>;
 #[cfg(rawr_rustc_generic_args_value)]
 pub(crate) type GenericArgsRef<'tcx> = rustc_middle::ty::GenericArgs<'tcx>;
 
+/// The lines of `rustc_metadata/src/locator.rs`'s "reading metadata from"
+/// and "lib candidate" events, which the driver observes.
+#[cfg(not(rawr_rustc_locator_search_paths))]
+pub(crate) const LOCATOR_LINES: (u32, u32) = (598, 442);
+#[cfg(all(rawr_rustc_locator_search_paths, not(rawr_rustc_locator_candidates)))]
+pub(crate) const LOCATOR_LINES: (u32, u32) = (590, 439);
+#[cfg(rawr_rustc_locator_candidates)]
+pub(crate) const LOCATOR_LINES: (u32, u32) = (598, 447);
+
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::def_id::DefId;
 use rustc_span::Span;

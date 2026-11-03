@@ -19,6 +19,7 @@ use crate::{Error, Result};
 
 mod bootstrap;
 mod cached;
+#[cfg(feature = "rustc-driver")]
 mod driver;
 mod host;
 mod identity;
@@ -27,9 +28,40 @@ pub(crate) mod window;
 
 pub(crate) use bootstrap::Installed;
 pub use cached::{cached, Attestation};
+#[cfg(feature = "rustc-driver")]
 pub(crate) use driver::Built;
 pub use identity::{active, Identity};
 pub(crate) use selection::Selection;
+
+/// Select the toolchain the project in `project` names, install what it
+/// lacks, and make it this process's (`identity.rs`), with its driver built
+/// if it is a nightly other than the pinned one. Every import of the
+/// process then reads with it.
+///
+/// # Errors
+///
+/// When the toolchain isn't a nightly inside the driver's window, or can't
+/// be installed, read or built for.
+#[cfg(feature = "rustc-driver")]
+pub fn select(project: &Path) -> Result<()> {
+    let environment = crate::cargo::config::Environment::capture()?;
+    crate::process::Native::selected_in(project, &environment).map(drop)
+}
+
+/// The directory of the std table rawr checks programs against for this
+/// process's toolchain, when it isn't the pinned nightly: rawr embeds that
+/// one's (`rawr::std_table`).
+#[must_use]
+pub fn std_table() -> Option<PathBuf> {
+    #[cfg(feature = "rustc-driver")]
+    {
+        driver::std_table()
+    }
+    #[cfg(not(feature = "rustc-driver"))]
+    {
+        None
+    }
+}
 
 /// The pinned nightly: what a project that names no toolchain reads crate
 /// APIs with, and what prebuilt drivers and the embedded std table are for.

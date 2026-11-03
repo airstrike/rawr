@@ -13,6 +13,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use super::identity::Identity;
 use crate::{Error, Result};
@@ -22,6 +23,16 @@ include!(concat!(env!("OUT_DIR"), "/driver_source.rs"));
 const BINARY: &str = "rawr-import-driver";
 const STD_TABLE: &str = "std-table";
 
+/// The built driver this process imports with, if it isn't the pinned
+/// nightly's.
+static IN_USE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The std table of the toolchain this process imports with, when that
+/// isn't the pinned nightly, whose table rawr embeds.
+pub(crate) fn std_table() -> Option<PathBuf> {
+    IN_USE.get().map(|directory| directory.join(STD_TABLE))
+}
+
 /// A driver built for one toolchain, with its std table.
 #[derive(Debug)]
 pub(crate) struct Built {
@@ -29,8 +40,9 @@ pub(crate) struct Built {
 }
 
 impl Built {
-    /// The driver for `identity`, installed at `root`, under rawr's `home`,
-    /// built first if there is none. `environment` is the import's.
+    /// The driver for `identity`, the toolchain this process adopted,
+    /// installed at `root`, under rawr's `home`, built first if there is
+    /// none. `environment` is the import's.
     pub(crate) fn ensure(
         home: &Path,
         identity: &Identity,
@@ -39,6 +51,7 @@ impl Built {
     ) -> Result<Self> {
         let drivers = home.join("drivers");
         let directory = drivers.join(key(identity));
+        let _ = IN_USE.set(directory.clone());
         let built = Self { directory };
         if built.driver().is_file() {
             return Ok(built);
@@ -74,13 +87,6 @@ impl Built {
     /// The driver executable.
     pub(crate) fn driver(&self) -> PathBuf {
         self.directory.join(BINARY)
-    }
-
-    /// The directory of the toolchain's std table (`paths.tsv`, `items.tsv`,
-    /// `impls.tsv`).
-    #[allow(dead_code, reason = "read once the std table loads at run time")]
-    pub(crate) fn std_table(&self) -> PathBuf {
-        self.directory.join(STD_TABLE)
     }
 }
 
