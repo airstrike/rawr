@@ -5,6 +5,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- ?play has no time limit while no other snippet is waiting. Once one waits, the running snippet gets the usual budget (60 s of script time, 120 s in all) from that moment, then stops with its output so far; a run nothing waits behind stops after 10 minutes. (#880)
+- Releases run in stages (binaries, playground, bot, site): the ?play image is rebuilt only when its sources change and with cached dependencies when it is, and a Worker settings change deploys in minutes. (#881)
+
+## 0.3.124 (2026-11-03)
+
+- Methods std marks stable on their own, such as `std::io::Error::new`, `other` and `kind`, and methods of `Condvar`, `RwLock`, `PoisonError`, `LocalKey`, `Cursor` and `Take`, are no longer refused as unstable library features. (#838)
 
 ## 0.3.123 (2026-11-03)
 
