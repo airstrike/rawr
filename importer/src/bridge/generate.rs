@@ -18327,6 +18327,24 @@ mod tests {
         }
     }
 
+    /// iced's changelog: `boxed` of the `Map<impl Widget, ..>` that `map`
+    /// gave takes it at the type that holds the table's opaque type, and a
+    /// `_` inside a name isn't one.
+    #[test]
+    fn an_operand_holding_the_opaque_type_is_taken_at_its_own_type() {
+        assert_eq!(
+            super::opaque_holes("::__rawr_crate_parts::widget::Map<_, Box<dyn Fn(u8) -> m_x>, _a>"),
+            [34]
+        );
+        let body = "    let argument_0: Map<_, Box<dyn Fn(String) -> crate::Message>, String> = take_like(arguments, 0, _w)?;\n    let receiver: _ = take_like(arguments, 0, _w)?;\n";
+        let shaped = super::shape_witnesses(body, 0);
+        assert!(
+            shaped.contains("= take_like(arguments, 0, { fn shape<T>(_: std::marker::PhantomData<T>) -> std::marker::PhantomData<Map<T, Box<dyn Fn(String) -> crate::Message>, String>> { std::marker::PhantomData } shape(_w) })?;"),
+            "{shaped}"
+        );
+        assert!(shaped.ends_with("    let receiver: _ = take_like(arguments, 0, _w)?;\n"), "{shaped}");
+    }
+
     /// T204: `&(f64, f64)` and `&[u8]` lend the Rust value made from
     /// Rawr's tuple or array, and the attestation of a call's output reaches
     /// into a tuple inside a `Result`.
