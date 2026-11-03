@@ -35316,10 +35316,14 @@ impl<'a> Parser<'a> {
         }
         if matches!(self.peek(), Token::Multiply) {
             let start = self.next().1;
-            let mut operand = self.parse_operand()?;
+            let operand = self.parse_operand()?;
             // `*r` reads what the holder `r` refers to: its use's place.
             self.flow().deref(operand.span.start(), start);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
+            // `*w` of a program type is `*Deref::deref(&w)`, and
+            // `*DerefMut::deref_mut(&mut w)` where it is assigned, as
+            // rustc's place deref is.
+            let (mut operand, dereferenced) = self.program_deref(operand)?;
             let resolved = self.inference.resolve(&operand.ty);
             let target = match resolved.clone() {
                 Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => target,
@@ -35397,17 +35401,19 @@ impl<'a> Parser<'a> {
             // A move out of `*r` or `*rc` is rustc's E0507; a `Box` gives
             // its value up.
             let behind = match self.inference.resolve(&base.1) {
-                Ty::Reference { mutable: true, .. } => Some("behind a mutable reference"),
-                Ty::Reference { .. } => Some("behind a shared reference"),
-                Ty::Counted(Counter::Rc, _) => Some("of an `Rc`"),
-                Ty::Counted(Counter::Arc, _) => Some("of an `Arc`"),
+                _ if let Some(owner) = &dereferenced => Some(format!("dereference of `{owner}`")),
+                Ty::Reference { mutable: true, .. } => {
+                    Some("a value behind a mutable reference".into())
+                }
+                Ty::Reference { .. } => Some("a value behind a shared reference".into()),
+                Ty::Counted(Counter::Rc, _) => Some("a value of an `Rc`".into()),
+                Ty::Counted(Counter::Arc, _) => Some("a value of an `Arc`".into()),
                 _ => None,
             };
-
             if let Some(behind) = behind {
                 self.unmovable.insert(
                     operand.span,
-                    ("E0507", format!("cannot move out of a value {behind}")),
+                    ("E0507", format!("cannot move out of {behind}")),
                 );
             }
             // `*x` of a `&&T` is the `&T` it refers to.

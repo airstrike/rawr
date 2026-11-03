@@ -256,3 +256,92 @@ main();
     );
 }
 
+#[test]
+fn language_deref_of_a_program_type_goes_through_its_deref() {
+    // `*w` is `*Deref::deref(&w)`, and `*DerefMut::deref_mut(&mut w)`
+    // where it is assigned (#859).
+    let output = printed(
+        r#"
+use std::ops::{Deref, DerefMut};
+
+struct W(Vec<i32>);
+
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Vec<i32> {
+        println!("deref");
+        &self.0
+    }
+}
+
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut Vec<i32> {
+        println!("deref_mut");
+        &mut self.0
+    }
+}
+
+struct N(i32);
+
+impl Deref for N {
+    type Target = i32;
+    fn deref(&self) -> &i32 {
+        &self.0
+    }
+}
+
+impl DerefMut for N {
+    fn deref_mut(&mut self) -> &mut i32 {
+        &mut self.0
+    }
+}
+
+fn main() {
+    let mut w = W(vec![1]);
+    println!("{:?}", *w);
+    *w = vec![5, 6];
+    println!("{:?}", w.0);
+    let mut n = N(2);
+    *n += 3;
+    let m = *n + 1;
+    println!("{} {}", n.0, m);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "deref\n[1]\nderef_mut\n[5, 6]\n5 6\n");
+    // rustc's E0594 with no `DerefMut`, and E0507 for a move out of it.
+    let program = |body: &str| {
+        format!(
+            r#"
+use std::ops::Deref;
+struct R(String);
+impl Deref for R {{
+    type Target = String;
+    fn deref(&self) -> &String {{
+        &self.0
+    }}
+}}
+fn main() {{
+    let r = R(String::from("a"));
+    {body}
+}}
+main();
+"#
+        )
+    };
+    for (body, expected) in [
+        (
+            r#"*r = String::from("x");"#,
+            "error[E0594]: cannot assign to data in dereference of `R`\n",
+        ),
+        (
+            r#"let s = *r; println!("{s}");"#,
+            "error[E0507]: cannot move out of dereference of `R`\n",
+        ),
+    ] {
+        let report = refused(&program(body));
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
