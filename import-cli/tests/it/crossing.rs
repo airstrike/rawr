@@ -1351,6 +1351,93 @@ fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
     );
 }
 
+/// #846: `view<'a>(items: &'a [Item]) -> impl Show + 'a` keeps the items
+/// borrowed for as long as its result lives, as rustc has it. The items are
+/// read while it lives and pushed to once it drops, at `drop` and at the
+/// end of a block. A result invariant in its lifetime (`Cell<&'a Item>`)
+/// and one kept in a struct field across calls run too, and a program
+/// struct lends `&self.items` (#848). An `Item` has no `Clone` and counts
+/// each time it is shown, so the counts show every result borrowed the one
+/// value of each item, which went back to its place after. The output is
+/// `cargo run`'s.
+#[test]
+fn an_opaque_result_borrows_its_slice_for_as_long_as_it_lives() {
+    let (rawr, cargo) = both_printed("crossing-shelf", "shelf.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("picked <first> <second>")
+            && rawr.contains("panel 2 [first second third more fourth]")
+            && rawr.contains("shown first:6,second:6,third:3,more:2,fourth:2,fifth:0")
+            && rawr.ends_with("counted first:8,second:8,third:5,more:4,fourth:4,fifth:2"),
+        "{rawr}"
+    );
+}
+
+/// #846: pushing to the items while a result that borrows them lives, after
+/// its last use but before it drops, and moving them meanwhile, are rustc's
+/// E0502 and E0505, which rawr's checker reports before anything runs.
+#[test]
+fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
+    let mutable = "cannot borrow `items` as mutable because it is also borrowed as immutable";
+    for (variant, code, message, at) in [
+        ("shelf_push.rs", "E0502", mutable, "main.rs:7:5"),
+        ("shelf_dropped.rs", "E0502", mutable, "main.rs:8:5"),
+        (
+            "shelf_move.rs",
+            "E0505",
+            "cannot move out of `items` because it is borrowed",
+            "main.rs:7:17",
+        ),
+    ] {
+        let stderr = checked("crossing-shelf-error", variant);
+        // rawr's own report, before cargo's.
+        let own = stderr.split("cargo check found").next().unwrap_or_default();
+        assert!(
+            own.contains(&format!("error[{code}]: {message}")) && own.contains(at),
+            "{variant}: {stderr}"
+        );
+    }
+}
+
+/// #846: a borrowing `impl Trait` result of a trait with a generic method,
+/// which can't be made into a trait object, makes its function one that
+/// can't be used yet.
+#[test]
+fn a_borrowing_result_of_a_trait_that_cant_be_an_object_isnt_supported_yet() {
+    let stderr = checked("crossing-shelf-tagged", "shelf_tagged.rs");
+    assert!(
+        stderr.contains(
+            "`tagged` can't be used yet: it gives an `impl Trait` that borrows its arguments, \
+             and its trait can't be made into a trait object"
+        ),
+        "{stderr}"
+    );
+}
+
+/// `rawr-import check` of the fixture copied to `name` with `variant` as
+/// its `main.rs`, which fails: its stderr.
+fn checked(name: &str, variant: &str) -> String {
+    let root = root(name);
+    fs::copy(
+        root.join("variants").join(variant),
+        root.join("src/main.rs"),
+    )
+    .unwrap();
+    let directory = crate::support::scratch();
+    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
+        .arg("check")
+        .arg(&root)
+        .env("RAWR_HOME", directory.join("rawr-home"))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr).into_owned();
+    assert!(!check.status.success(), "{stderr}");
+    stderr
+}
+
 /// iced's canvas examples: the program's own type implements the crate's
 /// `canvas::Program`, and `canvas(self)` takes the view's `&self`. The
 /// crate calls the impl's `draw` back while it lays the view out, lending

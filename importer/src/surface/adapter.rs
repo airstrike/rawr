@@ -1154,7 +1154,11 @@ fn clone_signature(source: &signature::Signature) -> Result<signature::Signature
     .with_guard(source.guard())
     .with_scope(source.scope())
     .with_instance(source.instance().map(clone_type).transpose()?)
-    .with_through(source.through().map(clone_type).transpose()?))
+    .with_through(source.through().map(clone_type).transpose()?)
+    // The trait object an opaque output that borrows its call's values is
+    // held as (`Opaque::principal`), and which inputs it borrows.
+    .with_opaques(source.opaques().into())
+    .with_lends(source.lends().into()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {

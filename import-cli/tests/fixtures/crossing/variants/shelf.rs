@@ -23,6 +23,10 @@ impl Shelf {
     fn render(&self) -> String {
         shelf::view(&self.items).show()
     }
+
+    fn names(&self) -> String {
+        shelf::names(&self.items)
+    }
 }
 
 fn main() {
@@ -65,5 +69,5 @@ fn main() {
     let state = Shelf { items };
     println!("state {}", state.render());
     println!("state {}", state.render());
-    println!("counted {}", shelf::names(&state.items));
+    println!("counted {}", state.names());
 }
