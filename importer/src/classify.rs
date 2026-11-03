@@ -10703,6 +10703,18 @@ fn substitute_parameters(
             associated: associated.clone(),
             arguments: arguments.iter().map(argument).collect(),
         },
+        // What an opaque type captures, as `Widget::explain`'s captures the
+        // trait's parameters, which a provided method takes at its impl's.
+        // Its bounds name its own parameters.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.clone(),
+            captures: captures.iter().map(argument).collect(),
+        },
         other => other.clone(),
     }
 }
