@@ -115,3 +115,18 @@ impl Tagged for View<'_> {
 pub fn tagged<'a>(items: &'a [Item]) -> impl Tagged + 'a {
     View { items }
 }
+
+/// A result that shows another in parentheses.
+struct Wrapped<S>(S);
+
+impl<S: Show> Show for Wrapped<S> {
+    fn show(&self) -> String {
+        format!("({})", self.0.show())
+    }
+}
+
+/// `shown` in parentheses (#856): it takes the result by value, so what
+/// that result borrows stays borrowed for as long as this one lives.
+pub fn wrap(shown: impl Show) -> impl Show {
+    Wrapped(shown)
+}
