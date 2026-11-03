@@ -327,3 +327,41 @@ fn a_snippet_past_its_memory_is_stopped_and_the_server_goes_on() {
     let output = text(server.run("1 + 2", &limits).unwrap());
     assert_eq!((output.text().as_str(), output.status), ("3\n", 0));
 }
+
+/// An iced program that never settles, run with a far ceiling and no
+/// deadline, picks up the deadline the bot sets as it runs: its shell ends
+/// the GIF before it, sooner than the shell's own 100 frames (5 s) would,
+/// and the run is not killed.
+#[test]
+#[ignore = "needs the universe runner"]
+fn an_iced_program_finishes_its_gif_before_a_deadline_set_as_it_runs() {
+    let server = server();
+    let endless = COUNTER_TYPES.replace("if self.value < 5 {", "if self.value >= 0 {");
+    let source = format!(
+        "{endless}
+pub fn main() -> iced::Result {{
+    iced::application(Counter::default, Counter::update, Counter::view)
+        .subscription(Counter::subscription)
+        .run()
+}}
+"
+    );
+    let file = rawr::play::deadline::File::new().unwrap();
+    let limits = rawr_play::Limits {
+        deadline: Some(file.path().to_owned()),
+        ..limits(600_000)
+    };
+    let started = std::time::Instant::now();
+    let output = std::thread::scope(|scope| {
+        let run = scope.spawn(|| server.run(&source, &limits));
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let at = std::time::SystemTime::now() + std::time::Duration::from_millis(1_500);
+        file.set(at).unwrap();
+        run.join().unwrap().unwrap()
+    });
+    let elapsed = started.elapsed();
+    assert_eq!((output.status, output.limit), (0, false), "{output:?}");
+    let image = output.frame.expect("the program drew");
+    assert_eq!(rawr_play::plain::image_kind(&image), Some("gif"));
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

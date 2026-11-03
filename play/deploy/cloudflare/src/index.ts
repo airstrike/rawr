@@ -160,6 +160,7 @@ interface Env {
   PLAY_MEMORY_MB: string;
   PLAY_TIMEOUT_MS: string;
   PLAY_TIME_MS: string;
+  PLAY_MAX_MS: string;
   PLAY_VERSION: string;
   /**
    * Secret: the key the bot makes server tokens with. The Worker only
@@ -202,6 +203,7 @@ export class PlayBot extends Container<Env> {
       PLAY_MEMORY_MB: env.PLAY_MEMORY_MB,
       PLAY_TIMEOUT_MS: env.PLAY_TIMEOUT_MS,
       PLAY_TIME_MS: env.PLAY_TIME_MS,
+      PLAY_MAX_MS: env.PLAY_MAX_MS,
       PLAY_CONFIG_URL: `http://${CONFIG_HOST}/channels`,
       PLAY_REPORT_URL: `http://${CONFIG_HOST}`,
       PLAY_HTTP_PORT: String(HTTP_PORT),
@@ -488,7 +490,7 @@ export class PlayBot extends Container<Env> {
   /** The settings the container reads at start: a change restarts it. */
   private settings(): string {
     const e = this.env;
-    return `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS}`;
+    return `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},max=${e.PLAY_MAX_MS}`;
   }
 
   /** The image the bot reported since its container last started, or null before it reports. */

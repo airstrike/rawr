@@ -4,13 +4,20 @@
 //! error.
 //!
 //! Each snippet runs in its own `rawr-play` process (beside this binary, or
-//! `PLAY_RENDERER`), so a run past `PLAY_TIMEOUT_MS` is killed and one
-//! past `PLAY_MEMORY_MB` aborts without touching the bot.
+//! `PLAY_RENDERER`), so a run past its time is killed and one past
+//! `PLAY_MEMORY_MB` aborts without touching the bot.
+//!
+//! A run has no time limit while no other snippet waits, up to a ceiling
+//! of `PLAY_MAX_MS` of script time (see [`rawr_play::budget`]). Once one
+//! waits, the run gets `PLAY_TIME_MS` of script time and `PLAY_TIMEOUT_MS`
+//! in all from that moment.
 //!
 //! Env: `DISCORD_TOKEN` (or a file at `DISCORD_TOKEN_FILE`, else
 //! `~/.config/rawr-play/token`), `PLAY_WORKERS` (default 2),
-//! `PLAY_TIME_MS` (script time per run, default 2000),
-//! `PLAY_TIMEOUT_MS` (whole run, default 10000),
+//! `PLAY_TIME_MS` (script time per contended run, default 2000),
+//! `PLAY_TIMEOUT_MS` (whole contended run, default 10000),
+//! `PLAY_MAX_MS` (script time of a run nothing waits behind, default
+//! 600000),
 //! `PLAY_MEMORY_MB` (address space per run on Linux, default 1024),
 //! `PLAY_USER_PER_MIN` (default 4),
 //! `PLAY_CHANNEL_PER_MIN` (default 12), `PLAY_CHANNELS` (comma-separated
@@ -34,8 +41,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rawr_play::budget::Budget;
 use rawr_play::channels::{self, Channels, Parents, Store};
 use rawr_play::message::{self, RateLimit, Reply};
+use rawr_play::queue::Queue;
 use rawr_play::server::ServerKey;
 use rawr_play::stats::{self, Batch, Outcome, Report, Status};
 use serenity::all::{
@@ -98,9 +107,8 @@ struct Renderer {
     web: Semaphore,
     discord_waiting: AtomicUsize,
     memory_mb: u64,
-    /// `PLAY_TIME_MS`: the script time of one run.
-    time: Duration,
-    timeout: Duration,
+    /// The snippets waiting, which set the deadline of those running.
+    queue: Queue,
     /// The universe runner, prepared once and serving every run (#515),
     /// when the image names one.
     universe: Option<rawr_play::universe::Served>,
@@ -111,8 +119,10 @@ impl Renderer {
     /// timeout drops it. `None`: a playground run found the playground
     /// busy.
     async fn run(&self, request: &message::Request, web: bool) -> Option<Ran> {
+        let waiting = self.queue.wait();
         let _web = if web {
-            let gate = tokio::time::timeout(self.timeout, self.web.acquire()).await;
+            let gate =
+                tokio::time::timeout(self.queue.budget().timeout(), self.web.acquire()).await;
             let gate = gate.ok()?.ok()?;
             while self.discord_waiting.load(Ordering::Acquire) > 0 {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -123,6 +133,7 @@ impl Renderer {
             None
         };
         let permit = self.workers.acquire().await;
+        drop(waiting);
         if !web {
             self.discord_waiting.fetch_sub(1, Ordering::AcqRel);
         }
@@ -147,9 +158,20 @@ impl Renderer {
         &self,
         request: &message::Request,
     ) -> (Result<rawr_play::Output, String>, Outcome) {
+        let deadline = match rawr::play::deadline::File::new() {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                eprintln!("rawr-play-bot: cannot make a run's deadline file: {error}");
+                return (Err("cannot start a run".to_owned()), Outcome::Limit);
+            }
+        };
         let mut command = tokio::process::Command::new(&self.path);
         command
-            .args(message::args(self.time, self.memory_mb))
+            .args(message::args(
+                self.queue.budget().max(),
+                self.memory_mb,
+                deadline.path(),
+            ))
             .env_clear();
         // The prebuilt runner snippets run on, which the image names.
         for name in [rawr_play::universe::ROOT, rawr_play::universe::RUNNER] {
@@ -189,7 +211,7 @@ impl Renderer {
             drop(stdin);
             child.wait_with_output().await
         };
-        match tokio::time::timeout(self.timeout, run).await {
+        match self.queue.run(&deadline, run).await {
             Ok(Ok(output)) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let success = output.status.success();
@@ -205,13 +227,7 @@ impl Renderer {
                 eprintln!("rawr-play-bot: run failed: {error}");
                 (Err("the run crashed".to_owned()), Outcome::Limit)
             }
-            Err(_) => (
-                Err(format!(
-                    "the run timed out after {} ms",
-                    self.timeout.as_millis()
-                )),
-                Outcome::Limit,
-            ),
+            Err(killed) => (Err(killed.to_string()), Outcome::Limit),
         }
     }
 }
@@ -951,8 +967,11 @@ async fn main() {
             web: Semaphore::new(1),
             discord_waiting: AtomicUsize::new(0),
             memory_mb: env_u64("PLAY_MEMORY_MB", 1024),
-            time: Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000)),
-            timeout: Duration::from_millis(env_u64("PLAY_TIMEOUT_MS", 10_000)),
+            queue: Queue::new(Budget::new(
+                Duration::from_millis(env_u64("PLAY_TIME_MS", 2_000)),
+                Duration::from_millis(env_u64("PLAY_TIMEOUT_MS", 10_000)),
+                Duration::from_millis(env_u64("PLAY_MAX_MS", 600_000)),
+            )),
             universe: rawr_play::universe::Universe::from_env()
                 .map(rawr_play::universe::Served::new),
         },
