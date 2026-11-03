@@ -858,17 +858,17 @@ impl Parser<'_> {
         for _ in 0..3 {
             self.next();
         }
+        let walked = Ty::Reference {
+            mutable: true,
+            target: Box::new(element.clone()),
+        };
         let item = Ty::Reference {
             mutable: false,
-            target: Box::new(Ty::Reference {
-                mutable: true,
-                target: Box::new(element.clone()),
-            }),
+            target: Box::new(walked.clone()),
         };
-        self.closure_hints = vec![Some(Box::new([item.clone()]) as Box<[Ty]>)];
-        let arguments = self.parse_call_arguments("`find` arguments");
-        self.closure_hints = Vec::new();
-        let (mut arguments, end) = arguments?;
+        let iterator = Ty::Iter(Box::new(walked));
+        let (mut arguments, end) =
+            self.parse_std_arguments(&iterator, "find", "`find` arguments")?;
         let expression = span(value.span.start(), end);
         let [predicate] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(

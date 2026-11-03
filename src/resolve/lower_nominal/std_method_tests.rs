@@ -455,3 +455,57 @@ fn language_vec_and_vec_deque_methods_are_each_their_own() {
         "{report}"
     );
 }
+
+#[test]
+fn language_a_closure_takes_its_parameter_types_from_std() {
+    // Each closure's parameters have the types its std method's `Fn` bound
+    // gives them (#795), with no annotation and no hand list.
+    let source = r#"
+use std::cmp::Ordering;
+
+fn main() {
+    let mut v = vec![3, 1, 2];
+    v.sort_by_key(|x| -*x);
+    v.retain(|x| *x != 2);
+    let mut s = String::from("banana");
+    s.retain(|c| c != 'a');
+    let ok: Result<i64, String> = Err(String::from("no"));
+    let order = Ordering::Equal.then_with(|| 2.cmp(&1));
+    let picked: Vec<i64> = v.iter().filter(|x| **x > 1).map(|x| x * 10).collect();
+    println!(
+        "{:?} {} {:?} {} {:?} {:?}",
+        v,
+        s,
+        ok.map_err(|e| e.len()),
+        order == Ordering::Greater,
+        true.then(|| 5),
+        picked,
+    );
+}
+main();
+"#;
+    assert_eq!(printed(source), "[3, 1] bnn Err(2) true Some(5) [30]\n");
+    // A method rawr doesn't run takes its closure's types from std too, so
+    // the not-yet error is what the program gets (#770).
+    for (call, path) in [
+        ("v.dedup_by_key(|x| *x / 2)", "Vec::dedup_by_key"),
+        ("let _ = v.iter().rposition(|x| *x > 1)", "Iterator::rposition"),
+        (
+            "let _: Vec<i64> = v.iter().scan(0, |total, x| { *total += *x; Some(*total) }).collect()",
+            "Iterator::scan",
+        ),
+        ("let _ = v.chunk_by(|a, b| *a <= *b)", "[T]::chunk_by"),
+        (
+            "let _ = v.first().map_or_else(|| 0, |x| *x * 2)",
+            "Option::map_or_else",
+        ),
+    ] {
+        let report = refused(&format!(
+            "fn main() {{ let mut v: Vec<i64> = vec![1, 2, 3]; {call}; }}\nmain();\n"
+        ));
+        assert!(
+            report.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{call}: {report}"
+        );
+    }
+}
