@@ -97,6 +97,40 @@ main();
 }
 
 #[test]
+fn language_text_into_with_no_target_is_e0283() {
+    // std has many `From<String>` impls: the use must give the target
+    // (#736).
+    let report = refused("fn main() { let x = String::new().into(); }\nmain();\n");
+    assert!(
+        report.starts_with("error[E0283]: type annotations needed\n"),
+        "{report}"
+    );
+    // A use that gives it. `Err("text".into())` boxed as `dyn Error` is
+    // `language_box_dyn_error_holds_any_error`'s.
+    let output = printed(
+        r#"
+struct Named {
+    name: String,
+}
+
+fn shout(text: String) -> String {
+    text.to_uppercase()
+}
+
+fn main() {
+    let a: String = "a".into();
+    let b = "b".into();
+    let c: String = b;
+    let named = Named { name: "n".into() };
+    println!("{a} {c} {} {}", named.name, shout("s".into()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a b n S\n");
+}
+
+#[test]
 fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
     // rustc's E0369, in its words for each operator (#733).
     for (expression, message) in [

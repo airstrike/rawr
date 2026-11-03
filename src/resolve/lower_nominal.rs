@@ -11585,9 +11585,10 @@ struct Parser<'a> {
     pending_parses: Vec<(Ty, Ty, Span, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
-    /// The spans of `text.into()` calls, which `Err(..)` may box as `dyn
-    /// Error` (`error_object.rs`).
-    text_into: Vec<Span>,
+    /// The `text.into()` calls, each one's span, the text's type and the
+    /// target, which `Err(..)` may box as `dyn Error` (`error_object.rs`)
+    /// and the use site gives.
+    text_into: Vec<(Span, Ty, Ty)>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
     /// `::<A, B>` read after a generic function's name, for its call.
@@ -16897,6 +16898,30 @@ impl<'a> Parser<'a> {
     /// known, and write it over the placeholder (same length, so source
     /// locations stay exact).
     fn finish_conversions(&mut self) -> Result<(), Error> {
+        // A `text.into()` no use gives a target: rustc's E0283, as std has
+        // many `From<String>` impls. A target other than the text's own
+        // type or a `String` is one rawr doesn't convert into.
+        for (at, source, target) in std::mem::take(&mut self.text_into) {
+            match self.inference.resolve(&target) {
+                Ty::Infer(_) => {
+                    return Err(Error::StdPath {
+                        code: "E0283",
+                        message: "type annotations needed".into(),
+                        label: Some("type must be known at this point".into()),
+                        note: None,
+                        reference: at,
+                    });
+                }
+                target if target == Ty::String || target == source => {}
+                target => {
+                    return Err(Error::TypeMismatch {
+                        expected: target.name(&self.models),
+                        actual: Ty::String.name(&self.models),
+                        expression: at,
+                    });
+                }
+            }
+        }
         self.finish_formats()?;
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
             if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
@@ -49070,10 +49095,12 @@ impl<'a> Parser<'a> {
         value.span = span(value.span.start(), end);
         value.lvalue = None;
         // Text converts into a `String`, through `From<&str>` or
-        // `From<T> for T` (or into a boxed error, `box_returned_error`).
+        // `From<T> for T` (or into a boxed error, `box_returned_error`):
+        // the target the use site gives, which rustc needs (E0283).
         if source.is_text() {
-            self.text_into.push(value.span);
-            value.ty = Ty::String;
+            let target = self.inference.fresh();
+            self.text_into.push((value.span, source, target.clone()));
+            value.ty = target;
         }
         Ok(value.retain_origin())
     }
