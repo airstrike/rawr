@@ -39,6 +39,13 @@ pub(crate) enum Type {
     /// `dyn Trait`: a value of any crate type, which the checker proved
     /// implements the trait where it was coerced.
     Object(ImmutableString),
+    /// Rust's `Rc<T>` or `Arc<T>`, by its name, of the one type in
+    /// `element`: rawr's counted pointer, whose value is checked as a `T`
+    /// (#775).
+    Counted {
+        name: ImmutableString,
+        element: Box<[Type]>,
+    },
     Script {
         identity: type_def::Identity,
         schema: program::schema::Fingerprint,
@@ -168,6 +175,10 @@ impl Type {
                 length: *length,
             },
             Self::Option(element) => Self::Option(Box::new(element.instantiate(arguments))),
+            Self::Counted { name, element } => Self::Counted {
+                name: name.clone(),
+                element: each(element),
+            },
             Self::Result(ok, err) => Self::Result(
                 Box::new(ok.instantiate(arguments)),
                 Box::new(err.instantiate(arguments)),
@@ -218,6 +229,14 @@ impl Type {
 
     pub(crate) fn option(element: Self) -> Self {
         Self::Option(Box::new(element))
+    }
+
+    /// Rust's `Rc` or `Arc` (`name`) of `element`.
+    pub(crate) fn counted(name: impl Into<ImmutableString>, element: Self) -> Self {
+        Self::Counted {
+            name: name.into(),
+            element: Box::new([element]),
+        }
     }
 
     pub(crate) fn tuple(members: Box<[Self]>) -> Self {
@@ -308,6 +327,7 @@ impl Type {
             Self::Object(_) => TypeId::of::<Dynamic>(),
             Self::Array { .. } | Self::Tuple(_) => TypeId::of::<crate::Array>(),
             Self::Option(_) => TypeId::of::<crate::option::Value>(),
+            Self::Counted { .. } => TypeId::of::<crate::resolve::lower_nominal::counted::Counted>(),
             Self::Result(..) => TypeId::of::<crate::result::Value>(),
             Self::Callable { .. } => TypeId::of::<crate::item::Value>(),
             Self::Builtin { runtime, .. } | Self::Script { runtime, .. } => runtime.runtime(),
@@ -325,6 +345,7 @@ impl Type {
             #[cfg(feature = "rust-import")]
             Self::Imported { arguments, .. } => arguments,
             Self::Script { arguments, .. } => arguments,
+            Self::Counted { element, .. } => element,
             Self::Unit
             | Self::Array { .. }
             | Self::Option(_)
@@ -361,6 +382,7 @@ impl Type {
             | Self::Callable { .. }
             | Self::Builtin { .. }
             | Self::Object(_)
+            | Self::Counted { .. }
             | Self::Script { .. } => None,
         }
     }
@@ -517,6 +539,19 @@ impl Type {
             }
             #[cfg(feature = "rust-import")]
             Self::Imported { path, owner, .. } => registry.attest(owner, path, value, self, model),
+            // The pointer, and the value it points to as its type.
+            Self::Counted { element, .. } => {
+                let pointee =
+                    crate::resolve::lower_nominal::counted::value(value).ok_or_else(|| {
+                        Error::Representation {
+                            expected: self.to_string().into(),
+                            actual: value.type_name().into(),
+                        }
+                    })?;
+                element
+                    .iter()
+                    .try_for_each(|element| element.validate(&pointee, model, registry))
+            }
             Self::Unit | Self::Builtin { .. } => {
                 if value.type_id() == self.runtime() {
                     Ok(())
@@ -560,6 +595,11 @@ impl Type {
             }
             Self::Array { element, .. } | Self::Option(element) => {
                 element.collect_dependencies(dependencies);
+            }
+            Self::Counted { element, .. } => {
+                for element in element {
+                    element.collect_dependencies(dependencies);
+                }
             }
             Self::Result(ok, err) => {
                 ok.collect_dependencies(dependencies);
@@ -771,6 +811,11 @@ impl crate::digest::Write for Type {
                 writer.tag(0x210b);
                 element.write(writer)?;
             }
+            Self::Counted { name, element } => {
+                writer.tag(0x2106);
+                writer.text(name);
+                write_slice(writer, element)?;
+            }
             Self::Result(ok, err) => {
                 writer.tag(0x210c);
                 ok.write(writer)?;
@@ -887,6 +932,10 @@ impl fmt::Display for Type {
                 write!(formatter, "fn({inputs}) -> {output}")
             }
             Self::Builtin { name, .. } => formatter.write_str(name),
+            Self::Counted { name, element } => {
+                let element = element.iter().map(ToString::to_string).collect::<String>();
+                write!(formatter, "{name}<{element}>")
+            }
             Self::Script {
                 identity: type_def::Identity::Script(key),
                 arguments,

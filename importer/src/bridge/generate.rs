@@ -95,6 +95,11 @@ thread_local! {
     /// The handles the protocol gave out: a handle on the wire keeps its
     /// value alive, as the caller may pass it back (review 5).
     static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+    /// Homes a call borrowed (`PointerLent`), back to their slots the next
+    /// time the owner thread has the arena.
+    static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
+    /// The homes calls borrow now (`PointerLent`), by their slots.
+    static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Slots whose last handle was dropped, freed on the owner thread the next
@@ -576,6 +581,229 @@ fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error>
         .ok_or(Error::TypeMismatch)
 }
 
+/// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
+/// it points to, which a rawr `Rc` or `Arc` holds the handle of. The
+/// value is read through it, as `Deref` reads it, and never copied out.
+#[allow(dead_code)]
+#[derive(Clone)]
+struct Pointed<P>(P);
+
+/// Rust's `Rc` and `Arc`, as a [`Pointed`] holds them.
+#[allow(dead_code)]
+trait Pointer: Clone + std::ops::Deref<Target = <Self as Pointer>::Value> + 'static {
+    type Value: 'static;
+    fn new(value: Self::Value) -> Self;
+    fn strong(&self) -> usize;
+    fn address(&self) -> usize;
+}
+
+impl<T: 'static> Pointer for std::rc::Rc<T> {
+    type Value = T;
+    fn new(value: T) -> Self {
+        Self::new(value)
+    }
+    fn strong(&self) -> usize {
+        Self::strong_count(self)
+    }
+    fn address(&self) -> usize {
+        Self::as_ptr(self).cast::<()>() as usize
+    }
+}
+
+impl<T: 'static> Pointer for std::sync::Arc<T> {
+    type Value = T;
+    fn new(value: T) -> Self {
+        Self::new(value)
+    }
+    fn strong(&self) -> usize {
+        Self::strong_count(self)
+    }
+    fn address(&self) -> usize {
+        Self::as_ptr(self).cast::<()>() as usize
+    }
+}
+
+impl<P: Pointer> Homed for Pointed<P> {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        call(&*self.0);
+        Ok(())
+    }
+
+    /// Rust's `Rc` and `Arc` lend only `&T`, as rustc's E0596 says.
+    fn mutable(&self, _call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        Err(Error::Home(
+            "cannot borrow data in an `Rc` or `Arc` as mutable (E0596)".into(),
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn value(&self) -> Option<&dyn Any> {
+        Some(&*self.0)
+    }
+
+    /// The value stays in its pointer for as long as the slot lives.
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        Err(self)
+    }
+}
+
+/// The strong count and address of the crate's own pointer `P` whose value
+/// `value`, a rawr pointer's handle, is in: what a rawr `Rc` or `Arc` that
+/// stands for it reads (`crossing::Link`).
+#[allow(dead_code)]
+fn pointer_count<P: Pointer>(value: &Dynamic) -> Option<(usize, usize)> {
+    let handle = value.read_lock::<NativeHandle>()?.clone();
+    arena_access(|arena| {
+        let pointed = arena.homed(&handle)?.as_any().downcast_ref::<Pointed<P>>()?;
+        Some((pointed.0.strong(), pointed.0.address()))
+    })
+    .flatten()
+}
+
+/// The crate's own pointer a rawr `Rc` or `Arc` gives native code by value
+/// (#775): the one its value is in, made now if this is its first
+/// crossing. rawr's last pointer moves it out of its slot, as Rust moves
+/// its last pointer; another one shares it and stands for it after. All
+/// of rawr's pointers share that one, so a copy for each of the others is
+/// held while the call runs (`Balance`), where it counts them.
+#[allow(dead_code)]
+fn take_pointer<P: Pointer>(arena: &mut Arena, value: Dynamic) -> Result<(P, Balance<P>), Error> {
+    let (pointee, strong, only) = __rawr_internal::crossing::pointee(&value).ok_or(Error::TypeMismatch)?;
+    let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+    let pointer = arena.point::<P>(handle.clone())?;
+    if only {
+        drop(arena.unhome(&handle)?);
+        return Ok((pointer, Balance(Vec::new())));
+    }
+    __rawr_internal::crossing::link(&value, pointer_count::<P>);
+    // `value` moves into the call, and the one rawr holds stands for one
+    // of those left.
+    let balance = Balance::of(&pointer, strong.saturating_sub(2));
+    Ok((pointer, balance))
+}
+
+/// Copies of a crate's own pointer, one for each rawr pointer but one that
+/// shares it, held while a call runs so that native code counts them.
+#[allow(dead_code)]
+struct Balance<P>(Vec<P>);
+
+#[allow(dead_code)]
+impl<P: Pointer> Balance<P> {
+    fn of(pointer: &P, count: usize) -> Self {
+        Self(std::iter::repeat_with(|| pointer.clone()).take(count).collect())
+    }
+}
+
+/// A crate's own pointer out of its slot while calls borrow it, with the
+/// copies that stand for rawr's other pointers to it (`Balance`). Every
+/// borrow of it in one call shares it, as `same(&a, &b)` of two of rawr's
+/// pointers to one allocation borrows two.
+#[allow(dead_code)]
+struct LentHome { homed: Box<dyn Homed>, balance: Box<dyn Any> }
+
+/// A borrow of a crate's own pointer for one call (#775): its home, out of
+/// its slot until the last borrow of it ends, so the borrow adds no count.
+#[allow(dead_code)]
+struct PointerLent<P: Pointer> { lent: Option<std::rc::Rc<LentHome>>, handle: NativeHandle, pointer: std::marker::PhantomData<P> }
+
+#[allow(dead_code)]
+impl<P: Pointer> PointerLent<P> {
+    fn get(&self) -> Option<&P> {
+        self.lent.as_ref()?.homed.as_any().downcast_ref::<Pointed<P>>().map(|pointed| &pointed.0)
+    }
+}
+
+impl<P: Pointer> Drop for PointerLent<P> {
+    fn drop(&mut self) {
+        let Some(lent) = self.lent.take() else {
+            return;
+        };
+        let key = (self.handle.epoch, self.handle.slot, self.handle.generation);
+        let last = LENT_HOMES.with_borrow_mut(|homes| {
+            let at = homes.iter().position(|(held, _)| *held == key)?;
+            (std::rc::Rc::strong_count(&lent) == 2).then(|| homes.remove(at))
+        });
+        drop(last);
+        if let Ok(lent) = std::rc::Rc::try_unwrap(lent) {
+            // The call that borrowed it may still hold the arena: the home
+            // waits for its next use.
+            REHOMES.with_borrow_mut(|rehomes| rehomes.push((self.handle.clone(), lent.homed)));
+            let _ = with_arena(|_| Ok(()));
+        }
+    }
+}
+
+/// Lend the crate's own pointer a rawr `Rc` or `Arc` stands for to a call
+/// that takes `&Rc<T>` or `&Arc<T>`, made now if this is its first
+/// crossing.
+#[allow(dead_code)]
+fn lend_pointer<P: Pointer>(arena: &mut Arena, value: &Dynamic) -> Result<PointerLent<P>, Error> {
+    let (pointee, strong, _) = __rawr_internal::crossing::pointee(value).ok_or(Error::TypeMismatch)?;
+    let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+    let key = (handle.epoch, handle.slot, handle.generation);
+    let shared = LENT_HOMES.with_borrow(|homes| {
+        homes.iter().find(|(held, _)| *held == key).map(|(_, lent)| lent.clone())
+    });
+    if let Some(lent) = shared {
+        return Ok(PointerLent { lent: Some(lent), handle, pointer: std::marker::PhantomData });
+    }
+    let pointer = arena.point::<P>(handle.clone())?;
+    __rawr_internal::crossing::link(value, pointer_count::<P>);
+    let balance = Balance::of(&pointer, strong.saturating_sub(1));
+    drop(pointer);
+    let homed = arena.unhome(&handle)?;
+    let lent = std::rc::Rc::new(LentHome { homed, balance: Box::new(balance) });
+    LENT_HOMES.with_borrow_mut(|homes| homes.push((key, lent.clone())));
+    Ok(PointerLent { lent: Some(lent), handle, pointer: std::marker::PhantomData })
+}
+
+/// A rawr `Rc` or `Arc` standing for the crate's own `pointer`, whose value
+/// it reads in place: a slot `pointer` is the home of.
+#[allow(dead_code)]
+fn give_pointed<P: Pointer>(
+    arena: &mut Arena,
+    pointer: P,
+    debug: Option<DebugText>,
+    display: Option<DebugText>,
+    clone: Option<CloneValue>,
+    relations: Relations,
+) -> Result<Dynamic, Error> {
+    let handle = arena.occupy(None, Some(Box::new(Pointed(pointer))), std::any::type_name::<P::Value>())?;
+    if let Some(entry) = arena.slots.get_mut(handle.slot as usize) {
+        entry.debug = debug;
+        entry.display = display;
+        entry.clone = clone;
+        entry.relations = relations;
+    }
+    Ok(__rawr_internal::crossing::counted(Dynamic::from(handle), pointer_count::<P>))
+}
+
+/// [`give_pointed`] with the `Debug`, `Display`, `Clone`, `PartialEq` and
+/// `Hash` of the value the pointer holds, when its type has them.
+#[allow(unused_macros)]
+macro_rules! give_pointer {
+    ($arena:expr, $pointer:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
+            WithoutClone as _, WithoutDebug as _, WithoutDisplay as _, WithoutEqual as _,
+            WithoutHash as _,
+        };
+        let pointer = $pointer;
+        let debug = (&$crate::debug_probe(&*pointer)).native_debug();
+        let display = (&$crate::debug_probe(&*pointer)).native_display();
+        let clone = (&$crate::debug_probe(&*pointer)).native_clone();
+        let relations = $crate::Relations {
+            equal: (&$crate::debug_probe(&*pointer)).native_equal(),
+            hash: (&$crate::debug_probe(&*pointer)).native_hash(),
+        };
+        $crate::give_pointed($arena, pointer, debug, display, clone, relations)
+    }};
+}
+
 /// `to_string()` and `{}` of an imported value print its Rust `Display`
 /// text.
 impl std::fmt::Display for NativeHandle {
@@ -870,6 +1098,11 @@ impl Arena {
     }
 
     fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
+        self.occupy(Some(Box::new(value)), None, std::any::type_name::<T>())
+    }
+
+    /// A slot holding `value`, or reaching it in `homed`, named `name`.
+    fn occupy(&mut self, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, name: &'static str) -> Result<NativeHandle, Error> {
         let slot = match self.free.pop() {
             Some(slot) => slot,
             None => {
@@ -882,11 +1115,12 @@ impl Arena {
         };
         let entry = self.slots.get_mut(slot as usize).ok_or(Error::StaleHandle)?;
         if entry.value.is_some() || entry.homed.is_some() { return Err(Error::StaleHandle); }
-        entry.value = Some(Box::new(value));
+        entry.value = value;
+        entry.homed = homed;
         entry.leased = false;
         entry.debug = None;
         // A tool reading a value without `Debug` names its type (D675.3).
-        entry.name = std::any::type_name::<T>();
+        entry.name = name;
         entry.display = None;
         entry.clone = None;
         entry.relations = Relations::default();
@@ -1055,6 +1289,41 @@ impl Arena {
         let shared = std::rc::Rc::new(*value);
         self.slots[index].homed = Some(Box::new(Viewed(shared.clone())));
         Ok(shared)
+    }
+
+    /// The crate's own `Rc` or `Arc` the value of `handle` is in (#775): its
+    /// home, where the value moves the first time it crosses as one, and
+    /// isn't copied.
+    #[allow(dead_code)]
+    fn point<P: Pointer>(&mut self, handle: NativeHandle) -> Result<P, Error> {
+        self.home::<P::Value, Pointed<P>>(handle, |value| Ok(Pointed(P::new(value))))
+            .map(|pointed| pointed.0)
+    }
+
+    /// The home of `handle`'s slot, out of it while a call borrows it
+    /// (`PointerLent`); the slot refuses every use meanwhile.
+    #[allow(dead_code)]
+    fn unhome(&mut self, handle: &NativeHandle) -> Result<Box<dyn Homed>, Error> {
+        if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
+        let entry = self.slots.get_mut(handle.slot as usize).ok_or(Error::StaleHandle)?;
+        if entry.generation != handle.generation { return Err(Error::StaleHandle); }
+        let homed = entry.homed.take().ok_or(Error::Leased)?;
+        entry.leased = true;
+        Ok(homed)
+    }
+
+    /// A home back in the slot it was lent from, unless its last handle
+    /// went meanwhile.
+    fn rehome(&mut self, handle: NativeHandle, homed: Box<dyn Homed>) {
+        if handle.epoch != self.epoch { return; }
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize)
+            && entry.generation == handle.generation
+            && entry.leased
+            && entry.homed.is_none()
+        {
+            entry.homed = Some(homed);
+            entry.leased = false;
+        }
     }
 
     /// Give the slot of `handle` its value back from its home once nothing
@@ -1293,6 +1562,9 @@ impl Arena {
         };
         for (handle, value) in restores {
             self.restore(handle, value);
+        }
+        for (handle, homed) in REHOMES.with_borrow_mut(std::mem::take) {
+            self.rehome(handle, homed);
         }
         // Another live arena's releases wait for it: the owner's for the
         // owner, and a call arena's for that call (`CallArena`). Those of a
@@ -2626,6 +2898,12 @@ fn attest_inner(
         && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| value.clone())
         && let Some(witness) = witness.argument_witness(*index)
     {
+        arena.attest(handle, witness)?;
+    } else if let Some((pointee, _, _)) = __rawr_internal::crossing::pointee(value)
+        && let Some(handle) = pointee.read_lock::<NativeHandle>().map(|value| value.clone())
+        && let Some(witness) = witness.argument_witness(0)
+    {
+        // The value an `Rc` or `Arc` a crate gave points to, as its type.
         arena.attest(handle, witness)?;
     } else if let Some((inner, index)) = inner_tuple(value)
         && let Some(tuple) = witness.argument_witness(index)
@@ -6802,6 +7080,7 @@ fn lendable(ty: &convert::Type) -> bool {
         && !is_duration(ty)
         && !is_facade_value(ty)
         && boxed_element(ty).is_none()
+        && counted_element(ty).is_none()
         && std_value(ty).is_none()
         && place::available(ty)
         && concrete_type(ty).is_some()
@@ -8852,6 +9131,7 @@ fn render_opening(
             && !is_value(&ty)
             && !is_duration(&ty)
             && boxed_element(&ty).is_none()
+            && counted_element(&ty).is_none()
             && !is_facade_value(&ty)
             && !copy_scalar(&ty);
         if !native {
@@ -12180,6 +12460,22 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&Rc<T>` or `&Arc<T>` of a crate value: the crate's own pointer
+    // rawr's stands for, lent from its slot for the call (#775).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && counted_element(lent).is_some()
+    {
+        let rust =
+            concrete_type(lent).ok_or_else(|| request::drift("a lent counted pointer's type"))?;
+        return writeln!(
+            output,
+            "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); lend_pointer::<{rust}>(arguments.arena, &value)? }};\n    let argument_{local}: &{rust} = argument_{local}_lent.get().ok_or(Error::TypeMismatch)?;"
+        )
+        .map_err(request::unwritable);
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -12321,6 +12617,7 @@ fn render_take_input(
         convert::Type::Sequence { .. } | convert::Type::Option(_) | convert::Type::Nominal { .. }
     ) || range_inclusive_element(ty).is_some()
         || boxed_element(ty).is_some()
+        || counted_element(ty).is_some()
     {
         deep = substituted(ty, signature, substitutions)?;
         &deep
@@ -12401,6 +12698,7 @@ impl Lease {
                     **lent,
                     convert::Type::Nominal { .. } | convert::Type::Parameter(_)
                 ) && std_value(lent).is_none()
+                    && counted_element(lent).is_none()
                     && !is_made_for_call(lent) =>
             {
                 let rust = concrete_type(lent)?;
@@ -12781,6 +13079,7 @@ fn render_callable_closure(
             || is_value(ty)
             || is_duration(ty)
             || boxed_element(ty).is_some()
+            || counted_element(ty).is_some()
     };
     let inputs = call
         .inputs()
@@ -13078,6 +13377,17 @@ fn render_take(
         ty if is_future(ty) => "take_script",
         // Rawr's float or integer range, as the range of the number the
         // instance gives.
+        // An `Rc` or `Arc` the call takes by value, with copies of the
+        // crate's pointer for rawr's others held while it runs (`Balance`).
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            let element = concrete_type(element)
+                .ok_or_else(|| request::drift("a counted pointer's element type"))?;
+            return writeln!(
+                output,
+                "    let (argument_{local}, _argument_{local}_balance) = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); take_pointer::<{pointer}<{element}>>(arguments.arena, value)? }};"
+            )
+            .map_err(request::unwritable);
+        }
         ty if range_inclusive_element(ty).is_some() || boxed_element(ty).is_some() => {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
@@ -13153,7 +13463,7 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
-        ty if boxed_element(ty).is_some() => {
+        ty if boxed_element(ty).is_some() || counted_element(ty).is_some() => {
             let mut converted = String::new();
             render_to_dynamic(ty, value, 0, &mut converted)?;
             writeln!(output, "    {converted}")
@@ -13341,6 +13651,16 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(element, value, depth, &mut converted)?;
             write!(output, "({converted}).map(Box::new)")
+        }
+        // Rawr's `Rc` or `Arc` of a crate value, as the crate's own pointer
+        // its value is in, made the first time it crosses (#775).
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            let element = concrete_type(element)
+                .ok_or_else(|| request::drift("a counted pointer's element type"))?;
+            write!(
+                output,
+                "take_pointer::<{pointer}<{element}>>(arguments.arena, {value}).map(|(pointer, _)| pointer)"
+            )
         }
         // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
         // `RangeInclusive<i64>` as one of the integer the instance gives.
@@ -13566,6 +13886,11 @@ fn render_to_dynamic(
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
+        // The crate's own `Rc` or `Arc`, as rawr's pointer whose value is in
+        // it: nothing is copied (#775).
+        ty if counted_element(ty).is_some() => {
+            write!(output, "give_pointer!(arguments.arena, {value})")
+        }
         ty if std_value(ty).is_some() => write!(
             output,
             "Ok::<Dynamic, Error>(__rawr_internal::crossing::Std::give({value}))"
@@ -13732,6 +14057,7 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
+        ty if counted_element(ty).is_some() => true,
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
         convert::Type::Tuple(members) => members.iter().any(holds_native),
         convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
@@ -13813,6 +14139,25 @@ fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
                 [element] => Some(element),
                 _ => None,
             }
+        }
+        _ => None,
+    }
+}
+
+/// Rust's `Rc<T>` or `Arc<T>` of a crate's `T` (#775), when `ty` is one:
+/// its Rust path and `T`. It crosses as rawr's pointer, whose value is a
+/// handle on `T`'s slot, which the crate's own pointer is the home of.
+fn counted_element(ty: &convert::Type) -> Option<(&'static str, &convert::Type)> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            let arc = crate::surface::identity::Definition::counter(definition.as_bytes())?;
+            let [element] = arguments.as_ref() else {
+                return None;
+            };
+            Some((if arc { "std::sync::Arc" } else { "std::rc::Rc" }, element))
         }
         _ => None,
     }
@@ -15931,6 +16276,9 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            format!("{pointer}<{}>", concrete_type(element)?)
+        }
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         // A script closure where a signature names its type, boxed (T417).

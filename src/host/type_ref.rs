@@ -135,6 +135,9 @@ pub(crate) enum Shape {
     Range(Box<Type>),
     /// Rust's `Box<T>`: rawr's `Box`, its value at runtime (D711 step 5).
     Boxed(Box<Type>),
+    /// Rust's `Arc<T>` (true) or `Rc<T>` of a crate's `T`: rawr's counted
+    /// pointer, standing for the crate's own pointer at runtime (#775).
+    Counted(bool, Box<Type>),
     /// Rust's `std::ops::RangeInclusive<T>` of a type parameter `T`:
     /// Rawr's `RangeInclusive<f64>` or `RangeInclusive<i64>` at runtime as
     /// `T` is a float or an integer.
@@ -202,6 +205,7 @@ impl Type {
             }
             | Shape::Iter(element)
             | Shape::Boxed(element)
+            | Shape::Counted(_, element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => element.retained_bytes(),
             Shape::Result(ok, err) => ok
@@ -256,6 +260,7 @@ impl Type {
             },
             Shape::Iter(element) => Shape::Iter(Box::new(element.try_clone()?)),
             Shape::Boxed(element) => Shape::Boxed(Box::new(element.try_clone()?)),
+            Shape::Counted(arc, element) => Shape::Counted(*arc, Box::new(element.try_clone()?)),
             Shape::Range(element) => Shape::Range(Box::new(element.try_clone()?)),
             Shape::RangeInclusive(element) => Shape::RangeInclusive(Box::new(element.try_clone()?)),
             Shape::Result(ok, err) => {
@@ -360,6 +365,14 @@ impl Type {
     #[must_use]
     pub fn boxed(element: Self) -> Self {
         Self(Shape::Boxed(Box::new(element)))
+    }
+
+    /// Construct Rust's `Arc<element>` (`arc`) or `Rc<element>` of a
+    /// crate's type: rawr's counted pointer, which stands for the crate's
+    /// own pointer at runtime (#775).
+    #[must_use]
+    pub fn counted(arc: bool, element: Self) -> Self {
+        Self(Shape::Counted(arc, Box::new(element)))
     }
 
     /// Construct Rust's `std::ops::Range<element>` of a float, a
@@ -526,6 +539,10 @@ impl Type {
             Shape::Boxed(element) => Ok(Self::boxed(
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
+            Shape::Counted(arc, element) => Ok(Self::counted(
+                *arc,
+                element.resolve(root, types, parameters, _imported, item)?,
+            )),
             Shape::Range(element) => Ok(Self::range(
                 element.resolve(root, types, parameters, _imported, item)?,
             )),
@@ -656,6 +673,7 @@ impl Type {
             }
             | Shape::Iter(element)
             | Shape::Boxed(element)
+            | Shape::Counted(_, element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.resolve_imported(root, types, parameters, imported, item, allocation)?;
@@ -813,6 +831,7 @@ impl Type {
             }
             | Shape::Iter(element)
             | Shape::Boxed(element)
+            | Shape::Counted(_, element)
             | Shape::Range(element)
             | Shape::RangeInclusive(element) => {
                 element.collect_exports(exports);
@@ -914,6 +933,10 @@ impl crate::digest::Write for Type {
             }
             Shape::Boxed(element) => {
                 writer.tag(0x2317);
+                element.write(writer)?;
+            }
+            Shape::Counted(arc, element) => {
+                writer.tag(if *arc { 0x2319 } else { 0x2318 });
                 element.write(writer)?;
             }
             Shape::Range(element) => {

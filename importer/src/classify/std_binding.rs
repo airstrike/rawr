@@ -28,6 +28,10 @@ pub(crate) enum Std {
     Cow,
     /// alloc's `Box<T>`: its value, which rawr holds as itself.
     Box,
+    /// alloc's `Rc<T>` (`arc` false) or `Arc<T>` of a crate's `T`: rawr's
+    /// counted pointer, whose value is the crate's own pointer (#775).
+    /// Of any other `T` it is [`Unrun::Rc`] or [`Unrun::Arc`].
+    Counted { arc: bool },
     /// core's `Duration`: rawr's own.
     Duration,
     /// std's `Instant`: rawr's own.
@@ -49,8 +53,9 @@ pub(crate) enum Std {
     Clone, Copy, Debug, serde::Deserialize, Eq, Ord, PartialEq, PartialOrd, serde::Serialize,
 )]
 pub enum Unrun {
-    /// `std::rc::Rc`, rawr's real counted pointer (#748, `Ty::Counted`):
-    /// passing one to a crate as the native pointer is still to come.
+    /// `std::rc::Rc` of other than a crate's type, as `Rc<str>` or
+    /// `Rc<i64>`: rawr's counted pointer holds that value itself, which no
+    /// crate's pointer can share without a copy.
     Rc,
     /// `std::sync::Arc`, as `Rc` is.
     Arc,
@@ -99,9 +104,9 @@ pub(crate) const BINDING: [(&[&str], Std); 23] = [
         &["alloc", "collections", "btree", "set", "BTreeSet"],
         Std::Unrun(Unrun::BTreeSet),
     ),
-    (&["alloc", "rc", "Rc"], Std::Unrun(Unrun::Rc)),
+    (&["alloc", "rc", "Rc"], Std::Counted { arc: false }),
     (&["alloc", "string", "String"], Std::String),
-    (&["alloc", "sync", "Arc"], Std::Unrun(Unrun::Arc)),
+    (&["alloc", "sync", "Arc"], Std::Counted { arc: true }),
     (&["alloc", "vec", "Vec"], Std::Vec),
     (
         &["core", "io", "error", "Error"],

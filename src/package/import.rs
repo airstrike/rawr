@@ -3279,6 +3279,15 @@ impl Types {
                 {
                     return Ok(host::type_ref::Type::boxed(element));
                 }
+                // alloc's `Rc<T>` or `Arc<T>` of a crate's type: rawr's,
+                // standing for the crate's own pointer (#775).
+                if let Some(arc) =
+                    rawr_import::surface::identity::Definition::counter(definition.as_bytes())
+                    && converted.len() == 1
+                    && let Some(element) = converted.pop()
+                {
+                    return Ok(host::type_ref::Type::counted(arc, element));
+                }
                 host::type_ref::Type::imported_boxed(
                     imported_identity(*definition),
                     converted.into_boxed_slice(),
