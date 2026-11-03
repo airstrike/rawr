@@ -6211,11 +6211,14 @@ fn render_source(
     )
     .map_err(request::unwritable)?;
     // std's traits outside the prelude whose members a crate type's impl
-    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709).
+    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709)
+    // and the `deref` a method probe takes through a crate type's `Deref`
+    // (#762).
     writeln!(
         stamps,
         "#[allow(unused_imports)]\npub(super) use ::core::str::FromStr as _;\n\
-         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;"
+         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;\n\
+         #[allow(unused_imports)]\npub(super) use ::core::ops::{{Deref as _, DerefMut as _}};"
     )
     .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a

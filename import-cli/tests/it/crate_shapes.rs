@@ -70,6 +70,15 @@ fn impl_fn_parameters_of_a_generic_builder_take_script_closures() {
     runs_as_cargo_does("button", "pressed 2\nwidths 3 6\n");
 }
 
+/// A method or field a crate's type lacks is its `Deref` target's, as
+/// rustc's probe finds it: another of the crate's types, a `String` and a
+/// `Vec`. A `&mut self` method is reached through the type's `DerefMut`,
+/// and a `&Name` is the `&str` a function takes (#762).
+#[test]
+fn a_crate_types_deref_gives_its_targets_members() {
+    runs_as_cargo_does("deref", "clicks 2 0\n4\n6 FERRIS FERRIS\n3 Some(3) 6\n");
+}
+
 /// A crate's `pub use Alignment::Center;` re-exports the variant, as
 /// `iced::Center` is, and `use Enum::Variant;` imports one: each name is
 /// the variant in expressions and patterns.

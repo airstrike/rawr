@@ -942,6 +942,9 @@ pub(super) enum DerefCall {
     Program(Box<method::Definition>),
     /// An `Rc`'s or `Arc`'s value, read (`counted.rs`).
     Counted,
+    /// A crate type's `deref` (or `deref_mut`), called through its facade.
+    #[cfg(feature = "rust-import")]
+    Host { mutable: bool },
 }
 
 impl Parser<'_> {
@@ -984,6 +987,12 @@ impl Parser<'_> {
                 "Target".into(),
             ));
             return Some((Compared::Ty(target), DerefCall::Program(Box::new(call))));
+        }
+        #[cfg(feature = "rust-import")]
+        if matches!(ty, Ty::Host { .. })
+            && let Some(target) = self.host_deref_target(&ty, mutable)
+        {
+            return Some((Compared::Ty(target), DerefCall::Host { mutable }));
         }
         let trait_ = if mutable {
             "core::ops::deref::DerefMut"
@@ -1093,8 +1102,14 @@ impl Parser<'_> {
     }
 
     /// `value` through `calls`, the deref steps a coercion or a method probe
-    /// takes, as type `ty`: each program `deref` called on the last.
-    pub(super) fn apply_derefs(&mut self, value: &mut ParsedExpr, calls: Vec<DerefCall>, ty: Ty) {
+    /// takes, as type `ty`: each program `deref` called on the last, and
+    /// each crate type's through its facade.
+    pub(super) fn apply_derefs(
+        &mut self,
+        value: &mut ParsedExpr,
+        calls: Vec<DerefCall>,
+        ty: Ty,
+    ) -> Result<(), Error> {
         for call in calls {
             match call {
                 DerefCall::Value => {}
@@ -1104,9 +1119,191 @@ impl Parser<'_> {
                     value.lvalue = None;
                 }
                 DerefCall::Counted => self.counted_value(value),
+                #[cfg(feature = "rust-import")]
+                DerefCall::Host { mutable } => {
+                    let name = if mutable { "deref_mut" } else { "deref" };
+                    let at = value.span;
+                    self.pending_arguments = Some((Vec::new(), at.end()));
+                    let receiver = value.clone();
+                    *value = self.parse_host_method(receiver, name.into(), at)?;
+                }
             }
         }
         value.ty = ty;
+        Ok(())
+    }
+
+    /// The method probe's deref steps, as rustc's probe takes them: while
+    /// `value`'s type, or the type it refers to, is a program's or a
+    /// crate's type that lacks `member`, one step through its `Deref`. A
+    /// method found past the steps that takes `&mut self` takes them
+    /// through `DerefMut`, each `deref_mut` called on the place before it,
+    /// as rustc's `convert_place_derefs_to_mutable` does.
+    pub(super) fn probe_derefs(
+        &mut self,
+        mut value: ParsedExpr,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut steps = Vec::new();
+        let mut probed = self.inference.resolve(&value.ty);
+        loop {
+            let target = match &probed {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                owned => owned.clone(),
+            };
+            let own = match &target {
+                Ty::Script(id, _) => self.own_member(*id, member),
+                #[cfg(feature = "rust-import")]
+                Ty::Host { .. } => self.host_own_member(&target, member),
+                _ => break,
+            };
+            if own {
+                break;
+            }
+            let reference = match &probed {
+                reference @ Ty::Reference { .. } => reference.clone(),
+                owned => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(owned.clone()),
+                },
+            };
+            let Some((ty, call)) = self.deref_reference(&reference, true) else {
+                break;
+            };
+            steps.push((target, ty.clone(), call));
+            probed = ty;
+        }
+        let method = matches!(self.peek(), Token::LeftParen | Token::Unit);
+        if !method || self.member_receiver(&probed, member) != Some(receiver::Mode::Mutable) {
+            for (_, ty, call) in steps {
+                self.apply_derefs(&mut value, vec![call], ty)?;
+            }
+            return Ok(value);
+        }
+        for (owner, _, _) in steps {
+            // rustc's E0596 when the type has no `DerefMut`.
+            let Some((target, call)) = self.deref_target(&owner, true) else {
+                return Err(Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow data in dereference of `{}` as mutable",
+                        owner.name(&self.models)
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                });
+            };
+            let Ty::Script(id, _) = owner else {
+                let ty = match target {
+                    Compared::Ty(target) => Ty::Reference {
+                        mutable: true,
+                        target: Box::new(target),
+                    },
+                    Compared::Str => Ty::Str,
+                };
+                self.apply_derefs(&mut value, vec![call], ty)?;
+                continue;
+            };
+            let name = self.models.definition(id).name().into();
+            value = match self.call_owner_method(
+                value,
+                id,
+                name,
+                &"deref_mut".into(),
+                member_span,
+                Vec::new(),
+                member_span.start(),
+            )? {
+                Ok(called) => called,
+                Err(_) => unreachable!("`DerefMut` has `deref_mut`"),
+            };
+        }
+        Ok(value)
+    }
+
+    /// The receiver `member` takes on `ty`, through its references: a
+    /// program type's method's, a crate type's, or std's inherent method's.
+    fn member_receiver(&self, ty: &Ty, member: &str) -> Option<receiver::Mode> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Script(id, _) => self.receiver_method(id, member)?.receiver(),
+            #[cfg(feature = "rust-import")]
+            ty @ Ty::Host { .. } => {
+                let owner = self.host_member_owner(&ty, member)?;
+                let items = self
+                    .models
+                    .host_items(&format!("{}::{member}", owner.path()))?;
+                items
+                    .iter()
+                    .find_map(crate::host::item::Definition::receiver)
+            }
+            ty => std_method::inherent(&ty, member).map(|found| found.mode),
+        }
+    }
+
+    /// `<ty as Deref>::Target` of a crate's type `ty`, or `DerefMut`'s with
+    /// `mutable`: the target of the borrow guard its facade's `deref` (or
+    /// `deref_mut`) gives (D554). `None` when the facade has none.
+    #[cfg(feature = "rust-import")]
+    fn host_deref_target(&mut self, ty: &Ty, mutable: bool) -> Option<Ty> {
+        let (name, guard) = if mutable {
+            ("deref_mut", crate::host::item::Guard::Mutable)
+        } else {
+            ("deref", crate::host::item::Guard::Shared)
+        };
+        let owner = self.host_member_owner(ty, name)?;
+        let items = self
+            .models
+            .host_items(&format!("{}::{name}", owner.path()))?
+            .to_vec();
+        if !items
+            .iter()
+            .all(|item| item.guard() == Some(guard) && item.signature().parameters().is_empty())
+        {
+            return None;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let selected = self.select_host_signature(&items, Some(ty), &mut [], false, Span::NONE);
+        let target = selected
+            .ok()
+            .map(|(_, signature)| self.inference.resolve(&signature.output));
+        self.inference.commit(checkpoint);
+        target
+    }
+
+    /// Whether the crate's type `ty` has a field or method `member` of its
+    /// own, which the method probe finds before it derefs.
+    #[cfg(feature = "rust-import")]
+    fn host_own_member(&self, ty: &Ty, member: &str) -> bool {
+        self.host_member_owner(ty, member).is_some()
+            || ty.host_alias().is_some_and(|definition| {
+                matches!(definition.shape(), crate::host::type_def::Shape::Struct { fields, .. }
+                    if fields.iter().any(|field| field.name() == member))
+            })
+            || self.imported_field_owner(ty, member).is_some()
+    }
+
+    /// The definition of the crate's type `ty` whose facade declares the
+    /// function `member`, at the path the type was named by or another.
+    #[cfg(feature = "rust-import")]
+    fn host_member_owner(
+        &self,
+        ty: &Ty,
+        member: &str,
+    ) -> Option<crate::host::type_def::Definition> {
+        ty.host_alias()
+            .filter(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+                    .is_some()
+            })
+            .cloned()
+            .or_else(|| self.imported_member_owner(ty, member))
     }
 
     /// Whether the program's type `id` has a field or method `member` of its

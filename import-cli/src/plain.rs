@@ -116,11 +116,15 @@ fn demand_more(
             continue;
         }
         crate_demand.extend(crate::demandable(path, through_alias, request_demand).map(Box::from));
+        // A member the type lacks may be its `Deref` target's, which the
+        // method probe reaches through its `deref` and `deref_mut` (#762).
         if let Some(owner) = owner {
             crate_demand.extend(
                 graph
                     .rust_method_names()
                     .iter()
+                    .map(|name| &**name)
+                    .chain(["deref", "deref_mut"])
                     .map(|name| Box::from(format!("{owner}::{name}"))),
             );
         }
