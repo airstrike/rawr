@@ -68,14 +68,16 @@ total: 27
 
 ## How do I install it?
 
-The `rawr` command needs Rust 1.95 or newer:
+One command installs `rawr` and the extension that runs crates with
+dependencies:
 
 ```sh
-cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
+curl -LsSf https://rawr.airstrike.fyi/install.sh | sh
 rawr new hello && cd hello && rawr run
 ```
 
-`rawr-cli` installs `rawr` and `cargo-rawr`. `rawr new hello` writes a crate
+The installer puts prebuilt `rawr`, `cargo-rawr`, `rawr-import` and
+`rawr-import-driver` in `~/.cargo/bin`. `rawr new hello` writes a crate
 with no dependencies whose `src/main.rs` starts with `// rawr`. `rawr run`
 restarts it when you save. Arguments after `--` go to the program, as under
 `cargo run`, and it reads the same stdin.
@@ -90,15 +92,20 @@ it, and says how to install it when it is missing.
   ([measurements](benches/README.md#release-hot-reload-measurements)).
   An [iced](https://github.com/iced-rs/iced) app is one of these programs.
 
-rawr-import needs 64-bit macOS or 64-bit Linux and the pinned nightly
-`nightly-2026-07-11` with the `rustc-dev` and `rust-src` components. It has
-been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. Windows isn't
-supported.
+rawr-import reads crate APIs with the pinned nightly `nightly-2026-07-11`
+and its `rustc-dev` and `rust-src` components. The first program that needs
+them installs them through [rustup](https://rustup.rs), once per machine.
+
+Prebuilt binaries cover macOS on Apple Silicon and Intel, and Linux on
+x86_64 and aarch64. rawr-import has been tested on Apple Silicon Macs, and
+CI runs it on x86_64 Linux. Windows is best effort. In PowerShell,
+`irm https://rawr.airstrike.fyi/install.ps1 | iex` installs `rawr` and
+`cargo-rawr` only, because rawr-import isn't built for Windows yet.
+
+`rawr` alone also installs from source, with Rust 1.95 or newer:
 
 ```sh
-rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver
+cargo install --locked --git https://github.com/airstrike/rawr rawr-cli
 ```
 
 A crate with dependencies needs `rust-toolchain.toml` and

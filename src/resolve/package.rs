@@ -1155,10 +1155,11 @@ impl<'a> Resolver<'a> {
                         type_ref::Target::Alias(type_ref::Alias::builtin(builtin, name.span)),
                     );
                 }
-                // A std type Rawr has no representation for yet names it,
-                // so its uses say so.
+                // A std type names its std path, which a path through it
+                // resolves by, unless it names one of Rawr's types above.
                 if matches!(import, item::Import::Module)
-                    && let Some(path) = super::std_path::unrepresented_type(&qualified)
+                    && !types.contains_key(&name.text)
+                    && let Some(path) = super::std_path::bound_type(&qualified)
                 {
                     types.insert(name.text.clone(), type_ref::Target::Std(path));
                 }

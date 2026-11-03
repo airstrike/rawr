@@ -188,6 +188,19 @@ fn collect_nominal(
                 (Ok(_), Err(_)) | (Err(_), Ok(_)) => Ok(false),
             }
         }
+        NominalPattern::Cow { owned, payload } => {
+            use crate::resolve::lower_nominal::cow;
+            let shape = || "cow payload no longer matches its proven shape".to_string();
+            let Some(value) = value.read_lock::<cow::Value>() else {
+                return if root { Ok(false) } else { Err(shape()) };
+            };
+            match (&*value, owned) {
+                (cow::Value::Borrowed(inner), false) | (cow::Value::Owned(inner), true) => {
+                    collected.part(0, inner, payload, &shape)
+                }
+                _ => Ok(false),
+            }
+        }
         NominalPattern::Literal(literal) => match compare_literal(value, literal) {
             Some(ordering) => Ok(ordering == std::cmp::Ordering::Equal),
             None => mismatch(),

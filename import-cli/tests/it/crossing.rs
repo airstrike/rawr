@@ -1326,7 +1326,11 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 /// them, and a guard reads them by reference first; through a reference it
 /// lends a `Door`, so `&self` methods and `&T` parameters reach it while
 /// the arm reads the matched value too, and a test of the variant reads no
-/// field. The output is `cargo run`'s.
+/// field. Each field is read alone (#785): a pattern below a variant's
+/// tests its field lent to it and moves or lends what it binds, and a
+/// `Copy` field is copied beside a field without `Clone`. Through `&mut`
+/// and as `ref mut` it lends a `Door` mutably (#786), so a `&mut self`
+/// method changes the matched value. The output is `cargo run`'s.
 #[test]
 fn a_match_moves_or_lends_variant_fields_without_clone() {
     let (rawr, cargo) = both_printed("crossing-matched", "matched.rs", "");
@@ -1335,7 +1339,10 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
         rawr,
         "ok 4\nclosed vent\nfailed\n\
          door door door open\nclosed door\nfailed\n3 consumed refused\n\
-         gate closed gate\nclosed hatch\nidle"
+         gate closed gate\nclosed hatch\nidle\n\
+         below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
+         above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
+         deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3"
     );
 }
 
@@ -1403,6 +1410,43 @@ fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
             "closure values=[\"entry-closure\", \"closure call\"] cap=12 vector=true string=true"
         ),
         "{rawr}"
+    );
+}
+
+/// An `Rc` or `Arc` of a crate's type crosses as the crate's own pointer
+/// (#775): one the crate gives keeps the copy the crate holds in its count
+/// and is `ptr_eq` to another of the same allocation; an `Arc` taken by
+/// value sees rawr's other pointers in its count; one passed and given
+/// back is the same pointer; and one the program makes with `Arc::new`
+/// becomes the crate's pointer the first time it crosses. Its value's
+/// methods run through `Deref`. The output is `cargo run`'s.
+#[test]
+fn an_arc_of_a_crate_value_crosses_as_the_crates_own_pointer() {
+    let (rawr, cargo) = both_printed("crossing-pointers", "pointers.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "shared 3 true shared\nmade 2 true\nkept true 2 2\nlevel 2\n\
+         after 1 Config { name: \"made\", level: 2 }\nown true 2\nheld 3\n\
+         back true 2 own\nnode leaf node leaf\nholders 3\ndropped 1"
+    );
+}
+
+/// std's maps and sets in a crate's signature are rawr's (#777): a
+/// `&HashMap` and a `&BTreeMap` of crate values without `Clone` lend each
+/// value to the call and keep it after, a `&HashSet` of strings and a
+/// `HashMap` by value are made from rawr's, and a `BTreeMap`, a `HashMap`
+/// of crate values, a `BTreeSet` and a `HashSet` given back are rawr's,
+/// in key order. The output is `cargo run`'s.
+#[test]
+fn maps_and_sets_cross_as_rawrs_keyed_collections() {
+    let (rawr, cargo) = both_printed("crossing-keyed", "keyed.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "total 7\nkept 3 2\ncheapest nib nib\nprices {\"a\": 1, \"b\": 2}\n\
+         catalog [\"cup\", \"mug\"] 5\ntags 8\nevens {0, 2, 4, 6}\n\
+         letters ['a', 'b', 'c']\ninvert {1: \"one\", 2: \"two\"}"
     );
 }
 

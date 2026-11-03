@@ -11,9 +11,11 @@ use sha2::{Digest as _, Sha256};
 use crate::process::{self, Program, ToolPaths};
 use crate::{Error, Result};
 
+mod bootstrap;
 mod cached;
 mod host;
 
+pub(crate) use bootstrap::Installed;
 pub use cached::{cached, Attestation};
 
 /// The pinned nightly the importer's driver runs on.
@@ -268,11 +270,16 @@ impl Requirement {
 
         #[cfg(feature = "rustc-driver")]
         let driver = {
+            let mut driver_environment = environment.to_vec();
+            if let Some((key, value)) = process::driver_library(native.rustc(), &environment) {
+                driver_environment.retain(|(name, _)| *name != key);
+                driver_environment.push((key, value));
+            }
             let version = run(
                 native,
                 process::Preflight::version(Program::Driver)?,
                 current_dir,
-                environment.clone(),
+                driver_environment.into_boxed_slice(),
                 limits,
             )?;
             let expected = format!(

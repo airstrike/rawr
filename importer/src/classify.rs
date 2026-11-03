@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 95;
+const CLASSIFIER_VERSION: u32 = 97;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -7593,6 +7593,64 @@ impl<P: api::Phase> Context<'_, P> {
                             )?,
                         )?]),
                     },
+                    // An `Rc<T>` or `Arc<T>` of a crate's type: rawr's
+                    // counted pointer, whose value is the crate's own
+                    // pointer, so passing it copies nothing (#775). Of any
+                    // other `T` rawr's pointer holds the value itself.
+                    Some(Std::Counted { arc }) => {
+                        let unrun = || {
+                            representability::reject::Kind::StdNotRun(if arc {
+                                std_binding::Unrun::Arc
+                            } else {
+                                std_binding::Unrun::Rc
+                            })
+                        };
+                        let element = self
+                            .convert(std_binding::type_argument(arguments, 0).ok_or_else(unrun)?)?;
+                        match &element {
+                            Type::Nominal { definition, .. }
+                                if !crate::surface::identity::Definition::is_projected(
+                                    definition.as_bytes(),
+                                ) =>
+                            {
+                                Type::Nominal {
+                                    definition: crate::surface::identity::Definition::counted(arc),
+                                    arguments: Box::new([element]),
+                                }
+                            }
+                            _ => return Err(unrun().into()),
+                        }
+                    }
+                    // A map or set whose keys are rawr's strings, numbers,
+                    // chars or bools: rawr's collection of its kind, which
+                    // the crate's is made from or made into where it
+                    // crosses (#777).
+                    Some(Std::Keyed(name, unrun)) => {
+                        let not_run = || representability::reject::Kind::StdNotRun(unrun);
+                        let map = name.ends_with("Map");
+                        let mut converted = Vec::new();
+                        for index in 0..if map { 2 } else { 1 } {
+                            converted.push(self.convert(
+                                std_binding::type_argument(arguments, index).ok_or_else(not_run)?,
+                            )?);
+                        }
+                        let ordered = matches!(
+                            converted.first(),
+                            Some(Type::Builtin(builtin))
+                                if *builtin == Builtin::String
+                                    || *builtin == Builtin::Char
+                                    || *builtin == Builtin::Bool
+                                    || *builtin == Builtin::I64
+                                    || builtin.is_narrow_integer()
+                        );
+                        if !ordered {
+                            return Err(not_run().into());
+                        }
+                        Type::Nominal {
+                            definition: crate::surface::identity::Definition::keyed(name),
+                            arguments: converted.into_boxed_slice(),
+                        }
+                    }
                     Some(Std::Unrun(unrun)) => {
                         return Err(representability::reject::Kind::StdNotRun(unrun).into())
                     }
@@ -10684,7 +10742,7 @@ fn shared_slice_element<'a>(
 ) -> Option<&'a model::Type> {
     if !matches!(
         std_binding::of(definition),
-        Some(Std::Box | Std::Unrun(std_binding::Unrun::Rc | std_binding::Unrun::Arc))
+        Some(Std::Box | Std::Counted { .. })
     ) {
         return None;
     }

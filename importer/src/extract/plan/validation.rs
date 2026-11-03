@@ -182,6 +182,9 @@ fn launch(
 ) -> test_launch::Step {
     let paths = native.production();
     let executable = paths.driver().to_path_buf();
+    let environment: Box<[_]> = process::driver_library(paths.rustc(), &[])
+        .into_iter()
+        .collect();
     let rustc = paths.rustc().as_os_str().to_owned();
     let plan = layout.extraction().plan().as_os_str().to_owned();
     let protocol = layout.extraction().protocol().as_os_str().to_owned();
@@ -197,7 +200,7 @@ fn launch(
                 process::Command::probe(
                     vec!["--probe".into(), rustc, plan, protocol, source],
                     directory,
-                    Box::default(),
+                    environment,
                 )
                 .expect("the independent expected Probe command seals"),
                 cargo::Limits::standard().process_limits(),

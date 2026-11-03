@@ -32,6 +32,7 @@ const TYPES: &[(&str, &str)] = &[
     ("alloc::collections::btree::map::BTreeMap", "BTreeMap"),
     ("alloc::collections::btree::set::BTreeSet", "BTreeSet"),
     ("core::cmp::Reverse", "Reverse"),
+    ("alloc::borrow::Cow", "Cow"),
     ("core::cmp::Ordering", "Ordering"),
     ("core::cell::RefCell", "RefCell"),
     ("core::cell::Cell", "Cell"),
@@ -87,6 +88,67 @@ pub(crate) fn arity(name: &str) -> Option<(usize, usize)> {
     std_table::item(definition_of(name)?).map(|item| item.type_arity())
 }
 
+/// rustc's E0107 for `actual` type arguments of rawr's builtin `name`,
+/// when std's declaration takes fewer or more, its unstable parameters
+/// counted: `Vec<T, A>` takes at most 2. `None` when it takes `actual`.
+pub(crate) fn wrong_arity(name: &str, actual: usize, reference: Span) -> Option<Error> {
+    let item = std_table::item(definition_of(name)?)?;
+    let parameters = item
+        .generics()
+        .filter(|parameter| parameter.kind == std_table::ParameterKind::Type)
+        .collect::<Vec<_>>();
+    let required = parameters
+        .iter()
+        .filter(|parameter| parameter.default.is_none())
+        .count();
+    let total = parameters.len();
+    let (bound, expected, named) = if actual < required {
+        let bound = if required < total { "at least " } else { "" };
+        (bound, required, required)
+    } else if actual > total {
+        let bound = if required < total { "at most " } else { "" };
+        (bound, total, total)
+    } else {
+        return None;
+    };
+    let plural = |count: usize, noun: &str| {
+        if count == 1 {
+            format!("{count} {noun}")
+        } else {
+            format!("{count} {noun}s")
+        }
+    };
+    let kind = item.kind;
+    let message = if actual == 0 {
+        format!("missing generics for {kind} `{name}`")
+    } else {
+        let supplied = if actual == 1 { "was" } else { "were" };
+        format!(
+            "{kind} takes {bound}{} but {} {supplied} supplied",
+            plural(expected, "generic argument"),
+            plural(actual, "generic argument"),
+        )
+    };
+    let names = parameters[..named]
+        .iter()
+        .map(|parameter| format!("`{}`", parameter.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(Error::StdPath {
+        code: "E0107",
+        message: message.into(),
+        label: Some(format!("expected {bound}{}", plural(expected, "generic argument")).into()),
+        note: Some(
+            format!(
+                "{kind} defined here, with {bound}{}: {names}",
+                plural(expected, "generic parameter")
+            )
+            .into(),
+        ),
+        reference,
+    })
+}
+
 /// rustc's E0658 for a type argument at `index` of rawr's builtin `name`
 /// that fills an unstable parameter, as `Vec`'s second fills `A`
 /// (`allocator_api`).
@@ -99,7 +161,7 @@ pub(crate) fn unstable_argument(name: &str, index: usize, reference: Span) -> Op
 }
 
 /// rustc's E0658 for naming an item with `stability`, when it is unstable.
-fn unstable(stability: Stability, reference: Span) -> Option<Error> {
+pub(crate) fn unstable(stability: Stability, reference: Span) -> Option<Error> {
     let Stability::Unstable {
         feature,
         issue,
@@ -242,19 +304,40 @@ pub(crate) fn glob(module: &str) -> Option<Vec<ImmutableString>> {
     Some(names)
 }
 
-/// The std type a `use` that binds `qualified` brings in, when rawr has no
-/// representation for it: the path, which its uses name in rawr's
-/// not-yet error.
-pub(crate) fn unrepresented_type(qualified: &str) -> Option<ImmutableString> {
+/// The std type a `use` that binds `qualified` brings in: the path, which a
+/// path through the name stands for.
+pub(crate) fn bound_type(qualified: &str) -> Option<ImmutableString> {
     let segments = std_segments(qualified)?;
     match std_table::resolve(&segments, Namespace::Type).ok()? {
-        Resolved::Path(path)
-            if path.is_type() && !TYPES.iter().any(|(known, _)| *known == path.definition) =>
-        {
-            Some(qualified.into())
-        }
+        Resolved::Path(path) if path.is_type() => Some(qualified.into()),
         _ => None,
     }
+}
+
+/// rustc's error for the bare `name` of a std type rawr represents, which
+/// nothing in scope binds: no declaration, no `use` and not std's prelude.
+/// E0425 where it names a type; E0433 where it heads a path (`head`), as
+/// `HashMap::new()`. `None` for any other name. The caller has looked
+/// `name` up in its scope.
+pub(crate) fn unbound_type(name: &str, head: bool, reference: Span) -> Option<Error> {
+    let represented = TYPES.iter().any(|(definition, _)| {
+        !definition.starts_with("core::fmt::") && definition.rsplit("::").next() == Some(name)
+    });
+    if !represented || qualified(name, None).is_some() {
+        return None;
+    }
+    let (code, label) = if head {
+        ("E0433", format!("use of undeclared type `{name}`"))
+    } else {
+        ("E0425", "not found in this scope".to_owned())
+    };
+    Some(Error::StdPath {
+        code,
+        message: format!("cannot find type `{name}` in this scope").into(),
+        label: Some(label.into()),
+        note: None,
+        reference,
+    })
 }
 
 /// rawr's error for a use of the std path `path`, which it resolves but

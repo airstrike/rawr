@@ -14,7 +14,7 @@ use crate::std_table::{self, Written};
 /// What an impl's parameters stand for once its header matched.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Substitution {
-    types: BTreeMap<&'static str, Compared>,
+    types: BTreeMap<&'static str, Ty>,
     lengths: BTreeMap<&'static str, usize>,
 }
 
@@ -27,7 +27,7 @@ pub(super) struct Selected {
 
 /// Why no impl holds: the innermost self type and trait argument an impl
 /// needed, as rustc's E0277 names them.
-pub(super) type Unmet = (Compared, Option<Compared>);
+pub(super) type Unmet = (Ty, Option<Ty>);
 
 /// How deep where-clauses are proven before giving up, as rustc's
 /// recursion limit does.
@@ -73,6 +73,7 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
             arguments.to_vec(),
         ),
         Ty::Reverse(inner) => ("core::cmp::Reverse", one(inner)),
+        Ty::Cow(borrowed) => (cow::DEFINITION, one(borrowed)),
         Ty::Cell(CellKind::RefCell, inner) => ("core::cell::RefCell", one(inner)),
         Ty::Cell(CellKind::Cell, inner) => ("core::cell::Cell", one(inner)),
         Ty::Ordering => ("core::cmp::Ordering", Vec::new()),
@@ -102,7 +103,7 @@ pub(super) fn std_definition(ty: &Ty) -> Option<(&'static str, Vec<Ty>)> {
 
 /// The native type that stands for the std definition `definition` with
 /// `arguments`: the inverse of [`std_definition`].
-fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
+pub(super) fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
     let first = || arguments.first().cloned().map(Box::new);
     if let Some(kind) = Int::named(definition) {
         return Some(Ty::Int(kind));
@@ -142,6 +143,7 @@ fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
             Ty::Keyed(Keyed::BTreeSet, arguments.get(..1)?.into())
         }
         "core::cmp::Reverse" => Ty::Reverse(first()?),
+        cow::DEFINITION => Ty::Cow(first()?),
         "core::cell::RefCell" => Ty::Cell(CellKind::RefCell, first()?),
         "core::cell::Cell" => Ty::Cell(CellKind::Cell, first()?),
         "core::cmp::Ordering" => Ty::Ordering,
@@ -263,12 +265,9 @@ impl Solve for Probe<'_, '_> {
 
 /// The simplified keys `impls.tsv` files `side`'s impls under, as rustc's
 /// simplified type: `None` for a type std doesn't declare.
-fn keys(solver: &impl Solve, side: &Compared) -> Option<Vec<&'static str>> {
-    let ty = match side {
-        Compared::Str => return Some(vec!["str"]),
-        Compared::Ty(ty) => solver.resolved(ty),
-    };
-    Some(match ty {
+fn keys(solver: &impl Solve, side: &Ty) -> Option<Vec<&'static str>> {
+    Some(match solver.resolved(side) {
+        Ty::UnsizedStr => vec!["str"],
         Ty::Str | Ty::Reference { mutable: false, .. } => vec!["&"],
         Ty::Reference { mutable: true, .. } => vec!["&mut"],
         Ty::Array { kind, .. } => vec![match kind {
@@ -291,8 +290,8 @@ fn keys(solver: &impl Solve, side: &Compared) -> Option<Vec<&'static str>> {
 pub(super) fn select(
     solver: &mut impl Solve,
     trait_: &str,
-    side: &Compared,
-    arguments: &[Compared],
+    side: &Ty,
+    arguments: &[Ty],
     strict: bool,
     depth: usize,
 ) -> Result<Selected, Unmet> {
@@ -325,7 +324,7 @@ pub(super) fn select(
 }
 
 /// How many of std's impls of `trait_` have a self type `side` matches.
-fn candidates(solver: &mut impl Solve, trait_: &str, side: &Compared) -> usize {
+fn candidates(solver: &mut impl Solve, trait_: &str, side: &Ty) -> usize {
     let mut keys = keys(solver, side).unwrap_or_default();
     keys.push("_");
     let mut count = 0;
@@ -354,8 +353,8 @@ fn candidates(solver: &mut impl Solve, trait_: &str, side: &Compared) -> usize {
 fn try_impl(
     solver: &mut impl Solve,
     line: std_table::Impl,
-    side: &Compared,
-    arguments: &[Compared],
+    side: &Ty,
+    arguments: &[Ty],
     strict: bool,
     depth: usize,
 ) -> Result<Substitution, Option<Unmet>> {
@@ -422,8 +421,8 @@ fn try_impl(
 pub(super) fn holds(
     solver: &mut impl Solve,
     trait_: &str,
-    side: &Compared,
-    arguments: &[Compared],
+    side: &Ty,
+    arguments: &[Ty],
     strict: bool,
     depth: usize,
 ) -> Result<(), Unmet> {
@@ -439,10 +438,7 @@ pub(super) fn holds(
         return select(solver, trait_, side, arguments, strict, depth).map(|_| ());
     }
     let unmet = || (side.clone(), arguments.first().cloned());
-    let Compared::Ty(ty) = side else {
-        return Err(unmet());
-    };
-    let ty = solver.resolved(ty);
+    let ty = solver.resolved(side);
     let name = trait_name(trait_);
     // A literal of a kind still to be inferred: the kind rawr runs it as
     // stands for every kind it may take, and binds nothing.
@@ -453,31 +449,22 @@ pub(super) fn holds(
         };
         let arguments = arguments
             .iter()
-            .map(|argument| match argument {
-                Compared::Ty(argument) if solver.resolved(argument) == ty => {
-                    Compared::Ty(standing.clone())
+            .map(|argument| {
+                if solver.resolved(argument) == ty {
+                    standing.clone()
+                } else {
+                    argument.clone()
                 }
-                argument => argument.clone(),
             })
             .collect::<Vec<_>>();
         let checkpoint = solver.checkpoint();
-        let selected = select(
-            solver,
-            trait_,
-            &Compared::Ty(standing),
-            &arguments,
-            strict,
-            depth,
-        );
+        let selected = select(solver, trait_, &standing, &arguments, strict, depth);
         solver.rollback(checkpoint);
         return selected.map(|_| ()).map_err(|_| unmet());
     }
     let types = arguments
         .iter()
-        .map(|argument| match argument {
-            Compared::Ty(argument) => Some(argument.clone()),
-            Compared::Str => None,
-        })
+        .map(|argument| (*argument != Ty::UnsizedStr).then(|| argument.clone()))
         .collect::<Option<Vec<_>>>()
         .ok_or_else(unmet)?;
     // A comparison of a type std doesn't declare takes its own type: a
@@ -501,9 +488,9 @@ pub(super) fn holds(
 fn with_defaults(
     solver: &mut impl Solve,
     trait_: &str,
-    side: &Compared,
-    arguments: &[Compared],
-) -> Option<Vec<Compared>> {
+    side: &Ty,
+    arguments: &[Ty],
+) -> Option<Vec<Ty>> {
     let parameters = std_table::item(trait_)?
         .generics()
         .filter(|parameter| {
@@ -534,14 +521,12 @@ fn with_defaults(
 fn bind(
     solver: &mut impl Solve,
     pattern: &Written,
-    side: &Compared,
+    side: &Ty,
     parameters: &[&'static str],
     substitution: &mut Substitution,
 ) -> bool {
-    let ty = match side {
-        Compared::Str => None,
-        Compared::Ty(ty) => Some(solver.resolved(ty)),
-    };
+    // `str` binds only a parameter or `str`.
+    let ty = Some(solver.resolved(side)).filter(|ty| *ty != Ty::UnsizedStr);
     match pattern {
         Written::Path {
             path, arguments, ..
@@ -549,43 +534,31 @@ fn bind(
             match substitution.types.get(path).cloned() {
                 None => {
                     let bound = match ty {
-                        Some(ty) => Compared::Ty(ty),
-                        None => Compared::Str,
+                        Some(ty) => ty,
+                        None => Ty::UnsizedStr,
                     };
                     substitution.types.insert(path, bound);
                     true
                 }
-                Some(Compared::Str) => ty.is_none(),
-                Some(Compared::Ty(bound)) => ty.is_some_and(|ty| solver.unify(&bound, &ty)),
+                Some(Ty::UnsizedStr) => ty.is_none(),
+                Some(bound) => ty.is_some_and(|ty| solver.unify(&bound, &ty)),
             }
         }
         Written::Reference { mutable, target } => match ty {
             Some(Ty::Str) if !mutable => {
-                bind(solver, target, &Compared::Str, parameters, substitution)
+                bind(solver, target, &Ty::UnsizedStr, parameters, substitution)
             }
             Some(Ty::Reference {
                 mutable: given,
                 target: referent,
-            }) if given == *mutable => bind(
-                solver,
-                target,
-                &Compared::Ty(*referent),
-                parameters,
-                substitution,
-            ),
+            }) if given == *mutable => bind(solver, target, &referent, parameters, substitution),
             _ => false,
         },
         Written::Slice(element) => match ty {
             Some(Ty::Array {
                 element: given,
                 kind: sequence::Kind::Slice,
-            }) => bind(
-                solver,
-                element,
-                &Compared::Ty(*given),
-                parameters,
-                substitution,
-            ),
+            }) => bind(solver, element, &given, parameters, substitution),
             _ => false,
         },
         Written::Array(element, length) => match ty {
@@ -604,29 +577,16 @@ fn bind(
                     }
                     None => length.parse::<usize>().ok() == Some(given_length),
                 };
-                fits && bind(
-                    solver,
-                    element,
-                    &Compared::Ty(*given),
-                    parameters,
-                    substitution,
-                )
+                fits && bind(solver, element, &given, parameters, substitution)
             }
             _ => false,
         },
         Written::Tuple(members) => match ty {
             Some(Ty::Unit) => members.is_empty(),
-            Some(Ty::Tuple(given)) if given.len() == members.len() => {
-                members.iter().zip(given.iter()).all(|(member, given)| {
-                    bind(
-                        solver,
-                        member,
-                        &Compared::Ty(given.clone()),
-                        parameters,
-                        substitution,
-                    )
-                })
-            }
+            Some(Ty::Tuple(given)) if given.len() == members.len() => members
+                .iter()
+                .zip(given.iter())
+                .all(|(member, given)| bind(solver, member, given, parameters, substitution)),
             _ => false,
         },
         Written::Never => matches!(ty, Some(Ty::Never)),
@@ -637,7 +597,12 @@ fn bind(
                 return false;
             };
             if definition == "str" {
-                return ty.is_none();
+                // A type still to be inferred becomes `str`.
+                return match ty {
+                    None => true,
+                    Some(ty @ Ty::Infer(_)) => solver.unify(&Ty::UnsizedStr, &ty),
+                    Some(_) => false,
+                };
             }
             let Some(ty) = ty else {
                 return false;
@@ -659,13 +624,7 @@ fn bind(
                     .iter()
                     .zip(given_arguments)
                     .all(|(argument, given)| {
-                        bind(
-                            solver,
-                            argument,
-                            &Compared::Ty(given),
-                            parameters,
-                            substitution,
-                        )
+                        bind(solver, argument, &given, parameters, substitution)
                     })
         }
         Written::Other(_) => false,
@@ -680,7 +639,7 @@ fn instantiate<S: Solve>(
     pattern: &Written,
     parameters: &[&'static str],
     substitution: &Substitution,
-) -> Option<Compared> {
+) -> Option<Ty> {
     let ty = |solver: &mut S, pattern| instantiate_ty(solver, pattern, parameters, substitution);
     Some(match pattern {
         Written::Path {
@@ -688,53 +647,53 @@ fn instantiate<S: Solve>(
         } if arguments.is_empty() && parameters.contains(path) => {
             match substitution.types.get(path) {
                 Some(bound) => bound.clone(),
-                None => Compared::Ty(solver.fresh()?),
+                None => solver.fresh()?,
             }
         }
         Written::Reference { mutable, target } => {
             match instantiate(solver, target, parameters, substitution)? {
-                Compared::Str if !mutable => Compared::Ty(Ty::Str),
-                Compared::Str => return None,
-                Compared::Ty(target) => Compared::Ty(Ty::Reference {
+                Ty::UnsizedStr if !mutable => Ty::Str,
+                Ty::UnsizedStr => return None,
+                target => Ty::Reference {
                     mutable: *mutable,
                     target: Box::new(target),
-                }),
+                },
             }
         }
-        Written::Slice(element) => Compared::Ty(Ty::Array {
+        Written::Slice(element) => Ty::Array {
             element: Box::new(ty(solver, element)?),
             kind: sequence::Kind::Slice,
-        }),
+        },
         Written::Array(element, length) => {
             let length = match substitution.lengths.get(length) {
                 Some(length) => *length,
                 None => length.parse().ok()?,
             };
-            Compared::Ty(Ty::Array {
+            Ty::Array {
                 element: Box::new(ty(solver, element)?),
                 kind: sequence::Kind::Array(length),
-            })
+            }
         }
-        Written::Tuple(members) if members.is_empty() => Compared::Ty(Ty::Unit),
-        Written::Tuple(members) => Compared::Ty(Ty::Tuple(
+        Written::Tuple(members) if members.is_empty() => Ty::Unit,
+        Written::Tuple(members) => Ty::Tuple(
             members
                 .iter()
                 .map(|member| ty(solver, member))
                 .collect::<Option<_>>()?,
-        )),
-        Written::Never => Compared::Ty(Ty::Never),
+        ),
+        Written::Never => Ty::Never,
         Written::Path {
             path, arguments, ..
         } => {
             let definition = std_table::definition_of(path)?;
             if definition == "str" {
-                return Some(Compared::Str);
+                return Some(Ty::UnsizedStr);
             }
             let arguments = arguments
                 .iter()
                 .map(|argument| ty(solver, argument))
                 .collect::<Option<Vec<_>>>()?;
-            Compared::Ty(std_type(definition, &arguments)?)
+            std_type(definition, &arguments)?
         }
         Written::Other(_) => return None,
     })
@@ -746,19 +705,12 @@ fn instantiate_ty(
     parameters: &[&'static str],
     substitution: &Substitution,
 ) -> Option<Ty> {
-    match instantiate(solver, pattern, parameters, substitution)? {
-        Compared::Ty(ty) => Some(ty),
-        Compared::Str => None,
-    }
+    instantiate(solver, pattern, parameters, substitution)
 }
 
 /// The associated type `name` of a selected impl: `str` for `Target` of
 /// `impl Deref for String`.
-pub(super) fn associated(
-    solver: &mut impl Solve,
-    selected: &Selected,
-    name: &str,
-) -> Option<Compared> {
+pub(super) fn associated(solver: &mut impl Solve, selected: &Selected, name: &str) -> Option<Ty> {
     let parameters = selected.line.generics().collect::<Vec<_>>();
     let written = std_table::written(selected.line.associated(name)?);
     instantiate(solver, &written, &parameters, &selected.substitution)
@@ -766,36 +718,24 @@ pub(super) fn associated(
 
 impl Parser<'_> {
     /// Whether `side` is a type std declares, whose impls are std's.
-    pub(super) fn std_declared(&self, side: &Compared) -> bool {
+    pub(super) fn std_declared(&self, side: &Ty) -> bool {
         keys(&Probe(self), side).is_some()
     }
 
     /// The `PartialEq` impl `lhs == rhs` selects from std's (D711 step 3):
     /// `Own` when it takes the left operand's type, `Between` when it
     /// compares two types, or the innermost two types an impl needed.
-    pub(super) fn std_partial_eq(
-        &mut self,
-        lhs: &Compared,
-        rhs: &Compared,
-    ) -> Result<PartialEqImpl, (Compared, Compared)> {
-        let resolve = |this: &Self, side: &Compared| match side {
-            Compared::Ty(ty) => Compared::Ty(this.inference.resolve(ty)),
-            Compared::Str => Compared::Str,
-        };
+    pub(super) fn std_partial_eq(&mut self, lhs: &Ty, rhs: &Ty) -> Result<PartialEqImpl, (Ty, Ty)> {
+        let resolve = |this: &Self, side: &Ty| this.inference.resolve(side);
         let (lhs, rhs) = (resolve(self, lhs), resolve(self, rhs));
         // A right operand still to be inferred takes the left's type.
-        if matches!(rhs, Compared::Ty(Ty::Infer(_) | Ty::Unknown | Ty::Never)) {
+        if matches!(rhs, Ty::Infer(_) | Ty::Unknown | Ty::Never) {
             return Ok(PartialEqImpl::Own);
         }
         // A scalar compares as a builtin operator, which takes its own type
         // (rustc's E0308 otherwise), as does a type std doesn't declare,
         // whose comparison the use checks.
-        let scalar = |side: &Compared| {
-            matches!(
-                side,
-                Compared::Ty(Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char)
-            )
-        };
+        let scalar = |side: &Ty| matches!(side, Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char);
         if scalar(&lhs) || keys(self, &lhs).is_none() {
             return Ok(PartialEqImpl::Own);
         }
@@ -828,7 +768,7 @@ impl Parser<'_> {
         } else {
             "core::cmp::Ord"
         };
-        let side = Compared::Ty(self.inference.resolve(ty));
+        let side = self.inference.resolve(ty);
         let arguments = if partial {
             vec![side.clone()]
         } else {
@@ -843,8 +783,8 @@ impl Parser<'_> {
     /// where-clauses proven; nothing is bound.
     pub(super) fn std_from(&mut self, target: &Ty, source: &Ty) -> bool {
         let checkpoint = self.inference.checkpoint();
-        let target = Compared::Ty(self.inference.resolve(target));
-        let source = Compared::Ty(self.inference.resolve(source));
+        let target = self.inference.resolve(target);
+        let source = self.inference.resolve(source);
         let holds = select(self, "core::convert::From", &target, &[source], true, 0).is_ok();
         self.inference.rollback(checkpoint);
         holds
@@ -877,6 +817,9 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
         (Ty::Float(Float::F64), Ty::Float(_)) => Some(None),
         // Every sequence is an array at runtime.
         (Ty::Array { .. }, Ty::Array { .. }) => Some(None),
+        // A `Cow` of a reference borrows it, and of a value owns it.
+        (Ty::Cow(_), Ty::Str | Ty::Reference { .. }) => Some(Some(PreludeOp::CowBorrowed)),
+        (Ty::Cow(_), _) => Some(Some(PreludeOp::CowOwned)),
         // A box is its value at runtime, and an `Rc` or `Arc` a new
         // allocation of it.
         (Ty::Boxed(inner), source) if same(inner, source) => Some(None),
@@ -942,6 +885,11 @@ pub(super) enum DerefCall {
     Program(Box<method::Definition>),
     /// An `Rc`'s or `Arc`'s value, read (`counted.rs`).
     Counted,
+    /// A crate type's `deref` (or `deref_mut`), called through its facade.
+    #[cfg(feature = "rust-import")]
+    Host { mutable: bool },
+    /// A `Cow`'s payload, read (`cow.rs`).
+    Cow,
 }
 
 impl Parser<'_> {
@@ -949,7 +897,7 @@ impl Parser<'_> {
     /// method probe and `as_deref`): from std's impls on natives, the
     /// program's `impl Deref`, as `str` for a `String`. With `mutable`,
     /// through `DerefMut`. `None` when `ty` has no `Deref`.
-    pub(super) fn deref_target(&mut self, ty: &Ty, mutable: bool) -> Option<(Compared, DerefCall)> {
+    pub(super) fn deref_target(&mut self, ty: &Ty, mutable: bool) -> Option<(Ty, DerefCall)> {
         let ty = self.inference.resolve(ty);
         if let Ty::Script(id, _) = &ty {
             let (trait_name, function) = if mutable {
@@ -983,7 +931,13 @@ impl Parser<'_> {
                 "Deref".into(),
                 "Target".into(),
             ));
-            return Some((Compared::Ty(target), DerefCall::Program(Box::new(call))));
+            return Some((target, DerefCall::Program(Box::new(call))));
+        }
+        #[cfg(feature = "rust-import")]
+        if matches!(ty, Ty::Host { .. })
+            && let Some(target) = self.host_deref_target(&ty, mutable)
+        {
+            return Some((target, DerefCall::Host { mutable }));
         }
         let trait_ = if mutable {
             "core::ops::deref::DerefMut"
@@ -991,7 +945,7 @@ impl Parser<'_> {
             "core::ops::deref::Deref"
         };
         let checkpoint = self.inference.checkpoint();
-        let side = Compared::Ty(ty.clone());
+        let side = ty.clone();
         let target = select(self, trait_, &side, &[], false, 0)
             .ok()
             .and_then(|_| {
@@ -1001,10 +955,10 @@ impl Parser<'_> {
                 associated(self, &selected, "Target")
             });
         self.inference.commit(checkpoint);
-        let call = if matches!(ty, Ty::Counted(..)) {
-            DerefCall::Counted
-        } else {
-            DerefCall::Value
+        let call = match ty {
+            Ty::Counted(..) => DerefCall::Counted,
+            Ty::Cow(_) => DerefCall::Cow,
+            _ => DerefCall::Value,
         };
         target.map(|target| (target, call))
     }
@@ -1023,10 +977,10 @@ impl Parser<'_> {
         let mutable = mutable && !shared;
         let (target, call) = self.deref_target(&target, mutable)?;
         let ty = match target {
-            Compared::Str if !mutable => Ty::Str,
+            Ty::UnsizedStr if !mutable => Ty::Str,
             // rawr has no `&mut str`.
-            Compared::Str => return None,
-            Compared::Ty(target) => Ty::Reference {
+            Ty::UnsizedStr => return None,
+            target => Ty::Reference {
                 mutable,
                 target: Box::new(target),
             },
@@ -1093,8 +1047,14 @@ impl Parser<'_> {
     }
 
     /// `value` through `calls`, the deref steps a coercion or a method probe
-    /// takes, as type `ty`: each program `deref` called on the last.
-    pub(super) fn apply_derefs(&mut self, value: &mut ParsedExpr, calls: Vec<DerefCall>, ty: Ty) {
+    /// takes, as type `ty`: each program `deref` called on the last, and
+    /// each crate type's through its facade.
+    pub(super) fn apply_derefs(
+        &mut self,
+        value: &mut ParsedExpr,
+        calls: Vec<DerefCall>,
+        ty: Ty,
+    ) -> Result<(), Error> {
         for call in calls {
             match call {
                 DerefCall::Value => {}
@@ -1104,9 +1064,196 @@ impl Parser<'_> {
                     value.lvalue = None;
                 }
                 DerefCall::Counted => self.counted_value(value),
+                #[cfg(feature = "rust-import")]
+                DerefCall::Host { mutable } => {
+                    let name = if mutable { "deref_mut" } else { "deref" };
+                    let at = value.span;
+                    self.pending_arguments = Some((Vec::new(), at.end()));
+                    let receiver = value.clone();
+                    *value = self.parse_host_method(receiver, name.into(), at)?;
+                }
+                DerefCall::Cow => {
+                    value.source = self.prelude_op(PreludeOp::CowValue, [value.rendered_source()]);
+                    value.prelude = origin::Fragment::default();
+                    value.lvalue = None;
+                }
             }
         }
         value.ty = ty;
+        Ok(())
+    }
+
+    /// The method probe's deref steps, as rustc's probe takes them: while
+    /// `value`'s type, or the type it refers to, is a program's or a
+    /// crate's type that lacks `member`, one step through its `Deref`. A
+    /// method found past the steps that takes `&mut self` takes them
+    /// through `DerefMut`, each `deref_mut` called on the place before it,
+    /// as rustc's `convert_place_derefs_to_mutable` does.
+    pub(super) fn probe_derefs(
+        &mut self,
+        mut value: ParsedExpr,
+        member: &ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let mut steps = Vec::new();
+        let mut probed = self.inference.resolve(&value.ty);
+        loop {
+            let target = match &probed {
+                Ty::Reference { target, .. } => self.inference.resolve(target),
+                owned => owned.clone(),
+            };
+            let own = match &target {
+                Ty::Script(id, _) => self.own_member(*id, member),
+                #[cfg(feature = "rust-import")]
+                Ty::Host { .. } => self.host_own_member(&target, member),
+                _ => break,
+            };
+            if own {
+                break;
+            }
+            let reference = match &probed {
+                reference @ Ty::Reference { .. } => reference.clone(),
+                owned => Ty::Reference {
+                    mutable: false,
+                    target: Box::new(owned.clone()),
+                },
+            };
+            let Some((ty, call)) = self.deref_reference(&reference, true) else {
+                break;
+            };
+            steps.push((target, ty.clone(), call));
+            probed = ty;
+        }
+        let method = matches!(self.peek(), Token::LeftParen | Token::Unit);
+        if !method || self.member_receiver(&probed, member) != Some(receiver::Mode::Mutable) {
+            for (_, ty, call) in steps {
+                self.apply_derefs(&mut value, vec![call], ty)?;
+            }
+            return Ok(value);
+        }
+        for (owner, _, _) in steps {
+            // rustc's E0596 when the type has no `DerefMut`.
+            let Some((target, call)) = self.deref_target(&owner, true) else {
+                return Err(Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!(
+                        "cannot borrow data in dereference of `{}` as mutable",
+                        owner.name(&self.models)
+                    )
+                    .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                });
+            };
+            let Ty::Script(id, _) = owner else {
+                let ty = match target {
+                    Ty::UnsizedStr => Ty::Str,
+                    target => Ty::Reference {
+                        mutable: true,
+                        target: Box::new(target),
+                    },
+                };
+                self.apply_derefs(&mut value, vec![call], ty)?;
+                continue;
+            };
+            let name = self.models.definition(id).name().into();
+            value = match self.call_owner_method(
+                value,
+                id,
+                name,
+                &"deref_mut".into(),
+                member_span,
+                Vec::new(),
+                member_span.start(),
+            )? {
+                Ok(called) => called,
+                Err(_) => unreachable!("`DerefMut` has `deref_mut`"),
+            };
+        }
+        Ok(value)
+    }
+
+    /// The receiver `member` takes on `ty`, through its references: a
+    /// program type's method's, a crate type's, or std's inherent method's.
+    fn member_receiver(&self, ty: &Ty, member: &str) -> Option<receiver::Mode> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Script(id, _) => self.receiver_method(id, member)?.receiver(),
+            #[cfg(feature = "rust-import")]
+            ty @ Ty::Host { .. } => {
+                let owner = self.host_member_owner(&ty, member)?;
+                let items = self
+                    .models
+                    .host_items(&format!("{}::{member}", owner.path()))?;
+                items
+                    .iter()
+                    .find_map(crate::host::item::Definition::receiver)
+            }
+            ty => std_method::inherent(&ty, member).map(|found| found.mode),
+        }
+    }
+
+    /// `<ty as Deref>::Target` of a crate's type `ty`, or `DerefMut`'s with
+    /// `mutable`: the target of the borrow guard its facade's `deref` (or
+    /// `deref_mut`) gives (D554). `None` when the facade has none.
+    #[cfg(feature = "rust-import")]
+    fn host_deref_target(&mut self, ty: &Ty, mutable: bool) -> Option<Ty> {
+        let (name, guard) = if mutable {
+            ("deref_mut", crate::host::item::Guard::Mutable)
+        } else {
+            ("deref", crate::host::item::Guard::Shared)
+        };
+        let owner = self.host_member_owner(ty, name)?;
+        let items = self
+            .models
+            .host_items(&format!("{}::{name}", owner.path()))?
+            .to_vec();
+        if !items
+            .iter()
+            .all(|item| item.guard() == Some(guard) && item.signature().parameters().is_empty())
+        {
+            return None;
+        }
+        let checkpoint = self.inference.checkpoint();
+        let selected = self.select_host_signature(&items, Some(ty), &mut [], false, Span::NONE);
+        let target = selected
+            .ok()
+            .map(|(_, signature)| self.inference.resolve(&signature.output));
+        self.inference.commit(checkpoint);
+        target
+    }
+
+    /// Whether the crate's type `ty` has a field or method `member` of its
+    /// own, which the method probe finds before it derefs.
+    #[cfg(feature = "rust-import")]
+    fn host_own_member(&self, ty: &Ty, member: &str) -> bool {
+        self.host_member_owner(ty, member).is_some()
+            || ty.host_alias().is_some_and(|definition| {
+                matches!(definition.shape(), crate::host::type_def::Shape::Struct { fields, .. }
+                    if fields.iter().any(|field| field.name() == member))
+            })
+            || self.imported_field_owner(ty, member).is_some()
+    }
+
+    /// The definition of the crate's type `ty` whose facade declares the
+    /// function `member`, at the path the type was named by or another.
+    #[cfg(feature = "rust-import")]
+    fn host_member_owner(
+        &self,
+        ty: &Ty,
+        member: &str,
+    ) -> Option<crate::host::type_def::Definition> {
+        ty.host_alias()
+            .filter(|definition| {
+                self.models
+                    .host_items(&format!("{}::{member}", definition.path()))
+                    .is_some()
+            })
+            .cloned()
+            .or_else(|| self.imported_member_owner(ty, member))
     }
 
     /// Whether the program's type `id` has a field or method `member` of its

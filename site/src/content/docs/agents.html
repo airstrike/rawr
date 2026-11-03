@@ -6,8 +6,8 @@
 
 <h2 id="install">Install</h2>
 <p>Install rawr:</p>
-<div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>That is enough for programs with no dependencies. A program with Rust dependencies needs rawr-import, and so does an iced app. <a href="/docs/imports#install">Imports</a> says how to install it. The server names whatever is missing when it starts, with the commands that install it.</p>
+<div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
+<p>That includes rawr-import, which runs programs with Rust dependencies and iced apps. <a href="/docs/start#install">Start</a> gives the other ways to install. The server names whatever is missing when it starts, with the commands that install it.</p>
 
 <h2 id="register">Register the server</h2>
 <p>Run <code>rawr init</code> in the project the agent works in:</p>

@@ -95,6 +95,14 @@ thread_local! {
     /// The handles the protocol gave out: a handle on the wire keeps its
     /// value alive, as the caller may pass it back (review 5).
     static EXPORTED: RefCell<Vec<NativeHandle>> = const { RefCell::new(Vec::new()) };
+    /// Homes a call borrowed (`PointerLent`), back to their slots the next
+    /// time the owner thread has the arena.
+    static REHOMES: RefCell<Vec<(NativeHandle, Box<dyn Homed>)>> = const { RefCell::new(Vec::new()) };
+    /// Values a call borrowed in a map (`MapLent`), back to their slots the
+    /// next time the owner thread has the arena.
+    static RELENDS: RefCell<Vec<(NativeHandle, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
+    /// The homes calls borrow now (`PointerLent`), by their slots.
+    static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Slots whose last handle was dropped, freed on the owner thread the next
@@ -576,6 +584,276 @@ fn copied<T: 'static>(target: &T, clone: Option<CloneValue>) -> Result<T, Error>
         .ok_or(Error::TypeMismatch)
 }
 
+/// A map a call borrows whose values are crate values (#777): each value
+/// moved out of its slot into the map for the call, and back after, so
+/// none is copied. Its keys are rawr's strings or numbers, made for it.
+#[allow(dead_code)]
+struct MapLent<M: LentMap> { map: M, keys: Vec<(M::Key, NativeHandle)> }
+
+/// std's `HashMap` and `BTreeMap`, as a [`MapLent`] gives their values
+/// back.
+#[allow(dead_code)]
+trait LentMap: 'static {
+    type Key: 'static;
+    type Value: 'static;
+    fn pull(&mut self, key: &Self::Key) -> Option<Self::Value>;
+}
+
+impl<K: std::hash::Hash + Eq + 'static, V: 'static> LentMap for std::collections::HashMap<K, V> {
+    type Key = K;
+    type Value = V;
+    fn pull(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+}
+
+impl<K: Ord + 'static, V: 'static> LentMap for std::collections::BTreeMap<K, V> {
+    type Key = K;
+    type Value = V;
+    fn pull(&mut self, key: &K) -> Option<V> {
+        self.remove(key)
+    }
+}
+
+impl<M: LentMap> Drop for MapLent<M> {
+    fn drop(&mut self) {
+        let keys = std::mem::take(&mut self.keys);
+        // The call that borrowed it may still hold the arena: the values
+        // wait for its next use.
+        RELENDS.with_borrow_mut(|relends| {
+            for (key, handle) in keys {
+                if let Some(value) = self.map.pull(&key) {
+                    relends.push((handle, Box::new(value) as Box<dyn Any>));
+                }
+            }
+        });
+        let _ = with_arena(|_| Ok(()));
+    }
+}
+
+/// A crate's own `Rc` or `Arc` (#775): the home of the slot of the value
+/// it points to, which a rawr `Rc` or `Arc` holds the handle of. The
+/// value is read through it, as `Deref` reads it, and never copied out.
+#[allow(dead_code)]
+#[derive(Clone)]
+struct Pointed<P>(P);
+
+/// Rust's `Rc` and `Arc`, as a [`Pointed`] holds them.
+#[allow(dead_code)]
+trait Pointer: Clone + std::ops::Deref<Target = <Self as Pointer>::Value> + 'static {
+    type Value: 'static;
+    fn new(value: Self::Value) -> Self;
+    fn strong(&self) -> usize;
+    fn address(&self) -> usize;
+}
+
+impl<T: 'static> Pointer for std::rc::Rc<T> {
+    type Value = T;
+    fn new(value: T) -> Self {
+        Self::new(value)
+    }
+    fn strong(&self) -> usize {
+        Self::strong_count(self)
+    }
+    fn address(&self) -> usize {
+        Self::as_ptr(self).cast::<()>() as usize
+    }
+}
+
+impl<T: 'static> Pointer for std::sync::Arc<T> {
+    type Value = T;
+    fn new(value: T) -> Self {
+        Self::new(value)
+    }
+    fn strong(&self) -> usize {
+        Self::strong_count(self)
+    }
+    fn address(&self) -> usize {
+        Self::as_ptr(self).cast::<()>() as usize
+    }
+}
+
+impl<P: Pointer> Homed for Pointed<P> {
+    fn shared(&self, call: &mut dyn FnMut(&dyn Any)) -> Result<(), Error> {
+        call(&*self.0);
+        Ok(())
+    }
+
+    /// Rust's `Rc` and `Arc` lend only `&T`, as rustc's E0596 says.
+    fn mutable(&self, _call: &mut dyn FnMut(&mut dyn Any)) -> Result<(), Error> {
+        Err(Error::Home(
+            "cannot borrow data in an `Rc` or `Arc` as mutable (E0596)".into(),
+        ))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn value(&self) -> Option<&dyn Any> {
+        Some(&*self.0)
+    }
+
+    /// The value stays in its pointer for as long as the slot lives.
+    fn settle(self: Box<Self>) -> Result<Box<dyn Any>, Box<dyn Homed>> {
+        Err(self)
+    }
+}
+
+/// The strong count and address of the crate's own pointer `P` whose value
+/// `value`, a rawr pointer's handle, is in: what a rawr `Rc` or `Arc` that
+/// stands for it reads (`crossing::Link`).
+#[allow(dead_code)]
+fn pointer_count<P: Pointer>(value: &Dynamic) -> Option<(usize, usize)> {
+    let handle = value.read_lock::<NativeHandle>()?.clone();
+    arena_access(|arena| {
+        let pointed = arena.homed(&handle)?.as_any().downcast_ref::<Pointed<P>>()?;
+        Some((pointed.0.strong(), pointed.0.address()))
+    })
+    .flatten()
+}
+
+/// The crate's own pointer a rawr `Rc` or `Arc` gives native code by value
+/// (#775): the one its value is in, made now if this is its first
+/// crossing. rawr's last pointer moves it out of its slot, as Rust moves
+/// its last pointer; another one shares it and stands for it after. All
+/// of rawr's pointers share that one, so a copy for each of the others is
+/// held while the call runs (`Balance`), where it counts them.
+#[allow(dead_code)]
+fn take_pointer<P: Pointer>(arena: &mut Arena, value: Dynamic) -> Result<(P, Balance<P>), Error> {
+    let (pointee, strong, only) = __rawr_internal::crossing::pointee(&value).ok_or(Error::TypeMismatch)?;
+    let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+    let pointer = arena.point::<P>(handle.clone())?;
+    if only {
+        drop(arena.unhome(&handle)?);
+        return Ok((pointer, Balance(Vec::new())));
+    }
+    __rawr_internal::crossing::link(&value, pointer_count::<P>);
+    // `value` moves into the call, and the one rawr holds stands for one
+    // of those left.
+    let balance = Balance::of(&pointer, strong.saturating_sub(2));
+    Ok((pointer, balance))
+}
+
+/// Copies of a crate's own pointer, one for each rawr pointer but one that
+/// shares it, held while a call runs so that native code counts them.
+#[allow(dead_code)]
+struct Balance<P>(Vec<P>);
+
+#[allow(dead_code)]
+impl<P: Pointer> Balance<P> {
+    fn of(pointer: &P, count: usize) -> Self {
+        Self(std::iter::repeat_with(|| pointer.clone()).take(count).collect())
+    }
+}
+
+/// A crate's own pointer out of its slot while calls borrow it, with the
+/// copies that stand for rawr's other pointers to it (`Balance`). Every
+/// borrow of it in one call shares it, as `same(&a, &b)` of two of rawr's
+/// pointers to one allocation borrows two.
+#[allow(dead_code)]
+struct LentHome { homed: Box<dyn Homed>, balance: Box<dyn Any> }
+
+/// A borrow of a crate's own pointer for one call (#775): its home, out of
+/// its slot until the last borrow of it ends, so the borrow adds no count.
+#[allow(dead_code)]
+struct PointerLent<P: Pointer> { lent: Option<std::rc::Rc<LentHome>>, handle: NativeHandle, pointer: std::marker::PhantomData<P> }
+
+#[allow(dead_code)]
+impl<P: Pointer> PointerLent<P> {
+    fn get(&self) -> Option<&P> {
+        self.lent.as_ref()?.homed.as_any().downcast_ref::<Pointed<P>>().map(|pointed| &pointed.0)
+    }
+}
+
+impl<P: Pointer> Drop for PointerLent<P> {
+    fn drop(&mut self) {
+        let Some(lent) = self.lent.take() else {
+            return;
+        };
+        let key = (self.handle.epoch, self.handle.slot, self.handle.generation);
+        let last = LENT_HOMES.with_borrow_mut(|homes| {
+            let at = homes.iter().position(|(held, _)| *held == key)?;
+            (std::rc::Rc::strong_count(&lent) == 2).then(|| homes.remove(at))
+        });
+        drop(last);
+        if let Ok(lent) = std::rc::Rc::try_unwrap(lent) {
+            // The call that borrowed it may still hold the arena: the home
+            // waits for its next use.
+            REHOMES.with_borrow_mut(|rehomes| rehomes.push((self.handle.clone(), lent.homed)));
+            let _ = with_arena(|_| Ok(()));
+        }
+    }
+}
+
+/// Lend the crate's own pointer a rawr `Rc` or `Arc` stands for to a call
+/// that takes `&Rc<T>` or `&Arc<T>`, made now if this is its first
+/// crossing.
+#[allow(dead_code)]
+fn lend_pointer<P: Pointer>(arena: &mut Arena, value: &Dynamic) -> Result<PointerLent<P>, Error> {
+    let (pointee, strong, _) = __rawr_internal::crossing::pointee(value).ok_or(Error::TypeMismatch)?;
+    let handle = pointee.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?;
+    let key = (handle.epoch, handle.slot, handle.generation);
+    let shared = LENT_HOMES.with_borrow(|homes| {
+        homes.iter().find(|(held, _)| *held == key).map(|(_, lent)| lent.clone())
+    });
+    if let Some(lent) = shared {
+        return Ok(PointerLent { lent: Some(lent), handle, pointer: std::marker::PhantomData });
+    }
+    let pointer = arena.point::<P>(handle.clone())?;
+    __rawr_internal::crossing::link(value, pointer_count::<P>);
+    let balance = Balance::of(&pointer, strong.saturating_sub(1));
+    drop(pointer);
+    let homed = arena.unhome(&handle)?;
+    let lent = std::rc::Rc::new(LentHome { homed, balance: Box::new(balance) });
+    LENT_HOMES.with_borrow_mut(|homes| homes.push((key, lent.clone())));
+    Ok(PointerLent { lent: Some(lent), handle, pointer: std::marker::PhantomData })
+}
+
+/// A rawr `Rc` or `Arc` standing for the crate's own `pointer`, whose value
+/// it reads in place: a slot `pointer` is the home of.
+#[allow(dead_code)]
+fn give_pointed<P: Pointer>(
+    arena: &mut Arena,
+    pointer: P,
+    debug: Option<DebugText>,
+    display: Option<DebugText>,
+    clone: Option<CloneValue>,
+    relations: Relations,
+) -> Result<Dynamic, Error> {
+    let handle = arena.occupy(None, Some(Box::new(Pointed(pointer))), std::any::type_name::<P::Value>())?;
+    if let Some(entry) = arena.slots.get_mut(handle.slot as usize) {
+        entry.debug = debug;
+        entry.display = display;
+        entry.clone = clone;
+        entry.relations = relations;
+    }
+    Ok(__rawr_internal::crossing::counted(Dynamic::from(handle), pointer_count::<P>))
+}
+
+/// [`give_pointed`] with the `Debug`, `Display`, `Clone`, `PartialEq` and
+/// `Hash` of the value the pointer holds, when its type has them.
+#[allow(unused_macros)]
+macro_rules! give_pointer {
+    ($arena:expr, $pointer:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{
+            ViaClone as _, ViaDebug as _, ViaDisplay as _, ViaEqual as _, ViaHash as _,
+            WithoutClone as _, WithoutDebug as _, WithoutDisplay as _, WithoutEqual as _,
+            WithoutHash as _,
+        };
+        let pointer = $pointer;
+        let debug = (&$crate::debug_probe(&*pointer)).native_debug();
+        let display = (&$crate::debug_probe(&*pointer)).native_display();
+        let clone = (&$crate::debug_probe(&*pointer)).native_clone();
+        let relations = $crate::Relations {
+            equal: (&$crate::debug_probe(&*pointer)).native_equal(),
+            hash: (&$crate::debug_probe(&*pointer)).native_hash(),
+        };
+        $crate::give_pointed($arena, pointer, debug, display, clone, relations)
+    }};
+}
+
 /// `to_string()` and `{}` of an imported value print its Rust `Display`
 /// text.
 impl std::fmt::Display for NativeHandle {
@@ -870,6 +1148,11 @@ impl Arena {
     }
 
     fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
+        self.occupy(Some(Box::new(value)), None, std::any::type_name::<T>())
+    }
+
+    /// A slot holding `value`, or reaching it in `homed`, named `name`.
+    fn occupy(&mut self, value: Option<Box<dyn Any>>, homed: Option<Box<dyn Homed>>, name: &'static str) -> Result<NativeHandle, Error> {
         let slot = match self.free.pop() {
             Some(slot) => slot,
             None => {
@@ -882,11 +1165,12 @@ impl Arena {
         };
         let entry = self.slots.get_mut(slot as usize).ok_or(Error::StaleHandle)?;
         if entry.value.is_some() || entry.homed.is_some() { return Err(Error::StaleHandle); }
-        entry.value = Some(Box::new(value));
+        entry.value = value;
+        entry.homed = homed;
         entry.leased = false;
         entry.debug = None;
         // A tool reading a value without `Debug` names its type (D675.3).
-        entry.name = std::any::type_name::<T>();
+        entry.name = name;
         entry.display = None;
         entry.clone = None;
         entry.relations = Relations::default();
@@ -1055,6 +1339,55 @@ impl Arena {
         let shared = std::rc::Rc::new(*value);
         self.slots[index].homed = Some(Box::new(Viewed(shared.clone())));
         Ok(shared)
+    }
+
+    /// The crate's own `Rc` or `Arc` the value of `handle` is in (#775): its
+    /// home, where the value moves the first time it crosses as one, and
+    /// isn't copied.
+    #[allow(dead_code)]
+    fn point<P: Pointer>(&mut self, handle: NativeHandle) -> Result<P, Error> {
+        self.home::<P::Value, Pointed<P>>(handle, |value| Ok(Pointed(P::new(value))))
+            .map(|pointed| pointed.0)
+    }
+
+    /// The value of `handle`, out of its slot while a call borrows it in a
+    /// map (`MapLent`); the slot refuses every use meanwhile.
+    #[allow(dead_code)]
+    fn lend_out<T: 'static>(&mut self, handle: NativeHandle) -> Result<T, Error> {
+        self.settle(&handle);
+        if self.homed(&handle).is_some() {
+            return Err(Error::Leased);
+        }
+        let index = self.index::<T>(&handle)?;
+        let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
+        self.slots[index].leased = true;
+        value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)
+    }
+
+    /// The home of `handle`'s slot, out of it while a call borrows it
+    /// (`PointerLent`); the slot refuses every use meanwhile.
+    #[allow(dead_code)]
+    fn unhome(&mut self, handle: &NativeHandle) -> Result<Box<dyn Homed>, Error> {
+        if handle.epoch != self.epoch { return Err(Error::StaleHandle); }
+        let entry = self.slots.get_mut(handle.slot as usize).ok_or(Error::StaleHandle)?;
+        if entry.generation != handle.generation { return Err(Error::StaleHandle); }
+        let homed = entry.homed.take().ok_or(Error::Leased)?;
+        entry.leased = true;
+        Ok(homed)
+    }
+
+    /// A home back in the slot it was lent from, unless its last handle
+    /// went meanwhile.
+    fn rehome(&mut self, handle: NativeHandle, homed: Box<dyn Homed>) {
+        if handle.epoch != self.epoch { return; }
+        if let Some(entry) = self.slots.get_mut(handle.slot as usize)
+            && entry.generation == handle.generation
+            && entry.leased
+            && entry.homed.is_none()
+        {
+            entry.homed = Some(homed);
+            entry.leased = false;
+        }
     }
 
     /// Give the slot of `handle` its value back from its home once nothing
@@ -1292,6 +1625,12 @@ impl Arena {
             mine
         };
         for (handle, value) in restores {
+            self.restore(handle, value);
+        }
+        for (handle, homed) in REHOMES.with_borrow_mut(std::mem::take) {
+            self.rehome(handle, homed);
+        }
+        for (handle, value) in RELENDS.with_borrow_mut(std::mem::take) {
             self.restore(handle, value);
         }
         // Another live arena's releases wait for it: the owner's for the
@@ -2055,6 +2394,43 @@ fn reach_lender<T: 'static>(
     })
 }
 
+/// Reach the value `lender` names mutably, for the scope a pattern through
+/// `&mut T` lends its fields to. A value in a slot is leased for the
+/// scope, so the arena is free while the fields are lent, every other use
+/// of the value meanwhile is refused, as rustc refuses it, and the value
+/// goes back when the scope ends. A value an iced view's home holds is
+/// changed there.
+#[allow(dead_code)]
+fn reach_lender_mut<T: 'static>(
+    lender: &Lender,
+    visit: &mut dyn FnMut(&mut T) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>>,
+) -> Result<Dynamic, Box<__rawr_internal::EvalAltResult>> {
+    let handle = match lender {
+        Lender::Lent(lent) => {
+            let failed = |error| place_error(Error::Lent(lent.name(), error));
+            let access: fn(u64, &mut dyn FnMut(&mut T)) -> Result<(), u8> = lent.accessor(true).map_err(failed)?;
+            let mut result = None;
+            access(lent.nonce().bits(), &mut |value| result = Some(visit(value)))
+                .map_err(|code| failed(__rawr_internal::scope::Error::from_code(code)))?;
+            return result.unwrap_or_else(|| Err(failed(__rawr_internal::scope::Error::Busy)));
+        }
+        Lender::Handle(handle) => handle,
+    };
+    let held = with_arena(|arena| {
+        if arena.homed(handle).is_some() {
+            return Ok(None);
+        }
+        arena.lease_place::<T>(handle.clone()).map(Some)
+    })
+    .map_err(place_error)?;
+    let Some(mut held) = held else {
+        return with_arena(|arena| arena.mutable::<T, _>(handle.clone(), |value| visit(value)))
+            .map_err(place_error)?;
+    };
+    let value = held.value.as_mut().ok_or_else(|| place_error(Error::StaleHandle))?;
+    visit(value)
+}
+
 /// Run `body` with each argument at `lendable` (its index, whether the call
 /// takes it `&mut`, and how to reach it) that is a value native code lent
 /// (D558.3) reached for the call, nested in its accessor, as ratatui's
@@ -2626,6 +3002,12 @@ fn attest_inner(
         && let Some(handle) = inner.read_lock::<NativeHandle>().map(|value| value.clone())
         && let Some(witness) = witness.argument_witness(*index)
     {
+        arena.attest(handle, witness)?;
+    } else if let Some((pointee, _, _)) = __rawr_internal::crossing::pointee(value)
+        && let Some(handle) = pointee.read_lock::<NativeHandle>().map(|value| value.clone())
+        && let Some(witness) = witness.argument_witness(0)
+    {
+        // The value an `Rc` or `Arc` a crate gave points to, as its type.
         arena.attest(handle, witness)?;
     } else if let Some((inner, index)) = inner_tuple(value)
         && let Some(tuple) = witness.argument_witness(index)
@@ -5829,11 +6211,14 @@ fn render_source(
     )
     .map_err(request::unwritable)?;
     // std's traits outside the prelude whose members a crate type's impl
-    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709).
+    // gives the program, as `Coords::from_str` of `"1,2".parse()` (#709)
+    // and the `deref` a method probe takes through a crate type's `Deref`
+    // (#762).
     writeln!(
         stamps,
         "#[allow(unused_imports)]\npub(super) use ::core::str::FromStr as _;\n\
-         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;"
+         #[allow(unused_imports)]\npub(super) use ::core::hash::Hash as _;\n\
+         #[allow(unused_imports)]\npub(super) use ::core::ops::{{Deref as _, DerefMut as _}};"
     )
     .map_err(request::unwritable)?;
     // Each trait the program names is in scope for every adapter, so a
@@ -6727,6 +7112,17 @@ enum Matcher {
     /// The fields, lent for the rest of the scope that binds them, as a
     /// pattern through `&T` binds them (`render_lent_fields`).
     Lend,
+    /// The fields, lent mutably for the rest of the scope that binds them,
+    /// as a pattern through `&mut T` or a `ref mut` binding binds them
+    /// (`render_lent_fields`).
+    LendMut,
+    /// The field at the index, copied, as a binding of a `Copy` field or of
+    /// a value Rawr holds as its own reads it.
+    Read(u32),
+    /// The field at the index, lent for the rest of the scope that reads
+    /// it, as a pattern below the variant's tests and binds it
+    /// (`render_borrowed_field`).
+    Borrow(u32),
 }
 
 impl Matcher {
@@ -6738,37 +7134,50 @@ impl Matcher {
             Self::Test => b"rawr-variant-test",
             Self::Take => b"rawr-variant-take",
             Self::Lend => b"rawr-variant-lend",
+            Self::LendMut => b"rawr-variant-lend-mut",
+            Self::Read(_) => b"rawr-variant-read",
+            Self::Borrow(_) => b"rawr-variant-borrow",
         });
+        if let Self::Read(field) | Self::Borrow(field) = self {
+            hasher.update(field.to_le_bytes());
+        }
         hasher.update(plan.identity().as_bytes());
         hasher.finalize().into()
     }
 
     fn name(self, plan: &Plan) -> String {
         let suffix = match self {
-            Self::Copy => "match",
-            Self::Test => "test",
-            Self::Take => "take",
-            Self::Lend => "lend",
+            Self::Copy => "match".to_owned(),
+            Self::Test => "test".to_owned(),
+            Self::Take => "take".to_owned(),
+            Self::Lend => "lend".to_owned(),
+            Self::LendMut => "lend_mut".to_owned(),
+            Self::Read(field) => format!("read_{field}"),
+            Self::Borrow(field) => format!("borrow_{field}"),
         };
         format!("{}_{suffix}", adapter_name(plan))
     }
 
     /// The runner's `StructuralKind` variant.
-    const fn kind(self) -> &'static str {
+    fn kind(self) -> String {
         match self {
-            Self::Copy => "Match",
-            Self::Test => "Test",
-            Self::Take => "Take",
-            Self::Lend => "Lend",
+            Self::Copy => "Match".to_owned(),
+            Self::Test => "Test".to_owned(),
+            Self::Take => "Take".to_owned(),
+            Self::Lend => "Lend".to_owned(),
+            Self::LendMut => "LendMut".to_owned(),
+            Self::Read(field) => format!("Read {{ field: {field} }}"),
+            Self::Borrow(field) => format!("Borrow {{ field: {field} }}"),
         }
     }
 }
 
 /// The matchers of a variant of a non-generic enum: one that copies its
-/// fields and its test, and, with fields, one that moves them and one that
-/// lends them. The set depends on the plan alone, so the runner's manifest
-/// and its rows name the same adapters; how each reaches the fields is
-/// decided where it is rendered (`render_matcher`).
+/// fields and its test, and, with fields, one that moves them, one that
+/// lends them, one that lends them mutably, and for each field one that
+/// copies it and one that lends it. The set depends on the plan alone, so
+/// the runner's manifest and its rows name the same adapters; how each
+/// reaches the fields is decided where it is rendered (`render_matcher`).
 fn matchers(plan: &Plan) -> Vec<Matcher> {
     let Operation::EnumVariant {
         parameters, fields, ..
@@ -6782,7 +7191,17 @@ fn matchers(plan: &Plan) -> Vec<Matcher> {
     if fields.is_empty() {
         return vec![Matcher::Copy, Matcher::Test];
     }
-    vec![Matcher::Copy, Matcher::Test, Matcher::Take, Matcher::Lend]
+    let mut matchers = vec![
+        Matcher::Copy,
+        Matcher::Test,
+        Matcher::Take,
+        Matcher::Lend,
+        Matcher::LendMut,
+    ];
+    for field in (0..fields.len()).filter_map(|index| u32::try_from(index).ok()) {
+        matchers.extend([Matcher::Read(field), Matcher::Borrow(field)]);
+    }
+    matchers
 }
 
 /// Whether the value of the variant `plan` builds is held where its fields
@@ -6802,6 +7221,8 @@ fn lendable(ty: &convert::Type) -> bool {
         && !is_duration(ty)
         && !is_facade_value(ty)
         && boxed_element(ty).is_none()
+        && counted_element(ty).is_none()
+        && keyed_element(ty).is_none()
         && std_value(ty).is_none()
         && place::available(ty)
         && concrete_type(ty).is_some()
@@ -6837,10 +7258,31 @@ fn variant_pattern(
     }
 }
 
+/// The pattern of the variant `name` of `path` in `form`, binding the field
+/// at `index` of `fields` to `field_0` and no other.
+fn field_pattern(
+    path: &str,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    index: usize,
+) -> String {
+    match (form, fields.get(index)) {
+        (crate::api::model::FieldForm::Tuple, Some(_)) => {
+            format!("{path}::{name}({}field_0, ..)", "_, ".repeat(index))
+        }
+        (crate::api::model::FieldForm::Record, Some(field)) => {
+            format!("{path}::{name} {{ {}: field_0, .. }}", field.name())
+        }
+        _ => variant_pattern(path, name, form, &[]),
+    }
+}
+
 /// The matcher `matcher` of a variant: `Some` of the variant's fields,
 /// copied, or of `()` for its test, when the value the first argument
-/// holds is that variant, otherwise `None`; or the variant's fields moved
-/// (`render_moved_fields`) or lent (`render_lent_fields`).
+/// holds is that variant, otherwise `None`; one field copied; or the
+/// variant's fields moved (`render_moved_fields`) or lent
+/// (`render_lent_fields`), or one field lent (`render_borrowed_field`).
 fn render_matcher(
     plan: &Plan,
     matcher: Matcher,
@@ -6853,28 +7295,55 @@ fn render_matcher(
         return Ok(());
     };
     let lent = |field: &crate::surface::adapter::Field| lendable(field.ty());
-    let fields = match matcher {
-        Matcher::Copy => &**fields,
-        Matcher::Test => &[],
+    let path = rust_path(plan);
+    let (pattern, fields) = match matcher {
+        Matcher::Copy => (variant_pattern(&path, name, *form, fields), &**fields),
+        Matcher::Test => (variant_pattern(&path, name, *form, &[]), &[][..]),
         Matcher::Take if reaches_fields(plan) => {
             return render_moved_fields(plan, name, *form, fields, output);
         }
-        Matcher::Lend
+        Matcher::Lend | Matcher::LendMut
             if reaches_fields(plan)
                 && fields.iter().any(lent)
                 && fields
                     .iter()
                     .all(|field| plain_value(field.ty()) || lent(field)) =>
         {
-            return render_lent_fields(plan, name, *form, fields, output);
+            let mutable = matcher == Matcher::LendMut;
+            return render_lent_fields(plan, name, *form, fields, mutable, output);
         }
-        Matcher::Take | Matcher::Lend => return render_copied_fields(plan, matcher, output),
+        Matcher::Take | Matcher::Lend | Matcher::LendMut => {
+            return render_copied_fields(plan, matcher, output);
+        }
+        Matcher::Borrow(field)
+            if reaches_fields(plan)
+                && fields
+                    .get(field as usize)
+                    .is_some_and(|field| lendable(field.ty())) =>
+        {
+            return render_borrowed_field(plan, name, *form, fields, field, output);
+        }
+        Matcher::Borrow(field) => return render_read_field(plan, field, output),
+        Matcher::Read(field) => {
+            let index = field as usize;
+            let Some(read) = fields.get(index..=index) else {
+                return Err(request::drift("a variant field's index"));
+            };
+            (field_pattern(&path, name, *form, fields, index), read)
+        }
     };
-    let path = rust_path(plan);
+    // The copying matcher and its test give `Some` of what they read, and
+    // `None` for another variant; a field's reader runs after the
+    // pattern's test has chosen the variant, and gives the field itself.
+    let reads = matches!(matcher, Matcher::Read(_));
+    let missed = if reads {
+        "Err(Error::TypeMismatch)"
+    } else {
+        "Ok(__rawr_internal::option::none())"
+    };
     let bound = (0..fields.len())
         .map(|index| format!("field_{index}"))
         .collect::<Vec<_>>();
-    let pattern = variant_pattern(&path, name, *form, fields);
     // A field Rawr holds as its own value is copied, as Rust reads it in
     // place. A native field is copied by its `Clone`; one without `Clone`
     // can't leave the borrowed value, which rustc says as E0507.
@@ -6909,6 +7378,11 @@ fn render_matcher(
     // A value in a scope frame's region (D558 tier 1): its fields that
     // carry the region's lifetime stay there.
     if let Some(family) = container_family(&path, &path) {
+        let found = if reads {
+            "values.into_iter().next().ok_or(Error::TypeMismatch)"
+        } else {
+            "Ok(__rawr_internal::option::some(if values.is_empty() { Dynamic::from(()) } else { Dynamic::from_array(values) }))"
+        };
         let mut values = String::new();
         {
             let _region = InRegion::enter();
@@ -6924,13 +7398,13 @@ fn render_matcher(
         return __rawr_internal::scope::with::<__rawr_internal::scope::RegionF, _>(scoped.nonce(), |region| -> Result<Dynamic, Error> {{
             #[allow(unreachable_patterns)]
             let output = match region.get::<{family}>(scoped).map_err(|error| Error::Lent(scoped.name(), error))? {{ {pattern} => Some({cloned}), _ => None }};
-            let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+            let Some(fields) = output else {{ return {missed}; }};
             let fields = fields?;
             #[allow(unused_mut)]
             let mut values: Vec<Dynamic> = Vec::new();
             #[allow(clippy::let_unit_value)]
             let _ = &fields;{values}
-            Ok(__rawr_internal::option::some(if values.is_empty() {{ Dynamic::from(()) }} else {{ Dynamic::from_array(values) }}))
+            {found}
         }})
         .map_err(|error| Error::Lent(scoped.name(), error))?;
     }}"
@@ -6948,7 +7422,7 @@ fn render_matcher(
             "    let handle = native_handle(arguments, 0, false)?;
     #[allow(unreachable_patterns)]
     let output = arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?;
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let Some(fields) = output else {{ return {missed}; }};
     let fields = fields?;"
         )
         .map_err(request::unwritable)?;
@@ -6973,7 +7447,7 @@ fn render_matcher(
             arguments.arena.shared::<{path}, _>(handle, |input| match input {{ {pattern} => Some({cloned}), _ => None }})?
         }}
     }};
-    let Some(fields) = output else {{ return Ok(__rawr_internal::option::none()); }};
+    let Some(fields) = output else {{ return {missed}; }};
     let fields = fields?;"
         )
         .map_err(request::unwritable)?;
@@ -6983,6 +7457,11 @@ fn render_matcher(
             .write_all(b"    let () = fields;\n    Ok(__rawr_internal::option::some(Dynamic::from(())))\n}\n\n")
             .map_err(request::unwritable)?;
         return Ok(());
+    }
+    if let ([field], true) = (fields, reads) {
+        let mut converted = String::new();
+        render_to_dynamic(field.ty(), "fields.0", 0, &mut converted)?;
+        return writeln!(output, "    {converted}\n}}\n").map_err(request::unwritable);
     }
     output
         .write_all(b"    let mut values = Vec::new();\n")
@@ -7065,14 +7544,20 @@ fn render_lent_fields(
     name: &str,
     form: crate::api::model::FieldForm,
     fields: &[crate::surface::adapter::Field],
+    mutable: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let path = rust_path(plan);
     let pattern = variant_pattern(&path, name, form, fields);
+    let matcher = if mutable {
+        Matcher::LendMut
+    } else {
+        Matcher::Lend
+    };
     writeln!(
         output,
         "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
-        Matcher::Lend.name(plan)
+        matcher.name(plan)
     )
     .map_err(request::unwritable)?;
     let mut copies = String::new();
@@ -7083,19 +7568,13 @@ fn render_lent_fields(
             let mut converted = String::new();
             render_to_dynamic(ty, "copied", 0, &mut converted)?;
             copies.push_str(&format!(
-                "\n            let value_{index} = {{ let copied = Clone::clone(field_{index}); {converted} }}.map_err(place_error)?;"
+                "\n            let value_{index} = {{ let copied = Clone::clone(&*field_{index}); {converted} }}.map_err(place_error)?;"
             ));
             continue;
         }
         let rust =
             concrete_type(ty).ok_or_else(|| request::drift("a lent field's concrete type"))?;
-        writeln!(
-            output,
-            "    struct Field{index};
-    impl __rawr_internal::scope::Family for Field{index} {{ type Of<'a> = {rust}; }}
-    const SHARED_{index}: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
-        )
-        .map_err(request::unwritable)?;
+        render_field_family(index, &rust, mutable, output)?;
         lent.push((index, rust));
     }
     let values = (0..fields.len())
@@ -7105,12 +7584,19 @@ fn render_lent_fields(
     let mut body = format!("rest(Dynamic::from_array(vec![{values}]))");
     for (index, rust) in lent.iter().rev() {
         body = format!(
-            "__rawr_internal::scope::lend_ref::<Field{index}, _>(field_{index}, |nonce| {{
-                let value_{index} = Dynamic::from(__rawr_internal::scope::Lent::new(nonce, {rust:?}, None, Some(&SHARED_{index} as __rawr_internal::scope::Accessor)));
+            "{} {{
+                let value_{index} = {};
                 {body}
-            }})"
+            }})",
+            lend_field(*index, mutable),
+            lent_field(*index, rust, mutable),
         );
     }
+    let reach = if mutable {
+        "reach_lender_mut"
+    } else {
+        "reach_lender"
+    };
     writeln!(
         output,
         "    let lender = match lent_value(arguments, 0) {{
@@ -7118,7 +7604,7 @@ fn render_lent_fields(
         None => Lender::Handle(native_handle(arguments, 0, false)?),
     }};
     Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
-        reach_lender::<{path}>(&lender, &mut |input| {{
+        {reach}::<{path}>(&lender, &mut |input| {{
             #[allow(irrefutable_let_patterns)]
             let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};{copies}
             {body}
@@ -7128,6 +7614,116 @@ fn render_lent_fields(
 "
     )
     .map_err(request::unwritable)
+}
+
+/// The field at `index` of the variant `name` of the value the first
+/// argument holds, lent for the rest of the scope that reads it, as a
+/// pattern below the variant's reads it: a scope frame that, opened, lends
+/// the field by its own type, as `render_lent_fields` lends each field.
+/// The value stays where it is, shared, while the frame lends the field.
+/// The pattern's test has already chosen the variant.
+fn render_borrowed_field(
+    plan: &Plan,
+    name: &str,
+    form: crate::api::model::FieldForm,
+    fields: &[crate::surface::adapter::Field],
+    field: u32,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    let path = rust_path(plan);
+    let index = field as usize;
+    let rust = fields
+        .get(index)
+        .and_then(|field| concrete_type(field.ty()))
+        .ok_or_else(|| request::drift("a lent field's concrete type"))?;
+    let pattern = field_pattern(&path, name, form, fields, index);
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{",
+        Matcher::Borrow(field).name(plan)
+    )
+    .map_err(request::unwritable)?;
+    render_field_family(0, &rust, false, output)?;
+    writeln!(
+        output,
+        "    let lender = match lent_value(arguments, 0) {{
+        Some(lent) => Lender::Lent(lent),
+        None => Lender::Handle(native_handle(arguments, 0, false)?),
+    }};
+    Ok(Dynamic::from(__rawr_internal::scope::Opening::new({path:?}, move |rest| {{
+        reach_lender::<{path}>(&lender, &mut |input| {{
+            #[allow(irrefutable_let_patterns)]
+            let {pattern} = input else {{ return Err(place_error(Error::TypeMismatch)); }};
+            {} rest({}))
+        }})
+    }})))
+}}
+",
+        lend_field(0, false),
+        lent_field(0, &rust, false),
+    )
+    .map_err(request::unwritable)
+}
+
+/// The lender of a field that is not lent by its type: the field copied,
+/// as its reader copies it.
+fn render_read_field(plan: &Plan, field: u32, output: &mut Vec<u8>) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "fn {}(arguments: &mut Arguments<'_, '_, '_>) -> Result<Dynamic, Error> {{
+    {}(arguments)
+}}
+",
+        Matcher::Borrow(field).name(plan),
+        Matcher::Read(field).name(plan)
+    )
+    .map_err(request::unwritable)
+}
+
+/// The scope family `Field{index}` of a lent field of the Rust type
+/// `rust`, and the accessors its `Lent` reaches it by: shared, and, when
+/// it is lent `mutable`, mutable.
+fn render_field_family(
+    index: usize,
+    rust: &str,
+    mutable: bool,
+    output: &mut Vec<u8>,
+) -> Result<(), request::Error> {
+    writeln!(
+        output,
+        "    struct Field{index};
+    impl __rawr_internal::scope::Family for Field{index} {{ type Of<'a> = {rust}; }}
+    const SHARED_{index}: fn(u64, &mut dyn FnMut(&{rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with_ref::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
+    )
+    .map_err(request::unwritable)?;
+    if mutable {
+        writeln!(
+            output,
+            "    const MUTABLE_{index}: fn(u64, &mut dyn FnMut(&mut {rust})) -> Result<(), u8> = |nonce, visit| __rawr_internal::scope::with::<Field{index}, _>(__rawr_internal::scope::nonce(nonce), |value| visit(value)).map_err(__rawr_internal::scope::Error::code);"
+        )
+        .map_err(request::unwritable)?;
+    }
+    Ok(())
+}
+
+/// The start of the lend of `field_{index}`, up to its body's opening
+/// brace: `lend` when it is lent `mutable`, `lend_ref` otherwise.
+fn lend_field(index: usize, mutable: bool) -> String {
+    let lend = if mutable { "lend" } else { "lend_ref" };
+    format!("__rawr_internal::scope::{lend}::<Field{index}, _>(field_{index}, |nonce|")
+}
+
+/// The script value of the field `lend_field` lends: a `Lent` reached by
+/// the accessors `render_field_family` made.
+fn lent_field(index: usize, rust: &str, mutable: bool) -> String {
+    let writer = if mutable {
+        format!("Some(&MUTABLE_{index} as __rawr_internal::scope::Accessor)")
+    } else {
+        "None".to_owned()
+    };
+    format!(
+        "Dynamic::from(__rawr_internal::scope::Lent::new(nonce, {rust:?}, {writer}, Some(&SHARED_{index} as __rawr_internal::scope::Accessor)))"
+    )
 }
 
 /// Key a structural row by the same concrete arguments as its adapter.
@@ -8852,6 +9448,8 @@ fn render_opening(
             && !is_value(&ty)
             && !is_duration(&ty)
             && boxed_element(&ty).is_none()
+            && counted_element(&ty).is_none()
+            && keyed_element(&ty).is_none()
             && !is_facade_value(&ty)
             && !copy_scalar(&ty);
         if !native {
@@ -12180,6 +12778,54 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&HashMap<K, V>` and the other keyed collections: std's made from
+    // rawr's for the call. A map of crate values moves each value out of
+    // its slot into it for the call, and back after (`MapLent`).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && let Some((_, members)) = keyed_element(lent)
+    {
+        let rust =
+            concrete_type(lent).ok_or_else(|| request::drift("a lent keyed collection's type"))?;
+        if let [key, value] = members
+            && lendable(value)
+        {
+            let item =
+                concrete_type(value).ok_or_else(|| request::drift("a lent map's value type"))?;
+            let mut key_converted = String::new();
+            render_from_dynamic(key, "key", 1, &mut key_converted)?;
+            return writeln!(
+                output,
+                "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); let mut lent = MapLent::<{rust}> {{ map: Default::default(), keys: Vec::new() }}; for entry in value.into_array().map_err(|_| Error::TypeMismatch)? {{ let mut pair = entry.into_array().map_err(|_| Error::TypeMismatch)?.into_iter(); let key = pair.next().ok_or(Error::TypeMismatch)?; let key = ({key_converted})?; let handle = pair.next().ok_or(Error::TypeMismatch)?.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch)?; let item = arguments.arena.lend_out::<{item}>(handle.clone())?; lent.keys.push((Clone::clone(&key), handle)); lent.map.insert(key, item); }} lent }};\n    let argument_{local}: &{rust} = &argument_{local}_lent.map;"
+            )
+            .map_err(request::unwritable);
+        }
+        let mut converted = String::new();
+        render_from_dynamic(lent, "value", 0, &mut converted)?;
+        return writeln!(
+            output,
+            "    let argument_{local}_made: {rust} = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take().flatten(); {converted}? }};\n    let argument_{local} = &argument_{local}_made;"
+        )
+        .map_err(request::unwritable);
+    }
+    // `&Rc<T>` or `&Arc<T>` of a crate value: the crate's own pointer
+    // rawr's stands for, lent from its slot for the call (#775).
+    if let convert::Type::Borrowed {
+        mutable: false,
+        ty: lent,
+    } = ty
+        && counted_element(lent).is_some()
+    {
+        let rust =
+            concrete_type(lent).ok_or_else(|| request::drift("a lent counted pointer's type"))?;
+        return writeln!(
+            output,
+            "    let argument_{local}_lent = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); lend_pointer::<{rust}>(arguments.arena, &value)? }};\n    let argument_{local}: &{rust} = argument_{local}_lent.get().ok_or(Error::TypeMismatch)?;"
+        )
+        .map_err(request::unwritable);
+    }
     if let convert::Type::Borrowed { .. } = ty {
         return render_lease(
             local,
@@ -12321,6 +12967,8 @@ fn render_take_input(
         convert::Type::Sequence { .. } | convert::Type::Option(_) | convert::Type::Nominal { .. }
     ) || range_inclusive_element(ty).is_some()
         || boxed_element(ty).is_some()
+        || counted_element(ty).is_some()
+        || keyed_element(ty).is_some()
     {
         deep = substituted(ty, signature, substitutions)?;
         &deep
@@ -12401,6 +13049,8 @@ impl Lease {
                     **lent,
                     convert::Type::Nominal { .. } | convert::Type::Parameter(_)
                 ) && std_value(lent).is_none()
+                    && counted_element(lent).is_none()
+                    && keyed_element(lent).is_none()
                     && !is_made_for_call(lent) =>
             {
                 let rust = concrete_type(lent)?;
@@ -12781,6 +13431,8 @@ fn render_callable_closure(
             || is_value(ty)
             || is_duration(ty)
             || boxed_element(ty).is_some()
+            || counted_element(ty).is_some()
+            || keyed_element(ty).is_some()
     };
     let inputs = call
         .inputs()
@@ -13078,7 +13730,21 @@ fn render_take(
         ty if is_future(ty) => "take_script",
         // Rawr's float or integer range, as the range of the number the
         // instance gives.
-        ty if range_inclusive_element(ty).is_some() || boxed_element(ty).is_some() => {
+        // An `Rc` or `Arc` the call takes by value, with copies of the
+        // crate's pointer for rawr's others held while it runs (`Balance`).
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            let element = concrete_type(element)
+                .ok_or_else(|| request::drift("a counted pointer's element type"))?;
+            return writeln!(
+                output,
+                "    let (argument_{local}, _argument_{local}_balance) = {{ let value = (**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(); take_pointer::<{pointer}<{element}>>(arguments.arena, value)? }};"
+            )
+            .map_err(request::unwritable);
+        }
+        ty if range_inclusive_element(ty).is_some()
+            || boxed_element(ty).is_some()
+            || keyed_element(ty).is_some() =>
+        {
             let mut converted = String::new();
             render_from_dynamic(ty, "value", 0, &mut converted)?;
             return writeln!(
@@ -13153,7 +13819,10 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
-        ty if boxed_element(ty).is_some() => {
+        ty if boxed_element(ty).is_some()
+            || counted_element(ty).is_some()
+            || keyed_element(ty).is_some() =>
+        {
             let mut converted = String::new();
             render_to_dynamic(ty, value, 0, &mut converted)?;
             writeln!(output, "    {converted}")
@@ -13341,6 +14010,28 @@ fn render_from_dynamic(
             let mut converted = String::new();
             render_from_dynamic(element, value, depth, &mut converted)?;
             write!(output, "({converted}).map(Box::new)")
+        }
+        // Rawr's map or set, as std's of its kind, made from its entries
+        // (`keyed_element`).
+        ty if let Some((_, members)) = keyed_element(ty) => {
+            let rust = concrete_type(ty)
+                .ok_or_else(|| request::drift("a keyed collection's type"))?;
+            let entry = format!("entry_{depth}");
+            let converted = render_entry_from_dynamic(members, &entry, depth)?;
+            write!(
+                output,
+                "{{ let value = {value}; value.into_array().map_err(|_| Error::TypeMismatch).and_then(|items| items.into_iter().map(|{entry}| {converted}).collect::<Result<{rust}, Error>>()) }}"
+            )
+        }
+        // Rawr's `Rc` or `Arc` of a crate value, as the crate's own pointer
+        // its value is in, made the first time it crosses (#775).
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            let element = concrete_type(element)
+                .ok_or_else(|| request::drift("a counted pointer's element type"))?;
+            write!(
+                output,
+                "take_pointer::<{pointer}<{element}>>(arguments.arena, {value}).map(|(pointer, _)| pointer)"
+            )
         }
         // Rawr's `RangeInclusive<f64>` as Rust's of `f32` or `f64`, and its
         // `RangeInclusive<i64>` as one of the integer the instance gives.
@@ -13566,6 +14257,50 @@ fn render_to_dynamic(
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
+        // std's map or set, as rawr's of its kind: its entries sorted by
+        // key, as rawr keeps them (`keyed_element`).
+        ty if let Some((kind, members)) = keyed_element(ty) => {
+            let sort = if kind.starts_with("Hash") {
+                if members.len() == 2 {
+                    "entries.sort_by(|left, right| left.0.cmp(&right.0)); "
+                } else {
+                    "entries.sort(); "
+                }
+            } else {
+                ""
+            };
+            let entry = match members {
+                [key] => {
+                    let mut converted = String::new();
+                    render_to_dynamic(key, &format!("key_{depth}"), depth + 1, &mut converted)?;
+                    format!("|key_{depth}| {converted}")
+                }
+                [key, value] => {
+                    let mut key_converted = String::new();
+                    render_to_dynamic(key, &format!("key_{depth}"), depth + 1, &mut key_converted)?;
+                    let mut value_converted = String::new();
+                    render_to_dynamic(
+                        value,
+                        &format!("value_{depth}"),
+                        depth + 1,
+                        &mut value_converted,
+                    )?;
+                    format!(
+                        "|(key_{depth}, value_{depth})| Ok::<Dynamic, Error>(Dynamic::from_array(vec![({key_converted})?, ({value_converted})?]))"
+                    )
+                }
+                _ => return Err(request::drift("a keyed collection of other than one or two types")),
+            };
+            write!(
+                output,
+                "{{ #[allow(unused_mut)] let mut entries = {value}.into_iter().collect::<Vec<_>>(); {sort}entries.into_iter().map({entry}).collect::<Result<Vec<Dynamic>, Error>>().map(Dynamic::from_array) }}"
+            )
+        }
+        // The crate's own `Rc` or `Arc`, as rawr's pointer whose value is in
+        // it: nothing is copied (#775).
+        ty if counted_element(ty).is_some() => {
+            write!(output, "give_pointer!(arguments.arena, {value})")
+        }
         ty if std_value(ty).is_some() => write!(
             output,
             "Ok::<Dynamic, Error>(__rawr_internal::crossing::Std::give({value}))"
@@ -13732,6 +14467,8 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
+        ty if counted_element(ty).is_some() => true,
+        ty if let Some((_, members)) = keyed_element(ty) => members.iter().any(holds_native),
         convert::Type::Nominal { .. } => !is_value(ty) && !is_duration(ty),
         convert::Type::Tuple(members) => members.iter().any(holds_native),
         convert::Type::Option(element) | convert::Type::Sequence { element, .. } => {
@@ -13815,6 +14552,72 @@ fn boxed_element(ty: &convert::Type) -> Option<&convert::Type> {
             }
         }
         _ => None,
+    }
+}
+
+/// Rust's `Rc<T>` or `Arc<T>` of a crate's `T` (#775), when `ty` is one:
+/// its Rust path and `T`. It crosses as rawr's pointer, whose value is a
+/// handle on `T`'s slot, which the crate's own pointer is the home of.
+fn counted_element(ty: &convert::Type) -> Option<(&'static str, &convert::Type)> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            let arc = crate::surface::identity::Definition::counter(definition.as_bytes())?;
+            let [element] = arguments.as_ref() else {
+                return None;
+            };
+            Some((if arc { "std::sync::Arc" } else { "std::rc::Rc" }, element))
+        }
+        _ => None,
+    }
+}
+
+/// std's keyed collection (#777), when `ty` is one: its name and its key
+/// (and value) types. It crosses as rawr's, an array of `[key, value]`
+/// pairs or of keys sorted by key, which the crate's is made from or made
+/// into: the two lay their entries out apart, so the keys, rawr's strings
+/// or numbers, are made anew, and crate values move.
+fn keyed_element(ty: &convert::Type) -> Option<(&'static str, &[convert::Type])> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => Some((
+            crate::surface::identity::Definition::keyed_kind(definition.as_bytes())?,
+            arguments,
+        )),
+        _ => None,
+    }
+}
+
+/// The entry of a keyed collection of `members`, as Rust's iterator gives
+/// it, converted from the rawr value `entry` to a `Result` of it.
+fn render_entry_from_dynamic(
+    members: &[convert::Type],
+    entry: &str,
+    depth: usize,
+) -> Result<String, request::Error> {
+    match members {
+        [key] => {
+            let mut converted = String::new();
+            render_from_dynamic(key, entry, depth + 1, &mut converted)?;
+            Ok(converted)
+        }
+        [key, value] => {
+            let (key_name, value_name) = (format!("key_{depth}"), format!("value_{depth}"));
+            let mut key_converted = String::new();
+            render_from_dynamic(key, &key_name, depth + 1, &mut key_converted)?;
+            let mut value_converted = String::new();
+            render_from_dynamic(value, &value_name, depth + 1, &mut value_converted)?;
+            Ok(format!(
+                "{{ let mut pair = {entry}.into_array().map_err(|_| Error::TypeMismatch)?.into_iter(); let {key_name} = pair.next().ok_or(Error::TypeMismatch)?; let {value_name} = pair.next().ok_or(Error::TypeMismatch)?; Ok::<_, Error>((({key_converted})?, ({value_converted})?)) }}"
+            ))
+        }
+        _ => Err(request::drift(
+            "a keyed collection of other than one or two types",
+        )),
     }
 }
 
@@ -15931,6 +16734,17 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
             format!("std::ops::RangeInclusive<{}>", concrete_type(element)?)
         }
         ty if let Some(element) = boxed_element(ty) => format!("Box<{}>", concrete_type(element)?),
+        ty if let Some((pointer, element)) = counted_element(ty) => {
+            format!("{pointer}<{}>", concrete_type(element)?)
+        }
+        ty if let Some((kind, members)) = keyed_element(ty) => format!(
+            "std::collections::{kind}<{}>",
+            members
+                .iter()
+                .map(concrete_type)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
         // An opaque `impl Trait` type, which rustc infers.
         convert::Type::Nominal { definition, .. } if is_opaque(definition) => "_".to_owned(),
         // A script closure where a signature names its type, boxed (T417).

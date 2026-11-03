@@ -1,0 +1,204 @@
+# Prebuilt binaries: one archive per host on the GitHub release of each
+# version, which install.sh and install.ps1 (site/public) download. A run
+# starts when a push to main changes the root Cargo.toml, as `chore: release
+# x.y.z` does, and does nothing when the version's release already has its
+# archives. Archives are named rawr-<target>.tar.gz (zip on Windows), the
+# same for every version, so releases/latest/download/<name> is the newest;
+# importer/src/prebuilt.rs names them the same way.
+#
+# Each Unix archive holds rawr, cargo-rawr, rawr-import and
+# rawr-import-driver. The driver links the pinned nightly's librustc_driver
+# dynamically. rawr-import points the loader at the user's copy of that
+# nightly whenever it starts the driver, and installs the nightly through
+# rustup the first time it needs it. rawr-import is Unix-only, so the
+# Windows archive holds rawr and cargo-rawr, and its build is best effort.
+name: Release binaries
+
+# Started by hand while patch releases have no tags of their own.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: binaries-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  TOOLCHAIN: nightly-2026-07-11
+  CARGO_INCREMENTAL: 0
+  # The workspace's release profile is fat LTO with one codegen unit, which
+  # needs more memory than a hosted runner has for rawr-import. Thin LTO is
+  # what the ?play image ships.
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      missing: ${{ steps.version.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the version and look for its release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          assets="$(gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)"
+          if [ "$assets" -gt 0 ]; then
+            echo "v$version already has $assets assets"
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: version
+    if: needs.version.outputs.missing == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            import: true
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            import: true
+          # Ubuntu 22.04's glibc (2.35) keeps the Linux binaries running on
+          # older distributions than the newest image would.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            import: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            import: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            import: false
+            best-effort: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.best-effort == true }}
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v5
+
+      # rawr-import and its driver build only on the pinned nightly with
+      # rustc-dev. rawr builds on it too, so every host uses one toolchain.
+      - name: Install the pinned nightly
+        shell: bash
+        run: |
+          components=rust-src
+          if [ "${{ matrix.import }}" = true ]; then components=rustc-dev,rust-src; fi
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --component "$components" --no-self-update
+          rustc "+$TOOLCHAIN" -vV
+
+      - name: Restore the Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: binaries-registry-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: binaries-registry-${{ matrix.target }}-
+
+      - name: Build rawr
+        shell: bash
+        run: cargo "+$TOOLCHAIN" build --release --locked -p rawr-cli --bins
+
+      - name: Build rawr-import and rawr-import-driver
+        if: matrix.import
+        run: |
+          cargo "+$TOOLCHAIN" build --release --locked -p rawr-import-cli --bin rawr-import
+          cargo "+$TOOLCHAIN" build --release --locked -p rawr-import --features rustc-driver --bin rawr-import-driver
+
+      # Each binary runs once from the archive's own files, the driver with
+      # only the toolchain's library directory to load rustc from, as
+      # rawr-import starts it.
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          stage="$RUNNER_TEMP/rawr-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp target/release/rawr target/release/cargo-rawr target/release/rawr-import target/release/rawr-import-driver "$stage/"
+          cp LICENSE-MIT.txt LICENSE-APACHE.txt "$stage/"
+          "$stage/rawr" --version
+          lib="$(rustc "+$TOOLCHAIN" --print sysroot)/lib"
+          if [ "$RUNNER_OS" = macOS ]; then
+            env -i DYLD_FALLBACK_LIBRARY_PATH="$lib" "$stage/rawr-import-driver" --version
+          else
+            env -i LD_LIBRARY_PATH="$lib" "$stage/rawr-import-driver" --version
+          fi
+          archive="rawr-${{ matrix.target }}.tar.gz"
+          # Members at the archive's root, without `./`, so rawr-import can
+          # extract its driver by name.
+          (cd "$stage" && tar -czf "$GITHUB_WORKSPACE/$archive" *)
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          mkdir -p dist
+          mv "$archive" "$archive.sha256" dist/
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "rawr-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target/release/rawr.exe, target/release/cargo-rawr.exe, LICENSE-MIT.txt, LICENSE-APACHE.txt $stage
+          & (Join-Path $stage rawr.exe) --version
+          $archive = "rawr-${{ matrix.target }}.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          Set-Content -NoNewline -Path "$archive.sha256" -Value "$hash  $archive`n"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Move-Item $archive, "$archive.sha256" dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rawr-${{ matrix.target }}
+          path: dist/*
+          retention-days: 7
+
+  release:
+    needs: [version, build]
+    if: needs.version.outputs.missing == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Every Unix host must be there. Windows is best effort.
+      - name: Check the archives
+        run: |
+          ls -l dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            test -f "dist/rawr-$target.tar.gz" || { echo "missing rawr-$target.tar.gz" >&2; exit 1; }
+          done
+
+      # The release is created on this commit, or completed when it exists
+      # without archives.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "rawr $VERSION" \
+              --notes "Install with \`curl -LsSf https://rawr.airstrike.fyi/install.sh | sh\`. The changes are in [CHANGELOG.md](https://github.com/airstrike/rawr/blob/main/CHANGELOG.md)."
+          fi

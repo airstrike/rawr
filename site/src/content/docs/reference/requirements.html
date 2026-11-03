@@ -1,4 +1,4 @@
-<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and the command, 64-bit macOS or Linux and nightly-2026-07-11 for rawr-import. Which platforms work, and what is planned.">
+<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and to build the command, 64-bit macOS or Linux and nightly-2026-07-11 for rawr-import. Which platforms work, and what is planned.">
 <article>
 <h1>Requirements</h1>
 <p class="lede">What each part of rawr needs, which platforms work and what is planned.</p>
@@ -10,18 +10,21 @@
 <table class="wide">
   <tr><th>Part</th><th>Needs</th><th>Tested on</th></tr>
   <tr><td>The <code>rawr</code> crate</td><td>Rust 1.95 or newer.</td><td>macOS and Linux.</td></tr>
-  <tr><td>The <code>rawr</code> command</td><td>Rust 1.95 or newer.</td><td>macOS. Linux on x86_64 in CI.</td></tr>
-  <tr><td>rawr-import</td><td>64-bit macOS or 64-bit Linux, and <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. A project it runs builds with the project&rsquo;s own toolchain, Rust 1.95 or newer.</td><td>Apple Silicon Macs. Linux on x86_64 in CI.</td></tr>
+  <tr><td>The <code>rawr</code> command</td><td>Nothing for the prebuilt binary. Rust 1.95 or newer to build it from source.</td><td>macOS. Linux on x86_64 in CI. Windows is best effort.</td></tr>
+  <tr><td>rawr-import</td><td>64-bit macOS or 64-bit Linux, rustup, and <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components, which rawr-import installs through rustup the first time it needs them. A project it runs builds with the project&rsquo;s own toolchain, Rust 1.95 or newer.</td><td>Apple Silicon Macs. Linux on x86_64 in CI.</td></tr>
   <tr><td><code>rawr-macros</code></td><td>Rust 1.95 or newer. It installs from git and isn&rsquo;t on crates.io yet.</td><td>macOS.</td></tr>
 </table>
-<p>Everything installs from <a href="https://github.com/airstrike/rawr">the git repository</a>. <a href="/docs/start#install">Start</a> and <a href="/docs/imports#install">Imports</a> give the commands.</p>
+<p>One command installs prebuilt <code>rawr</code> and rawr-import:</p>
+<div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
+<p>Each release on <a href="https://github.com/airstrike/rawr/releases">GitHub</a> carries archives for macOS on Apple Silicon and Intel, Linux on x86_64 and aarch64, and Windows on x86_64. <a href="/docs/start#install">Start</a> gives the other ways to install.</p>
 
 <h2 id="platforms">Platforms</h2>
 <p>rawr-import runs on 64-bit macOS and on 64-bit Linux.</p>
-<p>On Linux it covers x86_64 and aarch64, with glibc or musl.</p>
+<p>On Linux it covers x86_64 and aarch64, with glibc or musl. The prebuilt Linux binaries need glibc 2.35 or newer. On musl, build from source.</p>
 <p>Every change to rawr runs rawr-import on x86_64 Linux in CI, with a project that has a Cargo dependency.</p>
 <p>rawr-import hasn&rsquo;t been tried by hand on Linux yet. If it fails there, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a>.</p>
-<p>Other systems, such as Windows and FreeBSD, aren&rsquo;t supported.</p>
+<p>Windows is best effort. The <code>rawr</code> command builds for it, and <code>irm https://rawr.airstrike.fyi/install.ps1 | iex</code> installs it. rawr-import isn&rsquo;t built for Windows yet, so a program with dependencies doesn&rsquo;t run there. No one has tried rawr on Windows yet. If it fails, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a>.</p>
+<p>Other systems, such as FreeBSD, aren&rsquo;t supported.</p>
 <p>The MCP server&rsquo;s window screenshot needs macOS.</p>
 
 <h2 id="planned">Planned</h2>
