@@ -1,5 +1,8 @@
-//! What the end-to-end tests share: a fixture copied where Cargo keeps
-//! test files, and `rawr-import run` on it with its output read as it comes.
+//! What the end-to-end tests share: fixtures prepared in lanes where Cargo
+//! keeps test files ([`fixture`]), one `RAWR_HOME` for the suite, and
+//! `rawr-import run` with its output read as it comes. The suite runs its
+//! tests in parallel; a test that needs a project or a home no other test
+//! touches makes its own under [`scratch`] by a name no other test uses.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
