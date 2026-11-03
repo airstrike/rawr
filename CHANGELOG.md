@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.114 (2026-11-02)
+
 - `Vec<T>`, `[T]`, `[T; N]` and `VecDeque<T>` are four types, as in Rust. A `&Vec<T>` or `&[T; N]` coerces to `&[T]` through std's `Deref`, a range of a `Vec` and a crate's `&[T]` are slices, and calling another sequence type's method (`push` on a `&mut [T]`, `push_back` on a `Vec`, `sort` on a `VecDeque`) is rustc's E0599. (#769)
 - `VecDeque` has std's own methods and borrow summaries. rawr runs `push_front`, `pop_front`, `push_back`, `pop_back`, `front`, `back`, their `_mut` forms and the methods it shares with `Vec`; its other std methods give the not-yet error. (#769)
 - A `match`, `if let` or `let`-`else` on a crate enum binds the variant's fields as rustc does: by value it moves fields such as an `io::Error` out instead of cloning them, and through `&T` it lends a field without `Clone` to the arm, where `&self` methods and `&T` parameters reach it while the matched value is read too. Testing a variant no longer reads its fields. (#678)

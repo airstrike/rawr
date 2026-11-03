@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-02",
-  "version": "0.3.113",
+  "version": "0.3.114",
   "examples": {
     "running": 25,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`Vec<T>`, `[T]`, `[T; N]` and `VecDeque<T>` are four types, as in Rust. A `&Vec<T>` or `&[T; N]` coerces to `&[T]` through std's `Deref`, a range of a `Vec` and a crate's `&[T]` are slices, and calling another sequence type's method (`push` on a `&mut [T]`, `push_back` on a `Vec`, `sort` on a `VecDeque`) is rustc's E0599.","issues":[769]},
-        {"text":"`VecDeque` has std's own methods and borrow summaries. rawr runs `push_front`, `pop_front`, `push_back`, `pop_back`, `front`, `back`, their `_mut` forms and the methods it shares with `Vec`; its other std methods give the not-yet error.","issues":[769]},
-        {"text":"A `match`, `if let` or `let`-`else` on a crate enum binds the variant's fields as rustc does: by value it moves fields such as an `io::Error` out instead of cloning them, and through `&T` it lends a field without `Clone` to the arm, where `&self` methods and `&T` parameters reach it while the matched value is read too. Testing a variant no longer reads its fields.","issues":[678]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.114",
+        "date": "2026-11-02",
+        "entries": [
+          {"text":"`Vec<T>`, `[T]`, `[T; N]` and `VecDeque<T>` are four types, as in Rust. A `&Vec<T>` or `&[T; N]` coerces to `&[T]` through std's `Deref`, a range of a `Vec` and a crate's `&[T]` are slices, and calling another sequence type's method (`push` on a `&mut [T]`, `push_back` on a `Vec`, `sort` on a `VecDeque`) is rustc's E0599.","issues":[769]},
+          {"text":"`VecDeque` has std's own methods and borrow summaries. rawr runs `push_front`, `pop_front`, `push_back`, `pop_back`, `front`, `back`, their `_mut` forms and the methods it shares with `Vec`; its other std methods give the not-yet error.","issues":[769]},
+          {"text":"A `match`, `if let` or `let`-`else` on a crate enum binds the variant's fields as rustc does: by value it moves fields such as an `io::Error` out instead of cloning them, and through `&T` it lends a field without `Clone` to the arm, where `&self` methods and `&T` parameters reach it while the matched value is read too. Testing a variant no longer reads its fields.","issues":[678]}
+        ]
+      },
       {
         "version": "0.3.113",
         "date": "2026-11-02",
@@ -1795,7 +1797,7 @@
     {"issue":675,"title":"A free function generic over a crate trait with an Fn blanket impl can be imported","state":"open","category":"No glue (D593)"},
     {"issue":676,"title":"Type::from(value) of a crate type's own value is core's reflexive From","state":"closed","category":"No glue (D593)","release":"0.3.87"},
     {"issue":677,"title":"An async fn borrowing through any input type leases what it borrows","state":"closed","category":"No glue (D593)","release":"0.3.90"},
-    {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"closed","category":"Divergences from rustc"},
+    {"issue":678,"title":"Matching a crate enum variant by value moves its non-Clone fields out","state":"closed","category":"Divergences from rustc","release":"0.3.114"},
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"open","category":"Divergences from rustc"},
     {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"closed","category":"Health"},
@@ -1886,7 +1888,7 @@
     {"issue":766,"title":"Hold an opaque impl FnMut, impl FnOnce, higher-ranked or non-Send impl Fn a crate returns","state":"open","category":"No glue (D593)"},
     {"issue":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"open","category":"Divergences from rustc"},
     {"issue":768,"title":"Iterator's methods and adapter summaries come from Iterator's std declaration (D711 step 4, last type)","state":"open","category":"Divergences from rustc"},
-    {"issue":769,"title":"VecDeque, Vec and [T] are distinct types in rawr","state":"closed","category":"Divergences from rustc"},
+    {"issue":769,"title":"VecDeque, Vec and [T] are distinct types in rawr","state":"closed","category":"Divergences from rustc","release":"0.3.114"},
     {"issue":770,"title":"A std method rawr doesn't run reports the not-yet error before its argument errors","state":"open","category":"Divergences from rustc"},
     {"issue":771,"title":"An unstable std inherent method is rustc's E0658, not an unknown member","state":"open","category":"Divergences from rustc"},
     {"issue":772,"title":"v.get(range) on a Vec or slice gives Option<&[T]>","state":"open","category":"Divergences from rustc"},
