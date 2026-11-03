@@ -961,6 +961,48 @@ pub fn view() -> Button { button().style(|base: i64| base) }
         .expect_err("Rust rejects a one-parameter closure for a two-parameter callable");
 }
 
+/// A method and a function of one name each write a closure: two
+/// closures, each its own function's.
+#[test]
+fn closures_of_a_method_and_a_function_of_one_name_are_two() {
+    let mut engine = Engine::new();
+    engine.register_host_facade(style_facade()).unwrap();
+    let engine = crate::Shared::new(engine);
+    let executable = engine
+        .compile_executable(
+            r#"
+use ui::{Button, button};
+struct Panel;
+impl Panel {
+    fn view(&self) -> Button { button().style(|base: i64, _pressed: bool| base + 1) }
+}
+pub fn view() -> Button { button().style(|base: i64, _pressed: bool| base + 2) }
+pub fn both() -> (Button, Button) { (Panel.view(), view()) }
+"#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let authority = engine.authorize(executable).unwrap();
+    let mut results = authority
+        .items()
+        .filter(|value| value.key().name().contains("{closure#"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|closure| {
+            authority
+                .invoke(
+                    &closure,
+                    &mut [crate::Dynamic::from(5_i64), crate::Dynamic::from(true)],
+                )
+                .unwrap()
+                .as_int()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    results.sort_unstable();
+    assert_eq!(results, [6, 7]);
+}
+
 struct UiStyle;
 
 /// A facade `Style` with iced-shaped field builders and `default()`.

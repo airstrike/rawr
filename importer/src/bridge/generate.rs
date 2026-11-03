@@ -4749,7 +4749,8 @@ fn finish(result: std::io::Result<()>) -> ! {
 /// the manifest in `root` against that engine, with no parent and no
 /// Cargo, and runs it once as Rust runs it. The snapshot is the one the
 /// runner's build compiled: the same manifest at the same path, so a
-/// program whose native calls the build covered finds every one of them.
+/// program whose native calls the build covered finds every one of them,
+/// and one that makes another fails to compile there.
 fn run_play(root: std::path::PathBuf) -> ! {
     let Some(socket) = std::env::var_os(__rawr_internal::play::SOCKET) else {
         eprintln!("error: `{}` names no socket to serve on", __rawr_internal::play::SOCKET);
@@ -4795,16 +4796,16 @@ fn run_play(root: std::path::PathBuf) -> ! {
         let compiled = __rawr_internal::package::snapshot::Snapshot::new(entry.clone(), files)
             .map_err(|error| std::io::Error::other(error.to_string()))
             .and_then(|snapshot| {
-                let (candidate, ast) = __rawr_profile::compile_initial(
-                    &engine,
-                    &snapshot,
-                    &application_contract,
-                    &[0; 32],
-                )?;
+                // The runner prepares nothing, so a native use its build
+                // didn't cover is the snippet's compile error.
+                let compiled = engine.compile_package_snapshot_covered(&snapshot)
+                    .map_err(|error| std::io::Error::other(rendered(&error)))?;
+                let (compiled, ast) = compiled.with_top_level();
+                let (candidate, _, _) = compiled.into_parts();
                 Ok(Program {
                     engine: engine.clone(),
                     ast: Some(ast),
-                    candidate,
+                    candidate: Some(candidate),
                     application_contract: application_contract.clone(),
                     _bindings: bindings.clone(),
                     marked_main: snapshot.marked_root(),
@@ -4824,6 +4825,19 @@ fn run_play(root: std::path::PathBuf) -> ! {
             eprintln!("error: ?play's runner stopped: {error}");
             exit(1);
         }
+    }
+}
+
+/// A snippet's compile error as `rawr check` prints it: the report with
+/// the source it points at.
+fn rendered(error: &__rawr_internal::package::import::resident::Error) -> String {
+    use __rawr_internal::package::import::resident::Error;
+    match error {
+        Error::Source(source) => match source.report() {
+            Ok(report) => __rawr_internal::diagnostic::render(&report),
+            Err(_) => source.to_string(),
+        },
+        error => error.to_string(),
     }
 }
 
@@ -6710,6 +6724,7 @@ fn render_source(
         .map_err(request::unwritable)?;
     // Structural rows bind to installed facades; without a facade plan there
     // are none, so no row could be admitted.
+    let mut written = std::collections::BTreeSet::new();
     for plan in plans.iter().filter(|_| facade_plan.is_some()) {
         let Some(kind) = structural_kind(plan) else {
             continue;
@@ -6717,6 +6732,19 @@ fn render_source(
         let selector = plan
             .selector()
             .ok_or_else(|| request::drift("generated structural selector"))?;
+        // One type a program names at two paths, as a signature names
+        // `iced::keyboard::Event` and a closure's inferred type the
+        // `iced_core` one, is one type of the facade: its rows bind once,
+        // at the first path (D536.1).
+        let instance = crate::surface::instance::key(plan.structural_instance());
+        if !written.insert((
+            plan.export().root_alias(),
+            selector.to_owned(),
+            kind.clone(),
+            instance,
+        )) {
+            continue;
+        }
         write!(
             output,
             "    __rawr_internal::package::import::runner::StructuralRow::new({:?}, {:?}, ",

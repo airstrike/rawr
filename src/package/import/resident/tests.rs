@@ -576,6 +576,18 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         Ok(Outcome::NeedsPreparation)
     ));
     assert_eq!(owners(&engine), retained);
+    // A universe runner, which prepares nothing, reports the same use as
+    // the program's error where the program makes it (#863).
+    let Err(Error::Source(error)) = engine.compile_package_snapshot_covered(&snapshot(&changed))
+    else {
+        panic!("a use at types the carrier lacks is a source error");
+    };
+    let report = error.to_string();
+    assert!(
+        report.contains("this use of a crate isn't among the universe's bindings"),
+        "{report}"
+    );
+    assert_eq!(owners(&engine), retained);
     drop(candidates);
     assert_eq!(owners(&engine), before);
 }
@@ -594,6 +606,13 @@ fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
     let (candidate, ..) = compiled.into_parts();
     drop((candidate, top_level));
     assert_eq!(owners(&engine), before);
+    // A universe runner reports a native miss as the program's error.
+    assert!(matches!(
+        engine.compile_package_snapshot_covered(&native_snapshot(
+            "pub fn sample() -> i64 { native::new_function() }"
+        )),
+        Err(Error::Source(_))
+    ));
     // The same boundaries as a profile's: a native miss needs preparation,
     // and a source error is no miss.
     assert!(matches!(

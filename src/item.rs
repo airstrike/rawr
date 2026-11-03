@@ -66,6 +66,21 @@ impl Key {
         }
     }
 
+    /// The `index`th closure `callable` writes, `{name}{closure#index}`: a
+    /// method's at its owner, so the closures of a method and of a function
+    /// of one name are not one.
+    pub(crate) fn closure(callable: &Self, index: usize) -> Self {
+        Self {
+            path: program::Path::new(
+                callable.package().into(),
+                callable.modules().into(),
+                format!("{}{{closure#{index}}}", callable.name()).into(),
+            ),
+            owner: callable.owner.clone(),
+            kind: Kind::Function,
+        }
+    }
+
     /// Return the canonical package component.
     #[must_use]
     pub fn package(&self) -> &str {
