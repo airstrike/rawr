@@ -50,23 +50,27 @@ pub(crate) fn host_default(ty: TypeId) -> Option<Dynamic> {
     DEFAULTS.read().ok()?.get(&ty).map(|default| default())
 }
 
-type MakeDefault = fn() -> Dynamic;
+type MakeDefault = std::sync::Arc<dyn Fn() -> Dynamic + Send + Sync>;
 
 static IMPORTED_DEFAULTS: RwLock<BTreeMap<[u8; 32], MakeDefault>> = RwLock::new(BTreeMap::new());
 
 /// Let a derived `Default` build a field of the imported type `identity`
-/// by the crate's own `Default`, as a generated runner calls it.
+/// by the crate's own `Default`, as a generated runner calls it with the
+/// `Default` rustc proved for the type.
 #[doc(hidden)]
-pub fn register_imported_default(identity: [u8; 32], default: MakeDefault) {
+pub fn register_imported_default(
+    identity: [u8; 32],
+    default: impl Fn() -> Dynamic + Send + Sync + 'static,
+) {
     if let Ok(mut defaults) = IMPORTED_DEFAULTS.write() {
-        defaults.insert(identity, default);
+        defaults.insert(identity, std::sync::Arc::new(default));
     }
 }
 
 /// The `Default` value of the imported type `identity`, when a runner
 /// registered one.
 pub(crate) fn imported_default(identity: &[u8; 32]) -> Option<Dynamic> {
-    let default = *IMPORTED_DEFAULTS.read().ok()?.get(identity)?;
+    let default = std::sync::Arc::clone(IMPORTED_DEFAULTS.read().ok()?.get(identity)?);
     Some(default())
 }
 
