@@ -11,7 +11,7 @@
     {
       "class_name": "PlayBot",
       // A registry address, not a Dockerfile, so deploy never calls docker.
-      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:bdf44e242d63",
+      "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:487c21f0a678",
       // lite: 1/16 vCPU, 256 MiB. A render peaks well under that (see
       // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster.
       "instance_type": "lite",
@@ -32,14 +32,14 @@
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
     // A whole run, killed after it: the script time plus the process start.
-    "PLAY_TIMEOUT_MS": "30000",
+    "PLAY_TIMEOUT_MS": "120000",
     // Script time per run.
-    "PLAY_TIME_MS": "15000",
+    "PLAY_TIME_MS": "60000",
     // The image's commit (pin-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
     "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
-    "PLAY_VERSION": "bdf44e242d63"
+    "PLAY_VERSION": "487c21f0a678"
   },
   // /play's examples (play/tests/fixtures/**/*.rs), as text.
   "rules": [{ "type": "Text", "globs": ["**/*.rs"], "fallthrough": false }],
