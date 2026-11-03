@@ -34,7 +34,9 @@ pub(crate) enum Kind {
         field: u32,
     },
     /// One field of a value of the variant, lent for the rest of the scope
-    /// that reads it, as a pattern below the variant's reads it.
+    /// that reads it, as a pattern below the variant's reads it; or, under
+    /// a field's selector, that field of a struct, as `&value.field` reads
+    /// it.
     Borrow {
         field: u32,
     },

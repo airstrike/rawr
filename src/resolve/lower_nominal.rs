@@ -173,8 +173,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
             let lowered = parser.parse_function_body(definition);
             (lowered, std::mem::take(&mut parser.recovered))
         };
-        let (lowered, _) = lower(false, &mut allocation_failure);
-        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let first = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(first, || lower(true, &mut None));
         let Some(lowered) = body(
             lowered,
             more,
@@ -230,8 +230,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
             let lowered = parser.parse_method_body(definition);
             (lowered, std::mem::take(&mut parser.recovered))
         };
-        let (lowered, _) = lower(false, &mut allocation_failure);
-        let (lowered, more) = again(lowered, || lower(true, &mut None));
+        let first = lower(false, &mut allocation_failure);
+        let (lowered, more) = again(first, || lower(true, &mut None));
         let Some(lowered) = body(
             lowered,
             more,
@@ -274,8 +274,8 @@ pub(super) fn imported<A: crate::host::ImportAllocation>(
         let lowered = parser.parse();
         (lowered, std::mem::take(&mut parser.recovered))
     };
-    let (lowered, _) = lower(false, &mut allocation_failure);
-    let (lowered, more) = again(lowered, || lower(true, &mut None));
+    let first = lower(false, &mut allocation_failure);
+    let (lowered, more) = again(first, || lower(true, &mut None));
     let lowered = body(
         lowered,
         more,
@@ -449,8 +449,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             });
                             (result, std::mem::take(&mut parser.recovered))
                         };
-                    let (result, _) = lower(false, &mut allocation_failure);
-                    let (result, more) = again(result, || lower(true, &mut None));
+                    let first = lower(false, &mut allocation_failure);
+                    let (result, more) = again(first, || lower(true, &mut None));
                     recovered = more;
                     (shell.source, result)
                 }
@@ -496,8 +496,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                             });
                             (result, std::mem::take(&mut parser.recovered))
                         };
-                    let (result, _) = lower(false, &mut allocation_failure);
-                    let (result, more) = again(result, || lower(true, &mut None));
+                    let first = lower(false, &mut allocation_failure);
+                    let (result, more) = again(first, || lower(true, &mut None));
                     recovered = more;
                     (definition.source(), result)
                 }
@@ -1444,10 +1444,12 @@ fn body<T>(
 /// doesn't know is lowered once more, going on past each miss
 /// (`recover_miss`), for what else it misses (#662). Only the first
 /// lowering decides: going on past a miss would also take a candidate
-/// that the first lowering tried and set aside.
+/// that the first lowering tried and set aside. A first lowering that
+/// failed otherwise keeps what it missed on the way, as the `deref` a
+/// coercion through a crate type looked for.
 #[cfg(feature = "rust-import")]
 fn again<T>(
-    lowered: Result<T, Error>,
+    (lowered, missed): (Result<T, Error>, Vec<Error>),
     recover: impl FnOnce() -> (Result<T, Error>, Vec<Error>),
 ) -> (Result<T, Error>, Vec<Error>) {
     match lowered {
@@ -1457,6 +1459,7 @@ fn again<T>(
             more.retain(|other| *other != error);
             (Err(error), more)
         }
+        Err(error) => (Err(error), missed),
         lowered => (lowered, Vec::new()),
     }
 }
@@ -11684,6 +11687,10 @@ struct Parser<'a> {
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
+    /// Where the operand of the `&` being read starts: a crate struct's
+    /// field read there, as all of the operand, is lent, not taken
+    /// (`read_imported_field`).
+    lent_field: Option<Position>,
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
@@ -12051,6 +12058,7 @@ impl<'a> Parser<'a> {
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
             mutable_borrow: None,
+            lent_field: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
             pending_iter_mut: None,
@@ -23452,6 +23460,30 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Whether the field of type `ty` read from `receiver` is borrowed
+    /// where it is read, as rustc borrows it: the whole operand of a `&`,
+    /// or the receiver of a method that takes it `&self`, its own or its
+    /// `Deref` target's.
+    #[cfg(feature = "rust-import")]
+    fn borrows_field(&mut self, receiver: &ParsedExpr, ty: &Ty) -> bool {
+        match self.peek() {
+            Token::Period => {
+                let mut ahead = self.input.clone();
+                ahead.next();
+                let (
+                    Some((Token::Identifier(member), _)),
+                    Some((Token::LeftParen | Token::Unit, _)),
+                ) = (ahead.next(), ahead.next())
+                else {
+                    return false;
+                };
+                self.borrows_for_method(ty, member.as_str())
+            }
+            Token::LeftParen | Token::Unit | Token::LeftBracket => false,
+            _ => self.lent_field == Some(receiver.span.start()),
+        }
+    }
+
     #[cfg(feature = "rust-import")]
     fn read_imported_field(
         &mut self,
@@ -23509,6 +23541,38 @@ impl<'a> Parser<'a> {
         // `font.family`; a by-value use moves only the field (`move_local`).
         // Any other field takes the struct.
         let shared = self.type_provides(&ty, capability::Kind::Copy) || self.plain_value(&ty);
+        // `&shot.rgba`, and `shot.rgba.len()` through a `&self` method: the
+        // field lent where it is, for the statement, or for the rest of the
+        // block of a `let`, as Rust borrows it, and the struct stays whole
+        // (D683.1). A crate value field is lent by its own type; a `Vec` or
+        // a box of one is still read by the reader.
+        if !shared
+            && matches!(self.inference.resolve(&ty), Ty::Host { .. })
+            && definition.parameters().is_empty()
+            && receiver.prelude.is_empty()
+            && variable_name(receiver.source.as_str()).is_some()
+            && !self.frames.is_empty()
+            && self.borrows_field(&receiver, &ty)
+        {
+            let lend = ImportedOperation {
+                kind: crate::host::structural::Kind::Borrow { field: 0 },
+                operands: vec![(receiver.ty.clone(), receiver.span, true)].into_boxed_slice(),
+                output: ty.clone(),
+                receiver: Some(crate::receiver::Mode::Shared),
+            };
+            let helper =
+                self.push_imported_op(&path, field.imported_identity(), Some(lend), operation)?;
+            let lent = ParsedExpr {
+                prelude: receiver.prelude,
+                source: origin::Fragment::call(&helper, [receiver.source]),
+                ty,
+                span: operation,
+                lvalue: None,
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            };
+            return self.scoped_call(lent, true, &[]);
+        }
         if shared {
             self.shared_field_reads.insert(operation);
         } else {
@@ -35190,7 +35254,11 @@ impl<'a> Parser<'a> {
                 operand.span = whole;
                 return Ok(operand.retain_origin());
             }
-            let mut operand = self.parse_operand()?;
+            let operand_start = self.position();
+            let lent = self.lent_field.replace(operand_start);
+            let operand = self.parse_operand();
+            self.lent_field = lent;
+            let mut operand = operand?;
             let whole = span(start, operand.span.end());
             if operand.lvalue.is_some() || self.flow().is_place(operand.span) {
                 let inner = self.may_hold_borrow(&operand.ty);
