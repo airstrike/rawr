@@ -1006,7 +1006,10 @@ impl Probe {
             .parent()
             .ok_or_else(|| extraction("probe-plan-parent", "plan has no parent"))?;
         let command_directory = allocation.clone_path(command_directory)?;
-        let command = process::Command::probe(arguments, command_directory, Box::default())?;
+        let environment = process::driver_library(native.rustc(), &[])
+            .into_iter()
+            .collect();
+        let command = process::Command::probe(arguments, command_directory, environment)?;
         let _ = native
             .run(&command, limits.process_limits())?
             .checked(Program::Driver)?;

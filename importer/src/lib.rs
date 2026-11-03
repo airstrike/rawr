@@ -38,6 +38,8 @@ pub mod location;
 pub mod metrics;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub mod node;
+#[cfg(feature = "rustc-driver")]
+pub mod prebuilt;
 pub mod process;
 pub mod profile;
 pub mod progress;

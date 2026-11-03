@@ -4,10 +4,9 @@
 <p class="lede">Use the crates in your <code>Cargo.toml</code> and your native modules from marked code. rawr-import compiles them with Cargo.</p>
 <h2 id="install">Install rawr-import</h2>
 <p>Once rawr-import is installed, <code>rawr</code> hands it every program with dependencies or native modules.</p>
-<div class="note"><p>rawr-import needs 64-bit macOS or 64-bit Linux and the pinned Rust nightly <code>nightly-2026-07-11</code> with the <code>rustc-dev</code> and <code>rust-src</code> components. It has been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. <a href="/docs/reference/requirements#platforms">Requirements</a> lists the platforms.</p></div>
-<div class="block"><pre><code>rustup toolchain install nightly-2026-07-11 --component rustc-dev,rust-src
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import-cli
-cargo +nightly-2026-07-11 install --locked --git https://github.com/airstrike/rawr rawr-import --features rustc-driver</code></pre></div>
+<p>The installer from <a href="/docs/start#install">Start</a> includes it:</p>
+<div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
+<div class="note"><p>rawr-import runs on 64-bit macOS and 64-bit Linux. It reads crate APIs with the pinned Rust nightly <code>nightly-2026-07-11</code> and its <code>rustc-dev</code> and <code>rust-src</code> components. The first program that needs them installs them through rustup, once per machine. It has been tested on Apple Silicon Macs. CI runs it on x86_64 Linux. <a href="/docs/reference/requirements#platforms">Requirements</a> lists the platforms.</p></div>
 <p>An iced app runs on rawr-import too. <a href="/docs/iced">iced</a> says how.</p>
 
 <h2 id="project">Project setup</h2>

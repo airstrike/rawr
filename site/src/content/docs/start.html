@@ -3,9 +3,12 @@
 <h1>Start</h1>
 <p class="lede">Install rawr and run your first crate without compiling it. The same files build for release with Cargo.</p>
 <h2 id="install">Install</h2>
-<p>rawr needs Rust 1.95 or newer.</p>
+<p>One command installs rawr on macOS or Linux:</p>
+<div class="block"><pre><code>curl -LsSf https://rawr.airstrike.fyi/install.sh | sh</code></pre></div>
+<p>It puts prebuilt <code>rawr</code>, <code>cargo-rawr</code> and <a href="/docs/imports">rawr-import</a> in <code>~/.cargo/bin</code>. <code>cargo-rawr</code> makes <code>cargo rawr run</code> work too. The first program with dependencies installs the Rust nightly that rawr reads crate APIs with, through <a href="https://rustup.rs">rustup</a>, once per machine.</p>
+<p>On Windows, run <code>irm https://rawr.airstrike.fyi/install.ps1 | iex</code> in PowerShell. Windows is best effort, and it gets <code>rawr</code> without rawr-import.</p>
+<p><code>rawr</code> alone also installs from source, with Rust 1.95 or newer:</p>
 <div class="block"><pre><code>cargo install --locked --git https://github.com/airstrike/rawr rawr-cli</code></pre></div>
-<p>This also installs <code>cargo-rawr</code>, so <code>cargo rawr run</code> works too.</p>
 
 <h2 id="first-crate">A first crate</h2>
 <div class="block"><pre><code>rawr new hello &amp;&amp; cd hello &amp;&amp; rawr run</code></pre></div>
