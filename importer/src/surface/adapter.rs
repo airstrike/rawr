@@ -776,11 +776,21 @@ fn clone_operation(
                 .ok_or(Error::AdapterPlan {
                     reason: "enum selector is absent from its exact plan",
                 })?;
+            // A variant of an enum whose parameters all have defaults, as
+            // iced's `Key<C = SmolStr>`, holds its fields at them, and the
+            // generator matches it at them.
+            let mut parameters = clone_parameters(plan.parameters())?;
+            for (parameter, declared) in parameters.iter_mut().zip(plan.parameters()) {
+                if let Some(default) = declared.default() {
+                    *parameter = parameter.clone().with_default(Some(clone_type(default)?));
+                }
+            }
+            let fields = defaulted_fields(clone_fields(variant.fields())?, plan.parameters());
             Ok(Operation::EnumVariant {
-                parameters: clone_parameters(plan.parameters())?,
+                parameters,
                 name: clone_str(variant.name())?,
                 form: variant.form(),
-                fields: clone_fields(variant.fields())?,
+                fields,
             })
         }
         (
@@ -1065,8 +1075,9 @@ fn clone_field(field: &representability::structure::Field) -> Result<Field, Erro
     })
 }
 
-/// A generic struct's fields at the defaults in `parameters`, which an
-/// explicit instance replaces with its arguments (`parameters_at`).
+/// A generic struct's or enum variant's fields at the defaults in
+/// `parameters`, which an explicit instance replaces with its arguments
+/// (`parameters_at`).
 fn defaulted_fields(fields: Box<[Field]>, parameters: &[signature::Parameter]) -> Box<[Field]> {
     if parameters.is_empty() {
         return fields;

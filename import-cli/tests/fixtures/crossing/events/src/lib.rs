@@ -15,6 +15,7 @@ pub mod custom;
 pub mod fonts;
 pub mod grid;
 pub mod keyed;
+pub mod keys;
 pub mod matched;
 pub mod named;
 pub mod plane;

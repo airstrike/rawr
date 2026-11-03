@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 97;
+const CLASSIFIER_VERSION: u32 = 98;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -6431,7 +6431,12 @@ impl<P: api::Phase> Context<'_, P> {
         generics: &model::Generics,
     ) -> Result<representability::enumeration::Plan, Failure> {
         let parameters = self.sole_alias_defaults(definition, self.parameters(generics)?)?;
-        let declaration_only = !parameters.is_empty();
+        // An enum whose every parameter has a default, as iced's `Key<C =
+        // SmolStr>`, is matched and read at that instance, as a struct's
+        // is, which its path names as a Rust type.
+        let declaration_only = parameters
+            .iter()
+            .any(|parameter| parameter.default().is_none());
         let mut admitted = Vec::new();
         self.retain_array::<representability::enumeration::Variant>(variants.len())?;
         admitted
@@ -7483,12 +7488,23 @@ impl<P: api::Phase> Context<'_, P> {
                             // A range of a type parameter or of a float, as
                             // a crate's `slider(range: RangeInclusive<T>,
                             // value: T, ..)` takes: Rawr's integer or float
-                            // range as `T` is an integer or a float.
+                            // range as `T` is an integer or a float. A
+                            // range of a crate's type, as iced's
+                            // `Radians::RANGE` is, holds its two bounds.
                             let element = self.convert(element)?;
-                            if !matches!(
-                                element,
-                                Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
-                            ) {
+                            let crate_type = matches!(
+                                &element,
+                                Type::Nominal { definition, .. }
+                                    if !crate::surface::identity::Definition::is_projected(
+                                        definition.as_bytes(),
+                                    )
+                            );
+                            if !crate_type
+                                && !matches!(
+                                    element,
+                                    Type::Builtin(Builtin::F32 | Builtin::F64) | Type::Parameter(_)
+                                )
+                            {
                                 return Err(
                                     representability::reject::Kind::UnsupportedGenericArgument
                                         .into(),

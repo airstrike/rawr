@@ -237,6 +237,22 @@ impl<T: Copy + Debug, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
     }
 }
 
+/// A part of a turn, as iced's `Radians`, whose range is an associated
+/// constant of a range of itself.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Turn(pub f32);
+
+impl Turn {
+    /// A whole turn.
+    pub const RANGE: std::ops::RangeInclusive<Self> = Self(0.0)..=Self(1.0);
+}
+
+impl From<u8> for Turn {
+    fn from(value: u8) -> Self {
+        Self(f32::from(value))
+    }
+}
+
 /// Where a hint goes, which the crate's `Default` puts on top.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Position {

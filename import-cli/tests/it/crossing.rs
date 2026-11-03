@@ -396,6 +396,21 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
+/// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
+/// constant whose type is std's `RangeInclusive` of the crate's own type,
+/// and the slider takes it at that type. The output is `cargo run`'s.
+#[test]
+fn a_range_of_a_crate_type_from_an_associated_constant_crosses() {
+    let (rawr, cargo) = both_printed("crossing-turned", "turned.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None")
+            && rawr.contains("1 message Turned(Turn(1.0))")
+            && rawr.contains("last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None"),
+        "{rawr}"
+    );
+}
+
 /// iced's qr_code, solar_system and screenshot: `column!` boxes an
 /// `Option` of a slider or of a caption through the crate's impl of its
 /// widget trait for `Option<T>`, a std type, as it boxes the crate's own
@@ -1343,6 +1358,21 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
          below closed cellar\ntried 4 attempts\nquiet\n2 counted\n\
          above door attic\nagain failed\nbarn 5\n6\n7 by value\n\
          deck door deck open\nstoop door stoop open\nclosed terrace\nbarn 3"
+    );
+}
+
+/// iced's `keyboard::Key<C = SmolStr>`: an enum whose every type parameter
+/// has a default is matched below a variant that names it without
+/// arguments, as modal's `KeyPressed { key: Key::Named(Named::Tab), .. }`,
+/// and made at the instance its use infers, its default where nothing else
+/// fixes it. The output is `cargo run`'s.
+#[test]
+fn an_enum_with_defaulted_parameters_is_matched_and_made() {
+    let (rawr, cargo) = both_printed("crossing-keys", "keys.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "back\nforward\nclose\ntyped a\nother\nother\nNamed(Escape)"
     );
 }
 

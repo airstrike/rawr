@@ -31,10 +31,11 @@ fn has_unresolved_structural_parameters(
     use crate::classify::representability::Representability;
 
     match representability {
-        // A struct whose every parameter has a default is reached at that
-        // instance, as palette's `Rgb` is `Rgb<Srgb, f32>`.
+        // A struct or enum whose every parameter has a default is reached
+        // at that instance, as palette's `Rgb` is `Rgb<Srgb, f32>` and
+        // iced's `Key` is `Key<SmolStr>`.
         Representability::Struct(plan) => plan.declaration_only(),
-        Representability::Enum(plan) => !plan.parameters().is_empty(),
+        Representability::Enum(plan) => plan.declaration_only(),
         _ => false,
     }
 }

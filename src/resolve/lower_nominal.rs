@@ -1993,6 +1993,15 @@ fn imported_surface_type(
             }
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveOf(element) => {
+            imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
+            Type::Nominal {
+                definition: rawr_import::surface::identity::Definition::range_inclusive(),
+                arguments: Box::new([imported_surface_type(
+                    inference, models, element, operation, imported,
+                )?]),
+            }
+        }
         Ty::Range(element) => {
             imported.retain_checked(Some(1), Some(std::mem::size_of::<Type>()))?;
             Type::Range(Box::new(imported_surface_type(
@@ -2426,6 +2435,10 @@ fn instance_surface_type(
             Int::I128 | Int::U128 => return None,
         }),
         Ty::InclusiveRange => Type::Builtin(Builtin::InclusiveRange),
+        Ty::InclusiveOf(element) => Type::Nominal {
+            definition: rawr_import::surface::identity::Definition::range_inclusive(),
+            arguments: Box::new([instance_surface_type(inference, models, element)?]),
+        },
         Ty::Range(element) => {
             Type::Range(Box::new(instance_surface_type(inference, models, element)?))
         }
@@ -8471,6 +8484,10 @@ enum Ty {
     /// generic item takes as rand's `random_range` does. A `Range<f64>` at
     /// runtime.
     Range(Box<Ty>),
+    /// Rust's `RangeInclusive<T>` of a crate's type, as iced's
+    /// `Radians::RANGE` is: a `RangeInclusive<Dynamic>` of its two bounds
+    /// at runtime.
+    InclusiveOf(Box<Ty>),
     /// `std::cmp::Ordering`: an `i64` at runtime, its Rust discriminant
     /// (`Less` -1, `Equal` 0, `Greater` 1), so `==` and `<` are the integers'.
     Ordering,
@@ -8588,6 +8605,7 @@ impl Ty {
             | Self::Reverse(target)
             | Self::Cow(target)
             | Self::Range(target)
+            | Self::InclusiveOf(target)
             | Self::Cell(_, target)
             | Self::Projection(target, ..) => {
                 target.collect_dependencies(dependencies);
@@ -8735,12 +8753,15 @@ impl Ty {
                     "Ordering" => Self::Ordering,
                     "Duration" => Self::Time(Time::Duration),
                     "Instant" => Self::Time(Time::Instant),
-                    // `RangeInclusive<f64>` and `RangeInclusive<i64>`.
+                    // `RangeInclusive<f64>` and `RangeInclusive<i64>`, and
+                    // one of a crate's type.
                     "RangeInclusive" => match path.arguments.first() {
-                        Some(type_ref::Argument::Type(element))
-                            if matches!(Self::from_resolved(element), Self::Float(_)) =>
-                        {
-                            Self::FloatRange
+                        Some(type_ref::Argument::Type(element)) => {
+                            match Self::from_resolved(element) {
+                                Self::Float(_) => Self::FloatRange,
+                                element @ Self::Host { .. } => Self::InclusiveOf(Box::new(element)),
+                                _ => Self::InclusiveRange,
+                            }
                         }
                         _ => Self::InclusiveRange,
                     },
@@ -8821,6 +8842,9 @@ impl Ty {
             Self::InclusiveRange => "RangeInclusive<i64>".into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
             Self::Range(element) => format!("Range<{}>", element.name(models)).into(),
+            Self::InclusiveOf(element) => {
+                format!("RangeInclusive<{}>", element.name(models)).into()
+            }
             Self::Ordering => "Ordering".into(),
             Self::Time(time) => time.name().into(),
             Self::ParseError(error) => error.name().into(),
@@ -8975,6 +8999,7 @@ impl Ty {
             Self::InclusiveRange => Some(TypeId::of::<std::ops::RangeInclusive<INT>>()),
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
+            Self::InclusiveOf(_) => Some(TypeId::of::<std::ops::RangeInclusive<Dynamic>>()),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<std::time::Instant>()),
@@ -9106,6 +9131,7 @@ impl Ty {
             | Self::InclusiveRange
             | Self::FloatRange
             | Self::Range(_)
+            | Self::InclusiveOf(_)
             | Self::Ordering
             | Self::Time(_)
             | Self::ParseError(_)
@@ -9377,7 +9403,10 @@ fn same_inferred(left: &Ty, right: &Ty) -> bool {
             | (Ty::Iter(left), Ty::Iter(right))
             | (Ty::Reverse(left), Ty::Reverse(right))
             | (Ty::Cow(left), Ty::Cow(right))
-            | (Ty::Range(left), Ty::Range(right)) => compare(left, right, forward, reverse),
+            | (Ty::Range(left), Ty::Range(right))
+            | (Ty::InclusiveOf(left), Ty::InclusiveOf(right)) => {
+                compare(left, right, forward, reverse)
+            }
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
             }
@@ -9635,6 +9664,7 @@ impl Inference {
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
+            Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(self.resolve(element))),
             Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(self.resolve(inner))),
             Ty::Keyed(kind, arguments) => Ty::Keyed(
                 *kind,
@@ -10805,6 +10835,7 @@ fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
         Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
         Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
         Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
+        Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(instantiate(element, substitution))),
         Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
@@ -17745,8 +17776,9 @@ impl<'a> Parser<'a> {
                     || crate::capability::builtin_supports("String", capability)
             }
             Ty::InclusiveRange | Ty::FloatRange => false,
-            // `Range<T>` derives from `T`, but is never `Copy`.
-            Ty::Range(element) => {
+            // `Range<T>` and `RangeInclusive<T>` derive from `T`, but are
+            // never `Copy`.
+            Ty::Range(element) | Ty::InclusiveOf(element) => {
                 capability != capability::Kind::Copy && self.type_provides(&element, capability)
             }
             // `ParseIntError` and kin: `Debug`, `Clone`, `PartialEq`, `Eq`.
@@ -18013,6 +18045,10 @@ impl<'a> Parser<'a> {
                     "Range<i64>"
                 },
                 range_type_id(&element),
+            ),
+            Ty::InclusiveOf(_) => intrinsic::Type::builtin(
+                "RangeInclusive<Dynamic>",
+                TypeId::of::<std::ops::RangeInclusive<Dynamic>>(),
             ),
             Ty::Ordering => intrinsic::Type::builtin("i64", TypeId::of::<INT>()),
             Ty::Time(Time::Duration) => {
@@ -18843,15 +18879,16 @@ impl<'a> Parser<'a> {
                         .or(associated_origin.as_ref());
                     // A crate's `RangeInclusive<T>` takes the argument's range,
                     // of floats or of integers, and `T` that kind of number, as
-                    // rustc infers `T` from `1.0..=30.0`.
+                    // rustc infers `T` from `1.0..=30.0`. A range of a crate's
+                    // type, as iced's `Radians::RANGE`, makes `T` that type.
                     if let Some(element) = range_inclusive_element(ty)
-                        && let Some(float) = arguments
+                        && let Some(argument) = arguments
                             .and_then(|arguments| arguments.get(index))
-                            .and_then(|argument| match self.inference.resolve(&argument.ty) {
-                                Ty::FloatRange => Some(true),
-                                Ty::InclusiveRange => Some(false),
-                                _ => None,
-                            })
+                            .map(|argument| self.inference.resolve(&argument.ty))
+                        && matches!(
+                            argument,
+                            Ty::FloatRange | Ty::InclusiveRange | Ty::InclusiveOf(_)
+                        )
                     {
                         let element = self.instantiate_host_type(
                             element,
@@ -18861,7 +18898,16 @@ impl<'a> Parser<'a> {
                             item_owner.as_ref(),
                             originating,
                         )?;
-                        return Ok(self.inclusive_range_of(&element, Some(float)));
+                        return Ok(match argument {
+                            Ty::InclusiveOf(bound) => {
+                                let _ = self.unify_type(&element, &bound);
+                                Ty::InclusiveOf(Box::new(element))
+                            }
+                            argument => self.inclusive_range_of(
+                                &element,
+                                Some(matches!(argument, Ty::FloatRange)),
+                            ),
+                        });
                     }
                     // A crate's `impl IntoIterator<Item = T>`, which Rawr takes
                     // as an array of `T`, takes a shared borrow of an array too,
@@ -19035,11 +19081,13 @@ impl<'a> Parser<'a> {
     /// number, as rustc's `{float}` or `{integer}`.
     fn inclusive_range_of(&mut self, element: &Ty, float: Option<bool>) -> Ty {
         // With no argument to read, as a closure's hint is made, an open
-        // `T` stays open for the call's own arguments to settle.
+        // `T` stays open for the call's own arguments to settle. A range of
+        // a crate's type holds its two bounds.
         let float = match (float, self.inference.resolve(element)) {
             (Some(float), _) => float,
             (None, Ty::Float(_)) => true,
             (None, Ty::Int(_)) => false,
+            (None, Ty::Host { .. }) => return Ty::InclusiveOf(Box::new(element.clone())),
             (None, _) => return Ty::InclusiveRange,
         };
         let id = self.inference.fresh_id();
@@ -48034,7 +48082,10 @@ impl<'a> Parser<'a> {
                 construction: member_span,
             });
         }
-        if !definition.parameters().is_empty() {
+        // A generic enum is made only where every parameter has a default,
+        // as iced's `Key<C = SmolStr>`: the instance its path names.
+        let defaults = definition.defaults();
+        if defaults.len() != definition.parameters().len() || defaults.iter().any(Option::is_none) {
             return Err(Error::InvalidConstruction {
                 owner: path,
                 reason: "generic imported construction requires a sealed Phase 4 substitution"
@@ -48042,6 +48093,13 @@ impl<'a> Parser<'a> {
                 construction: member_span,
             });
         }
+        // Its fields and context infer the parameters, and a default fills
+        // each one they leave unknown, as rustc's fallback does.
+        let instance = definition
+            .parameters()
+            .iter()
+            .map(|_| self.inference.fresh())
+            .collect::<Box<[_]>>();
         let fields = variant.fields().to_vec();
         let rawr_import::surface::identity::Selector::EnumVariant { form, .. } =
             variant.imported_identity()
@@ -48128,7 +48186,12 @@ impl<'a> Parser<'a> {
                 construction: span(owner_span.start(), end),
             });
         }
-        let mut parameters = BTreeMap::new();
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(instance.iter().cloned())
+            .collect::<BTreeMap<_, _>>();
         for (argument, field) in arguments.iter_mut().zip(&fields) {
             let expected = self.instantiate_host_type(
                 field.ty(),
@@ -48141,10 +48204,24 @@ impl<'a> Parser<'a> {
             self.coerce_expr(&expected, argument)?;
             self.consume_imported_value(argument, &path, argument.span)?;
         }
+        for (parameter, default) in instance.iter().zip(definition.defaults()) {
+            if let Some(default) = default {
+                let default = self.instantiate_host_type(
+                    default,
+                    &mut parameters,
+                    &path,
+                    member_span,
+                    selected_owner.as_ref(),
+                    Some(&definition),
+                )?;
+                self.structural_defaults
+                    .push((parameter.clone(), default, member_span));
+            }
+        }
         let construction = span(owner_span.start(), end);
         let output = Ty::Host {
             proof: HostTyProof::new(definition.clone(), Some(definition.clone()), owner),
-            arguments: Box::default(),
+            arguments: instance,
         };
         let imported = ImportedOperation {
             kind: crate::host::structural::Kind::Variant,
@@ -50526,7 +50603,8 @@ impl<'a> Parser<'a> {
             | (Ty::Iter(expected_element), Ty::Iter(actual_element))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
             | (Ty::Cow(expected_element), Ty::Cow(actual_element))
-            | (Ty::Range(expected_element), Ty::Range(actual_element)) => {
+            | (Ty::Range(expected_element), Ty::Range(actual_element))
+            | (Ty::InclusiveOf(expected_element), Ty::InclusiveOf(actual_element)) => {
                 self.unify_type(expected_element, actual_element)
             }
             (Ty::Cell(expected_kind, expected_element), Ty::Cell(actual_kind, actual_element)) => {
@@ -51800,9 +51878,10 @@ enum Selection {
 fn reaches_param(ty: &Ty) -> bool {
     match ty {
         Ty::Param(_) => true,
-        Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Range(target) => {
-            reaches_param(target)
-        }
+        Ty::Reference { target, .. }
+        | Ty::Boxed(target)
+        | Ty::Range(target)
+        | Ty::InclusiveOf(target) => reaches_param(target),
         Ty::Array { element, .. } | Ty::Option(element) => reaches_param(element),
         Ty::Result(ok, err) => reaches_param(ok) || reaches_param(err),
         Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(reaches_param),
@@ -51832,6 +51911,7 @@ fn contains_inference(ty: &Ty) -> bool {
         | Ty::Reverse(target)
         | Ty::Cow(target)
         | Ty::Range(target)
+        | Ty::InclusiveOf(target)
         | Ty::Cell(_, target) => contains_inference(target),
         Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
         Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
