@@ -9,7 +9,7 @@
 use std::fs;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -52,7 +52,7 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("inspect-dependency");
+    let root = crate::support::scratch().join("inspect-dependency");
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);
     let events = root.join("debug-events");

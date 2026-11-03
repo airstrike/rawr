@@ -8,7 +8,7 @@
 //! tests run last. Build the driver first, as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use crate::support::copy;
@@ -32,7 +32,7 @@ fn run_at(name: &str, main: &str) -> (bool, String, String) {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let root = directory.join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(
@@ -360,7 +360,7 @@ fn main() {
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native
     // call holds it, returns to its slot (review 6, 7).
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("erasure");
+    let root = crate::support::scratch().join("erasure");
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([

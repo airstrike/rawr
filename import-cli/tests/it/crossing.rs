@@ -27,7 +27,7 @@ fn root(name: &str) -> PathBuf {
         "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
         driver.display()
     );
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_file(root.join("stop"));
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
@@ -53,7 +53,7 @@ fn printed(name: &str, variant: Option<&str>) -> String {
         )
         .unwrap();
     }
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(&root)
@@ -331,7 +331,7 @@ fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
         root.join("src/main.rs"),
     )
     .unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let output = |mut command: Command| {
         let run = command
             .current_dir(&root)
@@ -897,7 +897,7 @@ fn a_literal_names_the_public_field_rawr_cannot_hold() {
         root.join("src/main.rs"),
     )
     .unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
         .arg(&root)
@@ -949,7 +949,7 @@ fn a_borrowed_local_where_a_static_str_goes_does_not_live_long_enough() {
             root.join("src/main.rs"),
         )
         .unwrap();
-        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let directory = crate::support::scratch();
         let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
             .arg("check")
             .arg(&root)

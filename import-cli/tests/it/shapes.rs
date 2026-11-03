@@ -15,7 +15,7 @@ use crate::support::copy;
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/native-shapes");
 
 fn fixture(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     let _ = fs::remove_dir_all(root.join("shapes"));
     copy(Path::new(FIXTURE), &root);
@@ -23,7 +23,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn rawr_import(command: &str, root: &Path) -> Output {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg(command)
         .arg(root)

@@ -24,14 +24,14 @@ const MODULES: [&str; 5] = [
 ];
 
 fn fixture(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let root = crate::support::scratch().join(name);
     let _ = fs::remove_dir_all(root.join("src"));
     copy(Path::new(FIXTURE), &root);
     root
 }
 
 fn rawr_import(root: &Path) -> Output {
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let directory = crate::support::scratch();
     Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
         .arg(root)
