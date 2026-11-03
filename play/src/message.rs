@@ -11,6 +11,8 @@
 //! ````
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::Output;
@@ -55,17 +57,20 @@ fn request(content: &str, options_line: &str) -> Result<Request, String> {
 }
 
 /// Arguments for one `rawr-play` process that reads a request's code on
-/// stdin and writes its result to stdout.
+/// stdin and writes its result to stdout, with `time` at most, or less once
+/// the file at `deadline` gives a deadline.
 #[must_use]
-pub fn args(time: Duration, memory_mb: u64) -> Vec<String> {
+pub fn args(time: Duration, memory_mb: u64, deadline: &Path) -> Vec<OsString> {
     vec![
-        "-".to_owned(),
-        "--time-ms".to_owned(),
-        time.as_millis().to_string(),
-        "--memory-mb".to_owned(),
-        memory_mb.to_string(),
-        "-o".to_owned(),
-        "-".to_owned(),
+        "-".into(),
+        "--time-ms".into(),
+        time.as_millis().to_string().into(),
+        "--memory-mb".into(),
+        memory_mb.to_string().into(),
+        "--deadline-file".into(),
+        deadline.into(),
+        "-o".into(),
+        "-".into(),
     ]
 }
 
@@ -397,8 +402,13 @@ mod tests {
     #[test]
     fn message_request_args() {
         assert_eq!(
-            super::args(std::time::Duration::from_millis(2000), 512).join(" "),
-            "- --time-ms 2000 --memory-mb 512 -o -"
+            super::args(
+                std::time::Duration::from_millis(2000),
+                512,
+                std::path::Path::new("/tmp/run.deadline")
+            )
+            .join(std::ffi::OsStr::new(" ")),
+            "- --time-ms 2000 --memory-mb 512 --deadline-file /tmp/run.deadline -o -"
         );
     }
 

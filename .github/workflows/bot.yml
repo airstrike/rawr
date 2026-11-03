@@ -1,0 +1,211 @@
+# Stage 3 of the release (release.yml): the ?play image (play/Dockerfile),
+# built and pushed to Cloudflare's registry as rawr-play:<commit>.
+#
+# `need` compares the image's inputs at this commit with those of the image
+# Cloudflare runs (image-changed.sh: every file the Docker build reads, with
+# version-only bumps of the workspace ignored). When nothing changed, the
+# build is skipped, `image` is empty, and the deploy keeps the running image.
+# `build: always` builds regardless.
+#
+# The build keeps cargo's registry, git checkouts and target directories in
+# BuildKit cache mounts. buildkit-cache-dance moves them in and out of the
+# builder, and actions/cache keeps them between runs under a key of the
+# external dependencies (scripts/deps-key.sh), the Dockerfile (its
+# toolchains) and the universe's manifest. That cache is saved on the first
+# build after one of those changes; every later build restores it and
+# compiles rawr's own crates only. Layers go to the GitHub Actions cache too.
+#
+# Run on its own (Run workflow), it then deploys through site.yml with the
+# new image and the live rawr-web. In the chained release, `deploy` is false
+# and the site stage deploys it.
+name: Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: "`auto` builds only when the image's inputs changed; `always` builds anyway."
+        type: choice
+        options: [auto, always]
+        default: auto
+      deploy:
+        description: Deploy the Worker with the new image.
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      build:
+        type: string
+        default: auto
+      deploy:
+        type: boolean
+        default: true
+    outputs:
+      image:
+        description: The image pushed (registry.cloudflare.com/…/rawr-play:<commit>), or empty when the build was skipped.
+        value: ${{ jobs.image.outputs.ref }}
+
+# See site.yml: `release-play` when run alone, a group of its own when called.
+concurrency:
+  group: ${{ github.workflow == 'Bot' && 'release-play' || format('release-play-{0}-bot', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  need:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.need.outputs.build }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    defaults:
+      run:
+        working-directory: play/deploy/cloudflare
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # image-changed.sh diffs against the running image's commit.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install the Worker's dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Compare with the running image
+        id: need
+        env:
+          BUILD: ${{ inputs.build }}
+        run: |
+          if [ "$BUILD" = always ]; then
+            echo "build: always"
+            echo build=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          running="$(./pin-image.sh)"
+          echo "Cloudflare runs rawr-play:$running"
+          if ./image-changed.sh "$running"; then
+            echo build=true >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the image is unchanged since $running; the deploy keeps it"
+            echo build=false >> "$GITHUB_OUTPUT"
+          fi
+
+  image:
+    needs: need
+    if: needs.need.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      ref: ${{ steps.image.outputs.ref }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner has about 85 GB free on / (the build needs about 20), so
+      # nothing is deleted. Four rustc jobs on 16 GB of RAM can peak above it
+      # during the bot's thin-LTO link, so the build gets 24 GB of swap on the
+      # runner's second disk as a cushion.
+      - name: Add swap
+        run: |
+          df -h / /mnt
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile >/dev/null
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Name the image
+        id: image
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "set the CLOUDFLARE_ACCOUNT_ID repository variable" >&2; exit 1; }
+          sha="$(git rev-parse --short=12 HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref=registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/rawr-play:$sha" >> "$GITHUB_OUTPUT"
+          tools="$(sha256sum play/Dockerfile play/universe/Cargo.toml | sha256sum | cut -c1-12)"
+          echo "cargo-key=play-cargo-$(scripts/deps-key.sh)-$tools" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+
+      # Declared before the dance, so its post step (the save) runs after the
+      # dance's (the extraction). Saved only when the key missed.
+      - name: Restore the cargo caches
+        id: cargo-cache
+        uses: actions/cache@v4
+        with:
+          path: play-cache
+          key: ${{ steps.image.outputs.cargo-key }}
+          restore-keys: play-cargo-
+
+      - name: Put the cargo caches in the builder
+        uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          dockerfile: play/Dockerfile
+          cache-dir: play-cache
+          skip-extraction: ${{ steps.cargo-cache.outputs.cache-hit }}
+
+      # Built once and loaded into the local docker, then pushed: the
+      # registry's credentials last only 15 minutes. CARGO_BUILD_JOBS sets
+      # build speed only: the profiles are the Dockerfile's.
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: play/Dockerfile
+          builder: ${{ steps.buildx.outputs.name }}
+          platforms: linux/amd64
+          build-args: |
+            PLAY_VERSION=${{ steps.image.outputs.sha }}
+            CARGO_BUILD_JOBS=4
+          tags: ${{ steps.image.outputs.ref }}
+          load: true
+          provenance: false
+          cache-from: type=gha,scope=play
+          cache-to: type=gha,scope=play,mode=max
+
+      - name: Show the image's size
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          docker image ls "$IMAGE"
+          docker history --format '{{.Size}}\t{{.CreatedBy}}' "$IMAGE" | cut -c1-120
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Push the image
+        working-directory: play/deploy/cloudflare
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: |
+          npm install --no-audit --no-fund
+          credentials="$(npx wrangler containers registries credentials registry.cloudflare.com --push --json)"
+          field() { printf '%s' "$credentials" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)[process.argv[1]]))" "$1"; }
+          password="$(field password)"
+          echo "::add-mask::$password"
+          printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
+          docker push "$IMAGE"
+
+  deploy:
+    needs: image
+    if: inputs.deploy
+    uses: ./.github/workflows/site.yml
+    with:
+      image: ${{ needs.image.outputs.ref }}
+      web: live
+    secrets: inherit

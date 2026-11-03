@@ -9,7 +9,9 @@
 //! A request is answered by two forks. The first reads the request, takes
 //! the snippet's memory limit and forks the second, which runs the snippet
 //! with its output on pipes. The first collects that output, stops the
-//! second at the time limit, and answers with how it ended. The server
+//! second at the time limit, or sooner at the deadline the request's
+//! [`deadline::File`] gives once it is set, and answers with how it ended.
+//! The server
 //! itself only accepts and forks, and stays single-threaded, so every fork
 //! is a whole copy of it.
 
@@ -18,8 +20,10 @@ use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+pub mod deadline;
 
 /// The variable naming the socket a universe runner serves on.
 pub const SOCKET: &str = "RAWR_PLAY_SOCKET";
@@ -44,6 +48,9 @@ pub struct Request {
     pub env: Vec<(OsString, OsString)>,
     /// The wall-clock budget, from the fork to the end of the run.
     pub time: Duration,
+    /// A file another process may write a sooner deadline to as the run
+    /// goes on (see [`deadline::File`]).
+    pub deadline: Option<PathBuf>,
     /// The address space the run may have (`RLIMIT_AS`, Linux only).
     pub memory: Option<u64>,
 }
@@ -174,7 +181,8 @@ fn respond(stream: &mut UnixStream, run: &mut impl FnMut(String)) -> io::Result<
     drop((stdout_writer, stderr_writer, null));
     let stdout = std::thread::spawn(move || read_all(stdout));
     let stderr = std::thread::spawn(move || read_all(stderr));
-    let (status, limit) = wait(child, Instant::now() + request.time)?;
+    let deadline = deadline::Watch::new(Instant::now() + request.time, request.deadline);
+    let (status, limit) = wait(child, deadline)?;
     Ok(Ran {
         status,
         limit,
@@ -185,12 +193,12 @@ fn respond(stream: &mut UnixStream, run: &mut impl FnMut(String)) -> io::Result<
 
 /// Wait for `child` until `deadline`, then stop it: its status, and
 /// whether the deadline stopped it.
-fn wait(child: c_int, deadline: Instant) -> io::Result<(i32, bool)> {
+fn wait(child: c_int, mut deadline: deadline::Watch) -> io::Result<(i32, bool)> {
     let mut status = 0;
     loop {
         // SAFETY: waitpid writes the status of this process's own child.
         match unsafe { sys::waitpid(child, &mut status, sys::WNOHANG) } {
-            0 if Instant::now() >= deadline => {
+            0 if deadline.passed(Instant::now()) => {
                 // SAFETY: `child` is this process's own unreaped child, so
                 // its pid names no other process.
                 unsafe { sys::kill(child, sys::SIGKILL) };
@@ -280,6 +288,11 @@ impl Request {
         let millis = u64::try_from(self.time.as_millis()).unwrap_or(u64::MAX);
         bytes.extend_from_slice(&millis.to_le_bytes());
         bytes.extend_from_slice(&self.memory.unwrap_or(0).to_le_bytes());
+        let deadline = self
+            .deadline
+            .as_deref()
+            .map_or(&[][..], |path| path.as_os_str().as_bytes());
+        field(&mut bytes, deadline);
         bytes.extend_from_slice(&(self.env.len() as u64).to_le_bytes());
         for (name, value) in &self.env {
             field(&mut bytes, name.as_bytes());
@@ -295,6 +308,9 @@ impl Request {
         let mut input = bytes.as_slice();
         let time = Duration::from_millis(number(&mut input)?);
         let memory = Some(number(&mut input)?).filter(|&bytes| bytes != 0);
+        let deadline = Some(take(&mut input)?)
+            .filter(|path| !path.is_empty())
+            .map(|path| PathBuf::from(OsString::from_vec(path.to_vec())));
         let count = number(&mut input)?;
         let mut env = Vec::new();
         for _ in 0..count {
@@ -308,6 +324,7 @@ impl Request {
             source,
             env,
             time,
+            deadline,
             memory,
         })
     }
@@ -420,6 +437,7 @@ mod tests {
             source: "fn main() {}\n".into(),
             env: vec![("PLAY_FRAME".into(), "/tmp/frame.png".into())],
             time: Duration::from_millis(1500),
+            deadline: Some("/tmp/run.deadline".into()),
             memory: Some(1 << 30),
         };
         let mut stream = std::os::unix::net::UnixStream::pair().unwrap();
@@ -427,8 +445,14 @@ mod tests {
         drop(stream.0);
         let read = Request::read(&mut stream.1).unwrap();
         assert_eq!(
-            (read.source, read.env, read.time, read.memory),
-            (request.source, request.env, request.time, request.memory)
+            (read.source, read.env, read.time, read.deadline, read.memory),
+            (
+                request.source,
+                request.env,
+                request.time,
+                request.deadline,
+                request.memory
+            )
         );
         let ran = Ran {
             status: 101,

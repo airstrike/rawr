@@ -68,6 +68,18 @@ fn stability(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
     }
 }
 
+/// A member's stability as rustc checks it at a use: its own attribute,
+/// stable or not, else `inherited`, its owner's. A stable method of an impl
+/// in an unstable module (`Error::new` in `alloc::io`) is stable.
+fn member_stability(tcx: TyCtxt<'_>, member: DefId, inherited: Option<String>) -> String {
+    if tcx.lookup_stability(member).is_some() {
+        stability(tcx, member)
+    } else {
+        inherited
+    }
+    .unwrap_or_else(|| "s".to_owned())
+}
+
 /// One line's text: no tabs or newlines.
 fn clean(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -447,7 +459,7 @@ impl<'tcx> Table<'tcx> {
                         continue;
                     };
                     let member_kind = kind_text(tcx.def_kind(*member));
-                    let stability = stability(tcx, *member).unwrap_or_else(|| own.clone());
+                    let stability = member_stability(tcx, *member, Some(own.clone()));
                     let provided = if item.defaultness(tcx).has_value() {
                         "provided"
                     } else {
@@ -461,7 +473,7 @@ impl<'tcx> Table<'tcx> {
             }
             DefKind::Enum => {
                 for variant in tcx.adt_def(def_id).variants() {
-                    let stability = stability(tcx, variant.def_id).unwrap_or_else(|| own.clone());
+                    let stability = member_stability(tcx, variant.def_id, Some(own.clone()));
                     self.items.insert(
                         format!("{canonical}::{}", variant.name),
                         format!("variant\t{stability}\t"),
@@ -511,9 +523,7 @@ impl<'tcx> Table<'tcx> {
             };
             let key = format!("{owner}::{name}");
             seen.insert(key.clone());
-            let stability = stability(tcx, *member)
-                .or_else(|| inherited.clone())
-                .unwrap_or_else(|| "s".to_owned());
+            let stability = member_stability(tcx, *member, inherited.clone());
             let kind = kind_text(tcx.def_kind(*member));
             // A stable method beside an unstable one of its name keeps the
             // stable line.

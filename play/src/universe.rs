@@ -15,7 +15,8 @@
 //! The universe's iced has no window: its shell (`play/universe/shell`,
 //! patched in for iced_winit) runs an iced program headless until it
 //! settles, and writes its frame as a PNG, or a GIF when it animated, to
-//! the file `PLAY_FRAME` names, before the deadline `PLAY_DEADLINE` gives.
+//! the file `PLAY_FRAME` names, before the deadline `PLAY_DEADLINE` gives
+//! or the sooner one the file `PLAY_DEADLINE_FILE` names may give later.
 //! A run that wrote one gives that image beside the text it printed.
 
 use std::io::BufRead as _;
@@ -41,6 +42,10 @@ const FRAME: &str = "PLAY_FRAME";
 /// The variable naming the run's deadline for the shell, in milliseconds
 /// since the Unix epoch, so it writes its frame before the run is stopped.
 const DEADLINE: &str = "PLAY_DEADLINE";
+/// The variable naming the file a sooner deadline may be written to as the
+/// run goes on (see [`rawr::play::deadline`]), which the shell reads at
+/// each frame.
+const DEADLINE_FILE: &str = "PLAY_DEADLINE_FILE";
 
 /// The prebuilt runner, the root it was built from, and the socket of a
 /// server already running it, if one is.
@@ -202,14 +207,19 @@ fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<O
     let deadline = deadline
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis());
+    let mut env = vec![
+        (FRAME.into(), frame.0.clone().into()),
+        (DEADLINE.into(), deadline.to_string().into()),
+    ];
+    if let Some(file) = &limits.deadline {
+        env.push((DEADLINE_FILE.into(), file.clone().into()));
+    }
     let wrapped = program(source);
     let request = rawr::play::Request {
         source: wrapped.clone(),
-        env: vec![
-            (FRAME.into(), frame.0.clone().into()),
-            (DEADLINE.into(), deadline.to_string().into()),
-        ],
+        env,
         time: limits.time,
+        deadline: limits.deadline.clone(),
         memory: limits.memory,
     };
     let ran = rawr::play::run(socket, &request)

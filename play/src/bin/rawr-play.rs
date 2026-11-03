@@ -1,6 +1,8 @@
-//! `rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] -o <out|->`
+//! `rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] [--deadline-file F] -o <out|->`
 //!
-//! `--time-ms N` is the wall-clock budget for a run.
+//! `--time-ms N` is the wall-clock budget for a run. `--deadline-file F`
+//! names a file that may give a sooner deadline as the run goes on, in
+//! Unix milliseconds: the bot writes one there once another snippet waits.
 //!
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
 //! runs one of these per snippet, so `--memory-mb` caps the whole process,
@@ -21,7 +23,8 @@
 use std::io::{Read, Write};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] -o <out|->";
+const USAGE: &str =
+    "usage: rawr-play <file.rs|-> [--time-ms N] [--memory-mb N] [--deadline-file F] -o <out|->";
 
 /// Print the guild ID behind each token, or the token for each guild ID.
 fn server_tokens(decrypt: bool, values: &[String]) -> Result<(), String> {
@@ -80,6 +83,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
             "-o" | "--output" => output = Some(value("-o")?),
             "--time-ms" => {
                 limits.time = std::time::Duration::from_millis(number(value("--time-ms")?)?);
+            }
+            "--deadline-file" => {
+                limits.deadline = Some(value("--deadline-file")?.into());
             }
             "--memory-mb" => {
                 let bytes = number(value("--memory-mb")?)?.saturating_mul(1024 * 1024);

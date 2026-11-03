@@ -10,6 +10,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rawr::play::deadline;
 use rawr::{CallFnOptions, Dynamic, Engine, Scope};
 
 use crate::{Limits, PlayError, SOURCE_NAME};
@@ -195,7 +196,11 @@ pub struct Parsed {
 
 impl Parsed {
     /// Wrap and parse `source` on a sandboxed base Engine.
-    pub fn new(source: &str, limits: &Limits, deadline: Instant) -> Result<Self, PlayError> {
+    pub fn new(
+        source: &str,
+        limits: &Limits,
+        deadline: deadline::Watch,
+    ) -> Result<Self, PlayError> {
         let program = program(source);
         let sink = Arc::new(Mutex::new(Output::default()));
         let engine = engine(limits, deadline, &sink);
@@ -361,14 +366,20 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
 
 /// A base Engine with the untrusted-snippet limits whose output goes to
 /// `sink`; it stops a program at the deadline or once `sink` is full.
-fn engine(limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) -> Engine {
+fn engine(limits: &Limits, deadline: deadline::Watch, sink: &Arc<Mutex<Output>>) -> Engine {
     let mut engine = Engine::new();
     sandbox(&mut engine, limits, deadline, sink);
     engine
 }
 
 /// The untrusted-snippet limits on `engine`, its output going to `sink`.
-fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<Mutex<Output>>) {
+fn sandbox(
+    engine: &mut Engine,
+    limits: &Limits,
+    deadline: deadline::Watch,
+    sink: &Arc<Mutex<Output>>,
+) {
+    let deadline = Mutex::new(deadline);
     let depth = engine.max_call_levels().min(limits.call_depth);
     let (output, print, debug, progress) = (sink.clone(), sink.clone(), sink.clone(), sink.clone());
     engine
@@ -378,7 +389,7 @@ fn sandbox(engine: &mut Engine, limits: &Limits, deadline: Instant, sink: &Arc<M
         .set_max_array_size(limits.array_size)
         .set_max_map_size(limits.map_size)
         .on_progress(move |_| {
-            if Instant::now() >= deadline {
+            if deadline.lock().unwrap().passed(Instant::now()) {
                 Some(TIME_LIMIT.into())
             } else if progress.lock().unwrap().truncated {
                 Some(OUTPUT_LIMIT.into())

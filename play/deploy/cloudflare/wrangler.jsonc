@@ -31,10 +31,14 @@
   "vars": {
     "PLAY_WORKERS": "1",
     "PLAY_MEMORY_MB": "256",
-    // A whole run, killed after it: the script time plus the process start.
+    // A run has no time limit while no other snippet waits. Once one waits,
+    // the run gets these from that moment: the script time, and the whole
+    // run, killed after it (the script time plus the process start).
     "PLAY_TIMEOUT_MS": "120000",
-    // Script time per run.
     "PLAY_TIME_MS": "60000",
+    // Script time of a run nothing waits behind: the ceiling against a
+    // runaway loop.
+    "PLAY_MAX_MS": "600000",
     // The image's commit (pin-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
     // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).

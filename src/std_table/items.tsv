@@ -2103,13 +2103,13 @@ core::io::borrowed_buf::BorrowedCursor::set_init	assoc-fn	u borrowed_buf_init 78
 core::io::borrowed_buf::BorrowedCursor::with_unfilled_buf	assoc-fn	u core_io_borrowed_buf 117693 -		fn with_unfilled_buf<R>(&mut self, f: impl FnOnce(&mut std::io::BorrowedBuf<'_, T>) -> R) -> R
 core::io::borrowed_buf::BorrowedCursor::written	assoc-fn	u core_io_borrowed_buf 117693 -		fn written(&self) -> usize
 core::io::cursor::Cursor	struct	s	T
-core::io::cursor::Cursor::get_mut	assoc-fn	u core_io 154046 -		fn get_mut(&mut self) -> &mut T
-core::io::cursor::Cursor::get_ref	assoc-fn	u core_io 154046 -		fn get_ref(&self) -> &T
-core::io::cursor::Cursor::into_inner	assoc-fn	u core_io 154046 -		fn into_inner(self) -> T
+core::io::cursor::Cursor::get_mut	assoc-fn	s		fn get_mut(&mut self) -> &mut T
+core::io::cursor::Cursor::get_ref	assoc-fn	s		fn get_ref(&self) -> &T
+core::io::cursor::Cursor::into_inner	assoc-fn	s		fn into_inner(self) -> T
 core::io::cursor::Cursor::into_parts_mut	assoc-fn	u core_io_internals - exposed only for libstd		fn into_parts_mut(&mut self) -> (&mut u64, &mut T)
-core::io::cursor::Cursor::new	assoc-fn	u core_io 154046 -		fn new(inner: T) -> std::io::Cursor<T>
-core::io::cursor::Cursor::position	assoc-fn	u core_io 154046 -		fn position(&self) -> u64
-core::io::cursor::Cursor::set_position	assoc-fn	u core_io 154046 -		fn set_position(&mut self, pos: u64)
+core::io::cursor::Cursor::new	assoc-fn	s		fn new(inner: T) -> std::io::Cursor<T>
+core::io::cursor::Cursor::position	assoc-fn	s		fn position(&self) -> u64
+core::io::cursor::Cursor::set_position	assoc-fn	s		fn set_position(&mut self, pos: u64)
 core::io::cursor::Cursor::split	assoc-fn	u cursor_split 86369 -		fn split(&self) -> (&[u8], &[u8])
 core::io::cursor::Cursor::split_mut	assoc-fn	u cursor_split 86369 -		fn split_mut(&mut self) -> (&mut [u8], &mut [u8])
 core::io::cursor::WriteThroughCursor	trait	u core_io_internals - exposed only for libstd		Sized
@@ -2137,21 +2137,21 @@ core::io::error::Error::UNKNOWN_THREAD_COUNT	assoc-const	u core_io_internals - e
 core::io::error::Error::UNSUPPORTED_PLATFORM	assoc-const	u core_io_internals - exposed only for libstd	
 core::io::error::Error::WRITE_ALL_EOF	assoc-const	u core_io_internals - exposed only for libstd	
 core::io::error::Error::ZERO_TIMEOUT	assoc-const	u core_io_internals - exposed only for libstd	
-core::io::error::Error::downcast	assoc-fn	u alloc_io 154046 -		fn downcast<E: std::error::Error + Send + Sync>(self) -> Result<E, std::io::Error>
+core::io::error::Error::downcast	assoc-fn	s		fn downcast<E: std::error::Error + Send + Sync>(self) -> Result<E, std::io::Error>
 core::io::error::Error::from_custom_owner	assoc-fn	u core_io_internals - exposed only for libstd		fn from_custom_owner(custom: core::io::CustomOwner) -> std::io::Error
 core::io::error::Error::from_raw_os_error	assoc-fn	s		fn from_raw_os_error(code: i32) -> std::io::Error
 core::io::error::Error::from_raw_os_error_with_functions	assoc-fn	u core_io_internals - exposed only for libstd		fn from_raw_os_error_with_functions(code: i32, functions: &'static alloc::io::OsFunctions) -> std::io::Error
 core::io::error::Error::from_static_message	assoc-fn	u io_const_error_internals - -		fn from_static_message(msg: &'static std::io::SimpleMessage) -> std::io::Error
-core::io::error::Error::get_mut	assoc-fn	u core_io 154046 -		fn get_mut(&mut self) -> Option<&mut dyn std::error::Error + Sync + Send>
-core::io::error::Error::get_ref	assoc-fn	u core_io 154046 -		fn get_ref(&self) -> Option<&dyn std::error::Error + Sync + Send>
+core::io::error::Error::get_mut	assoc-fn	s		fn get_mut(&mut self) -> Option<&mut dyn std::error::Error + Sync + Send>
+core::io::error::Error::get_ref	assoc-fn	s		fn get_ref(&self) -> Option<&dyn std::error::Error + Sync + Send>
 core::io::error::Error::into_custom_owner	assoc-fn	u core_io_internals - exposed only for libstd		fn into_custom_owner(self) -> Result<core::io::CustomOwner, std::io::Error>
-core::io::error::Error::into_inner	assoc-fn	u alloc_io 154046 -		fn into_inner(self) -> Option<Box<dyn std::error::Error + Sync + Send>>
+core::io::error::Error::into_inner	assoc-fn	s		fn into_inner(self) -> Option<Box<dyn std::error::Error + Sync + Send>>
 core::io::error::Error::is_interrupted	assoc-fn	u core_io_internals - exposed only for libstd		fn is_interrupted(&self) -> bool
-core::io::error::Error::kind	assoc-fn	u core_io 154046 -		fn kind(&self) -> std::io::ErrorKind
+core::io::error::Error::kind	assoc-fn	s		fn kind(&self) -> std::io::ErrorKind
 core::io::error::Error::last_os_error	assoc-fn	s		fn last_os_error() -> std::io::Error
-core::io::error::Error::new	assoc-fn	u alloc_io 154046 -		fn new<E: Into<Box<dyn std::error::Error + Sync + Send>>>(kind: std::io::ErrorKind, error: E) -> std::io::Error
-core::io::error::Error::other	assoc-fn	u alloc_io 154046 -		fn other<E: Into<Box<dyn std::error::Error + Sync + Send>>>(error: E) -> std::io::Error
-core::io::error::Error::raw_os_error	assoc-fn	u core_io 154046 -		fn raw_os_error(&self) -> Option<i32>
+core::io::error::Error::new	assoc-fn	s		fn new<E: Into<Box<dyn std::error::Error + Sync + Send>>>(kind: std::io::ErrorKind, error: E) -> std::io::Error
+core::io::error::Error::other	assoc-fn	s		fn other<E: Into<Box<dyn std::error::Error + Sync + Send>>>(error: E) -> std::io::Error
+core::io::error::Error::raw_os_error	assoc-fn	s		fn raw_os_error(&self) -> Option<i32>
 core::io::error::ErrorKind	enum	s	
 core::io::error::ErrorKind::AddrInUse	variant	s	
 core::io::error::ErrorKind::AddrNotAvailable	variant	s	
@@ -2202,15 +2202,15 @@ core::io::error::Result	type	s	T	Result<T, std::io::Error>
 core::io::error::SimpleMessage	struct	u io_const_error_internals - -	
 core::io::error::const_error	macro	u io_const_error 133448 -	
 core::io::io_slice::IoSlice	struct	s	'a
-core::io::io_slice::IoSlice::advance	assoc-fn	u core_io 154046 -		fn advance(&mut self, n: usize)
-core::io::io_slice::IoSlice::advance_slices	assoc-fn	u core_io 154046 -		fn advance_slices(bufs: &mut &mut [std::io::IoSlice<'a>], n: usize)
+core::io::io_slice::IoSlice::advance	assoc-fn	s		fn advance(&mut self, n: usize)
+core::io::io_slice::IoSlice::advance_slices	assoc-fn	s		fn advance_slices(bufs: &mut &mut [std::io::IoSlice<'a>], n: usize)
 core::io::io_slice::IoSlice::as_slice	assoc-fn	u io_slice_as_bytes 132818 -		fn as_slice(self) -> &'a [u8]
-core::io::io_slice::IoSlice::new	assoc-fn	u core_io 154046 -		fn new(buf: &'a [u8]) -> std::io::IoSlice<'a>
+core::io::io_slice::IoSlice::new	assoc-fn	s		fn new(buf: &'a [u8]) -> std::io::IoSlice<'a>
 core::io::io_slice::IoSliceMut	struct	s	'a
-core::io::io_slice::IoSliceMut::advance	assoc-fn	u core_io 154046 -		fn advance(&mut self, n: usize)
-core::io::io_slice::IoSliceMut::advance_slices	assoc-fn	u core_io 154046 -		fn advance_slices(bufs: &mut &mut [std::io::IoSliceMut<'a>], n: usize)
+core::io::io_slice::IoSliceMut::advance	assoc-fn	s		fn advance(&mut self, n: usize)
+core::io::io_slice::IoSliceMut::advance_slices	assoc-fn	s		fn advance_slices(bufs: &mut &mut [std::io::IoSliceMut<'a>], n: usize)
 core::io::io_slice::IoSliceMut::into_slice	assoc-fn	u io_slice_as_bytes 132818 -		fn into_slice(self) -> &'a mut [u8]
-core::io::io_slice::IoSliceMut::new	assoc-fn	u core_io 154046 -		fn new(buf: &'a mut [u8]) -> std::io::IoSliceMut<'a>
+core::io::io_slice::IoSliceMut::new	assoc-fn	s		fn new(buf: &'a mut [u8]) -> std::io::IoSliceMut<'a>
 core::io::seek::Seek	trait	s		
 core::io::seek::Seek::rewind	assoc-fn	s	provided	fn rewind(&mut self) -> Result<(), std::io::Error>
 core::io::seek::Seek::seek	assoc-fn	s	required	fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64, std::io::Error>
@@ -2227,19 +2227,19 @@ core::io::size_hint::SizeHint::lower_bound	assoc-fn	u core_io_internals - expose
 core::io::size_hint::SizeHint::size_hint	assoc-fn	u core_io_internals - exposed only for libstd	provided	fn size_hint(&self) -> (usize, Option<usize>)
 core::io::size_hint::SizeHint::upper_bound	assoc-fn	u core_io_internals - exposed only for libstd	required	fn upper_bound(&self) -> Option<usize>
 core::io::util::Chain	struct	s	T U
-core::io::util::Chain::get_mut	assoc-fn	u core_io 154046 -		fn get_mut(&mut self) -> (&mut T, &mut U)
-core::io::util::Chain::get_ref	assoc-fn	u core_io 154046 -		fn get_ref(&self) -> (&T, &U)
-core::io::util::Chain::into_inner	assoc-fn	u core_io 154046 -		fn into_inner(self) -> (T, U)
+core::io::util::Chain::get_mut	assoc-fn	s		fn get_mut(&mut self) -> (&mut T, &mut U)
+core::io::util::Chain::get_ref	assoc-fn	s		fn get_ref(&self) -> (&T, &U)
+core::io::util::Chain::into_inner	assoc-fn	s		fn into_inner(self) -> (T, U)
 core::io::util::Empty	struct	s	
 core::io::util::Repeat	struct	s	
 core::io::util::Sink	struct	s	
 core::io::util::Take	struct	s	T
-core::io::util::Take::get_mut	assoc-fn	u core_io 154046 -		fn get_mut(&mut self) -> &mut T
-core::io::util::Take::get_ref	assoc-fn	u core_io 154046 -		fn get_ref(&self) -> &T
-core::io::util::Take::into_inner	assoc-fn	u core_io 154046 -		fn into_inner(self) -> T
-core::io::util::Take::limit	assoc-fn	u core_io 154046 -		fn limit(&self) -> u64
+core::io::util::Take::get_mut	assoc-fn	s		fn get_mut(&mut self) -> &mut T
+core::io::util::Take::get_ref	assoc-fn	s		fn get_ref(&self) -> &T
+core::io::util::Take::into_inner	assoc-fn	s		fn into_inner(self) -> T
+core::io::util::Take::limit	assoc-fn	s		fn limit(&self) -> u64
 core::io::util::Take::position	assoc-fn	u seek_io_take_position 97227 -		fn position(&self) -> u64
-core::io::util::Take::set_limit	assoc-fn	u core_io 154046 -		fn set_limit(&mut self, limit: u64)
+core::io::util::Take::set_limit	assoc-fn	s		fn set_limit(&mut self, limit: u64)
 core::io::util::chain	fn	u core_io_internals - exposed only for libstd	T U	fn chain<T, U>(first: T, second: U) -> std::io::Chain<T, U>
 core::io::util::empty	fn	s		fn empty() -> std::io::Empty
 core::io::util::repeat	fn	s		fn repeat(byte: u8) -> std::io::Repeat
@@ -6401,23 +6401,23 @@ std::sync::oneshot::TryRecvError::Empty	variant	u oneshot_channel 143674 -
 std::sync::oneshot::channel	fn	u oneshot_channel 143674 -	T	fn channel<T>() -> (std::sync::oneshot::Sender<T>, std::sync::oneshot::Receiver<T>)
 std::sync::poison::LockResult	type	s	T	Result<T, std::sync::PoisonError<T>>
 std::sync::poison::PoisonError	struct	s	T
-std::sync::poison::PoisonError::get_mut	assoc-fn	u sync_poison_mod 134646 -		fn get_mut(&mut self) -> &mut T
-std::sync::poison::PoisonError::get_ref	assoc-fn	u sync_poison_mod 134646 -		fn get_ref(&self) -> &T
-std::sync::poison::PoisonError::into_inner	assoc-fn	u sync_poison_mod 134646 -		fn into_inner(self) -> T
-std::sync::poison::PoisonError::new	assoc-fn	u sync_poison_mod 134646 -		fn new(data: T) -> std::sync::PoisonError<T>
+std::sync::poison::PoisonError::get_mut	assoc-fn	s		fn get_mut(&mut self) -> &mut T
+std::sync::poison::PoisonError::get_ref	assoc-fn	s		fn get_ref(&self) -> &T
+std::sync::poison::PoisonError::into_inner	assoc-fn	s		fn into_inner(self) -> T
+std::sync::poison::PoisonError::new	assoc-fn	s		fn new(data: T) -> std::sync::PoisonError<T>
 std::sync::poison::TryLockError	enum	s	T
 std::sync::poison::TryLockError::Poisoned	variant	s	
 std::sync::poison::TryLockError::WouldBlock	variant	s	
 std::sync::poison::TryLockResult	type	s	Guard	Result<Guard, std::sync::TryLockError<Guard>>
 std::sync::poison::condvar::Condvar	struct	s	
-std::sync::poison::condvar::Condvar::new	assoc-fn	u sync_poison_mod 134646 -		fn new() -> std::sync::Condvar
-std::sync::poison::condvar::Condvar::notify_all	assoc-fn	u sync_poison_mod 134646 -		fn notify_all(&self)
-std::sync::poison::condvar::Condvar::notify_one	assoc-fn	u sync_poison_mod 134646 -		fn notify_one(&self)
-std::sync::poison::condvar::Condvar::wait	assoc-fn	u sync_poison_mod 134646 -		fn wait<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>) -> Result<std::sync::MutexGuard<'a, T>, std::sync::PoisonError<std::sync::MutexGuard<'a, T>>>
-std::sync::poison::condvar::Condvar::wait_timeout	assoc-fn	u sync_poison_mod 134646 -		fn wait_timeout<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>, dur: std::time::Duration) -> Result<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult)>>
-std::sync::poison::condvar::Condvar::wait_timeout_ms	assoc-fn	u sync_poison_mod 134646 -		fn wait_timeout_ms<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>, ms: u32) -> Result<(std::sync::MutexGuard<'a, T>, bool), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, bool)>>
-std::sync::poison::condvar::Condvar::wait_timeout_while	assoc-fn	u sync_poison_mod 134646 -		fn wait_timeout_while<'a, T, F: FnMut(&mut T) -> bool>(&self, guard: std::sync::MutexGuard<'a, T>, dur: std::time::Duration, condition: F) -> Result<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult)>>
-std::sync::poison::condvar::Condvar::wait_while	assoc-fn	u sync_poison_mod 134646 -		fn wait_while<'a, T, F: FnMut(&mut T) -> bool>(&self, guard: std::sync::MutexGuard<'a, T>, condition: F) -> Result<std::sync::MutexGuard<'a, T>, std::sync::PoisonError<std::sync::MutexGuard<'a, T>>>
+std::sync::poison::condvar::Condvar::new	assoc-fn	s		fn new() -> std::sync::Condvar
+std::sync::poison::condvar::Condvar::notify_all	assoc-fn	s		fn notify_all(&self)
+std::sync::poison::condvar::Condvar::notify_one	assoc-fn	s		fn notify_one(&self)
+std::sync::poison::condvar::Condvar::wait	assoc-fn	s		fn wait<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>) -> Result<std::sync::MutexGuard<'a, T>, std::sync::PoisonError<std::sync::MutexGuard<'a, T>>>
+std::sync::poison::condvar::Condvar::wait_timeout	assoc-fn	s		fn wait_timeout<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>, dur: std::time::Duration) -> Result<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult)>>
+std::sync::poison::condvar::Condvar::wait_timeout_ms	assoc-fn	s		fn wait_timeout_ms<'a, T>(&self, guard: std::sync::MutexGuard<'a, T>, ms: u32) -> Result<(std::sync::MutexGuard<'a, T>, bool), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, bool)>>
+std::sync::poison::condvar::Condvar::wait_timeout_while	assoc-fn	s		fn wait_timeout_while<'a, T, F: FnMut(&mut T) -> bool>(&self, guard: std::sync::MutexGuard<'a, T>, dur: std::time::Duration, condition: F) -> Result<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult), std::sync::PoisonError<(std::sync::MutexGuard<'a, T>, std::sync::WaitTimeoutResult)>>
+std::sync::poison::condvar::Condvar::wait_while	assoc-fn	s		fn wait_while<'a, T, F: FnMut(&mut T) -> bool>(&self, guard: std::sync::MutexGuard<'a, T>, condition: F) -> Result<std::sync::MutexGuard<'a, T>, std::sync::PoisonError<std::sync::MutexGuard<'a, T>>>
 std::sync::poison::mutex::MappedMutexGuard	struct	u mapped_lock_guards 117108 -	'a T
 std::sync::poison::mutex::MappedMutexGuard::filter_map	assoc-fn	u mapped_lock_guards 117108 -		fn filter_map<U: ?Sized, F: FnOnce(&mut T) -> Option<&mut U>>(orig: std::sync::MappedMutexGuard<'a, T>, f: F) -> Result<std::sync::MappedMutexGuard<'a, U>, std::sync::MappedMutexGuard<'a, T>>
 std::sync::poison::mutex::MappedMutexGuard::map	assoc-fn	u mapped_lock_guards 117108 -		fn map<U: ?Sized, F: FnOnce(&mut T) -> &mut U>(orig: std::sync::MappedMutexGuard<'a, T>, f: F) -> std::sync::MappedMutexGuard<'a, U>
@@ -6443,24 +6443,24 @@ std::sync::poison::rwlock::MappedRwLockWriteGuard	struct	u mapped_lock_guards 11
 std::sync::poison::rwlock::MappedRwLockWriteGuard::filter_map	assoc-fn	u mapped_lock_guards 117108 -		fn filter_map<U: ?Sized, F: FnOnce(&mut T) -> Option<&mut U>>(orig: std::sync::MappedRwLockWriteGuard<'rwlock, T>, f: F) -> Result<std::sync::MappedRwLockWriteGuard<'rwlock, U>, std::sync::MappedRwLockWriteGuard<'rwlock, T>>
 std::sync::poison::rwlock::MappedRwLockWriteGuard::map	assoc-fn	u mapped_lock_guards 117108 -		fn map<U: ?Sized, F: FnOnce(&mut T) -> &mut U>(orig: std::sync::MappedRwLockWriteGuard<'rwlock, T>, f: F) -> std::sync::MappedRwLockWriteGuard<'rwlock, U>
 std::sync::poison::rwlock::RwLock	struct	s	T
-std::sync::poison::rwlock::RwLock::clear_poison	assoc-fn	u sync_poison_mod 134646 -		fn clear_poison(&self)
+std::sync::poison::rwlock::RwLock::clear_poison	assoc-fn	s		fn clear_poison(&self)
 std::sync::poison::rwlock::RwLock::data_ptr	assoc-fn	u rwlock_data_ptr 140368 -		fn data_ptr(&self) -> *mut T
 std::sync::poison::rwlock::RwLock::get_cloned	assoc-fn	u lock_value_accessors 133407 -		fn get_cloned(&self) -> Result<T, std::sync::PoisonError<()>> where T: Clone
-std::sync::poison::rwlock::RwLock::get_mut	assoc-fn	u sync_poison_mod 134646 -		fn get_mut(&mut self) -> Result<&mut T, std::sync::PoisonError<&mut T>>
-std::sync::poison::rwlock::RwLock::into_inner	assoc-fn	u sync_poison_mod 134646 -		fn into_inner(self) -> Result<T, std::sync::PoisonError<T>>
-std::sync::poison::rwlock::RwLock::is_poisoned	assoc-fn	u sync_poison_mod 134646 -		fn is_poisoned(&self) -> bool
-std::sync::poison::rwlock::RwLock::new	assoc-fn	u sync_poison_mod 134646 -		fn new(t: T) -> std::sync::RwLock<T>
-std::sync::poison::rwlock::RwLock::read	assoc-fn	u sync_poison_mod 134646 -		fn read(&self) -> Result<std::sync::RwLockReadGuard<'_, T>, std::sync::PoisonError<std::sync::RwLockReadGuard<'_, T>>>
+std::sync::poison::rwlock::RwLock::get_mut	assoc-fn	s		fn get_mut(&mut self) -> Result<&mut T, std::sync::PoisonError<&mut T>>
+std::sync::poison::rwlock::RwLock::into_inner	assoc-fn	s		fn into_inner(self) -> Result<T, std::sync::PoisonError<T>>
+std::sync::poison::rwlock::RwLock::is_poisoned	assoc-fn	s		fn is_poisoned(&self) -> bool
+std::sync::poison::rwlock::RwLock::new	assoc-fn	s		fn new(t: T) -> std::sync::RwLock<T>
+std::sync::poison::rwlock::RwLock::read	assoc-fn	s		fn read(&self) -> Result<std::sync::RwLockReadGuard<'_, T>, std::sync::PoisonError<std::sync::RwLockReadGuard<'_, T>>>
 std::sync::poison::rwlock::RwLock::replace	assoc-fn	u lock_value_accessors 133407 -		fn replace(&self, value: T) -> Result<T, std::sync::PoisonError<T>>
 std::sync::poison::rwlock::RwLock::set	assoc-fn	u lock_value_accessors 133407 -		fn set(&self, value: T) -> Result<(), std::sync::PoisonError<T>>
-std::sync::poison::rwlock::RwLock::try_read	assoc-fn	u sync_poison_mod 134646 -		fn try_read(&self) -> Result<std::sync::RwLockReadGuard<'_, T>, std::sync::TryLockError<std::sync::RwLockReadGuard<'_, T>>>
-std::sync::poison::rwlock::RwLock::try_write	assoc-fn	u sync_poison_mod 134646 -		fn try_write(&self) -> Result<std::sync::RwLockWriteGuard<'_, T>, std::sync::TryLockError<std::sync::RwLockWriteGuard<'_, T>>>
-std::sync::poison::rwlock::RwLock::write	assoc-fn	u sync_poison_mod 134646 -		fn write(&self) -> Result<std::sync::RwLockWriteGuard<'_, T>, std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, T>>>
+std::sync::poison::rwlock::RwLock::try_read	assoc-fn	s		fn try_read(&self) -> Result<std::sync::RwLockReadGuard<'_, T>, std::sync::TryLockError<std::sync::RwLockReadGuard<'_, T>>>
+std::sync::poison::rwlock::RwLock::try_write	assoc-fn	s		fn try_write(&self) -> Result<std::sync::RwLockWriteGuard<'_, T>, std::sync::TryLockError<std::sync::RwLockWriteGuard<'_, T>>>
+std::sync::poison::rwlock::RwLock::write	assoc-fn	s		fn write(&self) -> Result<std::sync::RwLockWriteGuard<'_, T>, std::sync::PoisonError<std::sync::RwLockWriteGuard<'_, T>>>
 std::sync::poison::rwlock::RwLockReadGuard	struct	s	'rwlock T
 std::sync::poison::rwlock::RwLockReadGuard::filter_map	assoc-fn	u mapped_lock_guards 117108 -		fn filter_map<U: ?Sized, F: FnOnce(&T) -> Option<&U>>(orig: std::sync::RwLockReadGuard<'rwlock, T>, f: F) -> Result<std::sync::MappedRwLockReadGuard<'rwlock, U>, std::sync::RwLockReadGuard<'rwlock, T>>
 std::sync::poison::rwlock::RwLockReadGuard::map	assoc-fn	u mapped_lock_guards 117108 -		fn map<U: ?Sized, F: FnOnce(&T) -> &U>(orig: std::sync::RwLockReadGuard<'rwlock, T>, f: F) -> std::sync::MappedRwLockReadGuard<'rwlock, U>
 std::sync::poison::rwlock::RwLockWriteGuard	struct	s	'rwlock T
-std::sync::poison::rwlock::RwLockWriteGuard::downgrade	assoc-fn	u sync_poison_mod 134646 -		fn downgrade(s: std::sync::RwLockWriteGuard<'rwlock, T>) -> std::sync::RwLockReadGuard<'rwlock, T>
+std::sync::poison::rwlock::RwLockWriteGuard::downgrade	assoc-fn	s		fn downgrade(s: std::sync::RwLockWriteGuard<'rwlock, T>) -> std::sync::RwLockReadGuard<'rwlock, T>
 std::sync::poison::rwlock::RwLockWriteGuard::filter_map	assoc-fn	u mapped_lock_guards 117108 -		fn filter_map<U: ?Sized, F: FnOnce(&mut T) -> Option<&mut U>>(orig: std::sync::RwLockWriteGuard<'rwlock, T>, f: F) -> Result<std::sync::MappedRwLockWriteGuard<'rwlock, U>, std::sync::RwLockWriteGuard<'rwlock, T>>
 std::sync::poison::rwlock::RwLockWriteGuard::map	assoc-fn	u mapped_lock_guards 117108 -		fn map<U: ?Sized, F: FnOnce(&mut T) -> &mut U>(orig: std::sync::RwLockWriteGuard<'rwlock, T>, f: F) -> std::sync::MappedRwLockWriteGuard<'rwlock, U>
 std::sync::reentrant_lock::ReentrantLock	struct	u reentrant_lock 121440 -	T
@@ -6508,16 +6508,16 @@ std::thread::join_handle::JoinHandle::join	assoc-fn	s		fn join(self) -> Result<T
 std::thread::join_handle::JoinHandle::thread	assoc-fn	s		fn thread(&self) -> &std::thread::Thread
 std::thread::local::AccessError	struct	s	
 std::thread::local::LocalKey	struct	s	T
-std::thread::local::LocalKey::get	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::Cell<T>>	fn get(&'static self) -> T where T: Copy
+std::thread::local::LocalKey::get	assoc-fn	s	std::thread::LocalKey<std::cell::Cell<T>>	fn get(&'static self) -> T where T: Copy
 std::thread::local::LocalKey::new	assoc-fn	u thread_local_internals - recently added to create a key		fn new(inner: for<'a> fn(std::option::Option<&'a mut std::option::Option<T>>) -> *const T) -> std::thread::LocalKey<T>
-std::thread::local::LocalKey::replace	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::RefCell<T>>	fn replace(&'static self, value: T) -> T
-std::thread::local::LocalKey::set	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::RefCell<T>>	fn set(&'static self, value: T)
-std::thread::local::LocalKey::take	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::RefCell<T>>	fn take(&'static self) -> T where T: Default
-std::thread::local::LocalKey::try_with	assoc-fn	u thread_local_internals - -		fn try_with<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> Result<R, std::thread::AccessError>
-std::thread::local::LocalKey::update	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::Cell<T>>	fn update(&'static self, f: impl FnOnce(T) -> T) where T: Copy
-std::thread::local::LocalKey::with	assoc-fn	u thread_local_internals - -		fn with<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> R
-std::thread::local::LocalKey::with_borrow	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::RefCell<T>>	fn with_borrow<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> R
-std::thread::local::LocalKey::with_borrow_mut	assoc-fn	u thread_local_internals - -	std::thread::LocalKey<std::cell::RefCell<T>>	fn with_borrow_mut<F: FnOnce(&mut T) -> R, R>(&'static self, f: F) -> R
+std::thread::local::LocalKey::replace	assoc-fn	s	std::thread::LocalKey<std::cell::Cell<T>>	fn replace(&'static self, value: T) -> T
+std::thread::local::LocalKey::set	assoc-fn	s	std::thread::LocalKey<std::cell::Cell<T>>	fn set(&'static self, value: T)
+std::thread::local::LocalKey::take	assoc-fn	s	std::thread::LocalKey<std::cell::Cell<T>>	fn take(&'static self) -> T where T: Default
+std::thread::local::LocalKey::try_with	assoc-fn	s		fn try_with<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> Result<R, std::thread::AccessError>
+std::thread::local::LocalKey::update	assoc-fn	s	std::thread::LocalKey<std::cell::Cell<T>>	fn update(&'static self, f: impl FnOnce(T) -> T) where T: Copy
+std::thread::local::LocalKey::with	assoc-fn	s		fn with<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> R
+std::thread::local::LocalKey::with_borrow	assoc-fn	s	std::thread::LocalKey<std::cell::RefCell<T>>	fn with_borrow<F: FnOnce(&T) -> R, R>(&'static self, f: F) -> R
+std::thread::local::LocalKey::with_borrow_mut	assoc-fn	s	std::thread::LocalKey<std::cell::RefCell<T>>	fn with_borrow_mut<F: FnOnce(&mut T) -> R, R>(&'static self, f: F) -> R
 std::thread::local::thread_local	macro	s	
 std::thread::local::thread_local_process_attrs	macro	u thread_local_internals - -	
 std::thread::scoped::Scope	struct	s	'scope 'env
