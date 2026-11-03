@@ -6,6 +6,16 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.117 (2026-11-03)
+
+- A crate enum's field bound through `&T` is borrowed where it is, a `Clone` field too, and the borrow lives as long as Rust's: a function can return it, a `match` can give it to a `let`, and a `let else` keeps it. (#783, #782)
+- A crate function or method taking `&mut PathBuf` changes the program's own path with no copy, and a crate method giving `&io::Error` gives a borrow of the error its value holds. (#680)
+- The std facade's `path`, `ffi`, `io`, `env`, `fs` and `process` items have std's own signatures, read from std's table: a parameter bounded by `AsRef<Path>` takes a `&str`, `String`, `OsString` or `PathBuf`, `read_line` takes `&mut String`, and each type has exactly std's capabilities. (#747)
+- `&value.field` of a crate struct lends the field in place instead of moving the struct, so `save(&screenshot.rgba, screenshot.size.width)` runs as in Rust, and a `&Bytes` coerces to the `&[u8]` its `Deref` gives. (#228)
+- A crate type that a signature gives but that has no public path in the crate you import, such as iced's `widget::Map` from `Widget::map`, works as in Rust; iced's bezier_tool checks again. (#334)
+- `Option`'s `clone` borrows its receiver again, so `self.t.clone()` through `&self` no longer gives a false E0507; iced's qr_code checks again. (#826)
+- A crate function that lends an `Option<&T>` at its own lifetime crosses, as iced's `combo_box(&state, .., self.selected.as_ref(), ..)` does, and a late-bound lifetime a function's output borrows at is read as rustc reads it at a call. (#827)
+
 ## 0.3.116 (2026-11-03)
 
 - `v.get(a..b)` on a Vec, array or slice gives `Option<&[T]>`, as std does. (#772)
