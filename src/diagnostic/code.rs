@@ -115,6 +115,9 @@ codes!(Resolve;
     (RESOLVE_UNRESOLVED_IMPORT, "E0432", "A `use` of a path that doesn't exist, as rustc reports it."),
     (RESOLVE_FAILED_PATH, "E0433", "A path through a module or type that doesn't exist, as rustc reports it."),
     (RESOLVE_UNSTABLE, "E0658", "A use of an unstable library item, as rustc reports it."),
+    (RESOLVE_MISSING_TRAIT_ITEMS, "E0046", "An impl that misses an item of its trait, as rustc reports it."),
+    (RESOLVE_UNKNOWN_TRAIT, "E0405", "A trait name nothing in scope declares, as rustc reports it."),
+    (RESOLVE_BINARY_OPERATOR, "E0369", "A binary operator whose left operand's type has no impl of its trait, as rustc reports it."),
     (RESOLVE_NOT_YET, "RAWR-NOT-YET", "A std item rawr resolves but doesn't run yet."),
     (RESOLVE_TYPE_ANNOTATIONS, "E0282", "A generic parameter whose type nothing gives, as rustc reports it."),
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
@@ -191,12 +194,16 @@ pub(crate) fn borrow(rustc: &str) -> Code {
     }
 }
 
-/// The code of rustc's error `rustc` for a std path (`resolve::std_path`).
+/// The code of rustc's error `rustc` that `resolve::Error::StdPath` carries:
+/// a std path's (`resolve::std_path`), or another error in rustc's words.
 pub(crate) fn std_path(rustc: &str) -> Code {
     match rustc {
         "E0432" => RESOLVE_UNRESOLVED_IMPORT,
         "E0433" => RESOLVE_FAILED_PATH,
         "E0425" => RESOLVE_NOT_IN_MODULE,
+        "E0046" => RESOLVE_MISSING_TRAIT_ITEMS,
+        "E0405" => RESOLVE_UNKNOWN_TRAIT,
+        "E0369" => RESOLVE_BINARY_OPERATOR,
         _ => RESOLVE_UNSTABLE,
     }
 }

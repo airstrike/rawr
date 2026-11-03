@@ -95,3 +95,24 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn language_an_operator_its_left_type_has_no_impl_of_is_e0369() {
+    // rustc's E0369, in its words for each operator (#733).
+    for (expression, message) in [
+        ("\"a\" + \"b\"", "cannot add `&str` to `&str`"),
+        ("true - false", "cannot subtract `bool` from `bool`"),
+        ("\"a\" * \"b\"", "cannot multiply `&str` by `&str`"),
+        ("true / false", "cannot divide `bool` by `bool`"),
+        (
+            "\"a\" % \"b\"",
+            "cannot calculate the remainder of `&str` divided by `&str`",
+        ),
+    ] {
+        let report = refused(&format!("fn main() {{ let x = {expression}; }}\nmain();\n"));
+        assert!(
+            report.starts_with(&format!("error[E0369]: {message}\n")),
+            "{report}"
+        );
+    }
+}

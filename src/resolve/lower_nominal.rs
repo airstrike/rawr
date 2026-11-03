@@ -31290,6 +31290,27 @@ impl<'a> Parser<'a> {
                     operand.ty = *target;
                 }
             }
+            // A left operand with no impl of the operator's trait, as
+            // `"a" + "b"`: rustc's E0369.
+            let left = self.inference.resolve(&lhs.ty);
+            if !matches!(left, Ty::Infer(_)) && !allowed_type(allowed, &left) {
+                let right = self.inference.resolve(&rhs.ty);
+                let (left, right) = (left.name(&self.models), right.name(&self.models));
+                let message = match symbol {
+                    "+" => format!("cannot add `{right}` to `{left}`"),
+                    "-" => format!("cannot subtract `{right}` from `{left}`"),
+                    "*" => format!("cannot multiply `{left}` by `{right}`"),
+                    "/" => format!("cannot divide `{left}` by `{right}`"),
+                    _ => format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
+                };
+                return Err(Error::StdPath {
+                    code: "E0369",
+                    message: message.into(),
+                    label: None,
+                    note: None,
+                    reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
+                });
+            }
         }
         let ty = self.operand_type(&lhs, &mut rhs, allowed)?;
         // An `i128` or a `u128` past `i64` is boxed: its operators are
