@@ -23,6 +23,11 @@ impl Item {
         self.name.clone()
     }
 
+    /// Counts one more show of this item.
+    pub(crate) fn count(&self) {
+        self.shown.set(self.shown.get() + 1);
+    }
+
     /// How many times a result showed this item.
     pub fn shown(&self) -> u32 {
         self.shown.get()
@@ -98,20 +103,4 @@ pub fn names(items: &[Item]) -> String {
         .map(|item| format!("{}:{}", item.name, item.shown.get()))
         .collect();
     names.join(",")
-}
-
-/// A trait whose generic method keeps it from being a trait object.
-pub trait Tagged {
-    fn tag<T: std::fmt::Display>(&self, tag: T) -> String;
-}
-
-impl Tagged for View<'_> {
-    fn tag<T: std::fmt::Display>(&self, tag: T) -> String {
-        format!("{tag}{}", self.items.len())
-    }
-}
-
-/// The items under a tag, borrowed for as long as the result lives.
-pub fn tagged<'a>(items: &'a [Item]) -> impl Tagged + 'a {
-    View { items }
 }

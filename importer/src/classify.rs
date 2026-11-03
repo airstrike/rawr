@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 102;
+const CLASSIFIER_VERSION: u32 = 103;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2102,6 +2102,34 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         api::identity::Definition,
         model::Type,
     )> {
+        self.elaborate(bounds).0
+    }
+
+    /// Each trait an opaque type's `bounds` name, then each of their
+    /// supertraits, at the bound's arguments after `Self`, as rustc
+    /// elaborates them: `impl Stocked` is a `Named` too, when `Named` is a
+    /// supertrait of `Stocked`.
+    fn bound_traits(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Vec<(api::identity::Definition, Vec<model::Argument>)> {
+        self.elaborate(bounds).1
+    }
+
+    /// The associated types `bounds` bind (`bound_associated`) and the
+    /// traits they name (`bound_traits`), each through the supertraits.
+    #[allow(clippy::type_complexity)]
+    fn elaborate(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> (
+        Vec<(
+            api::identity::Definition,
+            api::identity::Definition,
+            model::Type,
+        )>,
+        Vec<(api::identity::Definition, Vec<model::Argument>)>,
+    ) {
         /// Supertraits are read this deep.
         const DEPTH: usize = 8;
         fn is_self(ty: &model::Type) -> bool {
@@ -2193,7 +2221,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             read(supertraits, &bindings, depth + 1, &mut pending);
             seen.push((trait_id, arguments));
         }
-        found
+        (found, seen)
     }
 
     /// `ty` with each projection on a concrete type in it read by
@@ -4926,23 +4954,11 @@ impl<P: api::Phase> Context<'_, P> {
             let model::Type::ImplTrait { id, bounds, .. } = opaque else {
                 continue;
             };
-            for predicate in bounds.iter() {
-                let model::Predicate::Bound {
-                    bound:
-                        model::Bound::Trait {
-                            trait_id,
-                            arguments,
-                            polarity: model::Polarity::Positive,
-                            binders,
-                        },
-                    ..
-                } = predicate
-                else {
-                    continue;
-                };
-                if !binders.is_empty() {
-                    continue;
-                }
+            // Each trait the bounds name, and their supertraits, whose
+            // methods rustc reaches on the value as well.
+            for (trait_id, arguments) in self.bound_traits(bounds) {
+                let trait_id = &trait_id;
+                let arguments = &arguments[..];
                 let Some(trait_definition) = self
                     .graph
                     .definition_index(trait_id)
@@ -5339,9 +5355,14 @@ impl<P: api::Phase> Context<'_, P> {
                 parameter.kind().clone(),
             ));
         }
+        // Its bounds name its parameters at their new indices, as
+        // `tag<T: Display>`'s does.
         let own = model::Generics::new(
             own.into_boxed_slice(),
-            generics.predicates().cloned().collect(),
+            generics
+                .predicates()
+                .map(|predicate| substituted_predicate(predicate, &substitutions))
+                .collect(),
         );
         let signature = substituted_signature(signature, &substitutions);
         let inherited =
@@ -6447,62 +6468,36 @@ impl<P: api::Phase> Context<'_, P> {
     }
 
     /// Whether a call's `output`, when it is opaque and borrows the call's
-    /// inputs, can be held as a trait object beside what it borrows (#846):
-    /// its one trait besides auto traits is dyn compatible, and its bounds
-    /// bind each of that trait's associated types. Any other output is held
-    /// as it is.
-    fn boxes_opaque(&self, output: &model::Type) -> bool {
+    /// inputs, has bounds Rawr can write, so it is held beside what it
+    /// borrows through a proxy of them (#846, #849): each is a trait at
+    /// types Rawr writes, and none is higher-ranked or negative. Any other
+    /// output is held as it is.
+    fn writes_opaque(&self, output: &model::Type) -> bool {
         let model::Type::ImplTrait { bounds, .. } = output else {
             return true;
         };
-        let mut principal = None;
-        for predicate in bounds.iter() {
-            let model::Predicate::Bound {
+        let written = bounds.iter().all(|predicate| match predicate {
+            model::Predicate::Bound {
                 bound:
                     model::Bound::Trait {
-                        trait_id,
-                        polarity,
-                        binders,
-                        ..
+                        polarity, binders, ..
                     },
                 ..
-            } = predicate
-            else {
-                continue;
-            };
-            if *polarity != model::Polarity::Positive || !binders.is_empty() {
-                return false;
-            }
-            if self.is_core_trait(trait_id, "Sized")
-                || self.sizedness(trait_id)
-                || self.auto_trait(trait_id)
-            {
-                continue;
-            }
-            if principal.replace(trait_id).is_some() {
-                return false;
-            }
-        }
-        let Some(principal) = principal else {
-            return false;
-        };
-        let bound = self
-            .bound_associated(bounds)
-            .into_iter()
-            .map(|(_, associated, _)| associated)
-            .collect::<Vec<_>>();
-        self.dyn_compatible(principal, &bound, 0)
+            } => *polarity == model::Polarity::Positive && binders.is_empty(),
+            _ => true,
+        });
+        written && self.opaque_traits(bounds).is_some()
     }
 
-    /// The one trait of an opaque type's `bounds` besides auto traits and
+    /// The traits of an opaque type's `bounds` besides auto traits and
     /// `Sized`, at the bound's arguments after `Self`, as `Show` of `impl
-    /// Show + 'a` (`signature::Opaque::principal`). `None` when there is no
-    /// one such trait or Rawr can't write its arguments.
-    fn opaque_principal(
+    /// Show + 'a` (`signature::Opaque::traits`). `None` when Rawr can't
+    /// write the arguments of one.
+    fn opaque_traits(
         &self,
         bounds: &[model::Predicate],
-    ) -> Option<representability::convert::Type> {
-        let mut principal = None;
+    ) -> Option<Box<[representability::convert::Type]>> {
+        let mut traits = Vec::new();
         for predicate in bounds {
             let model::Predicate::Bound {
                 bound:
@@ -6531,15 +6526,12 @@ impl<P: api::Phase> Context<'_, P> {
                     _ => None,
                 })
                 .collect::<Option<Box<[_]>>>()?;
-            let previous = principal.replace(representability::convert::Type::Nominal {
+            traits.push(representability::convert::Type::Nominal {
                 definition: crate::surface::identity::Definition::of(trait_id),
                 arguments,
             });
-            if previous.is_some() {
-                return None;
-            }
         }
-        principal
+        Some(traits.into_boxed_slice())
     }
 
     /// Whether `id` is one of core's traits below `Sized` that every type
@@ -6567,108 +6559,6 @@ impl<P: api::Phase> Context<'_, P> {
                         }
                     )
                 })
-    }
-
-    /// Whether the trait `id` can be a trait object whose associated types
-    /// are those in `bound`, as rustc's dyn compatibility has it: each
-    /// method that `Self: Sized` doesn't exclude takes `self` by value or
-    /// by reference, has no type parameters of its own, and names `Self`
-    /// nowhere else but through an associated type; there is no associated
-    /// constant or generic associated type; and its supertraits are so too.
-    fn dyn_compatible(
-        &self,
-        id: &api::identity::Definition,
-        bound: &[api::identity::Definition],
-        depth: usize,
-    ) -> bool {
-        /// Supertraits are read this deep.
-        const DEPTH: usize = 8;
-        let definition = |id: &api::identity::Definition| {
-            self.graph
-                .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
-        };
-        let Some(model::Kind::Trait {
-            auto_trait,
-            supertraits,
-            associated,
-            ..
-        }) = definition(id).map(model::Definition::kind)
-        else {
-            return false;
-        };
-        if *auto_trait {
-            return true;
-        }
-        if depth > DEPTH {
-            return false;
-        }
-        for predicate in supertraits.iter() {
-            if let model::Predicate::Bound {
-                bound: model::Bound::Trait { trait_id, .. },
-                ..
-            } = predicate
-                && !self.sizedness(trait_id)
-                && (self.is_core_trait(trait_id, "Sized")
-                    || !self.dyn_compatible(trait_id, bound, depth + 1))
-            {
-                return false;
-            }
-        }
-        let is_self = |ty: &model::Type| match ty {
-            model::Type::SelfType(_) => true,
-            model::Type::Parameter { owner, index: 0 } => owner == id,
-            _ => false,
-        };
-        for item in associated.iter() {
-            let Some(member) = definition(item) else {
-                return false;
-            };
-            match member.kind() {
-                model::Kind::Function {
-                    signature,
-                    generics,
-                } => {
-                    let sized = generics.predicates().any(|predicate| {
-                        matches!(predicate, model::Predicate::Bound {
-                            ty,
-                            bound: model::Bound::Trait { trait_id, .. },
-                        } if is_self(ty) && self.is_core_trait(trait_id, "Sized"))
-                    });
-                    if sized {
-                        continue;
-                    }
-                    let own = generics.parameters().any(|parameter| {
-                        parameter.owner() == item
-                            && matches!(parameter.kind(), model::ParameterKind::Type { .. })
-                    });
-                    if own
-                        || signature.async_function()
-                        || matches!(
-                            signature.receiver(),
-                            model::Receiver::None | model::Receiver::Explicit { .. }
-                        )
-                        || signature
-                            .inputs()
-                            .chain([signature.output()])
-                            .any(|ty| names_self(ty, &is_self))
-                    {
-                        return false;
-                    }
-                }
-                model::Kind::AssociatedType { generics, .. } => {
-                    if generics
-                        .parameters()
-                        .any(|parameter| parameter.owner() == item)
-                        || !bound.contains(item)
-                    {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        }
-        true
     }
 
     /// Whether `generics` bound a type parameter by iced's `Renderer`, as
@@ -7256,9 +7146,10 @@ impl<P: api::Phase> Context<'_, P> {
                 // and `markdown::view(&'a [Item], ..) -> impl Widget + 'a`:
                 // the value keeps those inputs borrowed for as long as it
                 // lives, as rustc's checker reads the signature. An opaque
-                // one is held as a trait object beside what it borrows.
-                if !self.boxes_opaque(signature.output()) {
-                    return Err(representability::reject::Kind::OpaqueObject.into());
+                // one is held beside what it borrows, through a proxy of its
+                // traits.
+                if !self.writes_opaque(signature.output()) {
+                    return Err(representability::reject::Kind::OpaqueBounds.into());
                 }
                 lends = signature
                     .inputs()
@@ -8153,8 +8044,8 @@ impl<P: api::Phase> Context<'_, P> {
                     }
                 }
                 let definition = crate::surface::identity::Definition::of(id);
-                let principal = self.opaque_principal(bounds);
-                if !associated.is_empty() || principal.is_some() {
+                let traits = self.opaque_traits(bounds).unwrap_or_default();
+                if !associated.is_empty() || !traits.is_empty() {
                     let mut opaques = self.opaque_associated.borrow_mut();
                     if !opaques
                         .iter()
@@ -8163,7 +8054,7 @@ impl<P: api::Phase> Context<'_, P> {
                         opaques.push(representability::signature::Opaque::new(
                             *definition.as_bytes(),
                             associated.into_boxed_slice(),
-                            principal,
+                            traits,
                         ));
                     }
                 }
@@ -8175,6 +8066,32 @@ impl<P: api::Phase> Context<'_, P> {
             // `<T as Trait>::Name` of an impl of the trait for `T` that sets
             // `Name`, as `next`'s `Option<Self::Item>` names an iterator's
             // `Item` (D558 slice 2).
+            // `Self::Item` of a trait's method where it is a member of an
+            // opaque type (`opaque_implementations`): the type the opaque
+            // type's bounds bind it to, as `impl Stocked<Item = String>`.
+            model::Type::Projection {
+                associated,
+                arguments,
+                ..
+            } if matches!(
+                arguments.first(),
+                Some(model::Argument::Type(model::Type::SelfType(_)))
+            ) && self.opaque_self.borrow().is_some() =>
+            {
+                let opaque = self.opaque_self.borrow().clone();
+                let bound = match opaque {
+                    Some(model::Type::ImplTrait { bounds, .. }) => self
+                        .bound_associated(&bounds)
+                        .into_iter()
+                        .find(|(_, item, _)| item == associated)
+                        .map(|(_, _, ty)| ty),
+                    _ => None,
+                };
+                match bound {
+                    Some(ty) => return self.convert(&ty),
+                    None => return Err(representability::reject::Kind::Projection.into()),
+                }
+            }
             model::Type::Projection { .. } => match self.projected(ty) {
                 Some(item) => return self.convert(item),
                 None => return Err(representability::reject::Kind::Projection.into()),
@@ -10687,42 +10604,6 @@ fn names_early_lifetime(ty: &model::Type) -> bool {
         | model::Type::Never
         | model::Type::TraitObject { .. }
         | model::Type::ImplTrait { .. } => false,
-    }
-}
-
-/// Whether `ty`, in a trait's method, names the trait's `Self` (`is_self`)
-/// other than through an associated type of it, as `Self::Item` does, or
-/// holds a trait object or an `impl Trait`, which these facts don't read:
-/// what keeps a trait from being a trait object (`Context::dyn_compatible`).
-fn names_self(ty: &model::Type, is_self: &dyn Fn(&model::Type) -> bool) -> bool {
-    let argument = |argument: &model::Argument| match argument {
-        model::Argument::Type(ty) => names_self(ty, is_self),
-        _ => false,
-    };
-    if is_self(ty) {
-        return true;
-    }
-    match ty {
-        model::Type::Definition { arguments, .. } => arguments.iter().any(argument),
-        model::Type::Tuple(members) => members.iter().any(|member| names_self(member, is_self)),
-        model::Type::Slice(element)
-        | model::Type::Array { element, .. }
-        | model::Type::Reference { ty: element, .. }
-        | model::Type::RawPointer { ty: element, .. } => names_self(element, is_self),
-        model::Type::FunctionPointer(signature) => signature
-            .inputs()
-            .chain([signature.output()])
-            .any(|ty| names_self(ty, is_self)),
-        model::Type::TraitObject { .. } | model::Type::ImplTrait { .. } => true,
-        model::Type::Projection { arguments, .. } => {
-            arguments.iter().skip(1).any(argument)
-                || matches!(arguments.first(), Some(model::Argument::Type(ty))
-                if !is_self(ty) && names_self(ty, is_self))
-        }
-        model::Type::Primitive(_)
-        | model::Type::Parameter { .. }
-        | model::Type::SelfType(_)
-        | model::Type::Never => false,
     }
 }
 
