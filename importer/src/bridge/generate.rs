@@ -8682,16 +8682,16 @@ thread_local! {
     /// to read its type: the value goes to `witness`.
     static OPAQUE_WITNESSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// While a call in a table is rendered whose value lives beside what it
-    /// borrows (`lent_cell`): the call reaches it through that value.
-    static OPAQUE_CELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// borrows (`lent_cell`): the method of the value's proxy it calls.
+    static OPAQUE_CELL: std::cell::Cell<Option<ProxyReach>> = const { std::cell::Cell::new(None) };
 }
 
 /// Sets `OPAQUE_CELL` for as long as it lives.
-struct OpaqueCell(bool);
+struct OpaqueCell(Option<ProxyReach>);
 
 impl OpaqueCell {
-    fn enter(cell: bool) -> Self {
-        Self(OPAQUE_CELL.replace(cell))
+    fn enter(reach: Option<ProxyReach>) -> Self {
+        Self(OPAQUE_CELL.replace(reach))
     }
 }
 
@@ -8958,7 +8958,7 @@ fn opaque_table_source(
     // through the trait object it is held as.
     let cell = lends_cell(plan)?;
     let mut entries = Vec::new();
-    for consumer in opaque_consumers(cohort, &key)? {
+    for (index, consumer) in opaque_consumers(cohort, &key)?.into_iter().enumerate() {
         let Some((position, _, operand)) = opaque_operand(consumer)? else {
             continue;
         };
@@ -8989,11 +8989,20 @@ fn opaque_table_source(
         } else {
             None
         };
+        // Such a value's method is its proxy's (`proxy_entry`).
+        let reach = if cell {
+            proxy_entry(index, consumer, &key)?.map(|entry| ProxyReach {
+                index,
+                derives: entry.output.is_none(),
+            })
+        } else {
+            None
+        };
         let body = {
             let _producing = OpaqueProducing::enter(inner);
             let _consuming = OpaqueConsuming::enter(!other);
             let _witnessed = OpaqueWitnessed::enter(Some(returned.clone()));
-            let _cell = OpaqueCell::enter(cell);
+            let _cell = OpaqueCell::enter(reach);
             let mut body = Vec::new();
             let region = region_inputs(consumer)?;
             if !region.is_empty() {
@@ -9028,6 +9037,13 @@ fn opaque_table_source(
         // what it borrows.
         let body = if cell && body.contains(&format!("take_native(arguments, {position})")) {
             "    Err(Error::Home(\"rawr doesn't move a result that borrows its call's values yet\".into()))".to_owned()
+        } else {
+            body
+        };
+        // A method its proxy can't hold: one that takes the opaque type, or
+        // gives it inside another type, or gives a borrow of the value.
+        let body = if cell && reach.is_none() && proxied(consumer, &key)? {
+            "    Err(Error::Home(\"rawr doesn't call this method on a result that borrows its call's values yet\".into()))".to_owned()
         } else {
             body
         };
@@ -9510,6 +9526,12 @@ fn render_adapter_body(
                 } else {
                     String::new()
                 };
+                // The calls the program makes on such an output, which
+                // reach it through its proxy (#849).
+                let entries = match &owned {
+                    Some(_) => proxy_entries(cohort, returned)?,
+                    None => Vec::new(),
+                };
                 if lazy && !rebound.is_empty() {
                     // A future that borrows its inputs holds what lends them
                     // for its life: a leased value, or a value made for the
@@ -9524,7 +9546,7 @@ fn render_adapter_body(
                         "    let output = __rawr_profile_host::task::lazy(move || {call});"
                     )
                 } else if let Some(owned) = &owned {
-                    render_lent_cell(owned, &call, output)
+                    render_lent_cell(owned, &entries, &call, output)
                 } else if VIEWED_ARGUMENTS.get() {
                     // Out of any view's region, the output is at
                     // `'static`, and so is what it borrows.
@@ -10926,13 +10948,22 @@ fn render_borrowed_receiver(
     let access = if mutable { "mutable" } else { "shared" };
     let borrow = if mutable { "&mut " } else { "&" };
     // A value that lives beside what it borrows (`lent_cell`) is reached
-    // through the trait object it is held as, at the type `_w` names.
-    if OPAQUE_CELL.get() && container == "_" {
-        let reach = if mutable {
-            format!("receiver.with_dependent_mut(|_, receiver| {{ let receiver = &mut **receiver; {call} }})")
+    // through its proxy, at the type `_w` names.
+    if let Some(proxy) = OPAQUE_CELL.get()
+        && container == "_"
+    {
+        let index = proxy.index;
+        let mut arguments = Vec::new();
+        argument_list(signature.inputs().len(), 1, &mut arguments)?;
+        let arguments = String::from_utf8(arguments).map_err(request::unwritable)?;
+        let reach = if proxy.derives {
+            "derive"
+        } else if mutable {
+            "mutable"
         } else {
-            format!("{{ let receiver = &**receiver.borrow_dependent(); {call} }}")
+            "shared"
         };
+        let reach = format!("receiver.{reach}(|receiver| receiver.__rawr_{index}({arguments}))");
         return writeln!(
             output,
             "    let receiver = native_handle(arguments, 0, false)?;
@@ -16136,24 +16167,24 @@ impl Drop for LentCell {
 /// How an opaque output that borrows crate values its call takes lives
 /// beside them (#846), as `view<'a>(items: &'a [Item]) -> impl Show + 'a`
 /// gives: one self-referential value owns what the call lends, and the
-/// output borrows it there as the trait object `object`.
+/// output borrows it there, held as a proxy of its traits (#849).
 struct Owned {
-    /// The trait object the output is held as, without its lifetime, as
-    /// `dyn events::shelf::Show`.
-    object: String,
+    /// The traits the opaque type is known by, which bound the proxy's
+    /// impl, as `events::stock::Stocked<Item = String> + 'a`.
+    bounds: String,
     /// The type of each lent argument the value owns, and its name.
     owners: Vec<(String, String)>,
 }
 
 /// The value an opaque output that borrows its call's crate values lives
-/// in (`Owned`), or `None` when the output isn't one, or its trait or
+/// in (`Owned`), or `None` when the output isn't one, or its traits or
 /// arguments have no Rust spelling.
 fn lent_cell(
     signature: &crate::classify::representability::signature::Signature,
     substitutions: &[convert::Type],
 ) -> Result<Option<Owned>, request::Error> {
     // Only an output the classifier read as borrowing its inputs, whose
-    // trait it found can be a trait object (`Signature::lends`).
+    // bounds it can write (`Signature::lends`).
     if signature.lends().is_empty() {
         return Ok(None);
     }
@@ -16175,26 +16206,32 @@ fn lent_cell(
     else {
         return Ok(None);
     };
-    let Some(convert::Type::Nominal {
-        definition: principal,
-        arguments: bound,
-    }) = opaque.principal()
-    else {
-        return Ok(None);
-    };
-    let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(principal.as_bytes()).cloned())
-    else {
-        return Ok(None);
-    };
-    let mut written = Vec::new();
-    for argument in bound {
-        let Some(rust) = concrete_type(&substituted(argument, signature, substitutions)?) else {
+    // Each trait, at its arguments.
+    let mut traits = Vec::new();
+    for bound in opaque.traits() {
+        let convert::Type::Nominal {
+            definition: id,
+            arguments: bound,
+        } = bound
+        else {
             return Ok(None);
         };
-        written.push(rust);
+        let Some(path) = TYPE_PATHS.with_borrow(|paths| paths.get(id.as_bytes()).cloned()) else {
+            return Ok(None);
+        };
+        let mut written = Vec::new();
+        for argument in bound {
+            let Some(rust) = concrete_type(&substituted(argument, signature, substitutions)?)
+            else {
+                return Ok(None);
+            };
+            written.push(rust);
+        }
+        traits.push((*id.as_bytes(), path, written));
     }
-    // Each associated type the bounds bind, as `Item = T`; the marks of a
-    // future or a callable are no trait's.
+    // Each associated type the bounds bind, as `Item = T`, on the trait
+    // that declares it, or else on the first, which reaches a supertrait's.
+    // The marks of a future or a callable are no trait's.
     let marks = [
         *crate::surface::identity::Definition::future().as_bytes(),
         *crate::surface::identity::Definition::callable().as_bytes(),
@@ -16203,20 +16240,35 @@ fn lent_cell(
         if marks.contains(&associated.trait_identity()) {
             continue;
         }
+        // One the program can't know is left to rustc.
         let Some(rust) = usize::try_from(*position)
             .ok()
             .and_then(|position| arguments.get(position))
             .and_then(concrete_type)
+            .filter(|rust| opaque_holes(rust).is_empty())
         else {
-            return Ok(None);
+            continue;
         };
-        written.push(format!("{} = {rust}", associated.name()));
+        let declares = traits
+            .iter()
+            .position(|(id, ..)| *id == associated.trait_identity())
+            .unwrap_or(0);
+        if let Some((_, _, written)) = traits.get_mut(declares) {
+            written.push(format!("{} = {rust}", associated.name()));
+        }
     }
-    let object = if written.is_empty() {
-        format!("dyn {path}")
-    } else {
-        format!("dyn {path}<{}>", written.join(", "))
-    };
+    let bounds = traits
+        .iter()
+        .map(|(_, path, written)| {
+            if written.is_empty() {
+                path.clone()
+            } else {
+                format!("{path}<{}>", written.join(", "))
+            }
+        })
+        .chain(["'a".to_owned()])
+        .collect::<Vec<_>>()
+        .join(" + ");
     let mut owners = Vec::new();
     for (position, input) in signature.inputs().iter().enumerate() {
         let input = substituted(input, signature, substitutions)?;
@@ -16240,15 +16292,159 @@ fn lent_cell(
         };
         owners.push((owner, name));
     }
-    Ok((!owners.is_empty()).then_some(Owned { object, owners }))
+    Ok((!owners.is_empty()).then_some(Owned { bounds, owners }))
+}
+
+/// One method of a proxy (`render_lent_cell`): a call of the program's on
+/// a value of an opaque type that lives beside what it borrows, by the
+/// call's index in the type's table (`opaque_consumers`).
+struct ProxyEntry {
+    index: usize,
+    mutable: bool,
+    /// The Rust type of each argument after the receiver.
+    inputs: Vec<String>,
+    /// The Rust type of what it gives, or `None` for a value of the opaque
+    /// type itself, which is held as the first is.
+    output: Option<String>,
+    /// The call on `receiver`, of `argument_0`, `argument_1`, ...
+    call: String,
+}
+
+/// How a call in an opaque type's table reaches a value that lives beside
+/// what it borrows (`OPAQUE_CELL`): through its proxy's method `index`,
+/// which gives a value of the type itself when `derives`.
+#[derive(Clone, Copy)]
+struct ProxyReach {
+    index: usize,
+    derives: bool,
+}
+
+/// Whether `plan` is a method that borrows a value of the opaque type
+/// `key` as its receiver, which a value that lives beside what it borrows
+/// reaches through its proxy.
+fn proxied(plan: &Plan, key: &convert::Type) -> Result<bool, request::Error> {
+    if !matches!(
+        plan.operation(),
+        Operation::Method {
+            receiver: Receiver::Shared | Receiver::Mutable,
+            ..
+        }
+    ) {
+        return Ok(false);
+    }
+    Ok(opaque_operand(plan)?
+        .is_some_and(|(position, _, operand)| position == 0 && same_opaque(&operand, key)))
+}
+
+/// The proxy method of the call `plan`, the `index`th in the table of the
+/// opaque type `key`: one per instance of a generic method, its associated
+/// types as the call fixes them. `None` when it isn't proxied, or when a
+/// type it takes or gives has no Rust spelling, or holds the opaque type
+/// other than as the whole of what it gives.
+fn proxy_entry(
+    index: usize,
+    plan: &Plan,
+    key: &convert::Type,
+) -> Result<Option<ProxyEntry>, request::Error> {
+    let Operation::Method {
+        receiver,
+        signature,
+        substitutions,
+        constants,
+        container_parameters,
+        ..
+    } = plan.operation()
+    else {
+        return Ok(None);
+    };
+    if !proxied(plan, key)? || plan.application_invocation().is_some() {
+        return Ok(None);
+    }
+    let written = |ty: &convert::Type| {
+        concrete_type(ty).filter(|rust| !holds_opaque(ty) && opaque_holes(rust).is_empty())
+    };
+    let mut inputs = Vec::new();
+    for input in signature.inputs() {
+        let Some(rust) = written(&substituted(input, signature, substitutions)?) else {
+            return Ok(None);
+        };
+        inputs.push(rust);
+    }
+    let returned = substituted(signature.output(), signature, substitutions)?;
+    let copy = lent_copy(signature);
+    let mutable = matches!(receiver, Receiver::Mutable);
+    let output = match &returned {
+        ty if same_opaque(ty, key) && !mutable => None,
+        ty if same_opaque(ty, key) => return Ok(None),
+        convert::Type::Borrowed { ty, .. } if copy == ".to_vec()" => {
+            let convert::Type::Sequence { element, .. } = &**ty else {
+                return Ok(None);
+            };
+            let Some(element) = written(element) else {
+                return Ok(None);
+            };
+            Some(format!("Vec<{element}>"))
+        }
+        convert::Type::Borrowed { .. } if copy == ".to_owned()" => Some("String".to_owned()),
+        // What borrows the value can't leave its cell.
+        convert::Type::Borrowed { .. } => return Ok(None),
+        ty => match written(ty) {
+            Some(rust) => Some(rust),
+            None => return Ok(None),
+        },
+    };
+    let mut call = Vec::new();
+    render_method_head(
+        plan.name(),
+        *receiver,
+        signature,
+        substitutions,
+        constants,
+        *container_parameters,
+        &mut call,
+    )?;
+    argument_list(signature.inputs().len(), 1, &mut call)?;
+    call.write_all(b")").map_err(request::unwritable)?;
+    call.write_all(copy.as_bytes())
+        .map_err(request::unwritable)?;
+    Ok(Some(ProxyEntry {
+        index,
+        mutable,
+        inputs,
+        output,
+        call: String::from_utf8(call).map_err(request::unwritable)?,
+    }))
+}
+
+/// The proxy methods of the opaque type `key`, one for each call in
+/// `cohort` that reaches a value of it through its proxy.
+fn proxy_entries(cohort: &[Plan], key: &convert::Type) -> Result<Vec<ProxyEntry>, request::Error> {
+    let mut entries = Vec::new();
+    for (index, consumer) in opaque_consumers(cohort, key)?.into_iter().enumerate() {
+        entries.extend(proxy_entry(index, consumer, key)?);
+    }
+    Ok(entries)
 }
 
 /// The output of `call` in the value that owns what it borrows (`Owned`):
 /// the lent arguments move into it, and `call` names each by the builder's
-/// borrow of it (`LENT_CELL`). When its handle drops, the output drops
-/// first, and then the arguments, which give the values back to their
-/// slots.
-fn render_lent_cell(owned: &Owned, call: &str, output: &mut Vec<u8>) -> std::io::Result<()> {
+/// borrow of it (`LENT_CELL`).
+///
+/// The output is held as a `dyn Proxy`: an object-safe trait of one method
+/// for each call the program makes on it (`entries`), whatever its own
+/// traits allow of a trait object, implemented for each type of its traits
+/// by calling that type's method, so rustc checks each call as it is
+/// written. A method that gives `Self` gives a value held the same way, in
+/// the same cell, since it borrows what the first borrows. Each value is a
+/// slot of the cell: when its handle drops, the value in it drops, and when
+/// the last of them drops, the arguments drop, which give the values back
+/// to their slots.
+fn render_lent_cell(
+    owned: &Owned,
+    entries: &[ProxyEntry],
+    call: &str,
+    output: &mut Vec<u8>,
+) -> std::io::Result<()> {
     let types = owned
         .owners
         .iter()
@@ -16259,18 +16455,89 @@ fn render_lent_cell(owned: &Owned, call: &str, output: &mut Vec<u8>) -> std::io:
         .iter()
         .map(|(_, name)| format!("{name}, "))
         .collect::<String>();
-    let object = &owned.object;
+    let mut methods = String::new();
+    let mut bodies = String::new();
+    for entry in entries {
+        let index = entry.index;
+        let receiver = if entry.mutable { "&mut self" } else { "&self" };
+        let inputs = entry
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(position, ty)| format!(", argument_{position}: {ty}"))
+            .collect::<String>();
+        let (returned, body) = match &entry.output {
+            Some(ty) => (ty.as_str(), entry.call.clone()),
+            None => ("LentOutput<'a>", format!("Box::new({})", entry.call)),
+        };
+        let head = format!("fn __rawr_{index}({receiver}{inputs}) -> {returned}");
+        methods.push_str(&format!("        {head};\n"));
+        bodies.push_str(&format!(
+            "        {head} {{\n            let receiver = self;\n            {body}\n        }}\n"
+        ));
+    }
+    let bounds = &owned.bounds;
     writeln!(
         output,
-        "    type LentOutput<'a> = Box<{object} + 'a>;
+        "    trait Proxy<'a> {{
+{methods}    }}
+    impl<'a, T: {bounds}> Proxy<'a> for T {{
+{bodies}    }}
+    type LentOutput<'a> = Box<dyn Proxy<'a> + 'a>;
+    type Slot<'a> = std::rc::Rc<std::cell::RefCell<LentOutput<'a>>>;
+    struct Slots<'a>(std::cell::RefCell<Vec<Option<Slot<'a>>>>);
     __rawr_internal::self_cell::self_cell!(
         struct Lent {{
             owner: ({types}),
-            #[covariant]
-            dependent: LentOutput,
+            #[not_covariant]
+            dependent: Slots,
         }}
     );
-    let output = lend(arguments.arena, || Lent::new(({names}), |({names})| Box::new({call}) as LentOutput<'_>));"
+    struct LentValue {{ cell: std::rc::Rc<Lent>, slot: usize }}
+    impl LentValue {{
+        fn reach<R>(&self, call: impl for<'a> FnOnce(&Slots<'a>, Slot<'a>) -> R) -> R {{
+            self.cell.with_dependent(|_, slots| {{
+                let value = slots.0.borrow()[self.slot].clone();
+                call(slots, value.expect(\"a value's slot lives as long as it\"))
+            }})
+        }}
+        fn shared<R>(&self, call: impl for<'a> FnOnce(&(dyn Proxy<'a> + 'a)) -> R) -> R {{
+            self.reach(|_, value| call(&**value.borrow()))
+        }}
+        fn mutable<R>(&self, call: impl for<'a> FnOnce(&mut (dyn Proxy<'a> + 'a)) -> R) -> R {{
+            self.reach(|_, value| call(&mut **value.borrow_mut()))
+        }}
+        fn derive(&self, call: impl for<'a> FnOnce(&(dyn Proxy<'a> + 'a)) -> LentOutput<'a>) -> Self {{
+            let slot = self.reach(|slots, value| {{
+                let derived = Some(std::rc::Rc::new(std::cell::RefCell::new(call(&**value.borrow()))));
+                let mut slots = slots.0.borrow_mut();
+                match slots.iter().position(Option::is_none) {{
+                    Some(free) => {{
+                        slots[free] = derived;
+                        free
+                    }}
+                    None => {{
+                        slots.push(derived);
+                        slots.len() - 1
+                    }}
+                }}
+            }});
+            Self {{ cell: self.cell.clone(), slot }}
+        }}
+    }}
+    impl Drop for LentValue {{
+        fn drop(&mut self) {{
+            let slot = self.slot;
+            self.cell.with_dependent(|_, slots| {{
+                let value = slots.0.borrow_mut().get_mut(slot).and_then(Option::take);
+                drop(value);
+            }});
+        }}
+    }}
+    fn slots<'a>(value: LentOutput<'a>) -> Slots<'a> {{
+        Slots(std::cell::RefCell::new(vec![Some(std::rc::Rc::new(std::cell::RefCell::new(value)))]))
+    }}
+    let output = lend(arguments.arena, || LentValue {{ cell: std::rc::Rc::new(Lent::new(({names}), |({names})| slots(Box::new({call})))), slot: 0 }});"
     )
 }
 

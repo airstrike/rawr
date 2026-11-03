@@ -130,31 +130,32 @@ pub struct Signature {
 pub struct Opaque {
     definition: [u8; 32],
     associated: Box<[(Associated, u32)]>,
-    /// Its trait besides auto traits, at the bound's arguments after
-    /// `Self`, as `Show` of `impl Show + 'a`: the trait object a value of
-    /// it is held as where it borrows what its call takes (#846).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    principal: Option<super::convert::Type>,
+    /// Its traits besides auto traits, at the bound's arguments after
+    /// `Self`, as `Show` of `impl Show + 'a`: what the proxy a value of it
+    /// is held through bounds, where it borrows what its call takes (#846,
+    /// #849).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    traits: Box<[super::convert::Type]>,
 }
 
 impl Opaque {
     pub(crate) const fn new(
         definition: [u8; 32],
         associated: Box<[(Associated, u32)]>,
-        principal: Option<super::convert::Type>,
+        traits: Box<[super::convert::Type]>,
     ) -> Self {
         Self {
             definition,
             associated,
-            principal,
+            traits,
         }
     }
 
-    /// Its trait besides auto traits, at the bound's arguments after
-    /// `Self`, when it has one Rawr can write.
+    /// Its traits besides auto traits, at the bound's arguments after
+    /// `Self`.
     #[must_use]
-    pub const fn principal(&self) -> Option<&super::convert::Type> {
-        self.principal.as_ref()
+    pub fn traits(&self) -> &[super::convert::Type] {
+        &self.traits
     }
 
     /// The opaque type, by its definition identity.

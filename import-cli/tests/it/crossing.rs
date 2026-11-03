@@ -1399,17 +1399,37 @@ fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
     }
 }
 
-/// #846: a borrowing `impl Trait` result of a trait with a generic method,
-/// which can't be made into a trait object, makes its function one that
-/// can't be used yet.
+/// #849: a borrowing `impl Stocked<Item = String> + 'a` result of a trait
+/// that can't be a trait object: a supertrait's method, a generic method at
+/// two types, the associated type, the associated const through a method,
+/// and a method that gives `Self`, whose result outlives the first and
+/// borrows the same items. Each result says when it drops, and the items
+/// count each show, so the output, which is `cargo run`'s, shows each
+/// result dropped where rustc drops it and borrowed the one value of each
+/// item.
 #[test]
-fn a_borrowing_result_of_a_trait_that_cant_be_an_object_isnt_supported_yet() {
-    let stderr = checked("crossing-shelf-tagged", "shelf_tagged.rs");
+fn an_opaque_result_of_a_trait_that_cant_be_an_object_runs_through_its_proxy() {
+    let (rawr, cargo) = both_printed("crossing-stock", "stock.rs", "");
+    assert_eq!(rawr, cargo);
     assert!(
-        stderr.contains(
-            "`tagged` can't be used yet: it gives an `impl Trait` that borrows its arguments, \
-             and its trait can't be made into a trait object"
-        ),
+        rawr.contains("tag n3 73")
+            && rawr.contains("again 1[second third] second\ndrop 0\nstill 2[third]\ndrop 2")
+            && rawr.ends_with("drop 1\npushed first:1,second:2,third:2,fourth:0"),
+        "{rawr}"
+    );
+}
+
+/// #849: a result that `again(&self) -> Self` gives borrows the items the
+/// first borrowed, after the first drops: pushing to them while it lives is
+/// rustc's E0502, which rawr's checker reports before anything runs.
+#[test]
+fn a_result_a_method_gives_as_self_keeps_the_items_borrowed() {
+    let stderr = checked("crossing-stock-error", "stock_again.rs");
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains(
+            "error[E0502]: cannot borrow `items` as mutable because it is also borrowed as immutable"
+        ) && own.contains("main.rs:10:5"),
         "{stderr}"
     );
 }
