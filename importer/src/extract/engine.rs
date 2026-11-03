@@ -839,6 +839,25 @@ impl<'o, O: Oracle> Engine<'o, O> {
                 }
                 self.only_names = None;
             }
+            // Each type a reached signature names that no public path of the
+            // selected crate reaches, as `Widget::map`'s `Map`: rustc lets a
+            // program use it without naming it, so the bindings name it
+            // under the segment naming its crate.
+            let unnamed = self.unnamed_types();
+            if !unnamed.is_empty() {
+                let mut segments = unnamed
+                    .iter()
+                    .map(|(segment, _)| segment.clone())
+                    .collect::<Vec<_>>();
+                segments.dedup();
+                self.only_names = Some(unnamed.into_iter().map(|(_, key)| key).collect());
+                for name in segments {
+                    if let Some(segment) = self.oracle.segment(&name)? {
+                        self.walk(segment.root, vec![name], &[], 1, true)?;
+                    }
+                }
+                self.only_names = None;
+            }
         }
         let mut definitions = std::mem::take(&mut self.definitions)
             .into_values()
@@ -1427,7 +1446,14 @@ impl<'o, O: Oracle> Engine<'o, O> {
                     if let Some(error) = error {
                         return Err(Fault::Error(error.clone()));
                     }
-                    let named = !names_only || self.definitions.contains_key(key);
+                    // A walk for only some names passes through modules
+                    // another walk of the crate may have named already.
+                    let named = !names_only
+                        || self.definitions.contains_key(key)
+                            && self
+                                .only_names
+                                .as_ref()
+                                .is_none_or(|only| only.contains(key));
                     if !names_only {
                         let (request, alias) = request
                             .as_ref()
@@ -1560,6 +1586,46 @@ impl<'o, O: Oracle> Engine<'o, O> {
             }
         }
         targets
+    }
+
+    /// The types the walk reached that no export names yet, outside the
+    /// sysroot, each beside the segment naming its crate's root, in segment
+    /// order.
+    fn unnamed_types(&self) -> Vec<(String, Key)> {
+        let exported = self
+            .reachable
+            .iter()
+            .filter_map(|export| match &export.target {
+                ExportTarget::Definition { id } => Some(id.def_path_hash.as_str()),
+                ExportTarget::Unsupported { .. } => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut unnamed = self
+            .definitions
+            .iter()
+            .filter(|(key, _)| {
+                key.namespace == Namespace::Type && !exported.contains(hex(&key.hash).as_str())
+            })
+            .filter_map(|(key, definition)| {
+                let model::Authority::Compiler {
+                    crate_name,
+                    stable_crate_id,
+                } = &definition.id.authority;
+                let sysroot = self
+                    .crates
+                    .iter()
+                    .find(|krate| krate.stable_crate_id == *stable_crate_id)
+                    .is_none_or(|krate| krate.sysroot);
+                (!sysroot).then(|| {
+                    (
+                        format!("{CRATE_SEGMENT}{crate_name}_{stable_crate_id}"),
+                        *key,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        unnamed.sort_unstable();
+        unnamed
     }
 }
 
@@ -2234,5 +2300,179 @@ mod tests {
             super::ExportTarget::Unsupported { compiler_kind }
                 if compiler_kind == super::DERIVE_MACRO
         ));
+    }
+
+    /// A type a demanded item's signature names that no public path of the
+    /// selected crate reaches, as `Widget::map`'s `Map` from a crate iced
+    /// doesn't re-export: the demanded walk names it under the segment of
+    /// its own crate, as a whole walk does, and nothing else of that crate.
+    /// The walk for an alias's hidden target in the same crate, as iced's
+    /// `Element` names iced_core's, names each path once with it.
+    #[test]
+    fn a_type_only_a_signature_names_is_named_under_its_crates_segment() {
+        let core = format!("{}core_fedcba9876543210", super::CRATE_SEGMENT);
+        let foreign = |byte: u8| Id {
+            authority: Authority::Compiler {
+                crate_name: "core".to_owned(),
+                stable_crate_id: "fedcba9876543210".to_owned(),
+            },
+            def_path_hash: super::hex(&hash(byte)),
+            namespace: Namespace::Type,
+        };
+        let export = |name: &str, byte: u8, id: Id, module: Option<Nested>| Child {
+            name: name.to_owned(),
+            landing: None,
+            export: Some(ChildExport {
+                binding: Binding::Nameable,
+                variant: None,
+                span: span(),
+                reexports: Vec::new(),
+                hops: Vec::new(),
+                target: ChildTarget::Definition {
+                    key: key(byte),
+                    id,
+                    error: None,
+                    display_path: vec![name.to_owned()],
+                    request: Box::new(Ok((
+                        Request {
+                            key: key(byte),
+                            owner: raw(r#"{"kind":"free"}"#),
+                            level: Level::Shape,
+                        },
+                        None,
+                    ))),
+                    module,
+                },
+            }),
+        };
+        let mut fixture = Fixture::default();
+        exporting(&mut fixture);
+        fixture.modules.get_mut(&hash(0)).unwrap()[0].landing = Some(Ok(super::Landing {
+            requests: vec![(
+                Request {
+                    key: key(1),
+                    owner: raw(r#"{"kind":"free"}"#),
+                    level: Level::Selected,
+                },
+                None,
+            )],
+            next: super::Next::Nominal(hash(1)),
+        }));
+        // `One`'s signature names `Map` (2) and the alias `Element` (4),
+        // whose target (5) `core` defines in its public `widget` module (8)
+        // beside `Map` and `Other` (3), which nothing reaches.
+        fixture.units.insert(
+            Unit::Shape(key(1)),
+            vec![
+                definition(1),
+                Emission::Register {
+                    sysroot: false,
+                    crate_name: "core".to_owned(),
+                    stable_crate_id: "fedcba9876543210".to_owned(),
+                },
+                request(2, Level::Shape),
+                request(4, Level::Shape),
+                request(8, Level::Shape),
+            ],
+        );
+        fixture
+            .modules
+            .get_mut(&hash(0))
+            .unwrap()
+            .push(export("Element", 4, id(4), None));
+        fixture.units.insert(
+            Unit::Shape(key(4)),
+            vec![
+                Emission::Definition {
+                    key: key(4),
+                    id: id(4),
+                    value: raw(r#"{"name":4}"#),
+                    alias: Some(super::AliasTarget {
+                        target: key(5),
+                        krate: "fedcba9876543210".to_owned(),
+                        selected: false,
+                        sysroot: false,
+                        root: hash(7),
+                        segment: core.clone(),
+                    }),
+                },
+                request(5, Level::Shape),
+            ],
+        );
+        for byte in [5, 8] {
+            fixture.units.insert(
+                Unit::Shape(key(byte)),
+                vec![Emission::Definition {
+                    key: key(byte),
+                    id: foreign(byte),
+                    value: raw(&format!(r#"{{"name":{byte}}}"#)),
+                    alias: None,
+                }],
+            );
+        }
+        fixture.units.insert(
+            Unit::Shape(key(2)),
+            vec![Emission::Definition {
+                key: key(2),
+                id: foreign(2),
+                value: raw(r#"{"name":2}"#),
+                alias: None,
+            }],
+        );
+        fixture.segments.insert(
+            core.clone(),
+            Segment {
+                root: hash(7),
+                krate: "fedcba9876543210".to_owned(),
+            },
+        );
+        fixture.modules.insert(
+            hash(7),
+            vec![export(
+                "widget",
+                8,
+                foreign(8),
+                Some(Nested {
+                    module: hash(8),
+                    foreign: false,
+                }),
+            )],
+        );
+        fixture.modules.insert(
+            hash(8),
+            vec![
+                export("Map", 2, foreign(2), None),
+                export("Element", 5, foreign(5), None),
+                export("Other", 3, foreign(3), None),
+            ],
+        );
+        let demand = vec![vec!["fixture".to_owned(), "One".to_owned()]];
+        let extracted = Engine::new(
+            &mut fixture,
+            root(),
+            vec!["fixture".to_owned()],
+            String::new(),
+        )
+        .run(&demand)
+        .unwrap();
+        let paths = extracted
+            .reachable
+            .iter()
+            .map(|export| export.path.join("::"))
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&format!("{core}::widget::Map")), "{paths:?}");
+        assert!(
+            paths.contains(&format!("{core}::widget::Element")),
+            "{paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|path| path.ends_with("Other")),
+            "{paths:?}"
+        );
+        let mut unique = paths.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), paths.len(), "each path once: {paths:?}");
+        assert!(!fixture.asked.contains_key(&Unit::Shape(key(3))));
     }
 }
