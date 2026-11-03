@@ -1217,8 +1217,9 @@ pub mod markdown {
         }
     }
 
-    /// The items of each line of `markdown` that holds text.
-    pub fn parse(markdown: &str) -> impl Iterator<Item = Item> + '_ {
+    /// The items of each line of `markdown` that holds text. iced's
+    /// gives them as an iterator.
+    pub fn parse(markdown: &str) -> Vec<Item> {
         markdown
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -1226,16 +1227,18 @@ pub mod markdown {
                 text: line.trim().to_owned(),
                 draws: std::cell::Cell::new(0),
             })
+            .collect()
     }
 
     /// The widget of `items`, which it borrows for `'a`, as iced's
-    /// `markdown::view`: its type is opaque. A press on an item's text
-    /// sends that text as a link.
+    /// `markdown::view`: its type is opaque, behind the trait `map` is a
+    /// method of, as iced's `Widget` is. A press on an item's text sends
+    /// that text as a link.
     pub fn view<'a, Theme, Renderer>(
         items: &'a [Item],
         settings: impl Into<Settings>,
         theme: Theme,
-    ) -> impl Widget<Uri, Theme, Renderer> + 'a
+    ) -> impl crate::widgets::Framed<Uri, Theme, Renderer> + 'a
     where
         Theme: 'static,
     {

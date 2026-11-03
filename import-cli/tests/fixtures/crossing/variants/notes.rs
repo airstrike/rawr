@@ -17,7 +17,7 @@ struct Notes {
 impl Default for Notes {
     fn default() -> Self {
         Self {
-            items: markdown::parse("first\n\nsecond").collect(),
+            items: markdown::parse("first\n\nsecond"),
             clicked: None,
         }
     }
