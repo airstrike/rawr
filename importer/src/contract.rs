@@ -266,8 +266,25 @@ impl Contract<Classified> {
         &self,
         identity: &crate::surface::identity::Identity,
     ) -> Option<crate::classify::Outcome<'_>> {
-        self.outcomes()
-            .find_map(|outcome| binding_outcome(outcome, identity))
+        self.outcomes().find_map(|outcome| {
+            if outcome.identity().same_binding(identity)
+                && outcome
+                    .representability()
+                    .contains_selector(outcome.identity().selector(), identity.selector())
+            {
+                return Some(outcome);
+            }
+            outcome
+                .implementations()
+                .flat_map(|implementation| implementation.associated())
+                .find(|associated| {
+                    associated.identity().same_binding(identity)
+                        && associated.representability().contains_selector(
+                            associated.identity().selector(),
+                            identity.selector(),
+                        )
+                })
+        })
     }
 
     /// Derive one exact alias-bound operation identity from a classified selector.
@@ -332,7 +349,17 @@ impl Usage {
             .and_then(|items| items.checked_add(support.rejections_len()))
             .and_then(|items| {
                 outcomes.iter().try_fold(items, |items, outcome| {
-                    items.checked_add(outcome.retained_items()?)
+                    let implementations = outcome.implementations().len();
+                    let associated = outcome.implementations().iter().try_fold(
+                        0_usize,
+                        |count, implementation| {
+                            count.checked_add(implementation.associated().len())
+                        },
+                    )?;
+                    items
+                        .checked_add(1)?
+                        .checked_add(implementations)?
+                        .checked_add(associated)
                 })
             })
             .ok_or(crate::classify::Error::Limit {
@@ -550,24 +577,4 @@ mod tests {
             .expect_err("checked overflow refuses");
         assert_eq!(allocation.usage(), retained);
     }
-}
-
-/// `outcome`, or the associated outcome below it, that binds `identity`:
-/// a member of a type, or of the opaque type a trait's method gives, which
-/// is below that method (`classify::method_opaque_implementations`).
-fn binding_outcome<'contract>(
-    outcome: crate::classify::Outcome<'contract>,
-    identity: &crate::surface::identity::Identity,
-) -> Option<crate::classify::Outcome<'contract>> {
-    if outcome.identity().same_binding(identity)
-        && outcome
-            .representability()
-            .contains_selector(outcome.identity().selector(), identity.selector())
-    {
-        return Some(outcome);
-    }
-    outcome
-        .implementations()
-        .flat_map(crate::classify::ImplementationOutcome::associated)
-        .find_map(|associated| binding_outcome(associated, identity))
 }
