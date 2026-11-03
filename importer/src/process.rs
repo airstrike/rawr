@@ -800,9 +800,11 @@ impl Native {
         }
     }
 
-    /// The installation the sealed environment selects, without launching
-    /// anything. These paths key the toolchain record, so different
-    /// installs keep different records instead of rejecting each other.
+    /// The installation the sealed environment selects. It launches nothing
+    /// unless the pinned toolchain or one of its components is missing, which
+    /// rustup then installs. These paths key the toolchain record, so
+    /// different installs keep different records instead of rejecting each
+    /// other.
     pub(crate) fn selected_in(
         current_dir: &Path,
         environment: &crate::cargo::config::Environment,
@@ -838,14 +840,18 @@ impl Native {
         } else {
             current_dir.join(rustup_home)
         };
-        let requested_toolchain = rustup_home.join("toolchains").join(format!(
-            "{}-{}",
-            crate::cargo::toolchain::CHANNEL,
-            crate::cargo::toolchain::HOST,
-        ));
-        let toolchain = fs::canonicalize(&requested_toolchain).map_err(|source| Error::Io {
+        let command_environment = environment
+            .entries()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+            .collect::<Vec<_>>();
+        let installed = crate::cargo::toolchain::Installed::ensure(
+            &rustup,
+            &rustup_home,
+            &command_environment,
+        )?;
+        let toolchain = fs::canonicalize(installed.root()).map_err(|source| Error::Io {
             operation: "canonicalize pinned toolchain root",
-            path: requested_toolchain,
+            path: installed.root().to_path_buf(),
             source,
         })?;
         let selected_cargo =
@@ -1275,8 +1281,11 @@ fn find_program_in(name: &str, directories: impl IntoIterator<Item = PathBuf>) -
 /// A tool rawr needs is in none of `PATH`'s directories.
 fn not_found(name: &str) -> Error {
     Error::Request {
-        reason: format!("could not find `{name}` in `PATH`; install Rust with rustup")
-            .into_boxed_str(),
+        reason: format!(
+            "could not find `{name}` in `PATH`; rawr installs the Rust toolchain it reads crate \
+             APIs with through rustup. Install rustup from https://rustup.rs, then run this again"
+        )
+        .into_boxed_str(),
     }
 }
 
@@ -1310,7 +1319,64 @@ fn find_driver_in() -> Result<PathBuf> {
         "rawr-import-driver{}",
         std::env::consts::EXE_SUFFIX
     ));
+    if !candidate.exists() {
+        fetch_driver(target_directory)?;
+    }
     canonical_program_in("metadata probe driver", &candidate)
+}
+
+/// Install the driver of this version beside a `rawr-import` built without
+/// it, from the prebuilt archive for this host.
+#[cfg(all(feature = "rustc-driver", not(test)))]
+fn fetch_driver(directory: &Path) -> Result<PathBuf> {
+    let archive = crate::prebuilt::Archive::current();
+    crate::progress::say(&format!(
+        "Downloading rawr-import-driver {} for {} (once per install)",
+        env!("CARGO_PKG_VERSION"),
+        crate::cargo::toolchain::HOST
+    ));
+    archive.install("rawr-import-driver", directory)
+}
+
+/// Tests never download: a test build's driver is built beside it.
+#[cfg(all(feature = "rustc-driver", test))]
+fn fetch_driver(directory: &Path) -> Result<PathBuf> {
+    Err(Error::Request {
+        reason: format!(
+            "`rawr-import-driver` is not built in `{}`; run `cargo build -p rawr-import \
+             --features rustc-driver --bin rawr-import-driver`",
+            directory.display()
+        )
+        .into_boxed_str(),
+    })
+}
+
+/// The environment variable and value that let the driver load the pinned
+/// toolchain's `librustc_driver`, which it links dynamically. A driver built
+/// on this machine finds it through its rpath, but a prebuilt one names the
+/// build machine's toolchain, so every launch also points the loader at the
+/// toolchain beside `rustc`. macOS consults `DYLD_FALLBACK_LIBRARY_PATH`
+/// only after the rpath; Windows finds DLLs on `PATH`, in the toolchain's
+/// `bin`.
+#[cfg(feature = "rustc-driver")]
+pub(crate) fn driver_library(
+    rustc: &Path,
+    environment: &[(OsString, OsString)],
+) -> Option<(OsString, OsString)> {
+    let (key, directory) = if cfg!(target_vendor = "apple") {
+        ("DYLD_FALLBACK_LIBRARY_PATH", "lib")
+    } else if cfg!(windows) {
+        ("PATH", "bin")
+    } else {
+        ("LD_LIBRARY_PATH", "lib")
+    };
+    let toolchain = rustc.parent()?.parent()?;
+    let mut paths = vec![toolchain.join(directory)];
+    if let Some((_, caller)) = environment.iter().find(|(name, _)| name == key) {
+        paths.extend(std::env::split_paths(caller));
+    }
+    let value = std::env::join_paths(paths).ok()?;
+    Some((key.into(), value))
 }
 
 fn rustup_which(rustup: &Path, program: Program) -> Result<PathBuf> {

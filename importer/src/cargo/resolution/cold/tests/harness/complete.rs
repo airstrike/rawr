@@ -41,6 +41,9 @@ fn probe(
         layout.extraction().source().as_os_str().to_owned(),
         context.rawr().join("extraction").into_os_string(),
     ];
+    let environment: Box<[_]> = process::driver_library(native.rustc(), &[])
+        .into_iter()
+        .collect();
     let directory = layout.extraction().root().to_path_buf();
     let plan_path = layout.extraction().plan().to_path_buf();
     let protocol = layout.extraction().protocol().to_path_buf();
@@ -49,7 +52,7 @@ fn probe(
         move |_| {
             test_launch::Expected::new(
                 executable,
-                process::Command::probe(arguments, directory, Box::default())
+                process::Command::probe(arguments, directory, environment)
                     .expect("exact Probe command seals"),
                 Limits::standard().process_limits(),
             )
