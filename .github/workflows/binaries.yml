@@ -1,8 +1,10 @@
+# Stage 1 of the release (release.yml), and a workflow of its own.
 # Prebuilt binaries: one archive per host on the GitHub release of each
 # version, which install.sh and install.ps1 (site/public) download. A run
-# starts when a push to main changes the root Cargo.toml, as `chore: release
-# x.y.z` does, and does nothing when the version's release already has its
-# archives. Archives are named rawr-<target>.tar.gz (zip on Windows), the
+# does nothing when the version's release already has its archives. It runs
+# only by hand (Run workflow) or from release.yml with its `binaries` input
+# ticked, never by default, while patch releases have no tags of their own.
+# Archives are named rawr-<target>.tar.gz (zip on Windows), the
 # same for every version, so releases/latest/download/<name> is the newest;
 # importer/src/prebuilt.rs names them the same way.
 #
@@ -15,9 +17,9 @@
 # Windows archive holds rawr and cargo-rawr, and its build is best effort.
 name: Release binaries
 
-# Started by hand while patch releases have no tags of their own.
 on:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: binaries-${{ github.sha }}

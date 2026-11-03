@@ -1,0 +1,86 @@
+# Stage 2 of the release (release.yml): rawr-web, the playground's "Run in
+# browser" module, built for wasm32 by web/build.sh and uploaded as this
+# run's `web` artifact (with SHA256SUMS, which later deploys read back from
+# the site to keep it).
+#
+# The target dir (with wasm-bindgen-cli at the Cargo.lock version) and the
+# cargo registry live in the Actions cache. Its key is the external
+# dependencies of Cargo.lock (scripts/deps-key.sh), which a version bump
+# does not move, so the cache is saved once per dependency change and a run
+# recompiles the workspace's crates and the LTO link only: about 3 minutes.
+#
+# Run on its own (Run workflow), it then deploys through site.yml with that
+# rawr-web and the running image. In the chained release, `deploy` is false
+# and the site stage deploys it together with the bot's image, so the site
+# never goes live ahead of its bot.
+name: Playground
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the Worker with the new rawr-web.
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      deploy:
+        type: boolean
+        default: true
+
+# See site.yml: `release-play` when run alone, a group of its own when called.
+concurrency:
+  group: ${{ github.workflow == 'Playground' && 'release-play' || format('release-play-{0}-playground', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner's Rust can trail the workspace's rust-version.
+      - name: Install stable Rust for wasm32
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown --no-self-update
+          rustup default stable
+
+      - name: Key the cache
+        id: key
+        run: echo "deps=$(scripts/deps-key.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the wasm build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/wasm
+          key: web-${{ steps.key.outputs.deps }}
+          restore-keys: web-
+
+      - name: Build rawr-web
+        run: time web/build.sh target/web
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: target/web
+          retention-days: 7
+
+  deploy:
+    needs: web
+    if: inputs.deploy
+    uses: ./.github/workflows/site.yml
+    with:
+      web: artifact
+    secrets: inherit

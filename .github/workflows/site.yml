@@ -1,52 +1,86 @@
-# Deploy the site and the Worker when a push to main changes them, with the
-# ?play image Cloudflare already runs. /todo, the changelog and the docs are
-# static pages of the site, so a plan commit or a docs change goes live
-# within minutes instead of at the next release. Nothing is built but the
-# site: the container keeps its image, and the Worker's assets keep the
-# rawr-web that the release which built that image uploaded.
-# It shares the release's concurrency group, queued, so a deploy never runs
-# beside a release, and it reads the running image only once its turn comes.
-# It needs the same secrets and variable as release.yml.
+# Stage 4 of the release (release.yml), and the deploy every other stage
+# calls when it runs alone: deploy the Worker and site, then check them.
+# deploy.sh builds the site, runs the Worker's and the site's tests, deploys
+# (`wrangler deploy`), waits for Cloudflare and then the bot to report the
+# pinned image, and runs every snippet on the site's pages through /play/run,
+# so the docs are checked against the server that has just gone live.
+#
+# What it deploys:
+# - the image: `image` when a caller built one (the bot stage), else the one
+#   Cloudflare runs now, read inside the concurrency group so a release that
+#   ran just before is never rolled back;
+# - rawr-web (/web): this run's `web` artifact when `web` is `artifact` (the
+#   playground stage built it), else the files the site serves now
+#   (live-web.sh), since a deploy replaces every asset;
+# - the site and the Worker as committed.
+#
+# Triggers:
+# - a push to main that changes plan/, site/ or the Worker
+#   (play/deploy/cloudflare): /todo, the changelog, the docs, and Worker
+#   code or settings (wrangler.jsonc's vars, such as PLAY_TIME_MS) go live in
+#   minutes with the running image. A settings change restarts the bot on its
+#   image (src/index.ts compares them);
+# - by hand (Run workflow), the same;
+# - workflow_call, from release.yml, playground.yml and bot.yml.
+# It needs the CLOUDFLARE_API_TOKEN and PLAY_SMOKE_TOKEN secrets and the
+# CLOUDFLARE_ACCOUNT_ID variable ("Release from GitHub Actions" in
+# play/README.md). The job's copy of wrangler.jsonc is rewritten, never pushed.
 name: Deploy the site
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      image:
+        description: The image to deploy (registry.cloudflare.com/…/rawr-play:<commit>); empty keeps the running one.
+        type: string
+        default: ""
+      web:
+        description: "`artifact` deploys this run's rawr-web artifact; `live` keeps the live one."
+        type: string
+        default: live
   push:
     branches: [main]
     paths:
       - "plan/**"
       - "site/**"
+      - "play/deploy/cloudflare/**"
       - ".github/workflows/site.yml"
 
-# The release's group. `queue: max` keeps every waiting run in order, so a
-# push never cancels a waiting release and a release never cancels a push.
+# Run on its own, it takes the release's group, `release-play`: one release
+# or deploy at a time, and `queue: max` keeps every waiting run in order, so
+# a queued run never cancels another. Called by another workflow, which holds
+# that group already, it takes a group of its own (the same name would
+# deadlock); github.workflow is then the caller's name.
 concurrency:
-  group: release-play
+  group: ${{ github.workflow == 'Deploy the site' && 'release-play' || format('release-play-{0}-site', github.run_id) }}
   cancel-in-progress: false
   queue: max
 
 permissions:
   contents: read
-  # The rawr-web artifact of the release that built the running image.
   actions: read
 
 jobs:
   # A push that main has moved past by the time its turn comes has nothing to
   # deploy: a later run in the queue deploys main's newer head. Checked on its
-  # turn, inside the group, so runs queued behind a long release collapse to
-  # the newest one.
+  # turn, inside the group, so pushes queued behind a long release collapse to
+  # the newest one. A release's own call always deploys.
   latest:
     runs-on: ubuntu-latest
     outputs:
       current: ${{ steps.head.outputs.current }}
     steps:
       - id: head
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
         run: |
-          head=$(git ls-remote "https://github.com/${{ github.repository }}" refs/heads/main | cut -f1)
-          if [ "${{ github.event_name }}" != push ] || [ "$head" = "${{ github.sha }}" ]; then
+          head=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+          if [ "$GITHUB_WORKFLOW" != "Deploy the site" ] || [ "$EVENT" != push ] || [ "$head" = "$SHA" ]; then
             echo current=true >> "$GITHUB_OUTPUT"
           else
-            echo "main is at $head, past ${{ github.sha }}; a later run deploys it"
+            echo "main is at $head, past $SHA; a later run deploys it"
             echo current=false >> "$GITHUB_OUTPUT"
           fi
 
@@ -76,33 +110,26 @@ jobs:
       - name: Install the Worker's dependencies
         run: npm install --no-audit --no-fund
 
-      # Read here, inside the group, so a release that ran just before is seen.
-      - name: Point wrangler.jsonc at the running image
-        id: image
-        run: |
-          tag="$(./pin-image.sh)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Cloudflare runs rawr-play:$tag"
-
-      # A deploy replaces every asset, so /web must hold the rawr-web that is
-      # live now: the `web` artifact of the release run at the image's commit.
-      - name: Fetch that release's rawr-web
+      # The job's own copy of wrangler.jsonc names the image and its tag as
+      # PLAY_VERSION, which tells the bot to restart when it changed.
+      - name: Point wrangler.jsonc at the image
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.image.outputs.tag }}
+          IMAGE: ${{ inputs.image }}
         run: |
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=web&per_page=100" \
-            --jq "[.artifacts[] | select(.expired | not) | select(.workflow_run.head_sha | startswith(\"$TAG\"))][0].workflow_run.id // empty")"
-          if [ -z "$run" ]; then
-            echo "no unexpired rawr-web artifact from a release of $TAG; run the release workflow" >&2
-            exit 1
-          fi
-          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name web --dir public/web
-          ls -l public/web
+          if [ -n "$IMAGE" ]; then tag="$(./pin-image.sh "$IMAGE")"; else tag="$(./pin-image.sh)"; fi
+          echo "deploying rawr-play:$tag"
 
-      # deploy.sh builds the site, runs the Worker's and the site's tests,
-      # deploys, waits for the bot to report the pinned image and runs the
-      # site's snippets.
+      - name: Use this run's rawr-web
+        if: inputs.web == 'artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: play/deploy/cloudflare/public/web
+
+      - name: Keep the live rawr-web
+        if: inputs.web != 'artifact'
+        run: ./live-web.sh
+
       - name: Test, deploy and check the site
         env:
           PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}

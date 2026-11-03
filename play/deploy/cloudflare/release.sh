@@ -1,9 +1,10 @@
 #!/bin/sh
-# Once the GitHub Actions release (.github/workflows/release.yml) is switched
-# on, it is the main path. This script stays for releasing from a Mac.
+# The GitHub Actions release (.github/workflows/release.yml) is the main
+# path. This script stays for releasing from a Mac.
 # Release the committed HEAD to Cloudflare in one step:
 #   ./release.sh            build and push the image, then deploy
-#   ./release.sh --worker   deploy the Worker and site only (no new image)
+#   ./release.sh --worker   deploy the Worker and site only (no new image,
+#                           the live rawr-web)
 # It refuses to run while the Worker or site sources have uncommitted changes,
 # since `wrangler deploy` ships the working tree. deploy.sh then tests,
 # deploys, waits for the bot and runs the site's snippets. Last, this script
@@ -29,6 +30,8 @@ else
   # Keep the image Cloudflare runs, which a GitHub release may have advanced
   # past the committed wrangler.jsonc.
   ./pin-image.sh >/dev/null
+  # And the rawr-web the site serves, since a deploy replaces every asset.
+  ./live-web.sh >/dev/null
 fi
 ./deploy.sh
 want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
