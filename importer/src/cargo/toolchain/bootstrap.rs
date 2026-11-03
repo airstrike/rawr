@@ -1,5 +1,5 @@
-//! The pinned nightly, installed through rustup the first time an import
-//! needs it.
+//! The selected nightly, installed or completed through rustup the first
+//! time an import needs it.
 //!
 //! rustup records each toolchain's installed components in
 //! `lib/rustlib/components`, one per line, with the host triple after every
@@ -15,17 +15,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use super::{CHANNEL, HOST, REQUIRED_COMPONENTS};
+use super::{Selection, HOST, REQUIRED_COMPONENTS};
 use crate::{Error, Result};
 
-/// The pinned toolchain's root under rustup's home, with every required
+/// The selected toolchain's root under rustup's home, with every required
 /// component installed.
 #[derive(Debug)]
 pub(crate) struct Installed {
     root: PathBuf,
 }
 
-/// What the pinned toolchain lacks, read from its components file.
+/// What the selected toolchain lacks, read from its components file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Missing {
     Nothing,
@@ -38,16 +38,15 @@ enum Missing {
 static SEEN: OnceLock<PathBuf> = OnceLock::new();
 
 impl Installed {
-    /// The pinned toolchain in `rustup_home`, installed or completed with
+    /// The selected toolchain in `rustup_home`, installed or completed with
     /// `rustup` first when it is missing or lacks a required component.
     pub(crate) fn ensure(
         rustup: &Path,
         rustup_home: &Path,
+        selection: &Selection,
         environment: &[(OsString, OsString)],
     ) -> Result<Self> {
-        let root = rustup_home
-            .join("toolchains")
-            .join(format!("{CHANNEL}-{HOST}"));
+        let root = selection.root(rustup_home, HOST);
         if SEEN.get() == Some(&root) {
             return Ok(Self { root });
         }
@@ -56,15 +55,16 @@ impl Installed {
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(source) => {
                 return Err(Error::Io {
-                    operation: "read the pinned toolchain's components",
+                    operation: "read the selected toolchain's components",
                     path: root.join("lib/rustlib/components"),
                     source,
                 });
             }
         };
         let missing = Missing::of(components.as_deref(), HOST);
-        if let Some(arguments) = missing.arguments() {
-            crate::progress::say(&missing.to_string());
+        let channel = selection.name();
+        if let Some(arguments) = missing.arguments(channel) {
+            crate::progress::say(&missing.message(channel));
             install(rustup, &arguments, environment)?;
         }
         let _ = SEEN.set(root.clone());
@@ -107,14 +107,15 @@ impl Missing {
         }
     }
 
-    /// The `rustup` arguments that install what is missing, if anything is.
-    fn arguments(&self) -> Option<Vec<String>> {
+    /// The `rustup` arguments that install what `channel` is missing, if
+    /// anything is.
+    fn arguments(&self, channel: &str) -> Option<Vec<String>> {
         match self {
             Self::Nothing => None,
             Self::Toolchain => Some(vec![
                 "toolchain".into(),
                 "install".into(),
-                CHANNEL.into(),
+                channel.into(),
                 "--profile".into(),
                 "minimal".into(),
                 "--component".into(),
@@ -126,7 +127,7 @@ impl Missing {
                     "component".into(),
                     "add".into(),
                     "--toolchain".into(),
-                    CHANNEL.into(),
+                    channel.into(),
                 ];
                 arguments.extend(absent.iter().map(|component| (*component).to_owned()));
                 Some(arguments)
@@ -135,19 +136,18 @@ impl Missing {
     }
 }
 
-/// The line printed before rustup runs.
-impl std::fmt::Display for Missing {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Missing {
+    /// The line printed before rustup runs.
+    fn message(&self, channel: &str) -> String {
         match self {
-            Self::Nothing => write!(f, "Rust {CHANNEL} is installed"),
-            Self::Toolchain => write!(
-                f,
-                "Installing Rust {CHANNEL} with {}, which rawr reads crate APIs with (once per machine)",
+            Self::Nothing => format!("Rust {channel} is installed"),
+            Self::Toolchain => format!(
+                "Installing Rust {channel} with {}, which rawr reads crate APIs with (once per \
+                 machine)",
                 REQUIRED_COMPONENTS.join(" and ")
             ),
-            Self::Components(absent) => write!(
-                f,
-                "Adding {} to Rust {CHANNEL}, which rawr reads crate APIs with (once per machine)",
+            Self::Components(absent) => format!(
+                "Adding {} to Rust {channel}, which rawr reads crate APIs with (once per machine)",
                 absent.join(" and ")
             ),
         }
@@ -197,11 +197,11 @@ mod tests {
         let missing = Missing::of(None, HOST);
         assert_eq!(missing, Missing::Toolchain);
         assert_eq!(
-            missing.arguments().unwrap(),
+            missing.arguments(super::super::CHANNEL).unwrap(),
             [
                 "toolchain",
                 "install",
-                super::CHANNEL,
+                super::super::CHANNEL,
                 "--profile",
                 "minimal",
                 "--component",
@@ -218,7 +218,7 @@ mod tests {
             clippy-preview-aarch64-apple-darwin\n";
         let missing = Missing::of(Some(components), HOST);
         assert_eq!(missing, Missing::Nothing);
-        assert_eq!(missing.arguments(), None);
+        assert_eq!(missing.arguments(super::super::CHANNEL), None);
     }
 
     #[test]
@@ -228,12 +228,12 @@ mod tests {
         let missing = Missing::of(Some(components), HOST);
         assert_eq!(missing, Missing::Components(Box::from(["rustc-dev"])));
         assert_eq!(
-            missing.arguments().unwrap(),
+            missing.arguments(super::super::CHANNEL).unwrap(),
             [
                 "component",
                 "add",
                 "--toolchain",
-                super::CHANNEL,
+                super::super::CHANNEL,
                 "rustc-dev"
             ]
         );

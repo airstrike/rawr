@@ -4,8 +4,10 @@
 //! same way.
 //!
 //! A `rawr-import` built from source without its driver fetches the driver
-//! from the archive of its own version and host, so it never asks for a
-//! build against rustc's private crates.
+//! from the archive of its own version and host. That driver is the pinned
+//! nightly's, the one a project that names no toolchain reads with; a
+//! project on another nightly gets a driver built for it once
+//! (`cargo/toolchain/driver.rs`).
 
 use std::ffi::OsStr;
 use std::fs;

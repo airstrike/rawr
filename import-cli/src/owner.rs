@@ -927,6 +927,9 @@ pub fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Repo
     };
     crate::project::same_build(&root).map_err(|message| {
         diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
+    })?;
+    crate::project::toolchain(&root).map_err(|message| {
+        diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
     })
 }
 

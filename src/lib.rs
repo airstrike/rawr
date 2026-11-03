@@ -176,7 +176,8 @@ pub mod signature;
 pub mod source;
 mod std_facade;
 // D711: std's paths, kinds, stability and generics, from the sysroot.
-pub(crate) mod std_table;
+#[doc(hidden)]
+pub mod std_table;
 mod tests;
 /// Host-requested timing observations.
 pub mod timing;

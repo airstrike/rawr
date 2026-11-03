@@ -10,7 +10,8 @@
 # rawr-import-driver. The driver links the pinned nightly's librustc_driver
 # dynamically. rawr-import points the loader at the user's copy of that
 # nightly whenever it starts the driver, and installs the nightly through
-# rustup the first time it needs it. rawr-import is Unix-only, so the
+# rustup the first time it needs it. A project on another nightly gets a
+# driver rawr-import builds once from the sources it carries. rawr-import is Unix-only, so the
 # Windows archive holds rawr and cargo-rawr, and its build is best effort.
 name: Release binaries
 
