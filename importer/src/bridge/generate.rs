@@ -13334,7 +13334,8 @@ fn function_argument_list(
             // In the builder of the value that owns them (`LENT_CELL`), a
             // lent argument is the builder's borrow of it.
             _ if VIEWED_ARGUMENTS.get()
-                && lent_slice_element(&substituted(ty, signature, substitutions)?).is_some() =>
+                && lent_slice_element(ty, &substituted(ty, signature, substitutions)?)
+                    .is_some() =>
             {
                 if LENT_CELL.get() {
                     write!(output, "&argument_{position}[..]")
@@ -13542,7 +13543,7 @@ fn render_take_input(
     // (`views_natives`): an opaque one owns it (`lent_cell`), and another
     // has the call's pins hold it. Else it goes back after the call.
     let lent = substituted(ty, signature, substitutions)?;
-    if let Some(element) = lent_slice_element(&lent)
+    if let Some(element) = lent_slice_element(ty, &lent)
         && !LENT_ARGUMENTS.get()
     {
         let item =
@@ -16305,10 +16306,10 @@ fn lent_cell(
         format!("dyn {path}<{}>", written.join(", "))
     };
     let mut owners = Vec::new();
-    for (position, input) in signature.inputs().iter().enumerate() {
-        let input = substituted(input, signature, substitutions)?;
+    for (position, declared) in signature.inputs().iter().enumerate() {
+        let input = substituted(declared, signature, substitutions)?;
         let name = format!("argument_{position}");
-        let owner = if let Some(element) = lent_slice_element(&input) {
+        let owner = if let Some(element) = lent_slice_element(declared, &input) {
             let Some(item) = concrete_type(element) else {
                 return Ok(None);
             };
@@ -16420,9 +16421,9 @@ fn views_natives(
     if !borrows {
         return Ok(false);
     }
-    for input in signature.inputs() {
-        let input = substituted(input, signature, substitutions)?;
-        if viewed_native(&input).is_some() || lent_slice_element(&input).is_some() {
+    for declared in signature.inputs() {
+        let input = substituted(declared, signature, substitutions)?;
+        if viewed_native(&input).is_some() || lent_slice_element(declared, &input).is_some() {
             return Ok(true);
         }
     }
@@ -16431,8 +16432,16 @@ fn views_natives(
 
 /// The crate type of the elements of a `&[T]` a call takes, as iced's
 /// `markdown::view(&items, ..)` does: values the runner's arena holds,
-/// which the call borrows in one slice (`SliceLent`).
-fn lent_slice_element(ty: &convert::Type) -> Option<&convert::Type> {
+/// which the call borrows in one slice (`SliceLent`). Only a parameter
+/// `declared` a reference is one: a type parameter a `&[T]` fills, as
+/// `pick<L: Borrow<[T]>>(options: L)` is, takes what fills it.
+fn lent_slice_element<'t>(
+    declared: &convert::Type,
+    ty: &'t convert::Type,
+) -> Option<&'t convert::Type> {
+    if !matches!(declared, convert::Type::Borrowed { .. }) {
+        return None;
+    }
     let convert::Type::Borrowed { mutable: false, ty } = ty else {
         return None;
     };
