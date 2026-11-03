@@ -405,3 +405,33 @@ fn language_a_script_value_of_a_cow_shows_its_payload() {
     assert_eq!(format!("{value:?} {value}"), "\"a\" a");
 }
 
+#[test]
+fn language_return_of_an_assignment_is_unit() {
+    // An assignment expression is `()` (#862).
+    let output = printed(
+        r#"
+#[derive(Default, Debug)]
+struct P {
+    x: i32,
+}
+
+fn reset(p: &mut P) {
+    return *p = P::default()
+}
+
+fn main() {
+    let mut p = P { x: 3 };
+    reset(&mut p);
+    println!("{:?} {}", p, p.x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "P { x: 0 } 0\n");
+    // In a function returning `i32`, a mismatch, as rustc's E0308 is.
+    let report = refused("fn bump(n: &mut i32) -> i32 { return *n = 3 }\nfn main() {}\nmain();\n");
+    assert!(
+        report.contains("type mismatch: expected `i32`, found `()`"),
+        "{report}"
+    );
+}

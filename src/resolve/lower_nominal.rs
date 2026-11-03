@@ -28606,7 +28606,11 @@ impl<'a> Parser<'a> {
             }
         } else {
             let block_like = self.peek_block_like();
-            let value = self.parse_expr_expecting(Some(&output))?;
+            let mut value = self.parse_expr_expecting(Some(&output))?;
+            // `return *p = P::default()`: the assignment is the value, `()`.
+            if assignment_token(&self.peek()) {
+                value = self.parse_assignment_expr(value)?;
+            }
             let mut value = self.returned_place(value, block_like)?;
             end = value.span;
             self.coerce_expr(&output, &mut value)?;
@@ -28630,6 +28634,18 @@ impl<'a> Parser<'a> {
         self.exit_drop_uses(self.drop_base);
         self.flow().ret();
         Ok(self.operator_expr(source, Ty::Never, span(start.start(), end.end())))
+    }
+
+    /// `place = value` or a compound assignment after `place`, as an
+    /// expression: Rust's assignment expression, whose type is `()`.
+    fn parse_assignment_expr(&mut self, place: ParsedExpr) -> Result<ParsedExpr, Error> {
+        let start = place.span;
+        let (rendered, end) = self.parse_assignment(place)?;
+        Ok(self.operator_expr(
+            rendered.surrounded("{ ", " }"),
+            Ty::Unit,
+            span(start.start(), end.end()),
+        ))
     }
 
     /// What a function copying `&mut` parameters back out returns for
@@ -44097,13 +44113,7 @@ impl<'a> Parser<'a> {
                     }
                     return Ok(value);
                 }
-                let start = value.span;
-                let (rendered, end) = self.parse_assignment(value)?;
-                Ok(self.operator_expr(
-                    rendered.surrounded("{ ", " }"),
-                    Ty::Unit,
-                    span(start.start(), end.end()),
-                ))
+                self.parse_assignment_expr(value)
             })
             // A place the body changes through a field (`|x| p.b.push(x)`)
             // is reached in the body, at each call, not where the closure
