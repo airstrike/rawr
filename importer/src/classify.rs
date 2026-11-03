@@ -2772,14 +2772,30 @@ impl<'contract> Outcome<'contract> {
 }
 
 impl OutcomeRecord {
-    pub(crate) const fn implementations(&self) -> &[ImplementationRecord] {
-        &self.implementations
+    /// The implementation ledgers and associated outcomes the outcome
+    /// retains, with each associated outcome's own, as the opaque type a
+    /// trait's method gives has its members under that method
+    /// (`method_opaque_implementations`).
+    pub(crate) fn ledgers(&self) -> Option<(usize, usize)> {
+        self.implementations
+            .iter()
+            .flat_map(|implementation| implementation.associated.iter())
+            .try_fold(
+                (self.implementations.len(), 0_usize),
+                |(implementations, associated), member| {
+                    let (inner, below) = member.ledgers()?;
+                    Some((
+                        implementations.checked_add(inner)?,
+                        associated.checked_add(below)?.checked_add(1)?,
+                    ))
+                },
+            )
     }
-}
 
-impl ImplementationRecord {
-    pub(crate) const fn associated(&self) -> &[OutcomeRecord] {
-        &self.associated
+    /// The items the outcome retains: itself and its `ledgers`.
+    pub(crate) fn retained_items(&self) -> Option<usize> {
+        let (implementations, associated) = self.ledgers()?;
+        implementations.checked_add(associated)?.checked_add(1)
     }
 }
 
@@ -2847,17 +2863,16 @@ pub(crate) fn classification_evidence(
         return None;
     }
     let transaction = graph.transaction();
-    let implementation_ledgers = outcomes.iter().try_fold(0_usize, |count, outcome| {
-        count.checked_add(outcome.implementations.len())
-    })?;
-    let associated = outcomes.iter().try_fold(0_usize, |count, outcome| {
-        outcome
-            .implementations
-            .iter()
-            .try_fold(count, |count, implementation| {
-                count.checked_add(implementation.associated.len())
-            })
-    })?;
+    let (implementation_ledgers, associated) = outcomes.iter().try_fold(
+        (0_usize, 0_usize),
+        |(implementations, associated), outcome| {
+            let (inner, below) = outcome.ledgers()?;
+            Some((
+                implementations.checked_add(inner)?,
+                associated.checked_add(below)?,
+            ))
+        },
+    )?;
 
     let classifier_new_items = 1_usize
         .checked_add(definitions.len())?

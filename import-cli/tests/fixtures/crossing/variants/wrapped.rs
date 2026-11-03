@@ -1,11 +1,11 @@
 // rawr
 // iced's loupe: a program function whose output names `impl Widget` inside
 // another type. `zoomed` gives the program's own `Zoomed<impl Widget<M> +
-// 'a>`, whose hidden type is the crate's opaque widget, which the body
-// makes from crate calls, as rustc infers it. The view passes it on to
-// `column!` and reads its zoom.
+// 'a>`, whose hidden type is the crate's `Column` of a `Button`, which the
+// body makes from crate calls, as rustc infers it. The view passes it on
+// to `column!` and reads its zoom.
 
-use events::widgets::{button, center, column, opaque, text, Widget};
+use events::widgets::{button, center, column, text, Widget};
 
 #[derive(Default)]
 struct Counter {
@@ -24,13 +24,14 @@ struct Zoomed<W> {
     content: W,
 }
 
-fn zoomed<'a, Message: 'a>(
+fn zoomed<'a, Message: Clone + 'a>(
     zoom: u16,
-    content: impl Widget<Message> + 'a,
+    label: &'a str,
+    message: Message,
 ) -> Zoomed<impl Widget<Message> + 'a> {
     Zoomed {
         zoom,
-        content: opaque(content),
+        content: center(button(label).on_press(message)),
     }
 }
 
@@ -43,7 +44,7 @@ impl Counter {
     }
 
     fn view(&self) -> impl Widget<Message> {
-        let zoomed = zoomed(3, button("Increment").on_press(Message::Increment));
+        let zoomed = zoomed(3, "Increment", Message::Increment);
         let padding = zoomed.zoom;
         column![
             zoomed.content,

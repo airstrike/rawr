@@ -349,17 +349,7 @@ impl Usage {
             .and_then(|items| items.checked_add(support.rejections_len()))
             .and_then(|items| {
                 outcomes.iter().try_fold(items, |items, outcome| {
-                    let implementations = outcome.implementations().len();
-                    let associated = outcome.implementations().iter().try_fold(
-                        0_usize,
-                        |count, implementation| {
-                            count.checked_add(implementation.associated().len())
-                        },
-                    )?;
-                    items
-                        .checked_add(1)?
-                        .checked_add(implementations)?
-                        .checked_add(associated)
+                    items.checked_add(outcome.retained_items()?)
                 })
             })
             .ok_or(crate::classify::Error::Limit {
