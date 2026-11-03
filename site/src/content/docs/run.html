@@ -39,6 +39,18 @@ fn main() {
   <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
   <li>A path dependency is compiled natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</li>
 </ul>
+<p>Inner attributes go after the marker, as comments may come before them in Rust:</p>
+<div class="block"><pre><code>// rawr
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+fn main() {}</code></pre></div>
+<ul>
+  <li>The lint attributes <code>allow</code>, <code>warn</code>, <code>deny</code>, <code>forbid</code> and <code>expect</code> are accepted. rawr ignores them.</li>
+  <li>Build settings and documentation are accepted and ignored. These are <code>windows_subsystem</code>, <code>crate_name</code>, <code>crate_type</code>, <code>recursion_limit</code>, <code>type_length_limit</code>, <code>no_builtins</code>, <code>debugger_visualizer</code> and <code>doc</code>. <code>//!</code> comments are accepted too.</li>
+  <li><code>#![cfg_attr(predicate, ..)]</code> applies its attributes when the predicate holds. rawr builds as a debug build without <code>--test</code>, so <code>debug_assertions</code> holds and <code>test</code> and every <code>feature</code> don&rsquo;t. The attributes it applies follow the same rules.</li>
+  <li>Attributes that change the prelude or the language are errors. These include <code>no_std</code>, <code>no_implicit_prelude</code>, <code>no_main</code> and <code>feature</code>.</li>
+</ul>
+<p><code>cargo build</code> reads every one of these attributes as Rust does.</p>
 
 <h2 id="scripts">Scripts</h2>
 <p>A <code>.rs</code> file with a frontmatter block is a cargo script wherever it sits. rawr runs it as a file of its own, as cargo does. Inside a Cargo package it still doesn&rsquo;t use the package&rsquo;s <code>Cargo.toml</code>.</p>
