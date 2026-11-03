@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.120 (2026-11-03)
+
+- rawr-import reads crate APIs with the nightly the project names (`cargo +nightly`, `RUSTUP_TOOLCHAIN`, a rustup override or `rust-toolchain.toml`), from nightly-2026-07-11 through nightly-2026-11-02; a project that names none, or a stable or beta release, reads with the pinned nightly and still builds on its own toolchain. A nightly other than the pin gets its driver and std table built once into rawr's home. (#692)
+- A crate function's `impl Trait` result that borrows a slice of crate values, as `fn view<'a>(items: &'a [Item]) -> impl Show + 'a`, keeps them borrowed as long as rustc says: changing or moving them while it lives is rustc's E0502 or E0505, they're read in place rather than copied, and they go back to their `Vec` when the result drops. (#846)
+- A daily CI job builds rawr-import-driver on the latest nightly and opens a pull request moving the supported nightly range to it, or files one issue with the compiler errors when it no longer builds. (#864)
+
 ## 0.3.119 (2026-11-03)
 
 - A crate a macro names that the project reaches only through a `[patch]` no longer joins the runner's workspace, so the runner resolves no more than the project does and settles offline; the ?play image builds again. (#854)

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-03",
-  "version": "0.3.119",
+  "version": "0.3.120",
   "examples": {
     "running": 37,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.120",
+        "date": "2026-11-03",
+        "entries": [
+          {"text":"rawr-import reads crate APIs with the nightly the project names (`cargo +nightly`, `RUSTUP_TOOLCHAIN`, a rustup override or `rust-toolchain.toml`), from nightly-2026-07-11 through nightly-2026-11-02; a project that names none, or a stable or beta release, reads with the pinned nightly and still builds on its own toolchain. A nightly other than the pin gets its driver and std table built once into rawr's home.","issues":[692]},
+          {"text":"A crate function's `impl Trait` result that borrows a slice of crate values, as `fn view<'a>(items: &'a [Item]) -> impl Show + 'a`, keeps them borrowed as long as rustc says: changing or moving them while it lives is rustc's E0502 or E0505, they're read in place rather than copied, and they go back to their `Vec` when the result drops.","issues":[846]},
+          {"text":"A daily CI job builds rawr-import-driver on the latest nightly and opens a pull request moving the supported nightly range to it, or files one issue with the compiler errors when it no longer builds.","issues":[864]}
+        ]
+      },
       {
         "version": "0.3.119",
         "date": "2026-11-03",
@@ -1875,7 +1884,7 @@
     {"issue":689,"title":"An async fn input that is a struct holding references","state":"open","category":"No glue (D593)"},
     {"issue":690,"title":"Errors about a program module's items point at the program's source","state":"open","category":"Divergences from rustc"},
     {"issue":691,"title":"Share the nightly check build per machine, per pinned toolchain (D699, D700)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.95"},
-    {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":692,"title":"Oracle docket: extraction on the project's own toolchain (option B)","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.120"},
     {"issue":693,"title":"Hold `iter_mut()` in a local and step it with `next()`","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
     {"issue":694,"title":"A crate's type alias, struct field or trait header naming another crate's type resolves through that crate's facade","state":"open","category":"No glue (D593)"},
     {"issue":695,"title":"A move by an imported method points at the method's `self` in the crate's source, as rustc's E0382 note does","state":"open","category":"Health"},
@@ -2029,7 +2038,7 @@
     {"issue":843,"title":"scrollable: `Color::into` is not found","state":"closed","category":"No glue (D593)","release":"0.3.118"},
     {"issue":844,"title":"delineate: `selector::find` is not found, with no reason","state":"closed","category":"No glue (D593)","release":"0.3.118"},
     {"issue":845,"title":"loupe: `impl Trait` inside a script function's return type","state":"open","category":"No glue (D593)"},
-    {"issue":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"open","category":"No glue (D593)"},
+    {"issue":846,"title":"An opaque result that borrows its inputs lives as long as Rust says","state":"closed","category":"No glue (D593)","release":"0.3.120"},
     {"issue":847,"title":"An opaque `impl Sub<..>` leaves a type parameter unknown when Sub has a blanket impl over its supertrait","state":"open","category":"Divergences from rustc"},
     {"issue":848,"title":"`&self.field` of a Vec of crate values fails exact type attestation as `&[T]`","state":"open","category":"Divergences from rustc"},
     {"issue":849,"title":"Hold an opaque result of a trait that isn't object-safe through a generated proxy trait","state":"open","category":"No glue (D593)"},
@@ -2040,7 +2049,18 @@
     {"issue":854,"title":"The ?play image's universe runner pulls a [patch] crate into its workspace and can't settle offline","state":"closed","category":"Health","release":"0.3.119"},
     {"issue":855,"title":"Runner workspace membership follows the project's beyond hidden crates","state":"open","category":"Health"},
     {"issue":856,"title":"A crate call that takes a borrowing `impl Trait` result by value runs","state":"open","category":"No glue (D593)"},
-    {"issue":857,"title":"A named result type that borrows crate values lives beside them instead of in pins","state":"open","category":"No glue (D593)"}
+    {"issue":857,"title":"A named result type that borrows crate values lives beside them instead of in pins","state":"open","category":"No glue (D593)"},
+    {"issue":858,"title":"A DerefMut impl using Self::Target is refused as a signature mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":859,"title":"`*x` on a program type with Deref is unsupported","state":"open","category":"Divergences from rustc"},
+    {"issue":860,"title":"`.into()` to Cow in an if branch is typed as String","state":"open","category":"Divergences from rustc"},
+    {"issue":861,"title":"?play prints a Cow tail value as a Rust type name","state":"open","category":"Divergences from rustc"},
+    {"issue":862,"title":"`return place = value` is a false type mismatch","state":"open","category":"Divergences from rustc"},
+    {"issue":863,"title":"?play universe: iced calls outside the universe panic at run time instead of failing to compile","state":"open","category":"No glue (D593)"},
+    {"issue":864,"title":"Extend the driver's nightly window as nightly moves","state":"closed","category":"Health","release":"0.3.120"},
+    {"issue":865,"title":"Read Cargo's new build-dir layout","state":"open","category":"Health"},
+    {"issue":866,"title":"Check nightlies inside the driver window, not only its edges","state":"open","category":"Health"},
+    {"issue":867,"title":"rawr +toolchain names the import nightly","state":"open","category":"Health"},
+    {"issue":868,"title":"Adopt the nightly-window job's breakage issue into the plan","state":"open","category":"Health"}
   ],
   "groups": [
     {
