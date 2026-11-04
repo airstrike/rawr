@@ -339,24 +339,8 @@ impl<'g> Headers<'g> {
                 definition: crate::surface::identity::Definition::authenticated(opaque),
                 arguments,
             };
-            for predicate in bounds.iter() {
-                let model::Predicate::Bound {
-                    bound:
-                        model::Bound::Trait {
-                            trait_id,
-                            arguments,
-                            polarity: model::Polarity::Positive,
-                            binders,
-                        },
-                    ..
-                } = predicate
-                else {
-                    continue;
-                };
-                if !binders.is_empty() {
-                    continue;
-                }
-                let Some(arguments) = self.trait_arguments(trait_id, arguments) else {
+            for (trait_id, arguments) in self.elaborate(bounds) {
+                let Some(arguments) = self.trait_arguments(&trait_id, &arguments) else {
                     continue;
                 };
                 let mut bound = BTreeSet::new();
@@ -368,7 +352,7 @@ impl<'g> Headers<'g> {
                 }
                 headers.push(ImplHeader {
                     parameters: parameters.clone(),
-                    trait_identity: identity(trait_id),
+                    trait_identity: identity(&trait_id),
                     arguments,
                     self_type: self_type.clone(),
                     bounds: Box::default(),
@@ -376,6 +360,98 @@ impl<'g> Headers<'g> {
             }
         }
         headers
+    }
+
+    /// Each trait an opaque type's `bounds` name, at its arguments, then
+    /// each of their supertraits at the arguments the bound gives the
+    /// trait's parameters, as rustc elaborates an opaque type's bounds:
+    /// `impl Framed<Message, Theme, Renderer>` is a `Widget<Message,
+    /// Theme, Renderer>` too when `Widget` is a supertrait of `Framed`.
+    fn elaborate(
+        &self,
+        bounds: &[model::Predicate],
+    ) -> Vec<(api::identity::Definition, Box<[model::Argument]>)> {
+        /// Supertraits are read this deep.
+        const DEPTH: usize = 8;
+        let is_self = |ty: &model::Type| {
+            matches!(
+                ty,
+                model::Type::SelfType(_) | model::Type::Parameter { index: 0, .. }
+            )
+        };
+        let mut pending = Vec::new();
+        let read = |predicates: &[model::Predicate],
+                    bindings: &BTreeMap<u32, model::Type>,
+                    depth: usize,
+                    pending: &mut Vec<_>| {
+            for predicate in predicates {
+                let model::Predicate::Bound {
+                    ty,
+                    bound:
+                        model::Bound::Trait {
+                            trait_id,
+                            arguments,
+                            polarity: model::Polarity::Positive,
+                            binders,
+                        },
+                } = predicate
+                else {
+                    continue;
+                };
+                if !binders.is_empty() || (depth != 0 && !is_self(ty)) {
+                    continue;
+                }
+                let arguments = arguments
+                    .iter()
+                    .map(|argument| match argument {
+                        model::Argument::Type(ty) => model::Argument::Type(
+                            crate::classify::substitute_bindings(ty, bindings),
+                        ),
+                        other => other.clone(),
+                    })
+                    .collect::<Box<[_]>>();
+                pending.push((trait_id.clone(), arguments, depth));
+            }
+        };
+        read(bounds, &BTreeMap::new(), 0, &mut pending);
+        let mut seen = Vec::<(api::identity::Definition, Box<[model::Argument]>)>::new();
+        while let Some((trait_id, arguments, depth)) = pending.pop() {
+            if depth >= DEPTH
+                || seen
+                    .iter()
+                    .any(|(known, given)| *known == trait_id && *given == arguments)
+            {
+                continue;
+            }
+            if let Some(model::Kind::Trait {
+                supertraits,
+                generics,
+                ..
+            }) = self
+                .models
+                .get(&identity(&trait_id))
+                .map(|definition| definition.kind())
+            {
+                // The trait's parameters after `Self` take the bound's
+                // arguments after `Self`, in order.
+                let parameters = generics
+                    .parameters()
+                    .filter(|parameter| parameter.index() != 0)
+                    .collect::<Vec<_>>();
+                let offset = arguments.len().saturating_sub(parameters.len());
+                let bindings = parameters
+                    .iter()
+                    .zip(&arguments[offset..])
+                    .filter_map(|(parameter, argument)| match argument {
+                        model::Argument::Type(ty) => Some((parameter.index(), ty.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                read(supertraits, &bindings, depth + 1, &mut pending);
+            }
+            seen.push((trait_id, arguments));
+        }
+        seen
     }
 
     fn impl_header(&self, implementation: &model::Implementation) -> Option<ImplHeader> {

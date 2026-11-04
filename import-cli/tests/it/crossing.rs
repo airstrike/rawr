@@ -393,6 +393,45 @@ fn a_slider_beside_an_opaque_widget_runs() {
     );
 }
 
+/// #886: `badge(..)` gives an opaque `impl Framed<Message, Theme,
+/// Renderer>` that nothing at the call fixes, and `opaque(slider(..))` one
+/// whose theme and renderer it doesn't fix. `.map(..)` fixes the message,
+/// and `column!`'s boxing of the `Map` fixes the theme and renderer through
+/// `Map`'s impl, whose where-clause asks the opaque type for `Widget`, a
+/// supertrait of `Framed`. The call that made the value takes the types
+/// that later use fixes, held in a local or not, as rustc infers them. Each
+/// opaque widget's boxed element stays in the view's region, so a column of
+/// them alone is the view's widget. The output is `cargo run`'s.
+#[test]
+fn an_opaque_widget_takes_the_types_a_later_use_fixes() {
+    let (rawr, cargo) = both_printed("deferred.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains(
+            "1 view pad 0 opaque 1..=100@50/None map badge50@16 map badge50@16 badge50@16"
+        ) && rawr.contains(
+            "last view pad 0 opaque 1..=100@100/None map badge100@16 map badge100@16 badge100@16"
+        ),
+        "{rawr}"
+    );
+}
+
+/// iced's ferris (#887): `f32::from(self.angle)` and `angle.into()` call
+/// the crate's `impl From<Turn> for f32`, its impl of a std trait for a std
+/// type. The output is `cargo run`'s.
+#[test]
+fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
+    let (rawr, cargo) = both_printed("degrees.rs", "slide");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"90\" \"45\" \"0\"")
+            && rawr.contains(
+                "last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"360\" \"180\" \"360\""
+            ),
+        "{rawr}"
+    );
+}
+
 /// iced's gradient: `slider(Radians::RANGE, ..)` reads an associated
 /// constant whose type is std's `RangeInclusive` of the crate's own type,
 /// and the slider takes it at that type. The output is `cargo run`'s.
@@ -1336,7 +1375,7 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 /// value of each item, while `update` changes the rest of the state. The
 /// output is `cargo run`'s.
 #[test]
-#[ignore = "blocked: the checker leaves the renderer of an opaque `impl Framed` unknown (E0282), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
+#[ignore = "blocked: the renderer of a borrowing opaque `impl Framed` stays unknown, so the lent cell's proxy bound names it `_` (E0121), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
     let (rawr, cargo) = both_printed("notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);

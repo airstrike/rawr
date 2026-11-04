@@ -17113,10 +17113,35 @@ impl<'a> Parser<'a> {
     /// (`finish_conversions`), by an `into` form's output or the target's
     /// `from` of the value, as Rust's `Into` comes from `From`.
     fn parse_host_into(&mut self, value: ParsedExpr, source: &Ty, end: Position) -> ParsedExpr {
-        let Ty::Host { proof, .. } = source else {
+        if !matches!(source, Ty::Host { .. }) {
             return value;
+        }
+        let (forms, owner) = self.conversion_forms(source);
+        self.parse_target_into(value, source, forms, owner, end)
+    }
+
+    /// The `into` forms of a facade value's type, each a method without
+    /// inputs, and their owner: at the path its alias names, or for an
+    /// imported type no alias of the program names, at one of its crate's
+    /// paths that has them.
+    fn conversion_forms(
+        &self,
+        source: &Ty,
+    ) -> (
+        Vec<crate::host::item::Definition>,
+        Option<crate::host::facade::Dependency>,
+    ) {
+        let Ty::Host { proof, .. } = source else {
+            return (Vec::new(), None);
         };
         let path = format!("{}::into", proof.definition.path());
+        #[cfg(feature = "rust-import")]
+        let path = match self.imported_member_owner(source, "into") {
+            Some(owner) if self.models.host_items(&path).is_none() => {
+                format!("{}::into", owner.path())
+            }
+            _ => path,
+        };
         let forms = self
             .models
             .host_items(&path)
@@ -17128,8 +17153,24 @@ impl<'a> Parser<'a> {
                     && item.signature().parameters().is_empty()
             })
             .collect();
-        let owner = self.models.item_owner(&path).cloned();
-        self.parse_target_into(value, source, forms, owner, end)
+        (forms, self.models.item_owner(&path).cloned())
+    }
+
+    /// Keep the `into` of the imported type `ty` as a miss when none of
+    /// its paths has one yet: a crate's `impl From<Degrees> for f32` makes
+    /// it a member of `Degrees`, which the importer brings once it is
+    /// demanded. A pass that fails demands it with what else it missed, so
+    /// the conversion is checked again; asked already, the failure is the
+    /// pass's own error, as rustc's E0277.
+    #[cfg(feature = "rust-import")]
+    fn demand_into(&mut self, ty: &Ty) {
+        if let Some(owner) = self.imported_public_path(ty, "into") {
+            self.recovered.push(Error::UnknownMember {
+                owner,
+                member: "into".into(),
+                reference: Span::NONE,
+            });
+        }
     }
 
     /// `value.into()` chosen once its target is known
@@ -17368,7 +17409,7 @@ impl<'a> Parser<'a> {
                     // named, as a field's `Background`: its member, which
                     // the importer brings once it is demanded.
                     #[cfg(feature = "rust-import")]
-                    None if let Some(owner) = self.imported_public_path(&target) => {
+                    None if let Some(owner) = self.imported_public_path(&target, "from") => {
                         return Err(Error::UnknownMember {
                             owner,
                             member: "from".into(),
@@ -17376,6 +17417,13 @@ impl<'a> Parser<'a> {
                         });
                     }
                     None => {
+                        // A crate's `impl From<Degrees> for f32` gives the
+                        // source an `into` of its own, asked for with the
+                        // failure.
+                        #[cfg(feature = "rust-import")]
+                        if host.forms.is_empty() {
+                            self.demand_into(&source);
+                        }
                         let (source, target) =
                             (source.name(&self.models), target.name(&self.models));
                         return Err(Error::InvalidMethodCall {
@@ -22358,21 +22406,22 @@ impl<'a> Parser<'a> {
             .and_then(|path| self.models.host.type_(&path).cloned())
     }
 
-    /// The path to demand an imported type's `from` at, when none of its
-    /// paths has one yet: its crate's public path, as
+    /// The path to demand an imported type's `member` at, as its `from`,
+    /// when none of its paths has one yet: its crate's public path, as
     /// `events::conversions::Background`, before the hidden one.
     #[cfg(feature = "rust-import")]
-    fn imported_public_path(&self, ty: &Ty) -> Option<ImmutableString> {
+    fn imported_public_path(&self, ty: &Ty, member: &str) -> Option<ImmutableString> {
         let (identity, owner, _) = ty.imported_alias_context()?;
         let paths = self
             .models
             .host
             .imported_type_paths(identity, owner)?
             .collect::<Vec<_>>();
-        if paths
-            .iter()
-            .any(|path| self.models.host_items(&format!("{path}::from")).is_some())
-        {
+        if paths.iter().any(|path| {
+            self.models
+                .host_items(&format!("{path}::{member}"))
+                .is_some()
+        }) {
             return None;
         }
         paths
@@ -41221,7 +41270,7 @@ impl<'a> Parser<'a> {
                 // An imported error whose `from` the program never named:
                 // its member, which the importer brings once it is demanded.
                 #[cfg(feature = "rust-import")]
-                if let Some(owner) = self.imported_public_path(&returned) {
+                if let Some(owner) = self.imported_public_path(&returned, "from") {
                     return Err(Error::UnknownMember {
                         owner,
                         member: "from".into(),
@@ -46871,22 +46920,42 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(self.operator_expr(value, builtin, expression));
             }
-            // `f32::from(degrees)`: a facade number type's `into`.
-            if let Ty::Host { proof, .. } = &source
-                && matches!(builtin, Ty::Float(_))
-                && self
-                    .models
-                    .host_items(&format!("{}::into", proof.definition.path()))
-                    .is_some_and(|items| {
-                        items.iter().any(|item| {
-                            item.kind() == crate::host::item::Kind::Method
-                                && item.signature().parameters().is_empty()
-                        })
-                    })
-            {
-                self.pending_arguments = Some((Vec::new(), expression.end()));
-                let value = self.parse_host_method(argument.clone(), "into".into(), expression)?;
-                return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
+            // `f32::from(degrees)`: the source type's `into` that gives the
+            // target, as a crate's `impl From<Degrees> for f32` makes it,
+            // since rustc's `Into` comes from `From`. A generic body's
+            // facade calls carry witnesses, so it calls the type's own
+            // `into`.
+            if let Ty::Host { .. } = &source {
+                let (forms, owner) = self.conversion_forms(&source);
+                let gives = forms.iter().any(|item| {
+                    let checkpoint = self.inference.checkpoint();
+                    let fits = self
+                        .instantiate_host_signature(item, Some(&source), Some(&[]), Span::NONE)
+                        .is_ok_and(|signature| self.unify_type(&signature.output, &builtin));
+                    self.inference.rollback(checkpoint);
+                    fits
+                });
+                if gives && self.host_witnesses.is_empty() {
+                    let value = self.parse_target_into(
+                        argument.clone(),
+                        &source,
+                        forms,
+                        owner,
+                        expression.end(),
+                    );
+                    self.unify_type(&value.ty, &builtin);
+                    return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
+                }
+                if gives {
+                    self.pending_arguments = Some((Vec::new(), expression.end()));
+                    let value =
+                        self.parse_host_method(argument.clone(), "into".into(), expression)?;
+                    return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
+                }
+                #[cfg(feature = "rust-import")]
+                if forms.is_empty() {
+                    self.demand_into(&source);
+                }
             }
             if let Some(op) = self.std_conversion(&builtin, &source) {
                 let value = match op {

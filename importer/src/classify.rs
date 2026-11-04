@@ -11359,7 +11359,10 @@ fn bind_instance(
 }
 
 /// `ty` with each type parameter `bindings` binds replaced by its type.
-fn substitute_bindings(ty: &model::Type, bindings: &BTreeMap<u32, model::Type>) -> model::Type {
+pub(crate) fn substitute_bindings(
+    ty: &model::Type,
+    bindings: &BTreeMap<u32, model::Type>,
+) -> model::Type {
     let argument = |argument: &model::Argument| match argument {
         model::Argument::Type(ty) => model::Argument::Type(substitute_bindings(ty, bindings)),
         other => other.clone(),
