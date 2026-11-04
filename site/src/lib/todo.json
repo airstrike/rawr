@@ -1561,14 +1561,14 @@
     {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
-    {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
     {"issue":275,"title":"Nothing detects a crate whose API differs between the nightly extraction and the project's toolchain","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.1"},
     {"issue":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
     {"issue":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.0"},
-    {"issue":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":281,"title":"Whole-crate extraction fails on a macro's `$crate` roots (`column!`), and on iced it makes…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.29"},
     {"issue":282,"title":"Upstream text stops at `RAWR-RESOLVE-UNKNOWN-MEMBER` on `…::Text::new`, from the `text!(..)`…","state":"closed","category":"No glue (D593)","release":"0.3.3"},
     {"issue":283,"title":"Upstream progress_bar stops at \"unknown function `transition`\", from `use iced::widget::transition`","state":"open","category":"No glue (D593)"},
@@ -1596,7 +1596,7 @@
     {"issue":305,"title":"Seen once, not reproduced: the import-cli script test's second script failed with \"invalid…","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.7"},
-    {"issue":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":309,"title":"No-glue: member lookups on crate types","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":310,"title":"No-glue: a script's impl of a crate trait (`Component`, `widget::Meta`, `canvas::Program`) is…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.8"},
     {"issue":311,"title":"No-glue: iced's `Widget` extension trait","state":"closed","category":"Shared dependency cache (D607)"},
@@ -2249,7 +2249,7 @@
           "state": "done",
           "note": "Builds with cargo check and adds no files",
           "issues": [
-            {"number":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"open"},
+            {"number":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"closed"},
             {"number":277,"title":"A project's path dependencies compile a second time under the runner, because cargo hashes a…","state":"closed"},
             {"number":278,"title":"`deps::prune_superseded` deletes the project's own `target/debug/deps/<crate>-<hash>`, because…","state":"closed"},
             {"number":279,"title":"The `rawr` crate turns on smallvec's `union`, `const_new` and `const_generics`, so a project…","state":"closed"}
@@ -2281,7 +2281,7 @@
           "state": "done",
           "note": "Second project in 13 s",
           "issues": [
-            {"number":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"open"},
+            {"number":280,"title":"A project's first `rawr run` spends 86–122 s compiling rawr's own crates at `opt-level = 3`…","state":"closed"},
             {"number":301,"title":"Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed"},
             {"number":302,"title":"A user setting outside the crate's files lowers the runtime's opt-level","state":"closed"},
             {"number":315,"title":"Regression in 0.3.5 (D622): `prune_lock` in `importer/src/runner/runtime.rs` keeps every package…","state":"closed"}
@@ -2402,7 +2402,7 @@
           ],
           "milestone": "0.4"
         },
-        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"now","note":"Extract once per crate","issues":[],"milestone":"0.4"},
+        {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"done","note":"Extract once per crate","issues":[],"milestone":"0.4"},
         {
           "id": "key-and-publish",
           "name": "Key and publish",
@@ -2478,7 +2478,7 @@
           "note": "Slider runs again",
           "issues": [
             {"number":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed"},
-            {"number":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"open"}
+            {"number":308,"title":"No-glue: a name that is both a module and a function or macro (`combo_box`, `transition`…","state":"closed"}
           ],
           "milestone": "0.3"
         },
@@ -2564,8 +2564,7 @@
           "note": "exit runs",
           "issues": [
             {"number":336,"title":"exit: an array literal passed to `impl Into<Padding>` (`padding([10, 20])`) arrives as…","state":"closed"},
-            {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"},
-            {"number":345,"title":"No-glue stops after #312 and #338","state":"open"}
+            {"number":340,"title":"modal: `Some(Color { .. }.into())` where `Option<Background>` is expected","state":"closed"}
           ],
           "milestone": "0.3"
         },
@@ -2741,7 +2740,7 @@
     {
       "id": "parity",
       "title": "Rust as rustc has it",
-      "subtitle": "0.3.6x–0.3.125: std, types, borrows and errors",
+      "subtitle": "0.3.6x–0.3.132: std, types, borrows, errors and rustlings",
       "open": true,
       "rows": [
         {
@@ -2925,8 +2924,8 @@
           "name": "Prebuilt bindings for the bot",
           "start": 53,
           "size": 5,
-          "state": "now",
-          "note": "iced snippets render a frame and tokio runs; GIFs and a shared engine remain",
+          "state": "done",
+          "note": "iced snippets render frames, tokio runs, and GIFs play at the program's pace",
           "issues": [
             {"number":434,"title":"?play runs iced snippets on prebuilt generated bindings","state":"closed"},
             {"number":436,"title":"?play and the playground run async programs on generated bindings","state":"closed"},
