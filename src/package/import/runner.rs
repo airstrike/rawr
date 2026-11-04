@@ -275,7 +275,7 @@ fn install_decoded(
                     .and_then(|provider: &host::facade::Definition| {
                         provider.export_imported(&identity)
                     })
-                    .expect("a facade is built after those it resolves through");
+                    .expect("bindings are built after those they resolve through");
                 (identity, export)
             })
             .collect();

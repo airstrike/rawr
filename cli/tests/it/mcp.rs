@@ -649,10 +649,11 @@ fn a_breakpoint_pauses_a_running_program_which_steps_continues_and_keeps_it_acro
         "{started}"
     );
 
-    // A line with no statement is refused, as code.
+    // A line with no statement is refused, as code. The program answers
+    // once its process compiled, which may outlast the default wait.
     let refused = client.call(
         "break",
-        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5 }),
+        json!({ "path": "looper", "file": "looper/src/main.rs", "line": 5, "timeout_ms": 5000 }),
     );
     assert_eq!(refused["isError"], true, "{refused}");
     assert!(

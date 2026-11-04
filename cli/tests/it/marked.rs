@@ -401,7 +401,7 @@ fn rawr_check_reports_what_only_rustc_rejects() {
         &main,
         text.replace(
             "    println!(\"total: {}\", total(&cart));",
-            "    let label: String = \"total\";\n    println!(\"{label}: {}\", total(&cart));",
+            "    let shown: u8 = 300;\n    println!(\"total: {} ({shown})\", total(&cart));",
         ),
     )
     .unwrap();
@@ -420,10 +420,10 @@ fn rawr_check_reports_what_only_rustc_rejects() {
     assert_eq!(stdout(&output), format!("Checked {}\n", main.display()));
     let text = stderr(&output);
     assert!(
-        text.starts_with("\ncargo check found 1 error:\n\nerror[E0308]: mismatched types"),
+        text.starts_with("\ncargo check found 1 error:\n\nerror: literal out of range for `u8`"),
         "{text}"
     );
-    assert!(text.contains("src/main.rs:16"), "{text}");
+    assert!(text.contains("src/main.rs:16:21"), "{text}");
 }
 
 /// A script gets `cargo check` too, though rustc refuses its frontmatter
