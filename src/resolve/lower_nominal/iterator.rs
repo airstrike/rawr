@@ -765,8 +765,9 @@ impl Parser<'_> {
     ) -> Result<(), Error> {
         let item = self.inference.resolve(item);
         let fits = match self.inference.resolve(target) {
-            Ty::Array { element, kind } if kind.length().is_none() => {
-                self.unifies(&element, &item) && self.unify_type(&element, &item)
+            target @ Ty::Array { kind, .. } if kind.length().is_none() => {
+                let collected = Ty::sequence(kind, item.clone());
+                self.unifies(&target, &collected) && self.unify_type(&target, &collected)
             }
             Ty::String => matches!(
                 without_references(&item),
@@ -796,13 +797,20 @@ impl Parser<'_> {
         if fits {
             return Ok(());
         }
-        Err(Error::MissingCapability {
+        Err(self.uncollectable(target, &item, collect))
+    }
+
+    /// rustc's E0277 for a `collect()` into `target` of items no
+    /// `FromIterator` impl of it takes.
+    fn uncollectable(&self, target: &Ty, item: &Ty, collect: Span) -> Error {
+        Error::MissingCapability {
             owner: self.inference.resolve(target).name(&self.models),
-            capability: format!("FromIterator<{}>", item.name(&self.models)).into(),
+            capability: format!("FromIterator<{}>", self.inference.resolve(item).name(&self.models))
+                .into(),
             operation: collect,
             derive: false,
             required_by: None,
-        })
+        }
     }
 
     /// An iterator method on `value`: an adaptor extends its chain, a
@@ -1353,8 +1361,10 @@ impl Parser<'_> {
                             sequence::Kind::Deque => sequence::Kind::Deque,
                             _ => sequence::Kind::Vec,
                         };
-                        self.collected_into(&target, &item, member_span)?;
-                        let collected = Ty::sequence(kind, item);
+                        let collected = Ty::sequence(kind, item.clone());
+                        if !self.unifies(&target, &collected) {
+                            return Err(self.uncollectable(&target, &item, member_span));
+                        }
                         self.require_type(&target, &collected, expression)?;
                         (self.materialized(&pipeline), collected)
                     }
