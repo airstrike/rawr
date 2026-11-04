@@ -4172,7 +4172,7 @@ fn field_type_nameable(
             .iter()
             .all(|member| field_type_nameable(member, nominal)),
         Type::Inferred => true,
-        Type::Unit | Type::Builtin(_) | Type::Parameter(_) => true,
+        Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
 
@@ -4342,6 +4342,7 @@ fn type_nameable(
         } => all_nameable(members.iter(), root, names),
         representability::convert::Type::Inferred => (true, false),
         representability::convert::Type::Unit
+        | representability::convert::Type::Never
         | representability::convert::Type::Builtin(_)
         | representability::convert::Type::Parameter(_) => (true, false),
     }
@@ -7186,7 +7187,7 @@ impl<P: api::Phase> Context<'_, P> {
         use representability::convert::Type;
         match ty {
             Type::Inferred => false,
-            Type::Unit | Type::Builtin(_) => true,
+            Type::Unit | Type::Never | Type::Builtin(_) => true,
             Type::Nominal { definition, .. } => self
                 .graph
                 .definitions()
@@ -7623,6 +7624,11 @@ impl<P: api::Phase> Context<'_, P> {
                 .collect(),
         );
         let output = match signature.receiver() {
+            // `-> !`: the call never gives a value. `!` is no other
+            // position's type on stable Rust.
+            _ if matches!(rewritten, model::Type::Never) => {
+                Ok(representability::convert::Type::Never)
+            }
             model::Receiver::None | model::Receiver::Value { .. } => {
                 self.convert_output(&rewritten)
             }
@@ -10317,7 +10323,7 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
     match ty {
         Type::Parameter(index) => *index != except,
         Type::Inferred => false,
-        Type::Unit | Type::Builtin(_) => false,
+        Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
         | Type::Script { arguments, .. } => arguments.iter().any(other),
@@ -10337,7 +10343,7 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
     match ty {
         Type::Parameter(parameter) => *parameter == index,
         Type::Inferred => false,
-        Type::Unit | Type::Builtin(_) => false,
+        Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. } => arguments
             .iter()
             .any(|argument| names_parameter(argument, index)),

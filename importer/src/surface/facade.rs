@@ -761,6 +761,8 @@ impl Case {
 pub enum Type {
     /// Unit.
     Unit,
+    /// A function's output `!`, which never gives a value.
+    Never,
     /// Boolean.
     Bool,
     /// Character.
@@ -3979,6 +3981,7 @@ fn ty(
     Ok(match source {
         Source::Inferred => return Err(super::Error::ForeignIdentity),
         Source::Unit => Type::Unit,
+        Source::Never => Type::Never,
         Source::Builtin(Builtin::Bool) => Type::Bool,
         Source::Builtin(Builtin::Char) => Type::Char,
         Source::Builtin(Builtin::F64) => Type::F64,

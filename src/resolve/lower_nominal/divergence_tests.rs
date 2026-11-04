@@ -435,3 +435,53 @@ main();
         "{report}"
     );
 }
+
+/// rustc's errors for `!`: a `-> !` body that can finish is a type
+/// mismatch, which expects `!` and finds `()`. A `!` anywhere but a
+/// function's, a closure's or a `fn` pointer's output is E0658, the
+/// unstable `never_type`. An `Fn` trait's output is such a place.
+#[test]
+fn language_never_type_errors_are_rustcs() {
+    for (source, expected) in [
+        (
+            "fn f() -> ! { println!(\"hi\"); }\nfn main() { f() }",
+            "expected `!`, found `()`",
+        ),
+        (
+            "fn f() -> ! {}\nfn main() { f() }",
+            "expected `!`, found `()`",
+        ),
+        (
+            "fn f() -> ! { let mut n = 0; while n < 3 { n += 1; } }\nfn main() { f() }",
+            "expected `!`, found `()`",
+        ),
+        (
+            "fn f() -> ! { 5 }\nfn main() { f() }",
+            "expected `!`, found `{integer}`",
+        ),
+        (
+            "fn main() { let c = || -> ! { 1 }; c(); }",
+            "expected `!`, found `{integer}`",
+        ),
+    ] {
+        let report = refused(&format!("{source}\nmain();\n"));
+        assert!(report.contains(expected), "{source}: {report}");
+    }
+    for source in [
+        "fn main() { let x: ! = panic!(); }",
+        "fn f(x: !) {}\nfn main() {}",
+        "struct S { a: ! }\nfn main() {}",
+        "fn f() -> Option<!> { None }\nfn main() {}",
+        "fn main() { let v: Vec<!> = Vec::new(); }",
+        "fn run(f: impl Fn(&str) -> !) {}\nfn main() {}",
+        "fn run<F: FnOnce() -> !>(f: F) {}\nfn main() {}",
+        "fn main() { let f: Box<dyn Fn() -> !> = Box::new(|| panic!()); }",
+    ] {
+        let report = refused(&format!("{source}\nmain();\n"));
+        assert!(
+            report.starts_with("error[E0658]: the `!` type is experimental\n")
+                && report.contains("issues/35121"),
+            "{source}: {report}"
+        );
+    }
+}

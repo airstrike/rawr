@@ -43,6 +43,9 @@ pub enum Builtin {
     Duration,
     /// `std::time::Instant`, Rawr's own `Instant` at runtime.
     Instant,
+    /// `!`, the output of a function that never returns, as
+    /// `std::process::exit` gives.
+    Never,
 }
 
 impl Builtin {
@@ -64,6 +67,7 @@ impl Builtin {
             Self::U16 => "u16",
             Self::Usize => "usize",
             Self::F32 => "f32",
+            Self::Never => crate::item::type_ref::NEVER_TYPE,
             Self::InclusiveRange | Self::FloatInclusiveRange | Self::Duration | Self::Instant => {
                 return None
             }
@@ -1021,6 +1025,7 @@ impl crate::digest::Write for Type {
                 Builtin::F32 => 0x2331,
                 Builtin::Duration => 0x2333,
                 Builtin::Instant => 0x2334,
+                Builtin::Never => 0x2335,
             }),
             Shape::Registered { path, arguments } => {
                 writer.tag(0x2305);

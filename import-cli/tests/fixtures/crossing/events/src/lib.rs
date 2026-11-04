@@ -12,6 +12,7 @@ pub mod color;
 pub mod controls;
 pub mod conversions;
 pub mod custom;
+pub mod diverging;
 pub mod fonts;
 pub mod grid;
 pub mod keyed;

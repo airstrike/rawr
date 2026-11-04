@@ -1371,6 +1371,7 @@ fn prelude_arity(parsed: &item::type_ref::Path) -> Option<usize> {
         [segment] if segment.name.text.as_str() == "Vec" => Some(1),
         [segment] if segment.name.text.as_str() == item::type_ref::SLICE_TYPE => Some(1),
         [segment] if segment.name.text.as_str() == "Box" => Some(1),
+        [segment] if segment.name.text.as_str() == item::type_ref::NEVER_TYPE => Some(0),
         // `[T; N]`.
         [segment] if item::type_ref::array_length(&segment.name.text).is_some() => Some(1),
         [segment] if segment.name.text.as_str() == "Result" => Some(2),
