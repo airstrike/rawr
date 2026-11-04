@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 
+## 0.3.128 (2026-11-03)
+
+- The never type `!` works as rustc has it: a function, method, closure or fn pointer can return `!`, a call of one is a value of whatever type its place takes in `if`/`match` arms, `let` and `let .. else`, a crate's `-> !` function is imported, and `std::process::exit` and `abort` run. `!` anywhere else gives rustc's E0658. (#896)
+
 ## 0.3.127 (2026-11-03)
 
 - ?play snippets can tick with `iced::time::every`, as iced's stopwatch and clock do. (#890)

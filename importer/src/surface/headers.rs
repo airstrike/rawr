@@ -288,9 +288,19 @@ impl<'g> Headers<'g> {
                 continue;
             };
             let opaque = identity(id);
+            // A trait's method captures the trait's `Self`, its parameter 0,
+            // as iced's `Widget::explain` gives `impl Widget` of the widget
+            // it is called on.
             let Some(arguments) = captures
                 .iter()
                 .filter_map(|capture| match capture {
+                    model::Argument::Type(model::Type::SelfType(owner))
+                        if self.models.get(&identity(owner)).is_some_and(|model| {
+                            matches!(model.kind(), model::Kind::Trait { .. })
+                        }) =>
+                    {
+                        Some(Some(convert::Type::Parameter(0)))
+                    }
                     model::Argument::Type(ty) => Some(self.ty(ty)),
                     _ => None,
                 })

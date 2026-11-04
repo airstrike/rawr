@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.3.128",
+      "date": "2026-11-03",
+      "entries": [
+        {"text":"The never type `!` works as rustc has it: a function, method, closure or fn pointer can return `!`, a call of one is a value of whatever type its place takes in `if`/`match` arms, `let` and `let .. else`, a crate's `-> !` function is imported, and `std::process::exit` and `abort` run. `!` anywhere else gives rustc's E0658.","issues":[896]}
+      ]
+    },
+    {
       "version": "0.3.127",
       "date": "2026-11-03",
       "entries": [

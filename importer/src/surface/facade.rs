@@ -9,7 +9,7 @@ pub(crate) mod cached;
 
 pub use cached::Cached;
 
-const SCHEMA: u32 = 40;
+const SCHEMA: u32 = 42;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -1082,6 +1082,23 @@ impl Plan {
                         .flat_map(crate::classify::ImplementationOutcome::associated)
                     {
                         let path = super::member::path(&relative, associated.name());
+                        // The members of the opaque type it gives, as of a
+                        // function's (`surface::opaque`), as iced's
+                        // `Widget::explain` gives one whose `boxed` a
+                        // program calls.
+                        let owner = super::opaque::path(&path, 0);
+                        for member in associated
+                            .implementations()
+                            .flat_map(crate::classify::ImplementationOutcome::associated)
+                        {
+                            let member_path = format!("{owner}::{}", member.name());
+                            if let Some(item) = item(&member_path, member)? {
+                                let mut items = std::mem::take(&mut facade.items).into_vec();
+                                items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
+                                items.push(item);
+                                facade.items = items.into_boxed_slice();
+                            }
+                        }
                         let Some(mut item) = item(&path, associated)? else {
                             continue;
                         };
@@ -1333,12 +1350,35 @@ impl Plan {
         if !opaque.is_empty() {
             for facade in &mut facades {
                 let mut types = std::mem::take(&mut facade.types).into_vec();
-                for item in facade.items.iter() {
+                // The opaque type a trait's method gives is declared beside
+                // the method over the trait's `Self`, as Rawr declares it
+                // (`surface::member`), and not again beside each type the
+                // trait applies to, though each has the method, as iced's
+                // `Widget::explain` is each widget's.
+                let self_members = facade
+                    .items
+                    .iter()
+                    .filter(|item| super::member::declared(&item.path));
+                let others = facade
+                    .items
+                    .iter()
+                    .filter(|item| !super::member::declared(&item.path));
+                // Each path to the trait, as a crate's own path and its
+                // re-export, has its self member, with the opaque type's
+                // members beside it, so each path declares the type.
+                for item in self_members.chain(others) {
                     let mut found = Vec::new();
                     item.signature.output.opaque(&opaque, &mut found);
+                    let member = super::member::declared(&item.path);
                     for (index, (identity, parameters)) in found.into_iter().enumerate() {
                         let path = super::opaque::path(&item.path, index);
-                        if types.iter().any(|ty| *ty.path == *path) {
+                        if types.iter().any(|ty| {
+                            *ty.path == *path
+                                || (!member
+                                    && ty.opaque
+                                    && ty.identity == identity
+                                    && super::member::declared(&ty.path))
+                        }) {
                             continue;
                         }
                         let associated = item

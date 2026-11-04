@@ -1071,6 +1071,43 @@ fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
     );
 }
 
+/// iced's ferris and layout (#885): `explain`, a method of the
+/// blanket-implemented `Framed`, gives an `impl Widget` from the trait's own
+/// default body. It sits in `column!` as it is, is boxed through `Widget`'s
+/// own `boxed`, and through `Framed::framed`, which the blanket impl over
+/// `Widget` gives it. The output is `cargo run`'s.
+#[test]
+fn a_trait_methods_opaque_output_from_its_default_body_is_usable() {
+    let (rawr, cargo) = both_printed("explained.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with(
+            "last view pad 0 [Increment] 2@50 explain #ffffff rule 1 explain #0000ff rule 2 \
+             explain #00ff00 rule 3 [Decrement]"
+        ),
+        "{rawr}"
+    );
+}
+
+/// iced's loupe (#885): the program's own `Zoomed<W>` implements the
+/// crate's `Widget` for any `W: Widget` through `W`'s methods, and holds
+/// what `explain` gives. The runner compiles the impl for each type it is
+/// used at, and Rust code can't name the opaque type, so the checker
+/// refuses the use, not the build.
+#[test]
+fn a_program_impl_at_a_crates_opaque_type_is_refused_at_check() {
+    let stderr = checked("zoomed.rs");
+    let own = stderr.split("cargo check found").next().unwrap_or_default();
+    assert!(
+        own.contains("the program's impl of a crate's trait for `")
+            && own.contains("Zoomed<")
+            && own.contains("which holds the crate's `impl Trait` type")
+            && own.contains("__rawr_opaque_explain")
+            && own.contains("is not supported"),
+        "{stderr}"
+    );
+}
+
 /// iced's download_progress (#568): the program's own native
 /// `download(url: impl AsRef<str>) -> impl Steps` gives an opaque type
 /// that captures its `impl AsRef<str>` input, which Rawr fills with a

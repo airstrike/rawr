@@ -17,7 +17,7 @@ pub mod std_binding;
 use std_binding::Std;
 
 const CONTRACT_SCHEMA: u32 = 7;
-const CLASSIFIER_VERSION: u32 = 105;
+const CLASSIFIER_VERSION: u32 = 107;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -2772,14 +2772,30 @@ impl<'contract> Outcome<'contract> {
 }
 
 impl OutcomeRecord {
-    pub(crate) const fn implementations(&self) -> &[ImplementationRecord] {
-        &self.implementations
+    /// The implementation ledgers and associated outcomes the outcome
+    /// retains, with each associated outcome's own, as the opaque type a
+    /// trait's method gives has its members under that method
+    /// (`method_opaque_implementations`).
+    pub(crate) fn ledgers(&self) -> Option<(usize, usize)> {
+        self.implementations
+            .iter()
+            .flat_map(|implementation| implementation.associated.iter())
+            .try_fold(
+                (self.implementations.len(), 0_usize),
+                |(implementations, associated), member| {
+                    let (inner, below) = member.ledgers()?;
+                    Some((
+                        implementations.checked_add(inner)?,
+                        associated.checked_add(below)?.checked_add(1)?,
+                    ))
+                },
+            )
     }
-}
 
-impl ImplementationRecord {
-    pub(crate) const fn associated(&self) -> &[OutcomeRecord] {
-        &self.associated
+    /// The items the outcome retains: itself and its `ledgers`.
+    pub(crate) fn retained_items(&self) -> Option<usize> {
+        let (implementations, associated) = self.ledgers()?;
+        implementations.checked_add(associated)?.checked_add(1)
     }
 }
 
@@ -2847,17 +2863,16 @@ pub(crate) fn classification_evidence(
         return None;
     }
     let transaction = graph.transaction();
-    let implementation_ledgers = outcomes.iter().try_fold(0_usize, |count, outcome| {
-        count.checked_add(outcome.implementations.len())
-    })?;
-    let associated = outcomes.iter().try_fold(0_usize, |count, outcome| {
-        outcome
-            .implementations
-            .iter()
-            .try_fold(count, |count, implementation| {
-                count.checked_add(implementation.associated.len())
-            })
-    })?;
+    let (implementation_ledgers, associated) = outcomes.iter().try_fold(
+        (0_usize, 0_usize),
+        |(implementations, associated), outcome| {
+            let (inner, below) = outcome.ledgers()?;
+            Some((
+                implementations.checked_add(inner)?,
+                associated.checked_add(below)?,
+            ))
+        },
+    )?;
 
     let classifier_new_items = 1_usize
         .checked_add(definitions.len())?
@@ -4950,14 +4965,103 @@ impl<P: api::Phase> Context<'_, P> {
         };
         let mut opaques = Vec::new();
         impl_traits(signature.output(), &mut opaques);
+        self.opaque_records(export, definition, generics, &opaques)
+    }
+
+    /// The methods of each trait an opaque `impl Trait` type the method
+    /// `method` of the trait `definition` gives implements, as
+    /// `opaque_implementations` gives a function's: iced's `Widget::explain`
+    /// gives a value whose `Widget::boxed` layout calls. The method is a
+    /// function of the trait's `Self`, its parameter 0, as
+    /// `classify_self_member` has it, and of the trait's parameters and its
+    /// own, so the members are its self member's (`surface::member`).
+    fn method_opaque_implementations(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+        method: &model::Definition,
+    ) -> Result<Box<[ImplementationRecord]>, Error> {
+        let (
+            model::Kind::Trait {
+                generics: container,
+                ..
+            },
+            model::Kind::Function {
+                signature,
+                generics,
+            },
+        ) = (definition.kind(), method.kind())
+        else {
+            return Ok(Box::default());
+        };
+        let trait_id = definition.id();
+        let output = self_as_parameter(signature.output(), trait_id);
+        let mut opaques = Vec::new();
+        impl_traits(&output, &mut opaques);
+        if opaques.is_empty() {
+            return Ok(Box::default());
+        }
+        // `Self` is the trait's parameter 0, a parameter of its own here,
+        // named as the self member's signature names it, where the call's
+        // receiver fills it (`classify_self_member`): the opaque type's
+        // parameters take the names of that signature (`surface::facade`),
+        // and a member's parameter is its owner's by name.
+        let parameters = std::iter::once(model::Parameter::new(
+            trait_id.clone(),
+            0,
+            representability::signature::argument_impl_name(0),
+            model::ParameterKind::Type {
+                bounds: Box::default(),
+                default: model::Default::Absent,
+            },
+        ))
+        .chain(
+            container
+                .parameters()
+                .filter(|parameter| parameter.name() != "Self")
+                .cloned(),
+        )
+        .chain(generics.parameters().cloned())
+        .collect::<Box<[_]>>();
+        let predicates = container
+            .predicates()
+            .chain(generics.predicates())
+            .map(|predicate| self_predicate_as_parameter(predicate, trait_id))
+            .collect::<Box<[_]>>();
+        let generics = model::Generics::new(parameters, predicates);
+        Ok(self
+            .opaque_records(export, method, &generics, &opaques)?
+            .into_boxed_slice())
+    }
+
+    /// The members of each opaque type in `opaques`, which the function
+    /// `definition`, whose generics are `generics`, gives
+    /// (`opaque_implementations`).
+    fn opaque_records(
+        &self,
+        export: &ledger::Export,
+        definition: &model::Definition,
+        generics: &model::Generics,
+        opaques: &[&model::Type],
+    ) -> Result<Vec<ImplementationRecord>, Error> {
         let mut records = Vec::new();
-        for opaque in opaques {
+        for &opaque in opaques {
             let model::Type::ImplTrait { id, bounds, .. } = opaque else {
                 continue;
             };
             // Each trait the bounds name, and their supertraits, whose
-            // methods rustc reaches on the value as well.
-            for (trait_id, arguments) in self.bound_traits(bounds) {
+            // methods rustc reaches on the value as well, then each trait a
+            // blanket impl over them gives it (`blanket_extensions`).
+            let bound = self.bound_traits(bounds);
+            let extensions = self.blanket_extensions(&bound);
+            let traits = bound
+                .into_iter()
+                .map(|bound| (bound, false))
+                .chain(extensions.into_iter().map(|extension| (extension, true)));
+            // A method an extension shares a name with is the bound's, so
+            // each name is one member.
+            let mut names = Vec::<Box<str>>::new();
+            for ((trait_id, arguments), extension) in traits {
                 let trait_id = &trait_id;
                 let arguments = &arguments[..];
                 let Some(trait_definition) = self
@@ -4989,11 +5093,15 @@ impl<P: api::Phase> Context<'_, P> {
                     if matches!(method_signature.receiver(), model::Receiver::None) {
                         continue;
                     }
+                    let name = method.display_path().last().unwrap_or("<unnamed>");
+                    if extension && names.iter().any(|known| **known == *name) {
+                        continue;
+                    }
+                    names.push(name.into());
                     let selector = selector(method)?;
                     self.retain_selector(&selector)?;
                     let identity =
                         crate::surface::identity::Identity::imported(export, None, selector)?;
-                    let name = method.display_path().last().unwrap_or("<unnamed>");
                     self.retain_outcome_common(export.key(), name)?;
                     self.retain_span(export.span())?;
                     self.retain_span(method.span())?;
@@ -5034,6 +5142,93 @@ impl<P: api::Phase> Context<'_, P> {
             }
         }
         Ok(records)
+    }
+
+    /// The traits a blanket impl over a parameter gives a value whose type
+    /// implements the traits `bound` names, each with its arguments: iced's
+    /// `widget::Widget`, implemented for every `T: core::Widget`, gives the
+    /// opaque type `Widget::explain` gives its `boxed`. An impl applies when
+    /// each of its predicates is a bound of its self type that `bound` holds,
+    /// at arguments that fix the impl's parameters the trait names, or a
+    /// `Sized` bound.
+    fn blanket_extensions(
+        &self,
+        bound: &[(api::identity::Definition, Vec<model::Argument>)],
+    ) -> Vec<(api::identity::Definition, Vec<model::Argument>)> {
+        let mut found = Vec::<(api::identity::Definition, Vec<model::Argument>)>::new();
+        for implementation in self.graph.implementations() {
+            let model::Trait::Trait {
+                id,
+                arguments: implemented,
+            } = implementation.trait_ref()
+            else {
+                continue;
+            };
+            let model::Type::Parameter { owner, index: this } = implementation.self_type() else {
+                continue;
+            };
+            if owner != implementation.id()
+                || implementation.polarity() != model::Polarity::Positive
+                || bound.iter().chain(&found).any(|(known, _)| known == id)
+            {
+                continue;
+            }
+            let mut given = BTreeMap::<u32, model::Type>::new();
+            let mut through = false;
+            let applies = implementation.generics().predicates().all(|predicate| {
+                let model::Predicate::Bound { ty, bound: bounded } = predicate else {
+                    return false;
+                };
+                let model::Bound::Trait {
+                    trait_id,
+                    arguments,
+                    polarity: model::Polarity::Positive,
+                    ..
+                } = bounded
+                else {
+                    return matches!(bounded, model::Bound::MaybeSized);
+                };
+                if self.definition_name(trait_id) == Some("Sized") {
+                    return true;
+                }
+                if !matches!(ty, model::Type::Parameter { owner, index }
+                    if owner == implementation.id() && index == this)
+                {
+                    return false;
+                }
+                let Some((_, held)) = bound.iter().find(|(known, _)| known == trait_id) else {
+                    return false;
+                };
+                through = true;
+                arguments.len() == held.len()
+                    && arguments.iter().zip(held).all(|pair| match pair {
+                        (
+                            model::Argument::Type(model::Type::Parameter { owner, index }),
+                            model::Argument::Type(held),
+                        ) if owner == implementation.id() => match given.get(index) {
+                            Some(known) => known == held,
+                            None => {
+                                given.insert(*index, held.clone());
+                                true
+                            }
+                        },
+                        (argument, held) => argument == held,
+                    })
+            });
+            if !applies || !through {
+                continue;
+            }
+            // The trait's arguments leave out `Self`, as a bound's do.
+            let Some(arguments) = relabel_arguments(
+                implemented.get(1..).unwrap_or_default(),
+                implementation.id(),
+                &|index| given.get(&index).cloned(),
+            ) else {
+                continue;
+            };
+            found.push((id.clone(), arguments.into_vec()));
+        }
+        found
     }
 
     /// The methods the trait `definition` declares that take `self` by
@@ -5095,13 +5290,14 @@ impl<P: api::Phase> Context<'_, P> {
                 method_signature,
                 method_generics,
             )?;
+            let implementations = self.method_opaque_implementations(export, definition, method)?;
             outcomes.push(OutcomeRecord {
                 export: export.key().clone(),
                 identity,
                 name: name.into(),
                 origin: Some(origin),
                 evidence,
-                implementations: Box::default(),
+                implementations,
                 variant: None,
             });
         }
@@ -10365,6 +10561,17 @@ fn self_replaced(
             mutability: *mutability,
             ty: inner(ty),
         },
+        // The opaque type a trait's method gives captures `Self`, as
+        // iced's `Widget::explain` does.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.clone(),
+            captures: arguments(captures),
+        },
         other => other.clone(),
     }
 }
@@ -10606,6 +10813,18 @@ fn substitute_parameters(
             trait_id: trait_id.clone(),
             associated: associated.clone(),
             arguments: arguments.iter().map(argument).collect(),
+        },
+        // What an opaque type captures, as `Widget::explain`'s captures the
+        // trait's parameters, which a provided method takes at its impl's.
+        // Its bounds name its own parameters.
+        model::Type::ImplTrait {
+            id,
+            bounds,
+            captures,
+        } => model::Type::ImplTrait {
+            id: id.clone(),
+            bounds: bounds.clone(),
+            captures: captures.iter().map(argument).collect(),
         },
         other => other.clone(),
     }
@@ -11140,7 +11359,10 @@ fn bind_instance(
 }
 
 /// `ty` with each type parameter `bindings` binds replaced by its type.
-pub(crate) fn substitute_bindings(ty: &model::Type, bindings: &BTreeMap<u32, model::Type>) -> model::Type {
+pub(crate) fn substitute_bindings(
+    ty: &model::Type,
+    bindings: &BTreeMap<u32, model::Type>,
+) -> model::Type {
     let argument = |argument: &model::Argument| match argument {
         model::Argument::Type(ty) => model::Argument::Type(substitute_bindings(ty, bindings)),
         other => other.clone(),
