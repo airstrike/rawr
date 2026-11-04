@@ -14,6 +14,7 @@
   <tr><td><code>env!("HOME")</code></td><td>The snippet doesn&rsquo;t compile. The error is rustc&rsquo;s: <code>environment variable `HOME` not defined at compile time</code>. <code>option_env!("HOME")</code> is <code>None</code>.</td></tr>
   <tr><td><code>std::env::args()</code></td><td>It yields no arguments.</td></tr>
   <tr><td><code>std::process::id()</code></td><td>It panics with std&rsquo;s message for a platform without processes, <code>no pids on this platform</code>.</td></tr>
+  <tr><td><code>std::process::exit(code)</code> or <code>std::process::abort()</code></td><td>The snippet ends there. Nothing after the call runs.</td></tr>
   <tr><td><code>std::net</code> or <code>std::thread</code></td><td>The snippet doesn&rsquo;t compile. rawr has neither module.</td></tr>
   <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is <code>unknown import `reqwest`</code>.</td></tr>
 </table>
