@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A program runs in a project as it would in a fresh one after other programs ran there. A crate's types reached through its macros' `$crate` are named at their public paths, as rustc names them, and they are one type to the checker at every path.","issues":[893]}
+    ]
   },
   "releases": [
     {
