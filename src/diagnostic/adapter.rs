@@ -523,6 +523,9 @@ fn primary_label(
         resolve::Error::NotInModule { module, .. } => {
             Some(format!("not found in `{}`", written_module(source, primary, module)).into())
         }
+        resolve::Error::UnknownFunction { .. } | resolve::Error::UnknownVariable { .. } => {
+            Some("not found in this scope".into())
+        }
         resolve::Error::MovedValue {
             previous_iteration: true,
             ..
@@ -853,8 +856,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::MemberKind { owner, member, .. } => {
             format!("member `{owner}::{member}` used as the other kind")
         }
-        resolve::Error::UnknownFunction { name, .. } => format!("unknown function `{name}`"),
-        resolve::Error::UnknownVariable { name, .. } => format!("unknown variable `{name}`"),
+        resolve::Error::UnknownFunction { name, .. } => {
+            format!("cannot find function `{name}` in this scope")
+        }
+        resolve::Error::UnknownVariable { name, .. } => {
+            format!("cannot find value `{name}` in this scope")
+        }
         resolve::Error::MovedValue { name, .. } => format!("use of moved value: `{name}`"),
         resolve::Error::BorrowConflict { message, .. } => message.to_string(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {

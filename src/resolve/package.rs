@@ -1128,10 +1128,19 @@ impl<'a> Resolver<'a> {
                         },
                     )
                 });
+                // A std or crate path another module's import names, as
+                // `use super::*;` reaches the root's `use
+                // std::collections::HashMap;`, is spelled as that import
+                // spells it.
+                let spelled = if self.is_script_path(&origin_context, &origin_path) {
+                    &path
+                } else {
+                    &origin_path
+                };
                 // A crate's derive macro and nothing else at its path, as
                 // `use serde::Deserialize;`.
                 let variant = variant.or_else(|| {
-                    let qualified = super::std_reexport(&path.join("::"), self.host);
+                    let qualified = super::std_reexport(&spelled.join("::"), self.host);
                     (self.host.entry(&qualified).is_none() && self.host.derive_macro(&qualified))
                         .then_some(item::Import::Derive)
                 });
@@ -1161,7 +1170,7 @@ impl<'a> Resolver<'a> {
                 };
                 let qualified = super::std_reexport(
                     &self.rust_spelling(context, &path).map_or_else(
-                        || reexported.unwrap_or_else(|| path.join("::")),
+                        || reexported.unwrap_or_else(|| spelled.join("::")),
                         |spelling| spelling.join("::"),
                     ),
                     self.host,
