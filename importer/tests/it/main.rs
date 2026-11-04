@@ -17,7 +17,14 @@
 //! A test that changes what it built, or counts cache misses, keeps a project
 //! of its own: the runner tests (artifact, cache, process, runner_invoke,
 //! runner_snapshot, hot_reload) a fresh project cache, and runner_dag a fresh
-//! Rawr home as well.
+//! Cargo home, Rawr home and build directory as well. A project's cache lives
+//! in its `target/rawr`, which an inherited `CARGO_TARGET_DIR` would move and
+//! share, so the suite runs with `--target-dir` instead:
+//!
+//! ```text
+//! env -u CARGO_TARGET_DIR cargo test -p rawr-import \
+//!     --features rustc-driver,test-fixtures --target-dir <dir> --test it
+//! ```
 
 mod instances;
 mod limits;

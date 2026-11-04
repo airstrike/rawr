@@ -155,7 +155,11 @@ impl rawr_import::metrics::Sink for Counts {
     fn scope_joined(&self) {}
 }
 
+/// The project's context, cold: its own Cargo home (so its own Rawr home)
+/// and its own build directory under its own target, which nothing else in
+/// the suite shares.
 fn context(project: &std::path::Path) -> rawr_import::context::Context {
+    crate::shared::require_project_targets();
     let cargo_home = project.join("cargo-home");
     fs::create_dir_all(&cargo_home).expect("the runner DAG Cargo home creates");
     seed_offline_cargo_sources(&cargo_home);
@@ -179,17 +183,6 @@ fn context(project: &std::path::Path) -> rawr_import::context::Context {
                 .to_str()
                 .expect("the runner DAG Cargo home is Unicode"),
         )
-        // Each test keeps a cold Rawr home of its own (in its Cargo home),
-        // while Cargo's units go to the suite's build directory, as a
-        // project whose Cargo config names a shared `build-dir`.
-        .and_then(|environment| {
-            environment.setting(
-                "CARGO_BUILD_BUILD_DIR",
-                crate::shared::build_directory()
-                    .to_str()
-                    .expect("the shared build directory is Unicode"),
-            )
-        })
         .expect("the runner DAG Cargo home seals");
     rawr_import::context::Context::capture(
         project,

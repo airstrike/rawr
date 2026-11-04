@@ -25,11 +25,14 @@ pub fn lane() -> MutexGuard<'static, ()> {
 /// Cargo keys each unit in it as `cargo build` does (package, source,
 /// features, profile and toolchain) and decides what is fresh, so `rawr` and
 /// its dependencies compile once per configuration and stay compiled across
-/// runs until their sources, the lockfile or the toolchain change.
+/// runs until their sources, the lockfile or the toolchain change. Only
+/// builds under the default Cargo home share it: Cargo rebuilds a unit whose
+/// registry sources it finds under another home's path.
 #[cfg(feature = "test-fixtures")]
 pub fn build_directory() -> &'static Path {
     static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
     DIRECTORY.get_or_init(|| {
+        require_project_targets();
         let directory = rawr_import::store::isolate_for_tests()
             .parent()
             .expect("the test store has a parent")
@@ -38,6 +41,18 @@ pub fn build_directory() -> &'static Path {
         rawr_import::runner::share_build_directory(directory.clone());
         directory
     })
+}
+
+/// Rawr puts a project's runner cache and store in `<target>/rawr`,
+/// `CARGO_TARGET_DIR` first, as Cargo does. Inherited from the caller, it
+/// would give every test project one cache and one store, so the suite runs
+/// with `--target-dir` instead.
+pub fn require_project_targets() {
+    assert!(
+        std::env::var_os("CARGO_TARGET_DIR").is_none(),
+        "run this suite with `--target-dir`, not `CARGO_TARGET_DIR`: each test project keeps \
+         its own `target/rawr`"
+    );
 }
 
 /// `manifest`'s generated crate, written into a fresh project.
