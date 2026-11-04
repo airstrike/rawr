@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use rawr_import::api::identity::Authority;
 use rawr_import::api::{ledger, model};
@@ -21,23 +22,41 @@ impl Drop for Project {
     }
 }
 
+/// The facade fixture under two aliases, extracted once per process. Its
+/// capture leaves every fixture it compiles byte-identical.
+fn facade_graph() -> &'static rawr_import::api::Graph<rawr_import::api::Extracted> {
+    static GRAPH: OnceLock<rawr_import::api::Graph<rawr_import::api::Extracted>> = OnceLock::new();
+    GRAPH.get_or_init(|| {
+        let fixture_digest_oracle = fixture_digests();
+        let root = std::env::temp_dir().join(format!(
+            "rawr-support-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).expect("the unique support project can be created");
+        let project = Project(fs::canonicalize(root).expect("the support project is canonical"));
+        let limits = Limits::standard();
+        let native = Native::pinned().expect("the pinned driver toolchain is installed");
+        let lane = crate::shared::lane();
+        let graph = request(&project.0, &limits)
+            .resolve(&native, &limits)
+            .and_then(|resolution| {
+                rawr_import::extract::from_resolution(resolution, &native, &limits)
+            })
+            .expect("the cross-package compiler capture canonicalizes");
+        drop(lane);
+        assert_eq!(
+            fixture_digest_oracle,
+            fixture_digests(),
+            "fixtures remain unchanged"
+        );
+        graph
+    })
+}
+
 #[test]
 fn cross_package_support_and_duplicate_aliases_capture_once() {
-    let _turn = rawr_import::store::test_turn();
-    let fixture_digest_oracle = fixture_digests();
-    let root = std::env::temp_dir().join(format!(
-        "rawr-support-{}-{}",
-        std::process::id(),
-        TEST_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&root).expect("the unique support project can be created");
-    let project = Project(fs::canonicalize(root).expect("the support project is canonical"));
-    let limits = Limits::standard();
-    let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let graph = request(&project.0, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
-        .expect("the cross-package compiler capture canonicalizes");
+    let graph = facade_graph();
 
     assert_eq!(
         graph.invocation_count(),
@@ -45,17 +64,17 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
         "only the selected facade is probed"
     );
     for alias in ["facade_a", "facade_b"] {
-        assert!(imported(&graph, alias, &["RenamedNode"]));
-        assert!(imported(&graph, alias, &["BorrowConvert"]));
-        assert!(imported(&graph, alias, &["BUILD_MARKER"]));
-        assert!(imported(&graph, alias, &["OpaqueFields"]));
-        assert!(imported(&graph, alias, &["opaque_private"]));
-        assert!(imported(&graph, alias, &["capture"]));
-        assert!(imported(&graph, alias, &["boxed_iterator"]));
-        assert!(imported(&graph, alias, &["bound_only"]));
-        assert!(imported(&graph, alias, &["repeated"]));
-        assert!(imported(&graph, alias, &["ExternalAlias"]));
-        assert!(imported(&graph, alias, &["normal_only"]));
+        assert!(imported(graph, alias, &["RenamedNode"]));
+        assert!(imported(graph, alias, &["BorrowConvert"]));
+        assert!(imported(graph, alias, &["BUILD_MARKER"]));
+        assert!(imported(graph, alias, &["OpaqueFields"]));
+        assert!(imported(graph, alias, &["opaque_private"]));
+        assert!(imported(graph, alias, &["capture"]));
+        assert!(imported(graph, alias, &["boxed_iterator"]));
+        assert!(imported(graph, alias, &["bound_only"]));
+        assert!(imported(graph, alias, &["repeated"]));
+        assert!(imported(graph, alias, &["ExternalAlias"]));
+        assert!(imported(graph, alias, &["normal_only"]));
         for path in [
             "FieldSurface",
             "VariantSurface",
@@ -65,7 +84,7 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
             "ImplSurface",
             "PrivateSurface",
         ] {
-            assert!(imported(&graph, alias, &[path]));
+            assert!(imported(graph, alias, &[path]));
         }
         assert!(!graph.exports().any(|outcome| {
             outcome.key().root_alias() == alias && outcome.key().path().eq(["doc_only"])
@@ -77,7 +96,7 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
             "PrimitiveImpl",
             "ReferenceImpl",
         ] {
-            assert!(imported(&graph, alias, &[path]));
+            assert!(imported(graph, alias, &[path]));
         }
     }
     assert!(graph.exports().any(|outcome| {
@@ -155,13 +174,13 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
                     && binders[0].index() == 0
             )))
     }));
-    assert_impl_shapes(&graph);
-    assert_declared_bounds(&graph);
-    assert_semantic_edge_cases(&graph);
-    assert_selected_alias_implementations(&graph);
-    assert_selected_surface_implementations(&graph);
-    assert_field_forms(&graph);
-    assert_constant_alias_evidence(&graph);
+    assert_impl_shapes(graph);
+    assert_declared_bounds(graph);
+    assert_semantic_edge_cases(graph);
+    assert_selected_alias_implementations(graph);
+    assert_selected_surface_implementations(graph);
+    assert_field_forms(graph);
+    assert_constant_alias_evidence(graph);
     assert!(graph.definitions().all(|definition| {
         !matches!(
             definition.display_path().last(),
@@ -174,16 +193,11 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
         };
         matches!(id.unit().authority(), Authority::Cargo(package) if package.name() == "support-api")
     }));
-    assert_eq!(
-        fixture_digest_oracle,
-        fixture_digests(),
-        "fixtures remain unchanged"
-    );
 }
 
 #[test]
 fn type_constants_schedule_exact_named_alias_identities() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let graph = constant_graph().expect("the pinned type-constant fixture canonicalizes");
 
     assert_projected_constant_alias(&graph, "projected_array", 0);
@@ -329,20 +343,7 @@ fn type_constant<'a>(
 
 #[test]
 fn opaque_parameter_owners_follow_the_exact_compiler_generics_chain() {
-    let _turn = rawr_import::store::test_turn();
-    let root = std::env::temp_dir().join(format!(
-        "rawr-opaque-ownership-{}-{}",
-        std::process::id(),
-        TEST_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&root).expect("the unique opaque ownership project can be created");
-    let project = Project(fs::canonicalize(root).expect("the fixture project is canonical"));
-    let limits = Limits::standard();
-    let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let graph = request(&project.0, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
-        .expect("the opaque ownership fixture canonicalizes");
+    let graph = facade_graph();
 
     for alias in ["facade_a", "facade_b"] {
         for path in [
@@ -361,34 +362,21 @@ fn opaque_parameter_owners_follow_the_exact_compiler_generics_chain() {
             "opaque_without_outlives",
             "opaque_hrtb_outlives",
         ] {
-            assert!(imported(&graph, alias, &[path]));
+            assert!(imported(graph, alias, &[path]));
         }
     }
-    assert_opaque_parameter_ownership(&graph);
-    assert_opaque_outlives_ownership(&graph);
-    assert_anonymous_associated_support(&graph);
-    assert_full_trait_contract(&graph);
+    assert_opaque_parameter_ownership(graph);
+    assert_opaque_outlives_ownership(graph);
+    assert_anonymous_associated_support(graph);
+    assert_full_trait_contract(graph);
 }
 
 #[test]
 fn implementation_relevance_uses_exact_compiler_candidates() {
-    let _turn = rawr_import::store::test_turn();
-    let root = std::env::temp_dir().join(format!(
-        "rawr-implementation-relevance-{}-{}",
-        std::process::id(),
-        TEST_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&root).expect("the unique implementation relevance project can be created");
-    let project = Project(fs::canonicalize(root).expect("the fixture project is canonical"));
-    let limits = Limits::standard();
-    let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let graph = request(&project.0, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
-        .expect("the implementation relevance fixture canonicalizes");
+    let graph = facade_graph();
 
-    assert_impl_shapes(&graph);
-    assert_exact_implementation_relevance(&graph);
+    assert_impl_shapes(graph);
+    assert_exact_implementation_relevance(graph);
 }
 
 fn assert_field_forms(graph: &rawr_import::api::Graph<rawr_import::api::Extracted>) {
@@ -437,7 +425,7 @@ fn assert_field_forms(graph: &rawr_import::api::Graph<rawr_import::api::Extracte
 
 #[test]
 fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let root = std::env::temp_dir().join(format!(
         "rawr-duplicate-crates-{}-{}",
         std::process::id(),

@@ -85,6 +85,17 @@ pub fn home(cargo_home: &Path) -> PathBuf {
     }
 }
 
+/// Where rawr keeps its host sources (`hosts`) and its compiled runtime
+/// (`runtime`): `$RAWR_RUNTIME_HOME` when set, otherwise [`home`]. Both
+/// depend only on rawr's sources and the toolchain, never on what a home
+/// has bound or checked, so homes may share them: a test suite whose tests
+/// each start from a cold home of their own points those homes at one
+/// directory, and rawr's runtime compiles once for the suite.
+#[must_use]
+pub fn runtime_home(cargo_home: &Path) -> PathBuf {
+    std::env::var_os("RAWR_RUNTIME_HOME").map_or_else(|| home(cargo_home), PathBuf::from)
+}
+
 /// A test process's stand-in for the real default home; fixture Cargo homes
 /// keep their own.
 static TEST_HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -118,7 +129,7 @@ pub fn isolate_for_tests() -> PathBuf {
 ///
 /// The lane admits one owner per process and refuses a second outright
 /// ("process busy") rather than waiting, so tests sharing a binary hold a turn
-/// for their whole body and wait for each other instead.
+/// around each call that takes the lane and wait for each other instead.
 #[doc(hidden)]
 pub fn test_turn() -> std::sync::MutexGuard<'static, ()> {
     static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());

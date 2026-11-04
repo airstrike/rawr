@@ -5,67 +5,48 @@
 //! only its own type, a `Clone` bound is checked on the script type, native
 //! `Clone` and `Debug` are the script type's own, and a value holding a
 //! native one passes through whole. The generated runner's own runtime
-//! tests run last. Build the driver first, as for `plain`.
+//! tests run in the runner the press test generates. Build the driver
+//! first, as for `plain`.
 
-use std::fs;
-use std::path::Path;
 use std::process::Command;
 
-use crate::support::copy;
+use crate::support::fixture::Lease;
+use crate::support::Fixture;
 
-/// `rawr-import run` on the `erasure` fixture with `main` as its program:
-/// whether it succeeded, its stdout and its stderr. The cases share one
-/// root, so the native crate builds once.
-fn run(main: &str) -> (bool, String, String) {
-    run_at("erasure", main)
-}
+static ERASURE: Fixture = Fixture::new("erasure");
 
-/// [`run`] in its own root, `name`, so a test of its own doesn't share the
-/// one the cases above run in one after another.
-fn run_at(name: &str, main: &str) -> (bool, String, String) {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
-    let directory = crate::support::scratch();
-    let root = directory.join(name);
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/erasure"),
-        &root,
-    );
-    fs::write(root.join("src/main.rs"), format!("// rawr\n{main}")).unwrap();
+/// `rawr-import run` on a lane of the `erasure` fixture with `main` as its
+/// program: the lane, whether it succeeded, its stdout and its stderr.
+fn run(main: &str) -> (Lease, bool, String, String) {
+    let root = ERASURE.lease(&[("src/main.rs", &format!("// rawr\n{main}"))]);
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::scratch().join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
         .env_remove("RAWR_VERBOSE")
         .output()
         .unwrap();
     (
+        root,
         run.status.success(),
         String::from_utf8_lossy(&run.stdout).into_owned(),
         String::from_utf8_lossy(&run.stderr).into_owned(),
     )
 }
 
-/// A case that must run and print `expected`.
-fn runs(main: &str, expected: &str) {
-    let (success, stdout, stderr) = run(main);
+/// A case that must run and print `expected`: the lane it ran in.
+fn runs(main: &str, expected: &str) -> Lease {
+    let (root, success, stdout, stderr) = run(main);
     assert!(success, "{main}\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(stdout, expected, "{main}\nstderr:\n{stderr}");
+    root
 }
 
 /// A case that must stop, saying `said` and printing nothing.
 fn refused(main: &str, said: &str) {
-    let (success, stdout, stderr) = run(main);
+    let (_, success, stdout, stderr) = run(main);
     assert!(!success, "{main}\nstdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(
         !stdout.contains("wrong"),
@@ -92,13 +73,12 @@ struct Order {
 }
 ";
 
-// The cases run in one test, one after another, on one root.
+/// Review 1: a script type crosses as its own Rust type (D594), so a
+/// `TypeId` cast to the same instance works and one to another instance
+/// of the generic, or another script type, gives `None`, as in Rust. An
+/// unsuffixed literal is an `i32` there, as rustc infers it.
 #[test]
 fn a_script_type_filling_a_native_generic_keeps_its_type() {
-    // Review 1: a script type crosses as its own Rust type (D594), so a
-    // `TypeId` cast to the same instance works and one to another instance
-    // of the generic, or another script type, gives `None`, as in Rust. An
-    // unsuffixed literal is an `i32` there, as rustc infers it.
     runs(
         &format!(
             "{TYPES}
@@ -116,8 +96,12 @@ fn main() {{
         ),
         "same 1\nliteral false\nother false\norder false\n",
     );
-    // Review 2: a closure native code feeds a cast value gets its own type,
-    // and one of another type isn't fed, as in Rust.
+}
+
+/// Review 2: a closure native code feeds a cast value gets its own type,
+/// and one of another type isn't fed, as in Rust.
+#[test]
+fn a_closure_native_code_feeds_takes_only_its_own_type() {
     runs(
         &format!(
             "{TYPES}
@@ -133,7 +117,11 @@ fn main() {{
         ),
         "applied 3\nlength -1\n",
     );
-    // Review 3: `T: Clone` is checked on the script type, as rustc does.
+}
+
+/// Review 3: `T: Clone` is checked on the script type, as rustc does.
+#[test]
+fn a_clone_bound_is_checked_on_the_script_type() {
     runs(
         &format!(
             "{TYPES}
@@ -156,7 +144,11 @@ fn main() {{
         ),
         "Clone",
     );
-    // Review 8: native `Clone` and `Debug` are the script type's own.
+}
+
+/// Review 8: native `Clone` and `Debug` are the script type's own.
+#[test]
+fn native_clone_and_debug_are_the_script_types_own() {
     runs(
         &format!(
             "{TYPES}
@@ -179,7 +171,11 @@ fn main() {{
         ),
         "cloned 2 1\nEnvelope { value: Some(2) }\n",
     );
-    // Review 9: a script value holding a native one passes through whole.
+}
+
+/// Review 9: a script value holding a native one passes through whole.
+#[test]
+fn a_script_value_holding_a_native_one_passes_through_whole() {
     runs(
         "
 struct Holder {
@@ -193,9 +189,13 @@ fn main() {
 ",
         "held 3\n",
     );
-    // `-> impl Labelled` of the native crate's trait is rustc's opaque type:
-    // the body's type, here `natives::Resource`, also through another such
-    // function, a path from the crate's root and an `Option`.
+}
+
+/// `-> impl Labelled` of the native crate's trait is rustc's opaque type:
+/// the body's type, here `natives::Resource`, also through another such
+/// function, a path from the crate's root and an `Option`.
+#[test]
+fn an_opaque_output_of_a_native_trait_is_its_bodys_type() {
     runs(
         "
 use natives::Labelled;
@@ -235,9 +235,13 @@ fn main() {
 ",
         "impl natives::Labelled",
     );
-    // `R: SampleRange<T>` and its `impl<T> SampleRange<T> for Range<T>`
-    // give `T` the range's floats, as rustc infers it: an `f32` from `f32`
-    // bounds and from literals an `f32` binding takes.
+}
+
+/// `R: SampleRange<T>` and its `impl<T> SampleRange<T> for Range<T>`
+/// give `T` the range's floats, as rustc infers it: an `f32` from `f32`
+/// bounds and from literals an `f32` binding takes.
+#[test]
+fn a_range_gives_a_generic_bound_its_items_type() {
     runs(
         "
 fn main() {
@@ -265,9 +269,13 @@ fn main() {
 ",
         "2 7 !\n",
     );
-    // A marked `main` runs on the process's main thread, where winit's
-    // event loop must run, and a native panic it meets is reported with
-    // Rust's status instead of aborting (D551.6 d, e).
+}
+
+/// A marked `main` runs on the process's main thread, where winit's
+/// event loop must run, and a native panic it meets is reported with
+/// Rust's status instead of aborting (D551.6 d, e).
+#[test]
+fn a_marked_main_runs_on_the_main_thread_and_reports_a_native_panic() {
     runs(
         "
 fn main() {
@@ -276,7 +284,7 @@ fn main() {
 ",
         "main thread true\n",
     );
-    let (success, stdout, stderr) = run("
+    let (_, success, stdout, stderr) = run("
 fn main() {
     let text = String::from(\"boom\");
     let size = text.len() as i64;
@@ -290,12 +298,16 @@ fn main() {
             && !stderr.contains("ArgBackup"),
         "stdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    // Freya's builder shapes (D551.6). A glob import brings `Lazy<B>`,
-    // whose `flag(self, bool) -> Self` names its callable parameter `B`:
-    // that item is refused, and the rest of the crate installs. A trait's
-    // default method returning `Self` is a method of each type the trait
-    // is implemented for, through a blanket implementation (`expanded`),
-    // an empty one (`center`), or with a generic parameter (`child`).
+}
+
+/// Freya's builder shapes (D551.6). A glob import brings `Lazy<B>`,
+/// whose `flag(self, bool) -> Self` names its callable parameter `B`:
+/// that item is refused, and the rest of the crate installs. A trait's
+/// default method returning `Self` is a method of each type the trait
+/// is implemented for, through a blanket implementation (`expanded`),
+/// an empty one (`center`), or with a generic parameter (`child`).
+#[test]
+fn a_default_method_returning_self_builds_through_each_impl() {
     runs(
         "
 use natives::*;
@@ -307,11 +319,15 @@ fn main() {
 ",
         "rect 100 true [Hello, World]\n",
     );
-    // Freya's `WindowConfig::new(impl Into<AppComponent>)`, which takes any
-    // `F: Fn() -> E + 'static` through `From<F> for AppComponent`: a named
-    // function of no inputs or a closure. Native code calls it back from
-    // inside a native call, which lends it the arena, and it gives back a
-    // native value (D551.6 c).
+}
+
+/// Freya's `WindowConfig::new(impl Into<AppComponent>)`, which takes any
+/// `F: Fn() -> E + 'static` through `From<F> for AppComponent`: a named
+/// function of no inputs or a closure. Native code calls it back from
+/// inside a native call, which lends it the arena, and it gives back a
+/// native value (D551.6 c).
+#[test]
+fn a_function_or_closure_converts_into_a_native_callable() {
     runs(
         "
 use natives::*;
@@ -328,11 +344,15 @@ fn main() {
 ",
         "rect 100 true [Hello]; rect 100 true [Hello]\nrect 0 false [closure]\n",
     );
-    // Freya's `on_press(impl Into<EventHandler<Event<PressEventData>>>)`, a
-    // default method with `impl<H: FnMut(D) + 'static, D> From<H> for
-    // EventHandler<D>`: a closure that takes a native event, and one that
-    // changes a native count, fire when native code presses the element.
-    runs(
+}
+
+/// Freya's `on_press(impl Into<EventHandler<Event<PressEventData>>>)`, a
+/// default method with `impl<H: FnMut(D) + 'static, D> From<H> for
+/// EventHandler<D>`: a closure that takes a native event, and one that
+/// changes a native count, fire when native code presses the element.
+#[test]
+fn native_presses_fire_script_closures_and_the_runners_own_tests_pass() {
+    let root = runs(
         "
 use natives::*;
 
@@ -360,7 +380,6 @@ fn main() {
     // a handle the protocol gave out stays alive (review 5), and a lent
     // value given back on a thread without the arena, or while a native
     // call holds it, returns to its slot (review 6, 7).
-    let root = crate::support::scratch().join("erasure");
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([
@@ -378,7 +397,7 @@ fn main() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&test.stdout);
     assert!(
-        test.status.success() && stdout.contains("6 passed"),
+        test.status.success() && stdout.contains("5 passed"),
         "stdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&test.stderr)
     );
@@ -396,9 +415,7 @@ fn main() {
 /// native calls reach the arena the update lends.
 #[test]
 fn a_method_that_gives_a_borrow_guard_is_read_and_written_through_it() {
-    let (success, stdout, stderr) = run_at(
-        "guards",
-        "
+    let (_, success, stdout, stderr) = run("
 use natives::*;
 
 struct Point {
@@ -448,8 +465,7 @@ fn main() {
     *point.write() += Point { x: 4 };
     println!(\"point {}\", point.read().x);
 }
-",
-    );
+");
     assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(
         stdout, "meter 3\ntally 17 after 4 guards\ncount 7\nbumped 25\ntext abc 3\npoint 7\n",
@@ -466,9 +482,7 @@ fn main() {
 /// shape, or a float or integer `T` converts from.
 #[test]
 fn a_method_taking_impl_into_a_native_type_takes_what_converts_into_it() {
-    let (success, stdout, stderr) = run_at(
-        "builders",
-        "
+    let (_, success, stdout, stderr) = run("
 use natives::*;
 
 fn main() {
@@ -486,8 +500,7 @@ fn main() {
         .color((1, 2, 3, 0.5));
     println!(\"{}\", other.styled());
 }
-",
-    );
+");
     assert!(success, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert_eq!(
         stdout,

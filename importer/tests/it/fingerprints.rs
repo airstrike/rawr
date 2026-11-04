@@ -2,9 +2,11 @@ use crate::p2;
 
 use rawr_import::classify::Policy;
 
+/// Two extractions in one project give the same raw and classified evidence.
+/// (An extraction's fingerprint names its project, so the shared contract,
+/// extracted in a project of its own, can't stand in for the first.)
 #[test]
 fn real_extraction_and_contract_fingerprints_repeat_semantically() {
-    let _turn = rawr_import::store::test_turn();
     let limits = rawr_import::cargo::Limits::standard();
     let mut graphs = p2::graphs(2);
     let second = graphs.pop().expect("the repeated real graph exists");

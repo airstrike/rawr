@@ -622,6 +622,7 @@ fn named_output(
                     vec![&**element]
                 }
                 Ty::Result(ok, err) => vec![&**ok, &**err],
+                Ty::Host { arguments, .. } | Ty::Script(_, arguments) => arguments.iter().collect(),
                 _ => Vec::new(),
             }
             .into_iter();
@@ -1392,6 +1393,11 @@ fn instance_round<A: crate::host::ImportAllocation>(
                 .output
                 .as_ref()
                 .map(|output| substitute_parameters(output, &substituted));
+            // Elision reads the template's output, as rustc reads the
+            // generic signature (`method::Definition::instance`).
+            if instance.lifetimes.written_output.is_none() {
+                instance.lifetimes.written_output = definition.output.clone().map(Box::new);
+            }
             instance.lifetimes.bounds = instance
                 .lifetimes
                 .bounds
@@ -12836,6 +12842,9 @@ impl<'a> Parser<'a> {
                         vec![&**element]
                     }
                     Ty::Result(ok, err) => vec![&**ok, &**err],
+                    Ty::Host { arguments, .. } | Ty::Script(_, arguments) => {
+                        arguments.iter().collect()
+                    }
                     _ => Vec::new(),
                 };
                 let written = path.arguments.iter().filter_map(|argument| match argument {
@@ -13280,7 +13289,18 @@ impl<'a> Parser<'a> {
                 } else if output.result_elements().is_some() {
                     Ty::Result(next()?, next()?)
                 } else {
-                    return Err(unsupported());
+                    // A crate's or the program's own generic type, as
+                    // loupe's `Loupe<impl Widget<Message> + 'a>`: the type
+                    // at the arguments built here, each opaque one the
+                    // body's tail binds.
+                    match Ty::from_resolved(output) {
+                        Ty::Host { proof, .. } => Ty::Host {
+                            proof,
+                            arguments: inner.collect(),
+                        },
+                        Ty::Script(definition, _) => Ty::Script(definition, inner.collect()),
+                        _ => return Err(unsupported()),
+                    }
                 }
             }
         })

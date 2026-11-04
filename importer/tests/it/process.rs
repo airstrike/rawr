@@ -2,16 +2,17 @@ use crate::p3;
 
 #[test]
 fn cold_and_warm_epochs_swap_only_after_complete_staged_handshake() {
-    let _turn = rawr_import::store::test_turn();
     let project = rawr_import::store::TestProject::new("rawr-p3-process");
     let root = project.path().to_path_buf();
     let generated = p3::generated_at(&root);
     let cache = rawr_import::cache::Writer::new(&root).expect("the runner cache binds");
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is free");
     let built = generated
         .build(&cargo, &cache)
         .expect("the fixed-path runner builds");
     drop(cargo);
+    drop(lane);
 
     let process = rawr_import::process::Owner::new(&root).expect("the socket owner seals");
     let mut supervisor = rawr_import::supervisor::Owner::new();
@@ -24,11 +25,13 @@ fn cold_and_warm_epochs_swap_only_after_complete_staged_handshake() {
     assert_eq!(slot.key(), Some(first_key));
 
     let warm = p3::generated_at(&root);
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is released");
     let warm = warm
         .build(&cargo, &cache)
         .expect("the sealed runner is a warm hit");
     drop(cargo);
+    drop(lane);
     let second = supervisor
         .bootstrap(warm, p3::snapshot_transport(), &process)
         .expect("the warm candidate reaches admitted state");
@@ -42,11 +45,13 @@ fn cold_and_warm_epochs_swap_only_after_complete_staged_handshake() {
         .expect("the retired cold process exits and reaps");
 
     let rejected = p3::generated_at(&root);
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane remains reusable");
     let rejected = rejected
         .build(&cargo, &cache)
         .expect("the next candidate is another warm hit");
     drop(cargo);
+    drop(lane);
     assert!(matches!(
         supervisor.bootstrap(rejected, p3::other_snapshot_transport(), &process),
         Err(rawr_import::supervisor::bootstrap::Error::Snapshot(
@@ -56,11 +61,13 @@ fn cold_and_warm_epochs_swap_only_after_complete_staged_handshake() {
     assert_eq!(slot.key(), Some(second_key));
 
     let rejected = p3::generated_at(&root);
+    let lane = crate::shared::lane();
     let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane remains reusable");
     let rejected = rejected
         .build(&cargo, &cache)
         .expect("the activation candidate is another warm hit");
     drop(cargo);
+    drop(lane);
     let spawned = rejected
         .spawn(
             supervisor.epoch().expect("the rejected epoch exists"),

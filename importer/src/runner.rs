@@ -12,6 +12,9 @@ pub mod mirror;
 pub(crate) mod overlay;
 pub mod runtime;
 
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub use build::share_build_directory;
 pub use build::Error as BuildError;
 
 /// A manifest whose normalized source exists but has not been linked.

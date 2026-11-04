@@ -41,7 +41,7 @@ impl Project {
 
 #[test]
 fn real_pinned_cargo_seals_final_form_resolution_without_mutating_import() {
-    let _turn = rawr_import::store::test_turn();
+    let _lane = crate::shared::lane();
     let project = Project::new("native");
     let fixture = fixture();
     let before = fixture_bytes(&fixture);
@@ -115,7 +115,6 @@ fn native_request(project: &Project, fixture: &Path, limits: &Limits) -> Request
 
 #[test]
 fn unsupported_target_rejects_and_every_cargo_git_reference_seals() {
-    let _turn = rawr_import::store::test_turn();
     let project = Project::new("validation");
     let limits = Limits::standard();
     // Cargo accepts a branch, a tag, a short or full rev and the default

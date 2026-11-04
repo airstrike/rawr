@@ -5,8 +5,7 @@ use rawr_import::surface::callable::{shared, Class};
 
 #[test]
 fn real_static_fn_and_fn_mut_use_closed_epoch_owned_classes() {
-    let _turn = rawr_import::store::test_turn();
-    let (_project, contract, _limits) = p4::contract();
+    let contract = p4::shared();
     let class = |name| {
         let outcome = contract
             .outcomes()

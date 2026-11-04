@@ -44,7 +44,7 @@ pub fn root() -> crate::Result<PathBuf> {
         })?)
         .join(".cargo"),
     };
-    let hosts = crate::store::home(&home).join("hosts");
+    let hosts = crate::store::runtime_home(&home).join("hosts");
     let root = materialize(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
         operation: "write",
         path: hosts.clone(),
@@ -131,7 +131,7 @@ const HOSTS_KEPT: usize = 3;
 /// else a project derives lives in its own target directory).
 pub fn clean(cargo_home: &Path) {
     prune(
-        &crate::store::home(cargo_home).join("hosts"),
+        &crate::store::runtime_home(cargo_home).join("hosts"),
         &[],
         HOST_IDLE,
         HOSTS_KEPT,

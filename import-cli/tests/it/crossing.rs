@@ -8,55 +8,40 @@
 //! as for `plain`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::support::{copy, start};
+use crate::support::fixture::Lease;
+use crate::support::{start, Fixture};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/crossing");
+/// The fixture, whose lanes hold the program's own native module, which
+/// only some variants declare, beside them, so that rustfmt finds it from
+/// each.
+static CROSSING: Fixture =
+    Fixture::with("crossing", &[("src/download.rs", "variants/download.rs")]);
 
-/// The fixture copied to its own root `name` under the test directory.
-fn root(name: &str) -> PathBuf {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
-    let root = crate::support::scratch().join(name);
-    let _ = fs::remove_file(root.join("stop"));
-    let _ = fs::remove_dir_all(root.join("src"));
-    copy(Path::new(FIXTURE), &root);
-    // The program's own native module, which only some variants declare.
-    // It lives beside them so that rustfmt finds it from each.
-    fs::copy(
-        root.join("variants/download.rs"),
-        root.join("src/download.rs"),
-    )
-    .unwrap();
-    root
+/// A lane of the fixture, with `variant` from `variants/` as its `main.rs`
+/// when given.
+fn lane(variant: Option<&str>) -> Lease {
+    match variant {
+        Some(variant) => {
+            let main = CROSSING.read(&format!("variants/{variant}"));
+            CROSSING.lease(&[("src/main.rs", &main)])
+        }
+        None => CROSSING.lease(&[]),
+    }
 }
 
-/// `rawr-import run` on the fixture copied to `name`, with `variant` from
+/// `rawr-import run` on a lane of the fixture with `variant` from
 /// `variants/` as its `main.rs` when given: its stdout without the process
 /// id, which `cargo run` of the same crate prints too.
-fn printed(name: &str, variant: Option<&str>) -> String {
-    let root = root(name);
-    if let Some(variant) = variant {
-        fs::copy(
-            root.join("variants").join(variant),
-            root.join("src/main.rs"),
-        )
-        .unwrap();
-    }
+fn printed(variant: Option<&str>) -> String {
+    let root = lane(variant);
     let directory = crate::support::scratch();
     let run = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -80,10 +65,7 @@ const EVENTS: &str = "1 view \n1 message Increment\n2 view count 1\n2 message In
 
 #[test]
 fn a_script_state_message_update_and_view_run_under_a_native_generic_run() {
-    assert_eq!(
-        printed("crossing", None),
-        format!("title crossing::Counter\n{EVENTS}")
-    );
+    assert_eq!(printed(None), format!("title crossing::Counter\n{EVENTS}"));
 }
 
 /// iced's shape: `application(Counter::update, Counter::view)` takes the
@@ -92,7 +74,7 @@ fn a_script_state_message_update_and_view_run_under_a_native_generic_run() {
 #[test]
 fn methods_cross_through_traits_over_fn_as_iced_takes_them() {
     assert_eq!(
-        printed("crossing-application", Some("application.rs")),
+        printed(Some("application.rs")),
         format!("title crossing::Counter\ntheme events::Theme\n{EVENTS}")
     );
 }
@@ -106,7 +88,7 @@ fn methods_cross_through_traits_over_fn_as_iced_takes_them() {
 #[test]
 fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
     assert_eq!(
-        printed("crossing-counter", Some("counter.rs")),
+        printed(Some("counter.rs")),
         "title crossing::Counter\n\
          renderer events::widgets::fallback::Renderer<events::widgets::backend::Gpu, events::widgets::backend::Soft>\n\
          1 view pad 20 [Increment] 0@50 [Decrement]\n1 message Increment\n\
@@ -125,7 +107,7 @@ fn a_counter_whose_view_only_a_traits_defaults_and_impls_fix_runs() {
 /// region at that type. The output is `cargo run`'s.
 #[test]
 fn a_widget_whose_impl_bounds_its_contents_takes_the_views_theme() {
-    let (rawr, cargo) = both_printed("crossing-tiled", "tiled.rs", "");
+    let (rawr, cargo) = both_printed("tiled.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 20 <'Increment'> 0@50 <'Decrement'>\n1 message Increment"),
@@ -141,7 +123,7 @@ fn a_widget_whose_impl_bounds_its_contents_takes_the_views_theme() {
 #[test]
 fn a_text_only_view_takes_its_types_from_its_return_type() {
     for variant in ["classic.rs", "classic_into.rs"] {
-        let (rawr, cargo) = both_printed("crossing-classic", variant, "");
+        let (rawr, cargo) = both_printed(variant, "");
         assert_eq!(rawr, cargo, "{variant}");
         assert!(rawr.contains("1 view center hi"), "{variant}: {rawr}");
     }
@@ -153,7 +135,7 @@ fn a_text_only_view_takes_its_types_from_its_return_type() {
 /// run`'s.
 #[test]
 fn a_method_of_a_blanket_extension_trait_runs_on_generic_widgets() {
-    let (rawr, cargo) = both_printed("crossing-framed", "framed.rs", "");
+    let (rawr, cargo) = both_printed("framed.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 20 [Increment] [Decrement]\n1 message Increment")
@@ -169,7 +151,7 @@ fn a_method_of_a_blanket_extension_trait_runs_on_generic_widgets() {
 /// instantiation its callers use (D629). The output is `cargo run`'s.
 #[test]
 fn generic_functions_over_crate_types_run_once_per_instantiation() {
-    let (rawr, cargo) = both_printed("crossing-instances", "instances.rs", "");
+    let (rawr, cargo) = both_printed("instances.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 pad 5 [Increment] pad 7 0@50 [Decrement]")
@@ -185,7 +167,7 @@ fn generic_functions_over_crate_types_run_once_per_instantiation() {
 /// again. The output is `cargo run`'s.
 #[test]
 fn a_boot_function_giving_the_state_and_a_task_runs() {
-    let (rawr, cargo) = both_printed("crossing-boot", "boot.rs", "Refresh");
+    let (rawr, cargo) = both_printed("boot.rs", "Refresh");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("boot message Loaded(7)\n1 view pad 0 <x Refresh:0> \"7\"")
@@ -202,7 +184,7 @@ fn a_boot_function_giving_the_state_and_a_task_runs() {
 /// `Background` by `.into()` through `From`. The output is `cargo run`'s.
 #[test]
 fn a_selector_finds_by_id_and_a_fields_color_converts_into_a_background() {
-    let (rawr, cargo) = both_printed("crossing-found", "found.rs", "Refresh");
+    let (rawr, cargo) = both_printed("found.rs", "Refresh");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("Some(50.0) Color(Color { r: 3, g: 4, b: 5 })"),
@@ -217,7 +199,7 @@ fn a_selector_finds_by_id_and_a_fields_color_converts_into_a_background() {
 /// The output is `cargo run`'s.
 #[test]
 fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
-    let (rawr, cargo) = both_printed("crossing-system", "system.rs", "Refresh");
+    let (rawr, cargo) = both_printed("system.rs", "Refresh");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -238,7 +220,7 @@ fn a_crate_value_mapped_on_another_thread_reaches_its_message() {
 /// run`'s.
 #[test]
 fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
-    let (rawr, cargo) = both_printed("crossing-fonts", "fonts.rs", "Mono");
+    let (rawr, cargo) = both_printed("fonts.rs", "Mono");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("boot message FamiliesListed([Monospace, Serif])\nheard Rescaled(2.0)")
@@ -254,7 +236,7 @@ fn text_example_task_chains_pointer_callables_and_crate_slices_run() {
 /// instantiation its callers use (D629). The output is `cargo run`'s.
 #[test]
 fn generic_methods_and_body_only_generics_run_once_per_instantiation() {
-    let (rawr, cargo) = both_printed("crossing-methods", "methods.rs", "");
+    let (rawr, cargo) = both_printed("methods.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -274,7 +256,7 @@ fn generic_methods_and_body_only_generics_run_once_per_instantiation() {
 /// `cargo run`'s.
 #[test]
 fn a_script_impl_generic_over_a_crate_bound_is_compiled_per_use() {
-    let (rawr, cargo) = both_printed("crossing-quad", "quad.rs", "");
+    let (rawr, cargo) = both_printed("quad.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 custom 10 [quad 10r2 rgb(1, 2, 3)] [Increment] 0@16")
@@ -291,7 +273,7 @@ fn a_script_impl_generic_over_a_crate_bound_is_compiled_per_use() {
 /// crate keeps between its calls. The output is `cargo run`'s.
 #[test]
 fn an_associated_state_held_as_a_script_value_crosses() {
-    let (rawr, cargo) = both_printed("crossing-state", "state.rs", "");
+    let (rawr, cargo) = both_printed("state.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view canvas[primary 3 cells [1, 10, 20] at 40x30 tick 0#1]")
@@ -311,7 +293,7 @@ fn an_associated_state_held_as_a_script_value_crosses() {
 /// run`'s.
 #[test]
 fn a_generic_script_impl_with_an_opaque_view_runs() {
-    let (rawr, cargo) = both_printed("crossing-panel", "panel.rs", "");
+    let (rawr, cargo) = both_printed("panel.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view panel pad 0 [Increment] 0@16\n1 message Changed(1)")
@@ -328,7 +310,7 @@ fn a_generic_script_impl_with_an_opaque_view_runs() {
 /// failure. The output is `cargo run`'s.
 #[test]
 fn a_view_passing_a_later_methods_opaque_output_to_the_crate_runs() {
-    let (rawr, cargo) = both_printed("crossing-windows", "windows.rs", "");
+    let (rawr, cargo) = both_printed("windows.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 3 pad 0 One 1 0@16 [Increment]\n1 message Increment")
@@ -337,16 +319,11 @@ fn a_view_passing_a_later_methods_opaque_output_to_the_crate_runs() {
     );
 }
 
-/// `rawr-import run` and `cargo run` of the fixture copied to `name` with
+/// `rawr-import run` and `cargo run` of a lane of the fixture with
 /// `variant` as its `main.rs`, pressing the labels of `presses` in turn:
 /// both programs' stdout without the process id.
-fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
-    let root = root(name);
-    fs::copy(
-        root.join("variants").join(variant),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
+fn both_printed(variant: &str, presses: &str) -> (String, String) {
+    let root = lane(Some(variant));
     let directory = crate::support::scratch();
     let output = |mut command: Command| {
         let run = command
@@ -370,7 +347,7 @@ fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
     };
     let mut rawr = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     rawr.arg("run")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"));
     let mut cargo = Command::new("cargo");
     cargo.args(["run", "-q"]);
@@ -384,7 +361,7 @@ fn both_printed(name: &str, variant: &str, presses: &str) -> (String, String) {
 /// presses once the first is checked. The output is `cargo run`'s.
 #[test]
 fn a_checkbox_with_an_optional_callable_and_a_crate_style_runs() {
-    let (rawr, cargo) = both_printed("crossing-checkbox", "checkbox.rs", "Styled,Default,Styled");
+    let (rawr, cargo) = both_printed("checkbox.rs", "Styled,Default,Styled");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("2 message DefaultToggled(true)")
@@ -402,7 +379,7 @@ fn a_checkbox_with_an_optional_callable_and_a_crate_style_runs() {
 /// is `cargo run`'s.
 #[test]
 fn a_slider_beside_an_opaque_widget_runs() {
-    let (rawr, cargo) = both_printed("crossing-slider", "slider.rs", "slide");
+    let (rawr, cargo) = both_printed("slider.rs", "slide");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 1..=100@50/Some(50) \"50\" logo50@16")
@@ -417,7 +394,7 @@ fn a_slider_beside_an_opaque_widget_runs() {
 /// and the slider takes it at that type. The output is `cargo run`'s.
 #[test]
 fn a_range_of_a_crate_type_from_an_associated_constant_crosses() {
-    let (rawr, cargo) = both_printed("crossing-turned", "turned.rs", "slide");
+    let (rawr, cargo) = both_printed("turned.rs", "slide");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None")
@@ -433,7 +410,7 @@ fn a_range_of_a_crate_type_from_an_associated_constant_crosses() {
 /// widgets. The output is `cargo run`'s.
 #[test]
 fn an_option_of_a_widget_boxes_through_the_crates_impl_for_option() {
-    let (rawr, cargo) = both_printed("crossing-optional", "optional.rs", "slide,slide");
+    let (rawr, cargo) = both_printed("optional.rs", "slide,slide");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 1..=100@50/None none none")
@@ -449,7 +426,7 @@ fn an_option_of_a_widget_boxes_through_the_crates_impl_for_option() {
 /// its theme, as rustc infers them. The output is `cargo run`'s.
 #[test]
 fn a_generic_crate_function_named_as_a_value_maps_as_rustc_infers_it() {
-    let (rawr, cargo) = both_printed("crossing-valued", "valued.rs", "slide,slide");
+    let (rawr, cargo) = both_printed("valued.rs", "slide,slide");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 1..=100@50/None pad 0 \"first\" \"second\" none")
@@ -465,7 +442,7 @@ fn a_generic_crate_function_named_as_a_value_maps_as_rustc_infers_it() {
 /// is `cargo run`'s.
 #[test]
 fn constants_of_no_scalar_and_a_sole_alias_run() {
-    let (rawr, cargo) = both_printed("crossing-styling", "styling.rs", "");
+    let (rawr, cargo) = both_printed("styling.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("last view pad 0 \"2 looks\"/mono0 \"mono0\" \"0\"/plain0"),
@@ -475,14 +452,14 @@ fn constants_of_no_scalar_and_a_sole_alias_run() {
 
 #[test]
 fn methods_of_a_generic_target_are_callable_through_its_opaque_alias() {
-    let (rawr, cargo) = both_printed("crossing-alias-methods", "alias.rs", "");
+    let (rawr, cargo) = both_printed("alias.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "quad 10r2 rgb(1, 2, 3), quad 4r1 rgb(4, 5, 6) at 3");
 }
 
 #[test]
 fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
-    let (rawr, cargo) = both_printed("crossing-provided", "provided.rs", "");
+    let (rawr, cargo) = both_printed("provided.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr.matches("script widget").count(), 5, "{rawr}");
     assert!(rawr.contains("last view pad 0"), "{rawr}");
@@ -493,7 +470,7 @@ fn a_provided_method_reaches_a_script_impl_through_a_blanket_trait() {
 /// by-value use moves only that field. The output is `cargo run`'s.
 #[test]
 fn a_crate_structs_string_field_is_read_in_place() {
-    let (rawr, cargo) = both_printed("crossing-caption", "caption.rs", "");
+    let (rawr, cargo) = both_printed("caption.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -508,7 +485,7 @@ fn a_crate_structs_string_field_is_read_in_place() {
 /// counter shows none was copied. The output is `cargo run`'s.
 #[test]
 fn a_slice_a_method_lends_from_its_receiver_is_read_in_place() {
-    let (rawr, cargo) = both_printed("crossing-options", "options.rs", "");
+    let (rawr, cargo) = both_printed("options.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.ends_with("heavy at Some(1), 0 clones"), "{rawr}");
     // The vectors move their families into `Choices::new`, as Rust moves
@@ -528,7 +505,7 @@ fn a_slice_a_method_lends_from_its_receiver_is_read_in_place() {
 /// call's lifetime (#717). The output is `cargo run`'s.
 #[test]
 fn mutable_buffers_are_lent_in_place() {
-    let (rawr, cargo) = both_printed("crossing-buffers", "buffers.rs", "");
+    let (rawr, cargo) = both_printed("buffers.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.contains("room still kept true"), "{rawr}");
     assert!(rawr.contains("[1] 1, room kept true"), "{rawr}");
@@ -537,7 +514,7 @@ fn mutable_buffers_are_lent_in_place() {
 
 #[test]
 fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
-    let (rawr, cargo) = both_printed("crossing-fields", "fields.rs", "");
+    let (rawr, cargo) = both_printed("fields.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Shrink/Shrink\n13\n7\n7\n7\n13x14");
 }
@@ -548,7 +525,7 @@ fn generic_struct_fields_and_a_borrowed_field_store_match_rust() {
 /// is `cargo run`'s.
 #[test]
 fn a_tooltip_with_a_crate_default_field_and_a_crate_style_runs() {
-    let (rawr, cargo) = both_printed("crossing-tooltip", "tooltip.rs", "Delay,Delay");
+    let (rawr, cargo) = both_printed("tooltip.rs", "Delay,Delay");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 [Top:9] <Delay:0>")
@@ -568,7 +545,7 @@ fn a_tooltip_with_a_crate_default_field_and_a_crate_style_runs() {
 /// region and none at `'static`. The output is `cargo run`'s.
 #[test]
 fn a_macro_reaches_an_associated_function_through_an_alias() {
-    let (rawr, cargo) = both_printed("crossing-text", "text.rs", "");
+    let (rawr, cargo) = both_printed("text.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -592,7 +569,7 @@ fn a_macro_reaches_an_associated_function_through_an_alias() {
 /// IntoLabel<'a>` its output keeps. The output is `cargo run`'s.
 #[test]
 fn an_opaque_program_takes_a_subscription_of_its_state() {
-    let (rawr, cargo) = both_printed("crossing-subscription", "subscription.rs", "Listen");
+    let (rawr, cargo) = both_printed("subscription.rs", "Listen");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("heard Ticked(3)")
@@ -610,13 +587,13 @@ fn an_opaque_program_takes_a_subscription_of_its_state() {
 /// state by the second. Both outputs are `cargo run`'s.
 #[test]
 fn a_parameter_of_a_trait_over_fn_takes_any_type_that_implements_it() {
-    let (rawr, cargo) = both_printed("crossing-theme", "theme.rs", "Dark,Dark");
+    let (rawr, cargo) = both_printed("theme.rs", "Dark,Dark");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 theme Dark") && rawr.contains("2 theme Dark"),
         "{rawr}"
     );
-    let (rawr, cargo) = both_printed("crossing-themed", "themed.rs", "Dark,Dark");
+    let (rawr, cargo) = both_printed("themed.rs", "Dark,Dark");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 theme Light") && rawr.contains("2 theme Dark"),
@@ -632,7 +609,7 @@ fn a_parameter_of_a_trait_over_fn_takes_any_type_that_implements_it() {
 /// The output is `cargo run`'s.
 #[test]
 fn closures_that_borrow_the_programs_state_cross_as_its_methods_do() {
-    let (rawr, cargo) = both_printed("crossing-closures", "closures.rs", "Dark,Dark");
+    let (rawr, cargo) = both_printed("closures.rs", "Dark,Dark");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("update Ticked(2) after 1")
@@ -650,7 +627,7 @@ fn closures_that_borrow_the_programs_state_cross_as_its_methods_do() {
 /// binding fills it in, as rustc reads it. The output is `cargo run`'s.
 #[test]
 fn an_unannotated_closure_takes_its_input_from_the_opaque_programs_state() {
-    let (rawr, cargo) = both_printed("crossing-inferred", "inferred.rs", "Dark,Dark");
+    let (rawr, cargo) = both_printed("inferred.rs", "Dark,Dark");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("update Ticked(2) after 1")
@@ -670,7 +647,7 @@ fn an_unannotated_closure_takes_its_input_from_the_opaque_programs_state() {
 /// runs.
 #[test]
 fn std_types_a_crate_re_exports_cross_by_value() {
-    let (rawr, cargo) = both_printed("crossing-time", "time.rs", "Stop");
+    let (rawr, cargo) = both_printed("time.rs", "Stop");
     // `Instant { tv_sec: 7, tv_nsec: 8 }` with its values left out.
     let instants = |text: &str| {
         text.lines()
@@ -704,7 +681,7 @@ fn std_types_a_crate_re_exports_cross_by_value() {
 /// gives. The output is `cargo run`'s.
 #[test]
 fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
-    let (rawr, cargo) = both_printed("crossing-exit", "exit.rs", "Exit,Exit");
+    let (rawr, cargo) = both_printed("exit.rs", "Exit,Exit");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 message Confirm(true)")
@@ -726,7 +703,7 @@ fn a_method_of_an_impl_over_an_option_of_its_parameter_runs() {
 /// The output is `cargo run`'s.
 #[test]
 fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
-    let (rawr, cargo) = both_printed("crossing-conversions", "conversions.rs", "pair,slide");
+    let (rawr, cargo) = both_printed("conversions.rs", "pair,slide");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("[pair 10x20 None/0] [one 4x4 None/0] [floats 1.5x2.5 None/0]")
@@ -744,7 +721,7 @@ fn arrays_float_ranges_and_into_cross_as_rustc_converts_them() {
 /// `f32`, `20` a `u32` (#426). The output is `cargo run`'s.
 #[test]
 fn a_numbers_into_reaches_a_crate_fields_from_as_rustc_infers_it() {
-    let (rawr, cargo) = both_printed("crossing-pixels", "pixels.rs", "grow");
+    let (rawr, cargo) = both_printed("pixels.rs", "grow");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("content: \"computed\", size: Pixels(11.0)")
@@ -762,7 +739,7 @@ fn a_numbers_into_reaches_a_crate_fields_from_as_rustc_infers_it() {
 /// runner's own code used. The output is `cargo run`'s.
 #[test]
 fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
-    let (rawr, cargo) = both_printed("crossing-table", "table.rs", "");
+    let (rawr, cargo) = both_printed("table.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("last view pad 0 \"Events\" |Name|Time|Talk|45 min|Workshop|120 min|"),
@@ -787,7 +764,7 @@ fn a_borrowed_vec_fills_rows_a_crate_takes_by_into_iterator() {
 /// iced's clock calls it (#586). The output is `cargo run`'s.
 #[test]
 fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
-    let (rawr, cargo) = both_printed("crossing-canvas", "canvas.rs", "");
+    let (rawr, cargo) = both_printed("canvas.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -805,7 +782,7 @@ fn aliases_that_default_to_an_alias_or_name_an_associated_type_cross() {
 /// `cargo run`'s.
 #[test]
 fn a_struct_literal_fills_a_field_that_borrows_a_slice() {
-    let (rawr, cargo) = both_printed("crossing-dashed", "dashed.rs", "");
+    let (rawr, cargo) = both_printed("dashed.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -820,7 +797,7 @@ fn a_struct_literal_fills_a_field_that_borrows_a_slice() {
 /// one, as rustc does. The output is `cargo run`'s.
 #[test]
 fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
-    let (rawr, cargo) = both_printed("crossing-palette", "palette.rs", "");
+    let (rawr, cargo) = both_printed("palette.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
@@ -833,7 +810,7 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
 /// The output is `cargo run`'s.
 #[test]
 fn an_impl_whose_input_projects_through_a_projection_converts() {
-    let (rawr, cargo) = both_printed("crossing-lab", "lab.rs", "");
+    let (rawr, cargo) = both_printed("lab.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "rgb 0.6 0.35 0.7\nrgb 0.84999996 0.99999994 0.75");
 }
@@ -846,7 +823,7 @@ fn an_impl_whose_input_projects_through_a_projection_converts() {
 /// is `cargo run`'s.
 #[test]
 fn a_struct_update_of_a_generic_crate_struct_copies_its_fields() {
-    let (rawr, cargo) = both_printed("crossing-updated", "updated.rs", "");
+    let (rawr, cargo) = both_printed("updated.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -862,7 +839,7 @@ fn a_struct_update_of_a_generic_crate_struct_copies_its_fields() {
 /// rustc resolves them. The output is `cargo run`'s.
 #[test]
 fn an_associated_item_of_a_generic_parameters_bound_is_its_instances_types() {
-    let (rawr, cargo) = both_printed("crossing-ranges", "ranges.rs", "");
+    let (rawr, cargo) = both_printed("ranges.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("map pad 0 HSL 0..=360@16 [Increment] 1.0 1.0@16")
@@ -879,7 +856,7 @@ fn an_associated_item_of_a_generic_parameters_bound_is_its_instances_types() {
 /// crate's generic items. The output is `cargo run`'s.
 #[test]
 fn a_view_that_sends_no_message_names_infallible_in_its_revealed_type() {
-    let (rawr, cargo) = both_printed("crossing-never", "never.rs", "");
+    let (rawr, cargo) = both_printed("never.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.ends_with(
@@ -901,7 +878,7 @@ fn a_view_that_sends_no_message_names_infallible_in_its_revealed_type() {
 /// Self`, as rustc does (#624). The output is `cargo run`'s.
 #[test]
 fn a_vertex_literal_and_a_view_of_unit_state_run() {
-    let (rawr, cargo) = both_printed("crossing-geometry", "geometry.rs", "");
+    let (rawr, cargo) = both_printed("geometry.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.starts_with(
@@ -922,24 +899,7 @@ fn a_vertex_literal_and_a_view_of_unit_state_run() {
 /// and its type as the crate writes them (#608, D664).
 #[test]
 fn a_literal_names_the_public_field_rawr_cannot_hold() {
-    let root = root("crossing-shaded");
-    fs::copy(
-        root.join("variants").join("shaded.rs"),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
-    let directory = crate::support::scratch();
-    let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-        .arg("check")
-        .arg(&root)
-        .env("RAWR_HOME", directory.join("rawr-home"))
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("RUSTFLAGS")
-        .env_remove("RAWR_VERBOSE")
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&check.stderr);
-    assert!(!check.status.success(), "{stderr}");
+    let stderr = checked("shaded.rs");
     assert!(stderr.contains("main.rs:13:18"), "{stderr}");
     assert!(
         stderr.contains("field `shade` has type `fn(f32) -> f32`, which rawr can't hold yet"),
@@ -956,7 +916,7 @@ fn a_literal_names_the_public_field_rawr_cannot_hold() {
 /// run`'s.
 #[test]
 fn a_literal_lent_for_the_program_lives_as_long_as_it() {
-    let (rawr, cargo) = both_printed("crossing-titled", "titled.rs", "Count,Count");
+    let (rawr, cargo) = both_printed("titled.rs", "Count,Count");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.starts_with("headings 42\n")
@@ -974,24 +934,7 @@ fn a_borrowed_local_where_a_static_str_goes_does_not_live_long_enough() {
         ("lent_name.rs", "main.rs:10:37-"),
         ("lent_heading.rs", "main.rs:10:28-"),
     ] {
-        let root = root("crossing-lent");
-        fs::copy(
-            root.join("variants").join(variant),
-            root.join("src/main.rs"),
-        )
-        .unwrap();
-        let directory = crate::support::scratch();
-        let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
-            .arg("check")
-            .arg(&root)
-            .env("RAWR_HOME", directory.join("rawr-home"))
-            .env_remove("CARGO_TARGET_DIR")
-            .env_remove("RUSTFLAGS")
-            .env_remove("RAWR_VERBOSE")
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&check.stderr);
-        assert!(!check.status.success(), "{stderr}");
+        let stderr = checked(variant);
         // rawr's own span, which runs to the borrow's end.
         assert!(
             stderr.contains("error[E0597]: `name` does not live long enough")
@@ -1008,7 +951,7 @@ fn a_borrowed_local_where_a_static_str_goes_does_not_live_long_enough() {
 /// `cargo run`'s.
 #[test]
 fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
-    let (rawr, cargo) = both_printed("crossing-compared", "compared.rs", "");
+    let (rawr, cargo) = both_printed("compared.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "turn left\ntrue false false true false\ntrue false");
 }
@@ -1020,7 +963,7 @@ fn a_crate_type_compares_with_a_number_through_std_provided_methods() {
 /// rustc does (T502). The output is `cargo run`'s.
 #[test]
 fn an_operator_takes_the_output_of_the_impl_its_operand_picks() {
-    let (rawr, cargo) = both_printed("crossing-plane", "plane.rs", "");
+    let (rawr, cargo) = both_printed("plane.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1040,7 +983,7 @@ fn an_operator_takes_the_output_of_the_impl_its_operand_picks() {
 /// run`'s.
 #[test]
 fn a_crate_method_whose_output_names_its_closure_type_runs() {
-    let (rawr, cargo) = both_printed("crossing-mapped", "mapped.rs", "");
+    let (rawr, cargo) = both_printed("mapped.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 message Curve(Drawn(\"Increment\"))")
@@ -1062,7 +1005,7 @@ fn a_crate_method_whose_output_names_its_closure_type_runs() {
 /// is `cargo run`'s.
 #[test]
 fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
-    let (rawr, cargo) = both_printed("crossing-opaque", "opaque.rs", "");
+    let (rawr, cargo) = both_printed("opaque.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -1075,6 +1018,20 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
     );
 }
 
+/// iced's loupe (#845): `zoomed` gives the program's `Zoomed<impl
+/// Widget<Message> + 'a>`, an `impl Trait` inside the output, whose hidden
+/// type the checker infers from the body, as rustc does. The output is
+/// `cargo run`'s.
+#[test]
+fn an_opaque_type_inside_a_program_functions_output_is_the_bodys_type() {
+    let (rawr, cargo) = both_printed("wrapped.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(
+        rawr.ends_with("last view pad 0 pad 0 [Increment] 2@50 pad 3 [Decrement]"),
+        "{rawr}"
+    );
+}
+
 /// iced's download_progress (#568): the program's own native
 /// `download(url: impl AsRef<str>) -> impl Steps` gives an opaque type
 /// that captures its `impl AsRef<str>` input, which Rawr fills with a
@@ -1083,7 +1040,7 @@ fn opaque_widget_outputs_take_no_lifetime_and_map_as_cargo_checks_them() {
 /// output is `cargo run`'s.
 #[test]
 fn a_native_opaque_output_of_a_string_input_fills_a_crate_generic() {
-    let (rawr, cargo) = both_printed("crossing-stepped", "stepped.rs", "");
+    let (rawr, cargo) = both_printed("stepped.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Some(Finished(27))\nSome(Finished(0))");
 }
@@ -1093,7 +1050,7 @@ fn a_native_opaque_output_of_a_string_input_fills_a_crate_generic() {
 /// input the opaque type's binding decides. The output is `cargo run`'s.
 #[test]
 fn a_closure_takes_the_item_a_native_opaque_type_binds() {
-    let (rawr, cargo) = both_printed("crossing-sipped", "sipped.rs", "");
+    let (rawr, cargo) = both_printed("sipped.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Some(Downloading(18))");
 }
@@ -1107,7 +1064,7 @@ fn a_closure_takes_the_item_a_native_opaque_type_binds() {
 /// output is `cargo run`'s.
 #[test]
 fn a_closure_takes_the_output_a_native_opaque_future_binds() {
-    let (rawr, cargo) = both_printed("crossing-finished", "finished.rs", "");
+    let (rawr, cargo) = both_printed("finished.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "Some(Finished(Ok(27)))");
 }
@@ -1119,7 +1076,7 @@ fn a_closure_takes_the_output_a_native_opaque_future_binds() {
 /// `.and_then` and `.then` take it from there. The output is `cargo run`'s.
 #[test]
 fn a_native_opaque_future_fills_a_future_parameter() {
-    let (rawr, cargo) = both_printed("crossing-futured", "futured.rs", "");
+    let (rawr, cargo) = both_printed("futured.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1134,7 +1091,7 @@ fn a_native_opaque_future_fills_a_future_parameter() {
 /// run`'s.
 #[test]
 fn a_method_takes_its_traits_associated_type_of_the_receiver() {
-    let (rawr, cargo) = both_printed("crossing-hued", "hued.rs", "");
+    let (rawr, cargo) = both_printed("hued.rs", "");
     assert_eq!(rawr, cargo);
     assert!(rawr.starts_with("hue 220 85"), "{rawr}");
 }
@@ -1147,7 +1104,7 @@ fn a_method_takes_its_traits_associated_type_of_the_receiver() {
 /// is `cargo run`'s.
 #[test]
 fn a_blanket_impls_associated_type_resolves_through_the_impl_it_applies_by() {
-    let (rawr, cargo) = both_printed("crossing-darkened", "darkened.rs", "");
+    let (rawr, cargo) = both_printed("darkened.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "hsl 115 1 0.596875");
 }
@@ -1161,7 +1118,7 @@ fn a_blanket_impls_associated_type_resolves_through_the_impl_it_applies_by() {
 /// crosses through the arena. The output is `cargo run`'s.
 #[test]
 fn capturing_closures_fill_each_of_several_callable_parameters() {
-    let (rawr, cargo) = both_printed("crossing-withed", "withed.rs", "");
+    let (rawr, cargo) = both_printed("withed.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1179,7 +1136,7 @@ fn capturing_closures_fill_each_of_several_callable_parameters() {
 /// trait of a crate path of its own is special. The output is `cargo run`'s.
 #[test]
 fn a_trait_method_over_fn_runs_on_functions_and_its_callable_crosses() {
-    let (rawr, cargo) = both_printed("crossing-functioned", "functioned.rs", "");
+    let (rawr, cargo) = both_printed("functioned.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1195,7 +1152,7 @@ fn a_trait_method_over_fn_runs_on_functions_and_its_callable_crosses() {
 /// `std::fs::read` by its full path (#659). The output is `cargo run`'s.
 #[test]
 fn a_closure_takes_the_output_of_an_async_block_a_future_parameter_binds() {
-    let (rawr, cargo) = both_printed("crossing-loaded", "loaded.rs", "");
+    let (rawr, cargo) = both_printed("loaded.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1210,7 +1167,7 @@ fn a_closure_takes_the_output_of_an_async_block_a_future_parameter_binds() {
 /// `card`'s opaque type, as rustc infers it. The output is `cargo run`'s.
 #[test]
 fn a_borrowing_opaque_widget_is_boxed_in_a_closure_before_its_function() {
-    let (rawr, cargo) = both_printed("crossing-gallery", "gallery.rs", "");
+    let (rawr, cargo) = both_printed("gallery.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 [Increment] pad 1 ...@16 ...@16")
@@ -1230,7 +1187,7 @@ fn a_borrowing_opaque_widget_is_boxed_in_a_closure_before_its_function() {
 /// run`'s.
 #[test]
 fn an_option_of_an_opaque_widget_takes_the_written_bounds_defaults() {
-    let (rawr, cargo) = both_printed("crossing-viewer", "viewer.rs", "");
+    let (rawr, cargo) = both_printed("viewer.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("2 view pad 0 [Increment] none")
@@ -1248,7 +1205,7 @@ fn an_option_of_an_opaque_widget_takes_the_written_bounds_defaults() {
 /// `cargo run`'s.
 #[test]
 fn an_option_of_an_opaque_widget_crosses_whole_while_it_is_none() {
-    let (rawr, cargo) = both_printed("crossing-stacked", "stacked.rs", "");
+    let (rawr, cargo) = both_printed("stacked.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 [Increment] none")
@@ -1264,7 +1221,7 @@ fn an_option_of_an_opaque_widget_crosses_whole_while_it_is_none() {
 /// `PartialEq`. The output is `cargo run`'s.
 #[test]
 fn a_choice_of_script_values_beside_a_string_literal_runs() {
-    let (rawr, cargo) = both_printed("crossing-pick", "pick.rs", "Ruby,Some other language");
+    let (rawr, cargo) = both_printed("pick.rs", "Ruby,Some other language");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -1287,7 +1244,7 @@ fn a_choice_of_script_values_beside_a_string_literal_runs() {
 /// value, which `update` then replaces. The output is `cargo run`'s.
 #[test]
 fn a_reference_to_a_crate_or_script_value_fills_a_crate_type_argument() {
-    let (rawr, cargo) = both_printed("crossing-selected", "selected.rs", "Software,Elm");
+    let (rawr, cargo) = both_printed("selected.rs", "Software,Elm");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains(
@@ -1306,7 +1263,7 @@ fn a_reference_to_a_crate_or_script_value_fills_a_crate_type_argument() {
 /// view borrows it. The output is `cargo run`'s.
 #[test]
 fn a_widget_borrows_a_crate_value_of_the_state_for_the_views_lifetime() {
-    let (rawr, cargo) = both_printed("crossing-qr", "qr.rs", "Limit,Limit");
+    let (rawr, cargo) = both_printed("qr.rs", "Limit,Limit");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 <Limit:0> qr 9@10 draw 1")
@@ -1321,7 +1278,7 @@ fn a_widget_borrows_a_crate_value_of_the_state_for_the_views_lifetime() {
 /// output is `cargo run`'s.
 #[test]
 fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
-    let (rawr, cargo) = both_printed("crossing-chosen", "chosen.rs", "Elm,Rust");
+    let (rawr, cargo) = both_printed("chosen.rs", "Elm,Rust");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 <Type a language...? Rust|Elm>")
@@ -1340,7 +1297,7 @@ fn an_option_of_a_late_bound_reference_is_lent_for_the_call() {
 #[test]
 #[ignore = "blocked: the checker leaves the renderer of an opaque `impl Framed` unknown (E0282), and `&self.items` of a crate-value Vec field fails attestation as `&[T]`"]
 fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
-    let (rawr, cargo) = both_printed("crossing-notes", "notes.rs", "first,Reset");
+    let (rawr, cargo) = both_printed("notes.rs", "first,Reset");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 [Reset] map md first@16 draw 1 md second@16 draw 1")
@@ -1362,7 +1319,7 @@ fn an_opaque_widget_borrows_a_slice_of_crate_values_for_the_views_lifetime() {
 /// `cargo run`'s.
 #[test]
 fn an_opaque_result_borrows_its_slice_for_as_long_as_it_lives() {
-    let (rawr, cargo) = both_printed("crossing-shelf", "shelf.rs", "");
+    let (rawr, cargo) = both_printed("shelf.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("picked <first> <second>")
@@ -1389,7 +1346,7 @@ fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
             "main.rs:7:17",
         ),
     ] {
-        let stderr = checked("crossing-shelf-error", variant);
+        let stderr = checked(variant);
         // rawr's own report, before cargo's.
         let own = stderr.split("cargo check found").next().unwrap_or_default();
         assert!(
@@ -1409,7 +1366,7 @@ fn using_what_an_opaque_result_borrows_while_it_lives_is_rustcs_error() {
 /// item.
 #[test]
 fn an_opaque_result_of_a_trait_that_cant_be_an_object_runs_through_its_proxy() {
-    let (rawr, cargo) = both_printed("crossing-stock", "stock.rs", "");
+    let (rawr, cargo) = both_printed("stock.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("tag n3 73")
@@ -1424,7 +1381,7 @@ fn an_opaque_result_of_a_trait_that_cant_be_an_object_runs_through_its_proxy() {
 /// rustc's E0502, which rawr's checker reports before anything runs.
 #[test]
 fn a_result_a_method_gives_as_self_keeps_the_items_borrowed() {
-    let stderr = checked("crossing-stock-error", "stock_again.rs");
+    let stderr = checked("stock_again.rs");
     let own = stderr.split("cargo check found").next().unwrap_or_default();
     assert!(
         own.contains(
@@ -1441,7 +1398,7 @@ fn a_result_a_method_gives_as_self_keeps_the_items_borrowed() {
 /// every show read the one value of each item. The output is `cargo run`'s.
 #[test]
 fn a_crate_call_takes_a_borrowing_result_by_value() {
-    let (rawr, cargo) = both_printed("crossing-shelf-wrap", "shelf_wrap.rs", "");
+    let (rawr, cargo) = both_printed("shelf_wrap.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("twice (([first second]))")
@@ -1456,7 +1413,7 @@ fn a_crate_call_takes_a_borrowing_result_by_value() {
 /// runs.
 #[test]
 fn using_what_a_wrapped_result_borrows_while_it_lives_is_rustcs_error() {
-    let stderr = checked("crossing-shelf-wrap-error", "shelf_wrap_push.rs");
+    let stderr = checked("shelf_wrap_push.rs");
     let own = stderr.split("cargo check found").next().unwrap_or_default();
     assert!(
         own.contains(
@@ -1472,24 +1429,19 @@ fn using_what_a_wrapped_result_borrows_while_it_lives_is_rustcs_error() {
 /// reached. The output is `cargo run`'s.
 #[test]
 fn a_function_in_a_module_nested_under_an_imported_module_runs() {
-    let (rawr, cargo) = both_printed("crossing-nested", "nested.rs", "");
+    let (rawr, cargo) = both_printed("nested.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(rawr, "f 2\ng deep\nthrough 42\ndeeper deep\ncount 10 11");
 }
 
-/// `rawr-import check` of the fixture copied to `name` with `variant` as
-/// its `main.rs`, which fails: its stderr.
-fn checked(name: &str, variant: &str) -> String {
-    let root = root(name);
-    fs::copy(
-        root.join("variants").join(variant),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
+/// `rawr-import check` of a lane of the fixture with `variant` as its
+/// `main.rs`, which fails: its stderr.
+fn checked(variant: &str) -> String {
+    let root = lane(Some(variant));
     let directory = crate::support::scratch();
     let check = Command::new(env!("CARGO_BIN_EXE_rawr-import"))
         .arg("check")
-        .arg(&root)
+        .arg(&*root)
         .env("RAWR_HOME", directory.join("rawr-home"))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTFLAGS")
@@ -1511,7 +1463,7 @@ fn checked(name: &str, variant: &str) -> String {
 /// output is `cargo run`'s.
 #[test]
 fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
-    let (rawr, cargo) = both_printed("crossing-program", "program.rs", "");
+    let (rawr, cargo) = both_printed("program.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view canvas[primary plain 0#1, primary 40x30 after 0 rgb(10, 20, 30)#2]")
@@ -1528,7 +1480,7 @@ fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
 
 #[test]
 fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
-    let (rawr, cargo) = both_printed("crossing-results", "results.rs", "");
+    let (rawr, cargo) = both_printed("results.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1554,7 +1506,7 @@ fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
 /// own. The output is `cargo run`'s.
 #[test]
 fn a_match_moves_or_lends_variant_fields_without_clone() {
-    let (rawr, cargo) = both_printed("crossing-matched", "matched.rs", "");
+    let (rawr, cargo) = both_printed("matched.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1576,7 +1528,7 @@ fn a_match_moves_or_lends_variant_fields_without_clone() {
 /// fixes it. The output is `cargo run`'s.
 #[test]
 fn an_enum_with_defaulted_parameters_is_matched_and_made() {
-    let (rawr, cargo) = both_printed("crossing-keys", "keys.rs", "");
+    let (rawr, cargo) = both_printed("keys.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1591,7 +1543,7 @@ fn an_enum_with_defaulted_parameters_is_matched_and_made() {
 /// as std's impls for them say. The output is `cargo run`'s.
 #[test]
 fn string_like_generics_take_what_their_bounds_impls_take() {
-    let (rawr, cargo) = both_printed("crossing-named", "named.rs", "");
+    let (rawr, cargo) = both_printed("named.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("spelled Grace\nspelled Ada\n5 4 4\nopened icon.png in assets\nopened inter.ttf in assets/fonts"),
@@ -1606,7 +1558,7 @@ fn string_like_generics_take_what_their_bounds_impls_take() {
 /// The output is `cargo run`'s.
 #[test]
 fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
-    let (rawr, cargo) = both_printed("crossing-grid", "grid.rs", "");
+    let (rawr, cargo) = both_printed("grid.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1616,7 +1568,7 @@ fn a_non_static_fn_mut_and_function_pointers_of_any_arity_run() {
 
 #[test]
 fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
-    let (rawr, cargo) = both_printed("crossing-sequences", "sequences.rs", "");
+    let (rawr, cargo) = both_printed("sequences.rs", "");
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("local len=1 drops=0 capacity=8 allocation=true"),
@@ -1660,7 +1612,7 @@ fn native_sequence_callbacks_retain_mutations_ownership_and_unwind_history() {
 /// methods run through `Deref`. The output is `cargo run`'s.
 #[test]
 fn an_arc_of_a_crate_value_crosses_as_the_crates_own_pointer() {
-    let (rawr, cargo) = both_printed("crossing-pointers", "pointers.rs", "");
+    let (rawr, cargo) = both_printed("pointers.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1678,7 +1630,7 @@ fn an_arc_of_a_crate_value_crosses_as_the_crates_own_pointer() {
 /// in key order. The output is `cargo run`'s.
 #[test]
 fn maps_and_sets_cross_as_rawrs_keyed_collections() {
-    let (rawr, cargo) = both_printed("crossing-keyed", "keyed.rs", "");
+    let (rawr, cargo) = both_printed("keyed.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1695,7 +1647,7 @@ fn maps_and_sets_cross_as_rawrs_keyed_collections() {
 /// character (#345). The output is `cargo run`'s.
 #[test]
 fn a_crate_order_keys_a_btree_map_and_a_borrowed_instance_matches() {
-    let (rawr, cargo) = both_printed("crossing-ordered", "ordered.rs", "");
+    let (rawr, cargo) = both_printed("ordered.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1713,7 +1665,7 @@ fn a_crate_order_keys_a_btree_map_and_a_borrowed_instance_matches() {
 /// fixes. The output is `cargo run`'s.
 #[test]
 fn std_types_cross_in_every_position_and_std_trait_impls_are_demanded() {
-    let (rawr, cargo) = both_printed("crossing-signatures", "signatures.rs", "");
+    let (rawr, cargo) = both_printed("signatures.rs", "");
     assert_eq!(rawr, cargo);
     assert_eq!(
         rawr,
@@ -1728,12 +1680,7 @@ fn std_types_cross_in_every_position_and_std_trait_impls_are_demanded() {
 /// with the state kept.
 #[test]
 fn an_edit_to_a_script_impl_takes_effect_at_its_next_call() {
-    let root = root("crossing-program-swap");
-    fs::copy(
-        root.join("variants").join("program.rs"),
-        root.join("src/main.rs"),
-    )
-    .unwrap();
+    let root = lane(Some("program.rs"));
     let main = root.join("src/main.rs");
     let mut run = start(
         &root,
@@ -1792,7 +1739,7 @@ fn parse(line: &str) -> Option<(i64, i64)> {
 
 #[test]
 fn a_body_edit_takes_effect_at_the_next_event_with_the_state_kept() {
-    let root = root("crossing-swap");
+    let root = lane(None);
     let main = root.join("src/main.rs");
     let mut run = start(
         &root,

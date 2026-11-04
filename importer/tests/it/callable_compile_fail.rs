@@ -5,8 +5,7 @@ use rawr_import::surface::callable::Class;
 
 #[test]
 fn input_borrowing_hrtb_and_nonstatic_mutation_are_admitted() {
-    let _turn = rawr_import::store::test_turn();
-    let (_project, contract, _limits) = p4::contract();
+    let contract = p4::shared();
     let outcome = |name| {
         contract
             .outcomes()

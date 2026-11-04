@@ -1,5 +1,8 @@
-//! What the end-to-end tests share: a fixture copied where Cargo keeps
-//! test files, and `rawr-import run` on it with its output read as it comes.
+//! What the end-to-end tests share: fixtures prepared in lanes where Cargo
+//! keeps test files ([`fixture`]), one `RAWR_HOME` for the suite, and
+//! `rawr-import run` with its output read as it comes. The suite runs its
+//! tests in parallel; a test that needs a project or a home no other test
+//! touches makes its own under [`scratch`] by a name no other test uses.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -7,6 +10,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+pub mod alone;
+pub mod fixture;
+
+pub use alone::alone;
+pub use fixture::Fixture;
 
 pub fn copy(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
@@ -62,10 +71,20 @@ impl Drop for Run {
 
 /// The directory a test's projects and `RAWR_HOME` live in: `RAWR_TEST_TMPDIR`
 /// when set, so concurrent runs from different checkouts keep apart, and
-/// cargo's target tmp directory otherwise.
+/// cargo's target tmp directory otherwise. A test that asks for it runs
+/// beside others from then on, unless it runs [`alone`].
 pub fn scratch() -> PathBuf {
+    alone::share();
     std::env::var_os("RAWR_TEST_TMPDIR")
         .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
+}
+
+/// The suite's one `RAWR_RUNTIME_HOME`, the shared `RAWR_HOME`: a test
+/// with a home of its own still starts cold, but for rawr's host sources
+/// and compiled runtime, which no such test is about and which would
+/// otherwise compile again for each such home.
+pub fn runtime_home() -> PathBuf {
+    scratch().join("rawr-home")
 }
 
 /// `rawr-import run root`, with `variables` in its environment.

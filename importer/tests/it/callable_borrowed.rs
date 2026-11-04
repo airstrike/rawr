@@ -7,8 +7,8 @@ use rawr_import::surface::instance::{Arguments, Binder};
 
 #[test]
 fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
-    let _turn = rawr_import::store::test_turn();
-    let (_project, contract, _limits) = p4::contract();
+    let contract = p4::shared();
+    let limits = rawr_import::cargo::Limits::standard();
     let outcome = contract
         .outcomes()
         .find(|outcome| outcome.export().path().eq(["borrowed"]))
@@ -27,7 +27,7 @@ fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
     assert_eq!(item.binders()[0].depth(), 0);
     assert_eq!(item.binders()[0].index(), 0);
     let mut compiler = contract
-        .compiler((), p4::snapshot(&_limits), &_limits)
+        .compiler((), p4::snapshot(&limits), &limits)
         .expect("the callable demand compiler starts");
     compiler
         .require_instance(
@@ -41,7 +41,7 @@ fn real_input_only_late_bound_fn_is_classified_as_borrowed() {
                 Box::from([Type::Builtin(Builtin::I64)]),
                 Box::default(),
                 Box::from([Binder::normalized(0, 0)]),
-                &_limits,
+                &limits,
             )
             .expect("the borrowed instance seals"),
             "application.rs",
