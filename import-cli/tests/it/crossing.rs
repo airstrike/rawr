@@ -421,7 +421,9 @@ fn a_crates_impl_of_a_std_trait_for_a_std_type_is_callable() {
     assert_eq!(rawr, cargo);
     assert!(
         rawr.contains("1 view pad 0 Turn(0.0)..=Turn(1.0)@Turn(0.25)/None \"90\" \"45\" \"0\"")
-            && rawr.contains("last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"360\" \"180\" \"360\""),
+            && rawr.contains(
+                "last view pad 0 Turn(0.0)..=Turn(1.0)@Turn(1.0)/None \"360\" \"180\" \"360\""
+            ),
         "{rawr}"
     );
 }

@@ -371,9 +371,9 @@ impl<'g> Headers<'g> {
         };
         let mut pending = Vec::new();
         let read = |predicates: &[model::Predicate],
-                        bindings: &BTreeMap<u32, model::Type>,
-                        depth: usize,
-                        pending: &mut Vec<_>| {
+                    bindings: &BTreeMap<u32, model::Type>,
+                    depth: usize,
+                    pending: &mut Vec<_>| {
             for predicate in predicates {
                 let model::Predicate::Bound {
                     ty,

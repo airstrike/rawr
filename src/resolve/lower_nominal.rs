@@ -22335,10 +22335,11 @@ impl<'a> Parser<'a> {
             .host
             .imported_type_paths(identity, owner)?
             .collect::<Vec<_>>();
-        if paths
-            .iter()
-            .any(|path| self.models.host_items(&format!("{path}::{member}")).is_some())
-        {
+        if paths.iter().any(|path| {
+            self.models
+                .host_items(&format!("{path}::{member}"))
+                .is_some()
+        }) {
             return None;
         }
         paths
@@ -46853,8 +46854,13 @@ impl<'a> Parser<'a> {
                     fits
                 });
                 if gives && self.host_witnesses.is_empty() {
-                    let value =
-                        self.parse_target_into(argument.clone(), &source, forms, owner, expression.end());
+                    let value = self.parse_target_into(
+                        argument.clone(),
+                        &source,
+                        forms,
+                        owner,
+                        expression.end(),
+                    );
                     self.unify_type(&value.ty, &builtin);
                     return Ok(self.operator_expr(value.rendered_source(), builtin, expression));
                 }
