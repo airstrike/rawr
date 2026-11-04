@@ -855,9 +855,13 @@ fn take_instance_calls(parser: &mut Parser<'_>) -> Vec<(crate::item::Key, Vec<Ty
             let types = types
                 .iter()
                 .map(|ty| parser.inference.resolve(ty))
-                .collect();
+                .collect::<Vec<_>>();
             (key, types)
         })
+        // A literal still open is one of a body that stopped before its
+        // end, which settles it: `50` may be the `u32` a bound's impl
+        // picks, so its call waits for a reading that settles it.
+        .filter(|(_, types)| !types.iter().any(contains_open_literal))
         .collect()
 }
 
@@ -1060,7 +1064,9 @@ fn body_templates<A: crate::host::ImportAllocation>(
                     );
                     parser.symbolic_only = true;
                     parser.collecting_instances = true;
-                    let _ = parser.parse_function_body(definition);
+                    let _ = parser
+                        .expect_output(definition.output.as_ref())
+                        .and_then(|()| parser.parse_function_body(definition));
                     parser.reaches_host
                 }
                 Added::Method(index) => {
@@ -1083,7 +1089,9 @@ fn body_templates<A: crate::host::ImportAllocation>(
                         Ok(mut parser) => {
                             parser.symbolic_only = true;
                             parser.collecting_instances = true;
-                            let _ = parser.parse_method_body(definition);
+                            let _ = parser
+                                .expect_output(Some(definition.output()))
+                                .and_then(|()| parser.parse_method_body(definition));
                             parser.reaches_host
                         }
                         Err(_) => false,
@@ -13292,6 +13300,19 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The body's output, when `output` is opaque, as the type its body
+    /// gives, which `reveal` names from then on: an erased reading of the
+    /// body goes on to its end.
+    #[cfg(feature = "rust-import")]
+    fn expect_output(&mut self, output: Option<&type_ref::Type>) -> Result<(), Error> {
+        if let Some(output) = output.filter(|output| output.has_opaque()) {
+            let expected = self.opaque_expected(output)?;
+            self.return_ty = Some(expected.clone());
+            self.revealing = Some(expected);
+        }
+        Ok(())
+    }
+
     /// `output` with a fresh inference variable for each opaque `impl
     /// Trait` in it, which the body's tail then binds to its hidden type.
     #[cfg(feature = "rust-import")]
@@ -17348,8 +17369,9 @@ impl<'a> Parser<'a> {
             .filter(|item| item.kind() == crate::host::item::Kind::AssociatedFunction)
         {
             // A facade's number input takes each number of its kind.
-            if matches!(item.signature().parameters(), [parameter]
-                if host_number_accepts(parameter, source))
+            if item.imported_identity().is_none()
+                && matches!(item.signature().parameters(), [parameter]
+                    if host_number_accepts(parameter, source))
             {
                 return true;
             }
@@ -45123,6 +45145,18 @@ impl<'a> Parser<'a> {
                 let _ = self.fix_opaque_in(bound, &substitution[&generic.name.text], substitution);
             }
         }
+        // A literal argument takes the kind the one impl its bound reaches
+        // gives, as rustc selects it, before its instance is chosen: `50`
+        // for `impl Into<Pixels>` is the `u32` of `From<u32>`.
+        let literals = self
+            .pending_traits
+            .iter()
+            .filter(|(ty, ..)| contains_open_literal(&self.inference.resolve(ty)))
+            .cloned()
+            .collect::<Vec<_>>();
+        for (ty, trait_name, arguments, _) in literals {
+            self.type_implements_with(&ty, &trait_name, &arguments);
+        }
         let types = function
             .definition
             .generics
@@ -52385,28 +52419,41 @@ fn mentions_script(ty: &Ty) -> bool {
 }
 
 fn contains_inference(ty: &Ty) -> bool {
-    match ty {
-        Ty::Infer(_) => true,
-        Ty::Reference { target, .. }
-        | Ty::Boxed(target)
-        | Ty::Iter(target)
-        | Ty::Reverse(target)
-        | Ty::Cow(target)
-        | Ty::Range(target)
-        | Ty::InclusiveOf(target)
-        | Ty::Cell(_, target) => contains_inference(target),
-        Ty::Array { element, .. } | Ty::Option(element) => contains_inference(element),
-        Ty::Result(ok, err) => contains_inference(ok) || contains_inference(err),
-        Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(contains_inference),
-        Ty::Host { arguments, .. } => arguments.iter().any(contains_inference),
-        Ty::Callable { inputs, output, .. }
-        | Ty::Fn { inputs, output }
-        | Ty::FnItem { inputs, output, .. }
-        | Ty::FnChoice { inputs, output, .. } => {
-            inputs.iter().any(contains_inference) || contains_inference(output)
+    contains(ty, |ty| matches!(ty, Ty::Infer(_)))
+}
+
+/// Whether `ty` holds a literal whose kind is still open: `{integer}` or
+/// `{float}`, which only the end of its body settles.
+#[cfg(feature = "rust-import")]
+fn contains_open_literal(ty: &Ty) -> bool {
+    contains(ty, |ty| {
+        matches!(ty, Ty::Int(Int::Var(_)) | Ty::Float(Float::Var(_)))
+    })
+}
+
+/// Whether `ty` or a type inside it is one `leaf` picks.
+fn contains(ty: &Ty, leaf: fn(&Ty) -> bool) -> bool {
+    let inside = |ty: &Ty| contains(ty, leaf);
+    leaf(ty)
+        || match ty {
+            Ty::Reference { target, .. }
+            | Ty::Boxed(target)
+            | Ty::Iter(target)
+            | Ty::Reverse(target)
+            | Ty::Cow(target)
+            | Ty::Range(target)
+            | Ty::InclusiveOf(target)
+            | Ty::Cell(_, target) => inside(target),
+            Ty::Array { element, .. } | Ty::Option(element) => inside(element),
+            Ty::Result(ok, err) => inside(ok) || inside(err),
+            Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(inside),
+            Ty::Host { arguments, .. } => arguments.iter().any(inside),
+            Ty::Callable { inputs, output, .. }
+            | Ty::Fn { inputs, output }
+            | Ty::FnItem { inputs, output, .. }
+            | Ty::FnChoice { inputs, output, .. } => inputs.iter().any(inside) || inside(output),
+            _ => false,
         }
-        _ => false,
-    }
 }
 
 /// A loop being parsed. A `break` or `continue` to an enclosing loop sets

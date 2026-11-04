@@ -1,11 +1,13 @@
 // rawr
 // iced's layout in the fixture: `fn square(size: impl Into<Length> +
-// Copy)` takes an anonymous generic parameter of two bounds and passes it
-// twice to a crate's methods that take `impl Into<Length>`. A crate
-// function takes such a parameter too.
+// Copy) -> impl Widget<Message>` takes an anonymous generic parameter of
+// two bounds and passes it twice to a crate's methods that take `impl
+// Into<Length>`. A number fills it through the crate's `From` impls, and
+// a literal takes the kind of the one impl of its kind. A crate function
+// takes such a parameter too.
 
 use events::controls::application;
-use events::conversions::{frame, sized, square, Pixels, Sized};
+use events::conversions::{frame, sized, square, Pixels};
 use events::widgets::{column, Widget};
 
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +26,7 @@ impl Default for Squares {
 }
 
 /// A square of side `size`, as iced's layout draws one.
-fn boxed(label: &str, size: impl Into<Pixels> + Copy) -> Sized {
+fn boxed(label: &str, size: impl Into<Pixels> + Copy) -> impl Widget<Message> {
     sized(label).width(size).height(size)
 }
 
@@ -41,8 +43,10 @@ impl Squares {
             boxed("program", self.side),
             boxed("pixels", Pixels(3.0)),
             boxed("integer", 7u32),
+            boxed("literal", 50),
             square("crate", self.side * 2.0),
             square("crate-integer", 4u32),
+            square("crate-literal", 4),
         ]
     }
 }
