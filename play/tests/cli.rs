@@ -76,3 +76,97 @@ fn cli_refuses_an_async_main_with_no_runtime_as_rustc_does() {
     );
     assert!(stderr.contains("play.rs:1:1"), "{stderr}");
 }
+
+/// The playground's examples (examples.ts) run as rustc's build of each
+/// does: the same stdout and exit status, or for one rustc refuses, its
+/// error at its place. tests/fixtures/rust/expected holds what rustc's
+/// build printed (`generate.sh` writes it).
+#[test]
+fn cli_runs_the_playgrounds_examples_as_rustc_does() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = root.join("tests/fixtures/rust");
+    let read = |path: std::path::PathBuf| {
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    };
+    // Each example examples.ts imports and lists.
+    let menu = read(root.join("deploy/cloudflare/src/examples.ts"));
+    let examples: Vec<&str> = menu
+        .lines()
+        .filter_map(|line| {
+            let line = line.strip_prefix("import ")?;
+            let (binding, path) = line.split_once(" from \"../../../tests/fixtures/rust/")?;
+            let name = path.strip_suffix(".rs\";")?;
+            assert!(
+                menu.contains(&format!("code: {binding} }}")),
+                "examples.ts imports {name}.rs but doesn't list it"
+            );
+            Some(name)
+        })
+        .collect();
+    let mut files: Vec<String> = std::fs::read_dir(&fixtures)
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            name.strip_suffix(".rs").map(str::to_owned)
+        })
+        .collect();
+    files.sort();
+    let mut listed: Vec<String> = examples.iter().map(|name| (*name).to_owned()).collect();
+    listed.sort();
+    assert_eq!(
+        files, listed,
+        "every Rust fixture is an example in examples.ts"
+    );
+
+    for name in examples {
+        let source = read(fixtures.join(format!("{name}.rs")));
+        let expected = fixtures.join("expected");
+        let status: i32 = read(expected.join(format!("{name}.status")))
+            .trim()
+            .parse()
+            .unwrap();
+        let result = run_stdin(&source, &["--time-ms", "20000"]);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        if result.status.success() {
+            let output = rawr_play::Output::from_json(&result.stdout).unwrap();
+            let stdout: String = output
+                .chunks
+                .iter()
+                .filter(|(stream, _)| *stream == rawr_play::plain::Stream::Stdout)
+                .map(|(_, text)| text.as_str())
+                .collect();
+            let wanted = read(expected.join(format!("{name}.stdout")));
+            assert_eq!(
+                (stdout.as_str(), output.status),
+                (wanted.as_str(), status),
+                "{name}"
+            );
+            continue;
+        }
+        // A program rustc refuses: its first error, at the same place.
+        let rustc = read(expected.join(format!("{name}.stderr")));
+        assert_eq!(
+            status, 1,
+            "{name} built under rustc but not in rawr: {stderr}"
+        );
+        assert!(result.stdout.is_empty(), "{name}");
+        let first = |text: &str, prefix: &str| {
+            text.lines()
+                .map(str::trim_start)
+                .find(|line| line.starts_with(prefix))
+                .map(str::to_owned)
+        };
+        assert_eq!(
+            first(&stderr, "error"),
+            first(&rustc, "error"),
+            "{name}: {stderr}"
+        );
+        let place = |text: &str| {
+            let line = first(text, "--> ")?;
+            // Where it starts: rawr's adds where it ends.
+            let (_, place) = line.split_once(".rs:")?;
+            place.split('-').next().map(str::to_owned)
+        };
+        assert_eq!(place(&stderr), place(&rustc), "{name}: {stderr}");
+    }
+}

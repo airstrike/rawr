@@ -1,0 +1,26 @@
+error[E0382]: borrow of moved value: `words`
+  --> use_after_move.rs:10:16
+   |
+ 7 |     let words = vec![String::from("rawr"), String::from("runs")];
+   |         ----- move occurs because `words` has type `Vec<String>`, which does not implement the `Copy` trait
+ 8 |     let n = consume(words);
+   |                     ----- value moved here
+ 9 |     println!("{n} words");
+10 |     println!("{words:?}"); // error[E0382]: `words` was moved
+   |                ^^^^^ value borrowed here after move
+   |
+note: consider changing this parameter type in function `consume` to borrow instead if owning the value isn't necessary
+  --> use_after_move.rs:2:19
+   |
+ 2 | fn consume(words: Vec<String>) -> usize {
+   |    -------        ^^^^^^^^^^^ this parameter takes ownership of the value
+   |    |
+   |    in this function
+help: consider cloning the value if the performance cost is acceptable
+   |
+ 8 |     let n = consume(words.clone());
+   |                          ++++++++
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0382`.
