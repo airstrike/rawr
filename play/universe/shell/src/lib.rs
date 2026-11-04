@@ -15,6 +15,11 @@
 //! (#527). Either goes to the file [`FRAME`] names, and `run` returns, as
 //! iced's does when its window closes.
 //!
+//! A GIF plays at the program's pace, not the machine's (#889): a frame the
+//! window's redraws changed is shown for [`INTERVAL`] a redraw, however
+//! long it took to draw, and one the program's own clock changed (a timer,
+//! a task) for the time that clock ran.
+//!
 //! Its public items are the ones iced takes from iced_winit.
 
 pub use iced_debug as debug;
@@ -41,6 +46,8 @@ use crate::program::Program;
 use crate::runtime::user_interface::{self, UserInterface};
 use crate::runtime::{task, Action, Task};
 
+use std::sync::atomic::{self, AtomicBool};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The variable naming the file the frame is written to.
@@ -111,18 +118,19 @@ where
     shell.settle(&program);
     let mut film = Film::default();
     let mut next = Instant::now();
+    let mut clock = Clock::new(next);
     loop {
         shell.updated = false;
         let drawn = Instant::now();
+        let at = clock.frame(drawn, std::mem::take(&mut shell.timed));
         let (frame, redraw) = shell.redraw(&program);
-        let pushed = film
-            .push(frame, drawn)
-            .map_err(Error::WindowCreationFailed)?;
+        let pushed = film.push(frame, at).map_err(Error::WindowCreationFailed)?;
         let now = Instant::now();
         // Quiet counts from the end of a changed frame: drawing it is the
         // shell's time, not the program's, however slow the machine.
         if pushed {
             shell.changed = now;
+            clock.changed(drawn);
         }
         let step = now - drawn;
         let late = deadline
@@ -150,6 +158,59 @@ where
     }
     let bytes = film.finish().map_err(Error::WindowCreationFailed)?;
     std::fs::write(path, bytes).map_err(Error::WindowCreationFailed)
+}
+
+/// The GIF's clock: when each frame shows, in the time the program ran
+/// in rather than the time the machine took to draw it (#889).
+///
+/// A redraw is a frame of the program's window, so it advances the clock by
+/// [`INTERVAL`], as a window that draws each frame in time would. A program
+/// that counts frames, or a widget that animates a step a redraw, then plays
+/// at its own pace on a machine that takes seconds to draw each one. Once a
+/// message comes on the program's own clock (a timer, a task), the frame it
+/// changes shows at the wall time since the last change instead: that clock
+/// ran on through the draws, and its ticks say when the change was due.
+///
+/// The program itself still sees the machine's time, in its redraw events
+/// and through `Instant::now`: a widget compares one with the other, and a
+/// clock of the shell's own would stop one that started after it fell
+/// behind.
+struct Clock {
+    /// When the last frame shows.
+    at: Instant,
+    /// When the last changed frame was drawn, and when it shows.
+    changed: (Instant, Instant),
+    /// Whether a message came on the program's clock since that change.
+    timed: bool,
+}
+
+impl Clock {
+    fn new(now: Instant) -> Self {
+        Self {
+            at: now,
+            changed: (now, now),
+            timed: false,
+        }
+    }
+
+    /// When the frame drawn at `drawn` shows, given whether a message came
+    /// on the program's own clock since the last frame.
+    fn frame(&mut self, drawn: Instant, timed: bool) -> Instant {
+        self.timed |= timed;
+        let (wall, shown) = self.changed;
+        self.at = if self.timed {
+            (shown + (drawn - wall)).max(self.at)
+        } else {
+            self.at + INTERVAL
+        };
+        self.at
+    }
+
+    /// The last frame, drawn at `drawn`, changed.
+    fn changed(&mut self, drawn: Instant) {
+        self.changed = (drawn, self.at);
+        self.timed = false;
+    }
 }
 
 /// The run's deadline: the one [`DEADLINE`] gives, or the sooner one the
@@ -202,8 +263,13 @@ fn instant(millis: u64, now: Instant) -> Instant {
 
 /// What the program's tasks and subscriptions send the shell.
 enum Event<Message> {
-    /// An action to perform.
+    /// An action to perform. A message among them came on the program's
+    /// own clock: a task's, or a subscription's that doesn't listen to the
+    /// window.
     Action(Action<Message>),
+    /// A message a subscription made of the window's events, such as a
+    /// redraw.
+    Window(Message),
     /// A task finished.
     Done,
 }
@@ -225,6 +291,9 @@ struct Shell<P: Program> {
     subscribed: bool,
     /// Whether the program updated since the last frame.
     updated: bool,
+    /// Whether a message came on the program's own clock since the last
+    /// frame.
+    timed: bool,
     /// When the frame last changed.
     changed: Instant,
     /// Whether the program asked to exit or closed its window.
@@ -268,6 +337,7 @@ impl<P: Program + 'static> Shell<P> {
             pending: 0,
             subscribed: false,
             updated: false,
+            timed: false,
             changed: Instant::now(),
             exited: false,
         };
@@ -390,13 +460,12 @@ impl<P: Program + 'static> Shell<P> {
     }
 
     fn resubscribe(&mut self, program: &P) {
-        let recipes = subscription::into_recipes(self.runtime.enter(|| {
-            program
-                .subscription(&self.state)
-                .map(|message| Event::Action(Action::Output(message)))
-        }));
+        let recipes =
+            subscription::into_recipes(self.runtime.enter(|| program.subscription(&self.state)));
         self.subscribed = !recipes.is_empty();
-        self.runtime.track(recipes);
+        self.runtime.track(recipes.into_iter().map(|recipe| {
+            Box::new(Source { recipe }) as Box<dyn subscription::Recipe<Output = _>>
+        }));
     }
 
     fn perform(&mut self, program: &P, event: Event<P::Message>) {
@@ -405,10 +474,14 @@ impl<P: Program + 'static> Shell<P> {
                 self.pending = self.pending.saturating_sub(1);
                 return;
             }
+            Event::Window(message) => return self.update(program, message),
             Event::Action(action) => action,
         };
         match action {
-            Action::Output(message) => self.update(program, message),
+            Action::Output(message) => {
+                self.timed = true;
+                self.update(program, message);
+            }
             Action::Widget(operation) => {
                 let mut interface = UserInterface::build(
                     program.view(&self.state, self.window),
@@ -480,6 +553,39 @@ impl<P: Program + 'static> Shell<P> {
     }
 }
 
+/// A subscription's recipe whose messages say where they came from: of the
+/// window's events, once its stream has taken one, or of the program's own
+/// clock, such as `time::every`'s, which never takes one.
+struct Source<Message> {
+    recipe: Box<dyn subscription::Recipe<Output = Message>>,
+}
+
+impl<Message: futures::MaybeSend + 'static> subscription::Recipe for Source<Message> {
+    type Output = Event<Message>;
+
+    fn hash(&self, state: &mut subscription::Hasher) {
+        self.recipe.hash(state);
+    }
+
+    fn stream(
+        self: Box<Self>,
+        input: subscription::EventStream,
+    ) -> futures::BoxStream<Self::Output> {
+        let listened = Arc::new(AtomicBool::new(false));
+        let input = futures::boxed_stream(input.inspect({
+            let listened = Arc::clone(&listened);
+            move |_| listened.store(true, atomic::Ordering::Relaxed)
+        }));
+        futures::boxed_stream(self.recipe.stream(input).map(move |message| {
+            if listened.load(atomic::Ordering::Relaxed) {
+                Event::Window(message)
+            } else {
+                Event::Action(Action::Output(message))
+            }
+        }))
+    }
+}
+
 /// The frames drawn so far: a PNG while there is one, and a GIF from the
 /// second. Each GIF frame is the rectangle that changed, written once the
 /// next frame gives its delay.
@@ -487,7 +593,7 @@ impl<P: Program + 'static> Shell<P> {
 struct Film {
     /// The last frame's pixels and size.
     last: Option<window::Screenshot>,
-    /// The last frame's changed rectangle, its pixels, and when it was drawn.
+    /// The last frame's changed rectangle, its pixels, and when it shows.
     pending: Option<(Rect, Vec<u8>, Instant)>,
     gif: Option<gif::Encoder<Vec<u8>>>,
     /// Frames that differ from the one before.
@@ -505,7 +611,7 @@ struct Rect {
 }
 
 impl Film {
-    /// Add a frame drawn at `at`: whether it differs from the last one.
+    /// Add a frame that shows at `at`: whether it differs from the last one.
     fn push(&mut self, frame: window::Screenshot, at: Instant) -> std::io::Result<bool> {
         let rect = match &self.last {
             None => Rect {
