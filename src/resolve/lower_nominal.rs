@@ -12,6 +12,7 @@ mod expand;
 mod fmt_write;
 mod iterator;
 mod keyed;
+mod literal;
 mod location;
 mod origin;
 mod places;
@@ -51,7 +52,7 @@ use super::borrowck::{
     record::{Matched, ScopeEnd},
     Access as FactAccess, Path as FactPath, Projection as FactStep, Step as FactRegion,
 };
-use super::{intrinsic, item, type_ref, Callee, Error, LoweringFailure, Program};
+use super::{intrinsic, item, type_ref, Callee, Error, LoweringFailure, MoveCause, Program};
 use crate::ast::{
     self, BinaryExpr, FlowControl, FnCallExpr, FnCallHashes, NominalEnumPattern, NominalPattern,
     NominalPayloadType, Stmt, NOMINAL_MATCH_SENTINEL,
@@ -11682,6 +11683,9 @@ type HostCheck = (ImmutableString, PatternSyntax, Ty, Option<bool>);
 
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
+    /// The source the tokens were read from, where a diagnostic finds
+    /// what a literal's value doesn't show.
+    text: &'a str,
     input: Peekable<IntoIter<(Token, Position)>>,
     models: Models,
     bindings: BTreeMap<ImmutableString, Binding>,
@@ -11924,6 +11928,9 @@ struct Parser<'a> {
     /// Each `s.parse()`'s target and error type, the error settled by the
     /// target (`settle_parse`).
     pending_parses: Vec<(Ty, Ty, Span, String)>,
+    /// Each settled `parse`'s placeholder and the text written over it
+    /// once its call is in the body.
+    settled_parses: Vec<(String, String)>,
     /// The `parse` calls read so far, which number their placeholders.
     parse_count: usize,
     /// The `text.into()` calls, whose target `Err(..)` may box as `dyn
@@ -12112,7 +12119,7 @@ impl<'a> Parser<'a> {
 
     fn new_with_offset(
         engine: &Engine,
-        source: &str,
+        source: &'a str,
         models: Models,
         op_offset: usize,
         pattern_offset: usize,
@@ -12126,6 +12133,7 @@ impl<'a> Parser<'a> {
 
         Self {
             marker: std::marker::PhantomData,
+            text: source,
             input: tokens.into_iter().peekable(),
             models,
             bindings: BTreeMap::new(),
@@ -12228,6 +12236,7 @@ impl<'a> Parser<'a> {
             pending_conversions: Vec::new(),
             pending_formats: Vec::new(),
             pending_parses: Vec::new(),
+            settled_parses: Vec::new(),
             parse_count: 0,
             text_into: Vec::new(),
             generics: BTreeMap::new(),
@@ -12289,7 +12298,7 @@ impl<'a> Parser<'a> {
 
     fn for_method(
         engine: &Engine,
-        source: &str,
+        source: &'a str,
         models: Models,
         definition: &method::Definition,
         op_offset: usize,
@@ -12431,7 +12440,7 @@ impl<'a> Parser<'a> {
 
     fn for_function(
         engine: &Engine,
-        source: &str,
+        source: &'a str,
         models: Models,
         definition: &item::Function,
         key: crate::item::Key,
@@ -17361,6 +17370,9 @@ impl<'a> Parser<'a> {
             self.write_over(&into.placeholder, &format!("{helper}("));
         }
         self.finish_formats()?;
+        for (placeholder, text) in std::mem::take(&mut self.settled_parses) {
+            self.write_over(&placeholder, &text);
+        }
         for (target, error, span, placeholder) in std::mem::take(&mut self.pending_parses) {
             if let Some(helper) = self.settle_parse(&target, &error, span, true)? {
                 self.write_over(&placeholder, &format!("{helper}("));
@@ -25540,13 +25552,20 @@ impl<'a> Parser<'a> {
     }
 
     /// Each pending `parse` whose target a statement made known gets its
-    /// error type, so later statements can use it.
+    /// error type, so later statements can use it. A statement inside the
+    /// call's own expression (a closure's body in its chain) can settle it
+    /// before the call is written: its helper waits for the call.
     fn settle_parses(&mut self) -> Result<(), Error> {
         for pending in std::mem::take(&mut self.pending_parses) {
-            let (target, error, span, placeholder) = &pending;
+            let (target, error, span, _) = &pending;
             match self.settle_parse(target, error, *span, false)? {
-                Some(helper) => self.write_over(placeholder, &format!("{helper}(")),
+                Some(helper) => self.settled_parses.push((pending.3, format!("{helper}("))),
                 None => self.pending_parses.push(pending),
+            }
+        }
+        for (placeholder, text) in std::mem::take(&mut self.settled_parses) {
+            if !self.write_over(&placeholder, &text) {
+                self.settled_parses.push((placeholder, text));
             }
         }
         Ok(())
@@ -28528,10 +28547,13 @@ impl<'a> Parser<'a> {
                 .get(&binding.declaration)
                 .copied()
                 .unwrap_or(binding.declaration);
+            let moved = self.name_span(moved, name);
             return Err(Error::MovedValue {
                 name: name.clone(),
                 moved,
                 reference: moved,
+                borrowed: false,
+                cause: Some(self.move_cause(name, binding)),
                 previous_iteration: true,
             });
         }
@@ -33406,8 +33428,8 @@ impl<'a> Parser<'a> {
         if !opened {
             self.expect(Token::LeftParen, "'(' after `format!`")?;
         }
-        let template = match self.next() {
-            (Token::StringConstant(template), _) => template.to_string(),
+        let (template, template_at) = match self.next() {
+            (Token::StringConstant(template), position) => (template.to_string(), position),
             (_, position) => {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "`format!` without a string literal".into(),
@@ -33415,6 +33437,11 @@ impl<'a> Parser<'a> {
                 })
             }
         };
+        // The literal, up to the token after it.
+        let template_span = span(
+            template_at,
+            self.input.peek().map_or(template_at, |(_, at)| *at),
+        );
         let mut arguments = Vec::<(Option<ImmutableString>, ParsedExpr)>::new();
         let mut borrowed = Vec::new();
         while matches!(self.peek(), Token::Comma) {
@@ -33475,11 +33502,11 @@ impl<'a> Parser<'a> {
                     text.push('}');
                 }
                 '{' => {
-                    let mut key = String::new();
+                    let mut written = String::new();
                     loop {
                         match chars.next() {
                             Some('}') => break,
-                            Some(character) => key.push(character),
+                            Some(character) => written.push(character),
                             None => {
                                 return Err(invalid(
                                     "invalid format string: expected `}` but string was terminated"
@@ -33488,9 +33515,9 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
-                    let (key, raw) = match key.split_once(':') {
+                    let (key, raw) = match written.split_once(':') {
                         Some((name, spec)) => (name.trim().to_string(), spec.to_string()),
-                        None => (key.trim().to_string(), String::new()),
+                        None => (written.trim().to_string(), String::new()),
                     };
                     let spec = RawFormatSpec::parse(&raw).map_err(invalid)?;
                     // Each `{}`/`{:.*}` takes the next positional argument;
@@ -33550,16 +33577,21 @@ impl<'a> Parser<'a> {
                                     return Ok(arguments.len() - 1);
                                 };
                                 if !binding.available {
-                                    return Err(Error::MovedValue {
-                                        name: name.as_str().into(),
-                                        moved: this
-                                            .moved_at
-                                            .get(&binding.declaration)
-                                            .copied()
-                                            .unwrap_or(binding.declaration),
-                                        reference: expression,
-                                        previous_iteration: false,
-                                    });
+                                    // At the name in the string, which
+                                    // ends where the chars left start.
+                                    let reference = this
+                                        .template_name_span(
+                                            template_span,
+                                            &template,
+                                            &written,
+                                            template.chars().count()
+                                                - chars.clone().count()
+                                                - written.chars().count()
+                                                - 1,
+                                            name,
+                                        )
+                                        .unwrap_or(expression);
+                                    return Err(this.moved_value(name, binding, reference, true));
                                 }
                                 // The macro borrows the local where it runs.
                                 this.mention(
@@ -35079,15 +35111,83 @@ impl<'a> Parser<'a> {
         Some((definition, *error))
     }
 
+    /// rustc's E0382 for the local `name`, whose `binding` was moved, at
+    /// its use at `reference`, which `borrowed` it or used it by value.
+    fn moved_value(&self, name: &str, binding: &Binding, reference: Span, borrowed: bool) -> Error {
+        let moved = self
+            .moved_at
+            .get(&binding.declaration)
+            .copied()
+            .unwrap_or(binding.declaration);
+        Error::MovedValue {
+            name: name.into(),
+            moved: self.name_span(moved, name),
+            reference: self.name_span(reference, name),
+            borrowed,
+            cause: Some(self.move_cause(name, binding)),
+            previous_iteration: false,
+        }
+    }
+
+    /// Why using the local `name` after its move is rustc's E0382: its
+    /// type, which isn't `Copy`, labelled at its declaration.
+    fn move_cause(&self, name: &str, binding: &Binding) -> MoveCause {
+        MoveCause {
+            declaration: self.name_span(binding.declaration, name),
+            ty: self.inference.resolve(&binding.ty).name(&self.models),
+        }
+    }
+
+    /// `at`, a point where `name` is written, over the name, as rustc
+    /// marks a local where it is declared, moved and used.
+    fn name_span(&self, at: Span, name: &str) -> Span {
+        let named = span(at.start(), text_end(at.start(), name));
+        if at.start() == at.end() && named.text(self.text) == name {
+            named
+        } else {
+            at
+        }
+    }
+
+    /// Where `name` is in `written`, the inside of a `{...}` that starts
+    /// at char `at` of a `format!` string's value, in the literal at
+    /// `literal`: rustc points at it there. None for a literal the source
+    /// doesn't show as written.
+    fn template_name_span(
+        &self,
+        literal: Span,
+        template: &str,
+        written: &str,
+        at: usize,
+        name: &str,
+    ) -> Option<Span> {
+        let identifier = |character: char| character == '_' || character.is_alphanumeric();
+        let offset = written.match_indices(name).find_map(|(offset, _)| {
+            let before = written[..offset].chars().next_back();
+            let after = written[offset + name.len()..].chars().next();
+            (!before.is_some_and(identifier) && !after.is_some_and(identifier))
+                .then(|| written[..offset].chars().count())
+        })?;
+        let start = at + offset;
+        literal::value_span(
+            literal.text(self.text),
+            literal.start(),
+            template,
+            start..start + name.chars().count(),
+        )
+    }
+
     /// Write `text` over `placeholder`, padded to its length so source
-    /// locations stay exact, in the body and its lifted closures.
-    fn write_over(&mut self, placeholder: &str, text: &str) {
+    /// locations stay exact, in the body and its lifted closures. Whether
+    /// the placeholder was written yet: a call still being read isn't.
+    fn write_over(&mut self, placeholder: &str, text: &str) -> bool {
         let replacement = format!("{text:<width$}", width = placeholder.len());
         debug_assert_eq!(replacement.len(), placeholder.len());
-        self.output.replace_same_length(placeholder, &replacement);
+        let mut found = self.output.replace_same_length(placeholder, &replacement);
         for closure in &mut self.lifted {
-            closure.body.replace_same_length(placeholder, &replacement);
+            found |= closure.body.replace_same_length(placeholder, &replacement);
         }
+        found
     }
 
     /// The `String` methods Rust code reaches for, with Rust results.
@@ -39637,16 +39737,7 @@ impl<'a> Parser<'a> {
         }
         // A moved local may be assigned again, as in Rust.
         if !binding.available && !assigned {
-            return Err(Error::MovedValue {
-                moved: self
-                    .moved_at
-                    .get(&binding.declaration)
-                    .copied()
-                    .unwrap_or(binding.declaration),
-                name,
-                reference: name_span,
-                previous_iteration: false,
-            });
+            return Err(self.moved_value(&name, binding, name_span, false));
         }
         let Some(binding) = self.bindings.get(name.as_str()) else {
             return Err(self.unknown_variable(&name, name_span));
@@ -39701,16 +39792,7 @@ impl<'a> Parser<'a> {
         let binding = &self.bindings[name.as_str()];
         let mut ty = self.inference.resolve(&binding.ty);
         if !binding.available {
-            return Err(Error::MovedValue {
-                moved: self
-                    .moved_at
-                    .get(&binding.declaration)
-                    .copied()
-                    .unwrap_or(binding.declaration),
-                name,
-                reference: name_span,
-                previous_iteration: false,
-            });
+            return Err(self.moved_value(&name, binding, name_span, false));
         }
         // A closure that moves out a capture is `FnOnce`: its call moves it.
         if let Ty::FnItem { key, .. } = &ty

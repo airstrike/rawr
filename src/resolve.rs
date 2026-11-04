@@ -19,7 +19,7 @@ pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, CannotCompare, Qualified, Unsatisfied,
     Unsupported, ASYNC_MAIN,
 };
-pub use error::{Callee, Category, Error};
+pub use error::{Callee, Category, Error, MoveCause};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {

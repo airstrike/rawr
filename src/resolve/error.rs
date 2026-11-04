@@ -211,6 +211,17 @@ impl fmt::Display for ArgumentCount {
     }
 }
 
+/// Why a use after a move is one: the moved local's type isn't `Copy`.
+/// rustc labels its declaration "move occurs because `x` has type `T`,
+/// which does not implement the `Copy` trait".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MoveCause {
+    /// The local's name where it is declared.
+    pub declaration: Span,
+    /// The local's type, as rustc writes it.
+    pub ty: ImmutableString,
+}
+
 /// Failure to promote a parsed unit into an opaque resolved program.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Error {
@@ -316,6 +327,11 @@ pub enum Error {
         moved: Span,
         /// The use after the move.
         reference: Span,
+        /// The use borrows the value, as `format!` and `&self` calls do:
+        /// rustc's "borrow of moved value" rather than "use of".
+        borrowed: bool,
+        /// Why the value moves, where the lowering knows the local's type.
+        cause: Option<MoveCause>,
         /// The move is in a loop's body, which goes on to its next
         /// iteration and moves the value again: rustc's "value moved here,
         /// in previous iteration of loop". `moved` and `reference` are both
@@ -956,10 +972,12 @@ impl fmt::Display for Written<'_> {
                 name,
                 moved,
                 reference,
+                borrowed,
                 ..
             } => write!(
                 formatter,
-                "use of moved value `{name}` at {reference}; it was already moved at {moved}"
+                "{} of moved value `{name}` at {reference}; it was already moved at {moved}",
+                if *borrowed { "borrow" } else { "use" }
             ),
             Error::BorrowConflict {
                 code,
